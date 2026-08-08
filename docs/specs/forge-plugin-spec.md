@@ -1,7 +1,7 @@
 # Feature Specification: forge-plugin
 
 **Created**: 2026-08-08
-**Status**: Draft
+**Status**: Draft (Revision 1)
 **Intent**: A single Claude Code plugin (`forge`) that merges forge's DVRR governance (fail-closed gate chain, adversarial review constitution, worktree discipline, kill-switch, evals) with codex-orchestrator's durable journal-based orchestration of headless Codex CLI agents, for the Claude + Codex pair only. Claude orchestrates, verifies, and holds the binding review verdict; Codex implements and first-pass reviews. Out of scope: opencode support, automatic upstream synchronization, the upstream PRs themselves, changes to either upstream repository, cost/token capture in the eval runner.
 
 Inputs: `docs/design/0001-founding-decisions.md` (D1–D5), `docs/design/research/scout-engine-codex-orchestrator.md`, `docs/design/research/scout-forge.md`.
@@ -30,6 +30,8 @@ Inputs: `docs/design/0001-founding-decisions.md` (D1–D5), `docs/design/researc
 - The string `opencode` MUST NOT appear anywhere in the plugin outside `UPSTREAM`, `docs/design/`, and `docs/specs/`.
 - Test framework is stdlib `unittest` (upstream convention); no pytest.
 - No `commands/` directory: skills are the only invocation surface (preserves upstream doc-contract assertion).
+
+**Threat model**: the enforcement layer (guard hook, markers, sentinels, execpolicy) defends against accident, negligence, and prompt-injection-driven attempts by either model. Codex agents are additionally sandbox-confined to their worktrees and cannot reach main-checkout state. It does NOT defend against a deliberately adversarial orchestrator: Claude runs as the operator's OS user, and no same-user file mechanism can bind it. The kill-switch and audit log are operator-facing controls; anything stronger (an external broker or signing service) is out of scope for this release.
 
 ---
 
@@ -64,7 +66,7 @@ Inputs: `docs/design/0001-founding-decisions.md` (D1–D5), `docs/design/researc
 | Region | A `<!-- FORGE:REGION <name> BEGIN/END -->` block in `forge-project.md`; unfilled while it contains a `<!-- forge-init: ... -->` comment |
 | Iteration | One review-agent invocation; the initial review is iteration 1 |
 | Golden task | A committed eval fixture with `expected_verdict`; its committed `.result` is the baseline |
-| Detached launch | `nohup ... & disown` in its own process group, unmanaged by the Claude Code task layer |
+| Detached launch | A worker launched in its own process group (`set -m` job control, or `setsid` where available) via `nohup ... & disown`, unmanaged by the Claude Code task layer, with a `pid` sidecar file in its execution directory |
 
 ---
 
@@ -83,7 +85,7 @@ Inputs: `docs/design/0001-founding-decisions.md` (D1–D5), `docs/design/researc
 
 ### Modified surfaces
 
-- `/forge:workflow`, `/forge:orchestrate`, `/forge:report` — vendored skills renamed into the `forge` namespace; workflow gains gate steps and the gated close sequence (`validate --gates → run_closed → report.md`); orchestrate gains role routing, detached launch mechanics, and hardening rules
+- `/forge:workflow`, `/forge:orchestrate`, `/forge:report` — vendored skills renamed into the `forge` namespace; workflow gains gate steps and the gated close sequence (`validate --gates → run_closed → validate --gates → report.md`); orchestrate gains role routing, detached launch mechanics, and hardening rules
 - `tests/test_docs_contract.py` — assertions migrated to the merged prose (same contract-testing approach)
 - `tests/replay/long-run-001/` — journal extended with gate verifications so the replay passes `validate --gates`
 
@@ -109,7 +111,7 @@ Inputs: `docs/design/0001-founding-decisions.md` (D1–D5), `docs/design/researc
 {"type":"verification","id":"check-09","task":"task-02","criterion":"gate-3: review-final verdict","method":"inspection","check":"review-final subagent over git diff <baseline-sha>..HEAD","result":"passed","observation":"PASS; 0 CRITICAL/MAJOR findings; iteration 2 of 8.","recorded_at":"2026-08-08T14:20:00Z"}
 ```
 
-Rules: a gate verification's `criterion` MUST begin with exactly `gate-1: `, `gate-2: `, or `gate-3: ` (lowercase, single space after colon). Gate 3's criterion MUST be exactly `gate-3: review-final verdict`. A gate `result` uses the upstream enum; a BLOCK verdict is recorded as `result: "failed"` with the verdict and finding count in `observation`.
+Rules: a gate verification's `criterion` MUST begin with exactly `gate-1: `, `gate-2: `, or `gate-3: ` (lowercase, single space after colon). Gate 3's criterion MUST be exactly `gate-3: review-final verdict`. A gate `result` uses the upstream enum; a BLOCK verdict is recorded as `result: "failed"` with the verdict and finding count in `observation`. A gate-3 verification's `check` field MUST name the exact reviewed candidate — the reviewed commit range with full SHAs (task/merge reviews) or the staged-diff SHA-256 (commit reviews). That candidate identity is threaded unchanged through the pipeline: the same hash/SHA appears in the gate-pass marker (DM-006), in any control-class approval prompt, and in the reintegration push. This is a convention over existing fields; no schema change.
 
 **DM-002**: `validate` output payload gains one key when `--gates` is passed (absent otherwise, preserving upstream shape):
 
@@ -137,7 +139,7 @@ Region markers and the unfilled sentinel use upstream syntax: `<!-- FORGE:REGION
 
 **DM-005**: `.forge-manifest` (repo root, committed) — line-oriented keys: `forge_version: 1`, `plugin_ref: <git describe or SHA of the plugin>`, `installed: <YYYY-MM-DD>`, `project_name: <name>`, `default_branch: <branch>`, `init_completed: true|false`, one `region: <name>` line per filled region.
 
-**DM-006**: Gate-pass marker `.forge/tmp/commit-authorized` — two lines: line 1 = SHA-256 hex of the exact bytes of `git diff --cached`, line 2 = UTC ISO-8601 timestamp of the review PASS.
+**DM-006**: Gate-pass marker `.forge/tmp/commit-authorized` — line 1 = SHA-256 hex of the exact bytes of the *reviewed* `git diff --cached` output, line 2 = UTC ISO-8601 timestamp of the review PASS, optional line 3 = the annotation `skip: user-directed` (present only on the FR-056 skip path). The guard accepts the 2-line and 3-line forms and rejects any other shape as malformed.
 
 **DM-007**: Repo-local state layout: `.forge/evals/tasks/` (committed fixtures + `.result` baselines), `.forge/tmp/` (gitignored: locks, markers, telemetry, decision logs, halt audit log). Gitignore block appended by init (guarded by its `# --- forge agent system --- #` header line): `/.forge/tmp/`, `.worktrees/`, `/AGENT_HALT`, `/AGENT_HALT_*`, `*.local.md`.
 
@@ -147,7 +149,7 @@ Region markers and the unfilled sentinel use upstream syntax: `<!-- FORGE:REGION
 
 ### Plugin packaging (FR-001..FR-006)
 
-- **FR-001** (MUST): The plugin MUST ship `.claude-plugin/plugin.json` with `name: "forge"` and `.claude-plugin/marketplace.json` listing the plugin with `source: "./"`, so skills surface as `/forge:init`, `/forge:workflow`, `/forge:orchestrate`, `/forge:report`, `/forge:commit`, `/forge:worktree-merge`.
+- **FR-001** (MUST): The plugin MUST ship `.claude-plugin/plugin.json` with `name: "forge"` and `.claude-plugin/marketplace.json` listing the plugin with `source: "./"`, so skills surface as `/forge:init`, `/forge:workflow`, `/forge:orchestrate`, `/forge:report`, `/forge:commit`, `/forge:worktree-merge`. The plugin MUST also ship `hooks/hooks.json` registering the PreToolUse commit guard and the Stop telemetry hook; a plugin-load smoke test MUST verify both hooks are discovered.
 - **FR-002** (MUST): The plugin MUST contain exactly six skill directories under `skills/` (`init`, `workflow`, `orchestrate`, `report`, `commit`, `worktree-merge`), each a `SKILL.md` with `name` and `description` frontmatter, and MUST NOT contain a `commands/` directory.
 - **FR-003** (MUST): The vendored engine MUST live at upstream-identical relative paths: `scripts/codex_orch_tools.py`, `scripts/codex_orchestrator/{__init__,cli,journal,events,monitor}.py`, `tests/`, `docs/orchestration-contract.md`. Every deliberate in-file change to a vendored file MUST carry an inline `# forge: modified from upstream — <reason>` (Python/shell) or `<!-- forge: modified from upstream — <reason> -->` (markdown) marker.
 - **FR-004** (MUST): An `UPSTREAM` file at the plugin root MUST record, for each upstream (nixlim/forge, alexzh3/codex-orchestrator): repository URL, vendored commit SHA, vendoring date, and a list of deliberate deviations (one line each). Every FR in this spec that deviates from an upstream behavior MUST have a corresponding deviation line.
@@ -166,50 +168,50 @@ Region markers and the unfilled sentinel use upstream syntax: `<!-- FORGE:REGION
 ### Level B gate enforcement (FR-020..FR-025)
 
 - **FR-020** (MUST): `validate` MUST accept a `--gates` flag. With it, the payload gains `"profile": "gates"` and the checks in FR-021..FR-023 run in addition to the 23 baseline checks. Without it, behavior is bit-identical to upstream (FR-011).
-- **FR-021** (MUST): With `--gates`, a `run_closed` with `judgment: "passed"` MUST produce the issue `run closed as passed without a passing 'gate-3: review-final verdict' verification after the last mutating execution` unless there exists a `verification` with `criterion == "gate-3: review-final verdict"` and `result == "passed"` whose journal line number is greater than the line number of the terminal `execution_result` of every mutating execution (executions whose `role != "review"`). A journal with zero mutating executions is exempt from this check.
-- **FR-022** (MUST): With `--gates`, every `verification` whose `criterion` starts with `gate-1: `, `gate-2: `, or `gate-3: ` and whose `result` is `failed` MUST produce the issue `failed gate verification '<id>' has no subsequent passing recheck` unless a later `verification` with the same `criterion` prefix (`gate-N: `) has `result == "passed"`.
+- **FR-021** (MUST): With `--gates`, a `run_closed` with `judgment: "passed"` requires, for **each** of the three gate prefixes, a `verification` with `result == "passed"` whose journal line number is greater than the line number of the terminal `execution_result` of every mutating execution (executions whose `role != "review"`): for Gate 1 and Gate 2, any `criterion` beginning `gate-1: ` / `gate-2: `; for Gate 3, `criterion` exactly `gate-3: review-final verdict`. Each missing gate produces its own issue: `run closed as passed without a passing 'gate-1' verification after the last mutating execution` (likewise `'gate-2'`), and `run closed as passed without a passing 'gate-3: review-final verdict' verification after the last mutating execution`. A journal with zero mutating executions is exempt from this check.
+- **FR-022** (MUST): With `--gates`, every `verification` whose `criterion` starts with `gate-1: `, `gate-2: `, or `gate-3: ` and whose `result` is `failed` MUST produce the issue `failed gate verification '<id>' has no subsequent passing recheck` unless a later `verification` with the **identical `criterion` string** has `result == "passed"` (prefix-only matches do not clear a failure: a passing `gate-1: unit tests` never clears a failed `gate-1: blast radius`).
 - **FR-023** (MUST): With `--gates`, a gate verification whose `criterion` matches `gate-` followed by anything other than `1: `, `2: `, or `3: ` MUST produce the issue `unknown gate criterion: <criterion>`.
-- **FR-024** (MUST): The workflow and commit skills MUST always invoke `validate` with `--gates`, and the close sequence in the workflow skill MUST read `validate --gates → run_closed → report.md` (this exact string appears only in the workflow skill; the doc-contract test is updated accordingly). The `run_closed.validation` field embeds the `--gates` payload verbatim, so a close that skipped the gates profile is detectable by the absent `profile` key.
+- **FR-024** (MUST): Whenever the workflow skill invokes `validate` it MUST pass `--gates`, and its close sequence MUST read `validate --gates → run_closed → validate --gates → report.md`: a pre-close pass (advisory — FR-021 cannot fire before closure exists), then `run_closed` whose `validation` field embeds the pre-close payload verbatim, then a post-close pass that MUST exit 0. The report skill MUST refuse to write `report.md` while the post-close `validate --gates` reports issues. The exact close-sequence string appears only in the workflow skill (doc-contract test updated accordingly). A close that skipped the gates profile is detectable by the absent `profile` key in `run_closed.validation`.
 - **FR-025** (MUST): The orchestration contract doc MUST gain a "Gate Recording" section defining DM-001 and stating explicitly that the `--gates` profile is a deliberate forge deviation from the upstream stance that validation never decides acceptance.
 
 ### Roles, routing, and Codex launches (FR-030..FR-039)
 
-- **FR-030** (MUST): Role assignment MUST be: Claude main session = orchestrator/verifier (owns journal, worktrees, gate chain, all reintegration); Codex fresh session = implementer (`role: "implementation"`, model `gpt-5`, effort `high`, sandbox `workspace-write`); Codex fresh session = first-pass reviewer (`role: "review"`, model `gpt-4o`, effort `medium`, sandbox `read-only`); Claude subagent `review-final` = binding final reviewer. Changing any model/effort/sandbox value is a control-class change.
+- **FR-030** (MUST): Role assignment MUST be: Claude main session = orchestrator/verifier (owns journal, worktrees, gate chain, all reintegration); Codex fresh session = implementer (`role: "implementation"`, model `gpt-5.6-sol`, effort `ultra`, sandbox `workspace-write`); Codex fresh session = first-pass reviewer (`role: "review"`, model `gpt-5.6-terra`, effort `medium`, sandbox `read-only`); Claude subagent `review-final` = binding final reviewer. The journal `execution` entry's `model` and `effort` fields MUST record the values actually passed at launch. Changing any model/effort/sandbox value is a control-class change.
 - **FR-031** (MUST): Implementer executions MUST run in a dedicated git worktree; the implementer MAY commit only inside that worktree (its prompt template states: "You may commit inside this worktree. You must NEVER push, never touch any branch other than your own, and never run destructive git commands."). The orchestrator performs all reintegration.
 - **FR-032** (MUST): Codex reviewer launches MUST use `-s read-only` (deviation from upstream codex-orchestrator's `workspace-write` review guidance, recorded in `UPSTREAM`); the reviewer prompt MUST contain the goal, acceptance criteria, constraints, and exact target SHA, and MUST NOT contain the implementer's handoff, claimed test results, earlier review verdicts, or the orchestrator's tentative conclusion.
 - **FR-033** (MUST): Implementer sessions MUST NOT be resumed (`codex exec resume` is forbidden for `role: "implementation"`); every implementer task gets a fresh named agent and native session. The sole sanctioned resume is a reviewer confirmation round: same reviewer agent, next `execution-<NN>` directory, `resume` subcommand with the recorded `session_id`, and MUST NOT pass `-C` (the flag is rejected with `resume`; the working directory is inherited from the resumed session).
-- **FR-034** (MUST): Fresh launches MUST follow the upstream command pattern (`codex exec --json --output-last-message <handoff> -s <sandbox> -c approval_policy=never -C <worktree> - < prompt.md > events.jsonl`), MUST NOT use `--ephemeral`, and MUST wrap the invocation as a detached process: `nohup ... & disown` in its own process group, never as a harness-managed background task.
+- **FR-034** (MUST): Fresh launches MUST follow the upstream command pattern extended with explicit routing config: `codex exec --json --output-last-message <handoff> -s <sandbox> -c approval_policy=never -c model="<role model>" -c model_reasoning_effort="<role effort>" -C <worktree> - < prompt.md > events.jsonl`. Launches MUST NOT use `--ephemeral` and MUST run detached in their own process group (`set -m` job control, or `setsid` where available, wrapping `nohup ... & disown`), never as a harness-managed background task. Immediately after launch and before arming the monitor, the orchestrator MUST write `<execution-dir>/pid` — three lines: PID, PGID, UTC ISO-8601 launch timestamp. If the installed Codex CLI rejects the `model_reasoning_effort` key, the current CLI's documented effort key is used instead and the substitution recorded in `UPSTREAM`.
 - **FR-035** (MUST): Shell redirect targets in launch commands MUST be literal absolute paths (no `$VAR` in redirect position).
 - **FR-036** (MUST): For every execution, the orchestrator MUST, in order: create the execution directory, write `prompt.md`, create an empty `events.jsonl`, append the journal `execution` entry, then launch. The events file always exists before any journal entry or monitor references it.
 - **FR-037** (MUST): Codex agent prompts MUST be assembled at launch from the plugin role template + the `agent-project-context` region of `forge-project.md` + the task assignment, and saved verbatim to `prompt.md` before the `execution` entry is appended. Handoffs use the upstream six-heading contract unchanged.
 - **FR-038** (MUST): The `.codex/` layer installed by init MUST contain: `config.toml` (root `approval_policy = "on-failure"`, `sandbox_mode = "workspace-write"`, `[agents]` `max_threads = 6`, `max_depth = 1`, registering `implementer` and `review-cheap`), `agents/implementer.toml` and `agents/review-cheap.toml` (per FR-030 values), `rules/forge.rules`, and `hooks.json` (Stop hook: notification + `aggregate-telemetry.sh` to `.forge/tmp/`).
-- **FR-039** (MUST): `rules/forge.rules` MUST carry the four upstream `prefix_rule` deny entries verbatim (force push incl. `--force-with-lease`; `git reset --hard`; `git clean -fd`; `rm -rf` of `.`, `..`, `~`, `/`, `/*`), and init MUST verify the file with `codex execpolicy check --rules .codex/rules/forge.rules -- git push --force` expecting decision `forbidden`. Init MUST surface the Codex trust caveat: until the operator trusts the repo in Codex, the entire `.codex/` layer is skipped by Codex.
+- **FR-039** (MUST): `rules/forge.rules` MUST carry the four upstream `prefix_rule` deny entries verbatim (force push incl. `--force-with-lease`; `git reset --hard`; `git clean -fd`; `rm -rf` of `.`, `..`, `~`, `/`, `/*`) **plus a forge-added `prefix_rule` denying every `git push` invocation** — under D1 no Codex process ever pushes, so push capability is pure accident/attack surface (deviation from upstream forge recorded in `UPSTREAM`; the Codex sandbox's default network restrictions are defense-in-depth, not the control). Init MUST verify the file with `codex execpolicy check --rules .codex/rules/forge.rules` against both `git push --force` and `git push origin HEAD`, expecting decision `forbidden` for each. Init MUST surface the Codex trust caveat: until the operator trusts the repo in Codex, the entire `.codex/` layer is skipped by Codex.
 
 ### Monitoring hardening (FR-040..FR-043)
 
 - **FR-040** (MUST): The orchestrate skill MUST instruct re-arming the monitor at most 60 minutes after its last arm/exit while any execution is in flight (the monitor marks stale/unknown targets done and stops watching them).
-- **FR-041** (MUST): On a `codex_agent_stale` notification, the orchestrator MUST treat staleness as ambiguous and, before appending any `execution_result`: check the events file mtime, check process liveness (`ps` on the launched process group), and inspect the handoff and worktree. A conclusion of failure based on staleness alone is prohibited.
+- **FR-041** (MUST): On a `codex_agent_stale` notification, the orchestrator MUST treat staleness as ambiguous and, before appending any `execution_result`: check the events file mtime, check process liveness (`ps` against the PID/PGID recorded in `<execution-dir>/pid`), and inspect the handoff and worktree. A conclusion of failure based on staleness alone is prohibited.
 - **FR-042** (MUST): On `codex_agent_unknown` (low parse confidence), the orchestrator MUST run `state --dump-event-types`, MUST NOT infer agent status, and MUST surface the incompatibility to the user.
 - **FR-043** (SHOULD): After a machine-sleep gap (wall-clock jump exceeding the stale threshold), the orchestrator SHOULD re-check all in-flight targets via `state` before trusting any stale notification emitted across the gap.
 
 ### Commit gate chain (FR-050..FR-057)
 
-- **FR-050** (MUST): `/forge:commit` MUST run the 5-step chain in order — (1) classify changed files per the `file-categories` region plus the built-in `control` category; (2) run the `stack-validations` commands for every touched category, plus `run-evals.sh` when any `control` file is touched; (3) apply the `changelog-policy` region; (4) adversarial review; (5) halt check → commit lock → stage explicit paths → commit → release lock. The chain is fail-closed: any non-skipped step failing (including a review agent being unavailable) means no commit, with the failure surfaced.
-- **FR-051** (MUST): The `control` category MUST comprise: `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`. Control-class changes route to `review-final` and are gated-approval: after PASS, the skill presents the change and waits for explicit user approval instead of committing autonomously.
-- **FR-052** (MUST): Step 4 MUST route non-control changes to a fresh Codex `review-cheap` execution (recorded in the journal when a run is open) and control changes to the `review-final` Claude agent. The reviewer is always a distinct agent from the author. The review prompt MUST be the upstream mandated prompt with the constitution path re-rooted to `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md` and the `review-prompt-project-focus` + `project-triggers` + `completeness-project-items` region contents spliced in from `forge-project.md`; before sending, the diff MUST be scanned for secrets and any found MUST be redacted or their files excluded.
+- **FR-050** (MUST): `/forge:commit` MUST run the 5-step chain in order — (1) classify changed files per the `file-categories` region plus the built-in `control` category; (2) run the `stack-validations` commands for every touched category, plus `run-evals.sh` when any `control` file is touched; (3) apply the `changelog-policy` region; (4) stage the explicit target paths (never `git add .`/`-A`), secret-scan the staged diff, then adversarial review of exactly `git diff --cached`; (5) halt check → commit lock → staged-diff hash re-verification against the marker → commit → release lock. The chain is fail-closed: any non-skipped step failing (including a review agent being unavailable) means no commit, with the failure surfaced. The commit lock is NOT held across the Step 4 review loop — only across Step 5.
+- **FR-051** (MUST): The `control` category MUST comprise: `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, and CI workflow definitions (`.github/workflows/**`, or the project's equivalent CI config paths as recorded in `file-categories`). Project `file-categories` MAY extend the `control` category and MUST NOT remove or narrow any built-in entry. Control-class changes route to `review-final` and are gated-approval: after PASS, the skill presents the change and waits for explicit user approval instead of committing autonomously.
+- **FR-052** (MUST): Step 4 MUST route non-control changes to a fresh Codex `review-cheap` execution (recorded in the journal when a run is open) and control changes to the `review-final` Claude agent. The reviewer is always a distinct agent from the author. The review prompt MUST be the upstream mandated prompt with the constitution path re-rooted to `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md` and the `review-prompt-project-focus` + `project-triggers` + `completeness-project-items` region contents spliced in from `forge-project.md`; the review input is exactly the staged diff (`git diff --cached`); before sending, it MUST be scanned for secrets, and a secret finding BLOCKS the chain — the affected file is unstaged and the user informed; a file is never silently excluded from review while remaining staged.
 - **FR-053** (MUST): The review loop MUST enforce the iteration protocol: re-verify (re-run affected validations) after any fix before re-review; hard cap of 8 iterations; dispositioning any finding above MINOR requires user approval; at the cap without PASS, record residual risk (outstanding findings and why) and escalate — never commit.
-- **FR-054** (MUST): On review PASS, the skill MUST write the gate-pass marker (DM-006) before invoking `git commit`, and delete it after the commit completes (success or failure).
-- **FR-055** (MUST): Step 5 MUST run `check-halt.sh commit` and stop on nonzero; then acquire `.forge/tmp/commit-lock` via `acquire-commit-lock.sh` (format `<PID> <TIMESTAMP>`, stale-PID takeover, 2 s poll, 300 s timeout, ownership via `FORGE_SESSION_PID`); stage explicit paths only (never `git add .`/`-A`); release the lock in both success and failure paths.
-- **FR-056** (MUST): User skip directives MUST map exactly: "skip tests"/"skip validation" → Step 2; "skip changelog" → Step 3; "skip review" → Step 4; "just commit"/"skip everything" → Steps 2–4. Every skip is warned about in the reply. A skipped Step 4 writes no marker; the commit-guard hook (FR-090) still requires one, so the skill records the user-directed skip by writing the marker itself with the annotation line `skip: user-directed` appended.
-- **FR-057** (MUST): When a run is open, every gate execution in Steps 2 and 4 MUST also be recorded as a journal gate verification per DM-001. Checkpoint commit after every verified task is mandatory: the orchestrate skill's task-completion step invokes `/forge:commit` for the task's files.
+- **FR-054** (MUST): On review PASS, the skill MUST write the gate-pass marker (DM-006) with line 1 equal to the SHA-256 of the exact staged diff the reviewer saw, before invoking `git commit`, and delete it after the commit completes (success or failure). Any re-staging after the review changes the hash, invalidates the marker, and requires re-review.
+- **FR-055** (MUST): Step 5 MUST run `check-halt.sh commit` and stop on nonzero; then acquire `.forge/tmp/commit-lock` via `acquire-commit-lock.sh` (format `<PID> <TIMESTAMP>`, stale-PID takeover, 2 s poll, 300 s timeout, ownership via `FORGE_SESSION_PID`); inside the lock, recompute the SHA-256 of `git diff --cached` and stop if it differs from the marker (staging drifted since review — re-run Step 4); then commit; release the lock in both success and failure paths.
+- **FR-056** (MUST): User skip directives MUST map exactly: "skip tests"/"skip validation" → Step 2; "skip changelog" → Step 3; "skip review" → Step 4; "just commit"/"skip everything" → Steps 2–4. Every skip is warned about in the reply. A skipped Step 4 writes no review-backed marker; the commit-guard hook (FR-090) still requires one, so the skill writes the marker itself with the DM-006 line-3 annotation `skip: user-directed`, and records the skip durably: a journal `decision` entry when a run is open, else an audit line in `.forge/tmp/halt-audit.log`.
+- **FR-057** (MUST): When a run is open, every gate execution in Steps 2 and 4 MUST also be recorded as a journal gate verification per DM-001. `/forge:commit` consults the journal only for an explicitly identified open run (run ID passed by the orchestrator or confirmed by the user); with no open run, the chain executes without journal entries; the skill MUST NOT infer "the latest run". Checkpoint commit after every verified task is mandatory: the orchestrate skill's task-completion step invokes `/forge:commit` for the task's files with the run ID.
 
 ### Merge gate chain and reintegration (FR-060..FR-065)
 
-- **FR-060** (MUST): `/forge:worktree-merge` MUST run Gates 1–4 in order: Gate 1 = the `gate1-test-command` region body; Gate 2 = the `stack-validations` commands for touched categories; Gate 3 = `review-final` over `git diff origin/<default-branch>...HEAD` with binding PASS/BLOCK; Gate 4 = diff summary then automatic proceed. Fail-closed: any gate not returning clean PASS means no merge, worktree left intact.
+- **FR-060** (MUST): `/forge:worktree-merge` MUST begin with two preconditions: (a) the worktree is clean — `git status --porcelain=v1 --untracked-files=all` returns empty; a dirty worktree stops the merge (commit the work via the chain, or discard only with explicit user approval); (b) the full merge diff (`git diff origin/<default-branch>...HEAD`) is classified against `file-categories` plus the built-in `control` category. Then Gates 1–4 in order: Gate 1 = the `gate1-test-command` region body; Gate 2 = the `stack-validations` commands for touched categories; Gate 3 = `review-final` over the merge diff with binding PASS/BLOCK; Gate 4 = diff summary — when the diff touches `control` paths, explicit user approval naming the candidate HEAD SHA is REQUIRED before reintegration; otherwise automatic proceed. Fail-closed: any gate not returning clean PASS means no merge, worktree left intact.
 - **FR-061** (MUST): Before Gate 1, the skill MUST verify `forge-project.md` exists and the `gate1-test-command`, `stack-validations`, and `file-categories` regions contain no `forge-init:` sentinel; a missing file or unfilled required region fails Gate 1 with the message `forge: <region> not configured — run /forge:init` and exit 1.
-- **FR-062** (MUST): Reintegration MUST run under the rebase lock: `check-halt.sh` first; lock file `agent-rebase.lock` in `git rev-parse --path-format=absolute --git-common-dir`; `flock --timeout 300` when available, else the `mkdir`-based mutex at `agent-rebase.lockdir` with 300 s timeout and `trap rmdir EXIT`; a missing `flock` with no fallback path MUST fail the merge loudly, never skip locking. Inside the lock: fetch, `git rebase origin/<default-branch>`, fast-forward `git push origin HEAD:<default-branch>`. Merge commits, non-rebase pulls, and integration branches are prohibited.
-- **FR-063** (MUST): If the rebase incorporated commits beyond the worktree's own (the default branch advanced), Gate 1 MUST be re-run against the integrated tip before cleanup; a pure fast-forward needs no re-run.
-- **FR-064** (MUST): Worktree cleanup (`git worktree remove --force`, `git branch -D`) MUST happen only after a successful push; no failed merge path may delete the worktree or branch.
+- **FR-062** (MUST): Reintegration MUST run under the rebase lock: `check-halt.sh` first; lock file `agent-rebase.lock` in `git rev-parse --path-format=absolute --git-common-dir`; `flock --timeout 300` when available, else the `mkdir`-based mutex at `agent-rebase.lockdir` with 300 s timeout and `trap rmdir EXIT`; a missing `flock` with no fallback path MUST fail the merge loudly, never skip locking. Inside the lock: fetch; `git rebase origin/<default-branch>`; FR-063's re-verification; only then fast-forward `git push origin HEAD:<default-branch>`. Merge commits, non-rebase pulls, and integration branches are prohibited.
+- **FR-063** (MUST): If the rebase incorporated commits beyond the worktree's own (the default branch advanced), Gates 1 and 2 MUST be re-run against the integrated tip **inside the lock, before the push**; if the rebase required conflict resolution, Gate 3 MUST also be re-run on the post-rebase diff (content changed). Any re-run failure aborts with the remote untouched, the lock released, and the worktree intact. A pure fast-forward needs no re-run. (Upstream forge re-verifies only after the push — a deliberate forge-plugin strengthening, recorded in `UPSTREAM`.)
+- **FR-064** (MUST): Worktree cleanup MUST happen only after a successful push, using `git worktree remove` **without** `--force` (residual untracked files abort cleanup rather than being destroyed) and deleting the branch only after verifying its tip is contained in the pushed default branch (`git merge-base --is-ancestor`). No failed merge path may delete the worktree or branch.
 - **FR-065** (MUST): The orchestrator MUST re-run Gates 1 and 2 in its own environment (the integration target, not the agent's worktree) before any commit or merge that reintegrates agent work; agent-reported results are never accepted as gate evidence (record-authority rule: handoffs are claims).
 
 ### Region file and rendering (FR-070..FR-073)
@@ -221,19 +223,19 @@ Region markers and the unfilled sentinel use upstream syntax: `<!-- FORGE:REGION
 
 ### Installer (FR-080..FR-084)
 
-- **FR-080** (MUST): `/forge:init` MUST perform, in order: (0) preconditions — git repo root, prior `.forge-manifest` detection, project name + default branch confirmation (auto-detect via `origin/HEAD`, fall back to `main`), `command -v flock` check; (1) mechanical install via `scripts/forge/install.sh` — write `forge-project.md` from template (region-merge on re-init), splice AGENTS.md, write CLAUDE.md import, install `.codex/` (preserving pre-existing non-forge `config.toml`/`hooks.json` as `<file>.forge-new`), append the gitignore block (guarded against double-append), create `.forge/evals/tasks/` and `.forge/tmp/`; (2) brownfield mining; (3) region filling; (4) eval baselines; (5) self-review and manifest; (6) present for approval — never auto-commit.
+- **FR-080** (MUST): `/forge:init` MUST perform, in order: (0) preconditions — git repo root, prior `.forge-manifest` detection, project name + default branch confirmation (auto-detect via `origin/HEAD`, fall back to `main`), `command -v flock` check, and a model-availability probe — one trivial `codex exec` per configured model (FR-030); a rejected model stops init with the model named; (1) mechanical install via `scripts/forge/install.sh` — write `forge-project.md` from template (region-merge on re-init), splice AGENTS.md, write CLAUDE.md import, install `.codex/` (preserving pre-existing non-forge `config.toml`/`hooks.json` as `<file>.forge-new`), append the gitignore block (guarded against double-append), create `.forge/evals/tasks/` and `.forge/tmp/`; (2) brownfield mining; (3) region filling; (4) eval baselines; (5) self-review and manifest; (6) present for approval — never auto-commit.
 - **FR-081** (MUST): Brownfield mining MUST follow the seed protocol: CI pipeline definitions are the source of truth for `stack-validations` and `gate1-test-command`; existing linters/formatters are adopted, never replaced; recurring fix/revert patterns from `git log` feed `project-triggers`; a repo whose history shows merge-commit workflow gets the conflict with the linear-history rule surfaced for user decision. The blast-radius suite in `gate1-test-command` MUST be confirmed with the user before the region is marked filled.
 - **FR-082** (MUST): After filling regions, init MUST run the assembled Gate 1 and stack-validation commands once on the clean tree and require them to pass (a gate failing on untouched code is miscalibrated — init stops and reports).
-- **FR-083** (MUST): Init's own output is a control-class change: it MUST run `STRICT=1 run-evals.sh`, spawn `review-final` over the full install diff (binding verdict), verify `grep -rn "forge-init:" forge-project.md` returns nothing, write `.forge-manifest` per DM-005, and then present for explicit user approval.
+- **FR-083** (MUST): Init's own output is a control-class change: it MUST write `.forge-manifest` per DM-005 with `init_completed: false`, run `STRICT=1 run-evals.sh`, spawn `review-final` over the full install diff *including the manifest* (binding verdict), verify `grep -rn "forge-init:" forge-project.md` returns nothing, and then present for explicit user approval; `init_completed` flips to `true` only after that approval.
 - **FR-084** (MUST): Init MUST be idempotent: re-running never overwrites filled regions, existing eval fixtures, or `.result` baselines, and re-splices AGENTS.md rather than duplicating the block.
 
 ### Kill-switch and enforcement hooks (FR-090..FR-094)
 
-- **FR-090** (MUST): The plugin MUST register a PreToolUse hook on Bash that matches commands containing `git commit` or `git push` (word-boundary match, including chained commands). The guard blocks (permission decision deny, with the reason in the message) when: (a) `check-halt.sh` (global `AGENT_HALT` or scoped `AGENT_HALT_commit` sentinel) reports a halt; or (b) for `git commit` in a repo containing `.forge-manifest`: `.forge/tmp/commit-authorized` is missing, its recorded hash differs from the SHA-256 of the current `git diff --cached` output, or its timestamp is older than 30 minutes. In repos without `.forge-manifest`, only the halt check applies.
+- **FR-090** (MUST): The plugin's PreToolUse hook on Bash MUST match any command segment (split on `;`, `&&`, `||`, `|`, and newlines) that invokes git — the token `git`, a path ending in `/git`, or `env` with assignments followed by `git` — followed, after any global options (including `-C <path>`, `-c <k=v>`, `--git-dir=...`), by the subcommand token `commit` or `push`. Shell aliases, functions, and other wrappers are out of scope (see Threat model). The guard blocks (permission decision deny, with the reason in the message) when: (a) `check-halt.sh` (global `AGENT_HALT` or scoped `AGENT_HALT_commit` sentinel) reports a halt; or (b) for `git commit` in a repo where `.forge-manifest` is tracked in `HEAD` (`git cat-file -e HEAD:.forge-manifest`) **or** present in the working tree: `.forge/tmp/commit-authorized` is missing, malformed per DM-006, its recorded hash differs from the SHA-256 of the current `git diff --cached` output, or its timestamp is older than 30 minutes. Deleting or staging deletion of `.forge-manifest` therefore does not lift the guard. In repos meeting neither condition, only the halt check applies.
 - **FR-091** (MUST): `check-halt.sh` MUST implement the upstream contract: global + scoped sentinels at the main-checkout root (resolved via `git rev-parse --git-common-dir`, worktree-transparent), append-only audit line to `.forge/tmp/halt-audit.log` (`<UTC ISO-8601> halt detected (pid <pid>, cwd <cwd>, sentinel <name>)`), exit 0 clear / 1 halted, and exit 0 with a warning outside a git repo. Agents MUST NOT create, delete, or bypass sentinels without explicit user direction.
 - **FR-092** (MUST): The halt MUST be checked at: commit Step 5.0, worktree-merge before rebase, workflow before launching each new execution, and orchestrate between monitor cycles. When halted: no new work, no reintegration, report and wait.
 - **FR-093** (MUST): The plugin Stop hook MUST run `aggregate-telemetry.sh .forge/tmp/decisions --csv .forge/tmp/telemetry-latest.csv` and MUST exit 0 silently when the working directory has no `.forge-manifest` (non-forge repos are unaffected).
-- **FR-094** (SHOULD): The commit guard SHOULD log every block to `.forge/tmp/halt-audit.log` with the blocked command line, so operator forensics have a single file.
+- **FR-094** (SHOULD): The commit guard SHOULD log every block to `.forge/tmp/halt-audit.log` as: UTC timestamp, executable, deny reason code, and a command excerpt truncated to 200 characters with common secret patterns (API/bearer tokens, `password=`, PEM blocks) redacted — never the raw full command line. The log file SHOULD be created with mode 600.
 
 ### Eval harness (FR-100..FR-103)
 
@@ -246,7 +248,7 @@ Region markers and the unfilled sentinel use upstream syntax: `<!-- FORGE:REGION
 
 - **FR-110** (MUST): The plugin MUST ship `rules/review-constitution.md` preserving upstream structure and content: 6 core axioms, 8 lenses with their principle IDs (AMB/INC/CON/FEA/SEC/OPS/COR/CPX, including the existing gap at SEC-10), the 8 per-artefact profiles with `Profile set version: 1.0`, the finding format, the binary PASS/BLOCK verdict (no hedging), and the iteration protocol — with the two project regions replaced by references to `forge-project.md` (`project-triggers`, `completeness-project-items`).
 - **FR-111** (MUST): `agents/review-final.md` MUST carry: `model: fable`, `effort: high`, tools limited to `Read, Bash, Glob, Grep, LS`, the upstream read-only-execution paragraph verbatim, the blind-spot compensation clause, and the constitution path `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`.
-- **FR-112** (MUST): Constitution or profile changes MUST bump `Profile set version` and are control-class (evals + review-final + explicit human approval), enforced by FR-051's control category via the plugin's own repo configuration.
+- **FR-112** (MUST): Constitution or profile changes MUST bump `Profile set version` and are control-class (evals + review-final + explicit human approval), enforced by FR-051's control category via the plugin's own repo configuration. forge-plugin's own repository MUST declare its enforcement surfaces (`skills/`, `hooks/`, `scripts/`, `rules/`, `agents/`, `.claude-plugin/`, `system/`) control-class in its own `file-categories`.
 
 ### Journal discipline and verification doctrine (FR-120..FR-126)
 
@@ -294,7 +296,7 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 
 | Condition | Surface | Result | Notes |
 |-----------|--------|--------|-------|
-| `run_closed: passed` without post-mutation gate-3 pass | `validate --gates` | issue, exit 1 | FR-021 exact string; not retryable — append missing verification or close as blocked |
+| `run_closed: passed` without post-mutation gate-1/2/3 passes | `validate --gates` | one issue per missing gate, exit 1 | FR-021 exact strings; not retryable — append missing verification or close as blocked |
 | Failed gate verification, no passing recheck | `validate --gates` | issue, exit 1 | FR-022 |
 | Unknown `gate-*` criterion | `validate --gates` | issue, exit 1 | FR-023 |
 | Unfilled required region at Gate 1 | `worktree-merge`/`commit` | exit 1, `forge: <region> not configured — run /forge:init` | Fail-closed by design |
@@ -308,10 +310,12 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 | Monitor: declared events path missing | `monitor` | `monitor_error`, exit 1 | Prevented by FR-036 ordering |
 | Stale/unknown agent stream | `monitor` | terminal notification | Ambiguity protocol FR-041/FR-042 before any `execution_result` |
 | Second run opened while one is unclosed | workflow skill | refusal | Successor-run designation required (FR-014) |
+| Dirty implementer worktree at merge start | `worktree-merge` | stop before Gate 1 | Commit via chain or user-approved discard (FR-060) |
+| Control-class merge diff without user approval | `worktree-merge` Gate 4 | wait; no rebase/push | Approval bound to candidate HEAD SHA (FR-060) |
 
 ---
 
-## 10. Behavioral Scenarios
+## Behavioral Scenarios
 
 ### Scenario: Orchestrated task passes all gates and the run closes as passed
 
@@ -321,9 +325,10 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 - **Given** an open run with task-01 active and an implementer execution completed in its worktree
 - **And** the orchestrator has re-run Gate 1 and Gate 2 in the integration target and recorded passing `gate-1: ` and `gate-2: ` verifications
 - **And** review-final returned PASS, recorded as a passing `gate-3: review-final verdict` verification after the implementer's terminal `execution_result`
-- **When** the workflow skill runs `validate --gates` and appends `run_closed` with `judgment: "passed"`
-- **Then** `validate --gates` exits 0 with `ok: true` and `profile: "gates"`
-- **And** `run_closed.validation` embeds that payload verbatim
+- **And** passing `gate-1: ` and `gate-2: ` verifications are likewise recorded after it
+- **When** the workflow skill runs the close sequence `validate --gates → run_closed → validate --gates → report.md`
+- **Then** both validation passes exit 0 with `ok: true` and `profile: "gates"`
+- **And** `run_closed.validation` embeds the pre-close payload verbatim
 
 ### Scenario: Run closed as passed without a final-review gate record
 
@@ -367,8 +372,8 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 **Category**: Happy Path
 
 - **Given** a forge-initialized repo with filled regions and staged changes in the `python` category only
-- **When** `/forge:commit` runs and review-cheap returns PASS on iteration 1
-- **Then** the stack validations for `python` are executed, the marker `.forge/tmp/commit-authorized` is written with the staged-diff hash, `check-halt.sh commit` passes, the commit lock is acquired and released, `git commit` succeeds, and the marker is deleted afterward
+- **When** `/forge:commit` stages the target paths and review-cheap returns PASS on iteration 1 over exactly `git diff --cached`
+- **Then** the stack validations for `python` are executed, the marker `.forge/tmp/commit-authorized` is written with the SHA-256 of the reviewed staged diff, `check-halt.sh commit` passes, the in-lock hash re-verification matches, `git commit` succeeds, and the marker is deleted afterward
 
 ### Scenario: Direct commit without the gate chain is blocked
 
@@ -490,7 +495,7 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 
 - **Given** Gates 1–3 passed in a worktree while the default branch advanced by one commit
 - **When** the merge step runs under the rebase lock
-- **Then** the branch is rebased onto `origin/<default-branch>` and fast-forward pushed, Gate 1 is re-run against the integrated tip before cleanup, and the worktree and branch are removed only after the push succeeds
+- **Then** the branch is rebased onto `origin/<default-branch>`, Gates 1 and 2 are re-run against the integrated tip inside the lock and pass, the branch is then fast-forward pushed, and the worktree and branch are removed only after the push succeeds — the worktree remove uses no `--force`
 
 ### Scenario: flock missing on stock macOS
 
@@ -556,15 +561,52 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 - **When** the workflow skill is asked to start run-B without successor designation
 - **Then** the skill refuses and names run-A as the open run
 
+### Scenario: Control-class merge waits for explicit approval
+
+**Traces to**: FR-060, FR-051
+**Category**: Error Path
+
+- **Given** a worktree whose merge diff touches `.codex/rules/forge.rules` and Gates 1–3 have passed
+- **When** Gate 4 runs
+- **Then** the skill presents the diff summary with the candidate HEAD SHA and waits for explicit user approval
+- **But** nothing is rebased or pushed until the approval is given
+
+### Scenario: Dirty worktree blocks the merge
+
+**Traces to**: FR-060
+**Category**: Error Path
+
+- **Given** an implementer worktree containing an untracked scratch file
+- **When** `/forge:worktree-merge` starts
+- **Then** the merge stops before Gate 1, naming the untracked file, and the worktree is left intact with no cleanup
+
+### Scenario: Deleting the manifest does not lift the guard
+
+**Traces to**: FR-090
+**Category**: Edge Case
+
+- **Given** a repo where `.forge-manifest` is tracked in `HEAD` and staged for deletion, with no gate-pass marker
+- **When** `git commit` is attempted
+- **Then** the guard denies with reason `forge: commit not authorized — run /forge:commit (marker missing)`
+
+### Scenario: Report refused while post-close validation is dirty
+
+**Traces to**: FR-024
+**Category**: Error Path
+
+- **Given** a run closed as `passed` whose journal lacks a passing `gate-2: ` verification after the last mutating execution
+- **When** the report skill runs
+- **Then** the post-close `validate --gates` exits 1 and `report.md` is not written
+
 ---
 
 ## 11. Testing Requirements
 
 ### Unit
 
-- `--gates` checks: FR-021 (present/absent/ordering/zero-mutating-exemption), FR-022 (recheck matching by prefix), FR-023 (unknown gate criterion), payload `profile` key, exit codes
+- `--gates` checks: FR-021 (per-gate presence, ordering, zero-mutating exemption, one issue per missing gate), FR-022 (recheck matching by exact criterion, prefix-only non-match), FR-023 (unknown gate criterion), payload `profile` key, exit codes
 - Baseline `validate` unchanged without `--gates` (all upstream validation tests still green)
-- Commit-guard decision logic: halt, marker missing/stale/hash-mismatch, non-forge repo passthrough, chained-command matching
+- Commit-guard decision logic: halt, marker missing/stale/hash-mismatch/malformed, HEAD-tracked-manifest scoping (incl. staged deletion), non-forge repo passthrough, command-form matrix (`git -C`, path-prefixed, `env`-prefixed, chained, newline-separated)
 - `check-halt.sh` scoped/global sentinels, audit-line format, worktree-transparent root resolution
 - Lock scripts: stale-PID takeover, timeout, foreign-owner release refusal
 - `run-evals.sh`: exit codes 0/1/2, STRICT, empty suite, malformed fixture, review-agent FLAG rejection
@@ -578,11 +620,13 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 - Gates-negative replay variants (passed-close without gate-3; failed gate without recheck)
 - `/forge:init` on a scaffold repo: files written, fail-closed defaults, re-init preservation, gitignore guard
 - Guard hook end-to-end through a scripted PreToolUse invocation (JSON in, decision out)
+- Plugin-load hook discovery (`hooks/hooks.json` registers the PreToolUse guard and Stop hook)
 - `codex execpolicy check` over `forge.rules` for the four denied patterns
 
 ### E2E Smoke
 
-- Full run on a fixture repo with `fake_codex.py`: init → workflow (implementer + review-cheap + review-final gates) → `validate --gates` → `run_closed: passed` → report; then the same journal validates clean under upstream-shape `validate`
+- Full run on a fixture repo with `fake_codex.py`: init → workflow (implementer + review-cheap + review-final gates) → gated close sequence → report; then the same journal validates clean under upstream-shape `validate`
+- Opt-in live smoke (real Codex CLI): one `codex exec` launch per configured model (`gpt-5.6-sol`, `gpt-5.6-terra`) verifying model acceptance and the effort config key
 
 ---
 
@@ -592,8 +636,8 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 - **SC-002**: `validate` without `--gates` on the extended replay journal produces a payload with exactly the four upstream keys and exit 0; with `--gates`, the same journal yields `ok: true`, `profile: "gates"`, exit 0.
 - **SC-003**: The two gates-negative fixtures produce exactly the FR-021 and FR-022 issue strings respectively, with exit 1.
 - **SC-004**: On a freshly initialized scaffold repo before region filling, `grep -rln "forge-init:" forge-project.md` is non-empty and the Gate 1 command exits 1; after `/forge:init` completes, the grep is empty and Gate 1 exits 0 on the clean tree.
-- **SC-005**: With `.forge-manifest` present and no marker, the guard denies `git commit` (deny decision emitted); with a fresh matching marker it allows; with `AGENT_HALT` present it denies both `git commit` and `git push` in any repo.
-- **SC-006**: `codex execpolicy check --rules .codex/rules/forge.rules -- git push --force` reports decision `forbidden`; the three other deny patterns likewise; `git push origin HEAD` is not forbidden.
+- **SC-005**: With `.forge-manifest` present (working tree or `HEAD`, including staged for deletion) and no marker, the guard denies `git commit` — including the forms `git -C <path> commit` and `cd x && git commit`; with a fresh matching marker it allows; with `AGENT_HALT` present it denies both `git commit` and `git push` in any repo.
+- **SC-006**: `codex execpolicy check --rules .codex/rules/forge.rules` reports decision `forbidden` for `git push --force`, `git push origin HEAD`, `git reset --hard`, `git clean -fd`, and `rm -rf /`.
 - **SC-007**: `run-evals.sh` on an empty task dir exits 2; on the three seeded fixtures with matching baselines exits 0; flipping one baseline exits 1.
 - **SC-008**: `grep -ri opencode` over the plugin tree returns matches only under `UPSTREAM`, `docs/design/`, and `docs/specs/`.
 - **SC-009**: The E2E smoke run (fixture repo, `fake_codex.py`) completes twice consecutively with `run_closed: passed` and gate verifications present, per FR-121's two-consecutive-runs rule applied to the release itself.
@@ -606,14 +650,14 @@ Written only by `/forge:commit` Step 4 (or FR-056 skip path); consumed and delet
 |----------|------|-----------|---------------|
 | FR-001..FR-006 | Plugin packaging | Fresh repo initialized (Happy) | Integration: vendored suite, version/manifest checks; Unit: none |
 | FR-010..FR-015 | Vendored engine | Upstream-compatible validation (Happy), Second run refused (Error) | Integration: vendored suite, migrated doc-contract; Unit: baseline validate |
-| FR-020..FR-025 | Level B gates | Run closes passed (Happy), Passed without gate-3 (Error), Failed gate no recheck (Error), Review-only run (Edge) | Unit: --gates checks; Integration: replay ± gates |
+| FR-020..FR-025 | Level B gates | Run closes passed (Happy), Passed without gate-3 (Error), Failed gate no recheck (Error), Review-only run (Edge), Report refused (Error) | Unit: --gates checks; Integration: replay ± gates |
 | FR-030..FR-039 | Roles & launches | Implementer launch ordering (Happy), Reviewer isolation (Happy), Confirmation-round resume (Edge) | Integration: execpolicy check, replay launch assertions |
 | FR-040..FR-043 | Monitoring | Stale treated as ambiguous (Edge) | Integration: vendored monitor tests; Unit: none |
 | FR-050..FR-057 | Commit chain | Commit passes chain (Happy), Empty eval suite (Error), Marker stale (Edge) | Unit: guard logic, evals runner, locks; Integration: guard end-to-end |
-| FR-060..FR-065 | Merge chain | Locked rebase (Happy), Unfilled gate command (Error), flock missing (Edge) | Unit: lock scripts, region sentinel check; Integration: init scaffold |
+| FR-060..FR-065 | Merge chain | Locked rebase (Happy), Unfilled gate command (Error), flock missing (Edge), Control-class merge approval (Error), Dirty worktree (Error) | Unit: lock scripts, region sentinel check; Integration: init scaffold |
 | FR-070..FR-073 | Region file | Fresh repo initialized (Happy), Merge before init (Error), Re-init preserves (Edge) | Unit: region merge; Integration: init scaffold |
 | FR-080..FR-084 | Installer | Fresh repo initialized (Happy), Re-init preserves (Edge) | Integration: init scaffold end-to-end |
-| FR-090..FR-094 | Kill-switch & hooks | Direct commit blocked (Error), Halt blocks merge (Error), Non-forge repo unaffected (Edge) | Unit: guard + check-halt; Integration: hook invocation |
+| FR-090..FR-094 | Kill-switch & hooks | Direct commit blocked (Error), Halt blocks merge (Error), Non-forge repo unaffected (Edge), Manifest deletion (Edge) | Unit: guard + check-halt; Integration: hook invocation, plugin-load discovery |
 | FR-100..FR-103 | Evals | Empty eval suite (Error) | Unit: run-evals exit codes |
 | FR-110..FR-112 | Constitution | Weakened test caught (Error) | Integration: constitution content assertions (migrated doc-contract style) |
 | FR-120..FR-126 | Journal & doctrine | BLOCK enters revision loop (Error), 8-iteration cap (Edge), Injection flagged (Error), Report after close (Happy) | Integration: replay + report skill tests; E2E smoke |
