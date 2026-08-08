@@ -1,4 +1,4 @@
-# claude-forge — Founding Decisions
+# forge-plugin — Founding Decisions
 
 **Status:** agreed 2026-08-08 (Igor + Claude). This document records the founding
 architecture and the resolutions of the five design decisions. It is the input to the
@@ -6,7 +6,7 @@ full specification; it is not the spec.
 
 ## TL;DR
 
-claude-forge is a single Claude Code plugin that merges two systems into one
+forge-plugin is a single Claude Code plugin that merges two systems into one
 streamlined pair-orchestration platform:
 
 - **forge** (github.com/nixlim/forge) supplies the *governance*: the DVRR operating
@@ -19,7 +19,7 @@ streamlined pair-orchestration platform:
 
 **Claude + Codex only.** All opencode support is deleted. Claude Code is the
 orchestrator/verifier harness; Codex CLI (headless `codex exec`) is the execution
-muscle. This is a deliberate divergence from upstream forge — claude-forge is the new
+muscle. This is a deliberate divergence from upstream forge — forge-plugin is the new
 forge; upstream syncs are assessed case-by-case, not automatic.
 
 ## Architecture
@@ -125,7 +125,7 @@ Claude decides acceptance") toward enforcement. Adopted with eyes open.
 
 ### D5 — Provenance and upstream sync: RESOLVED — deliberate divergence
 
-claude-forge is the new forge. Igor maintains upstream forge; claude-forge diverges
+forge-plugin is the new forge. Igor maintains upstream forge; forge-plugin diverges
 freely. When either upstream (forge, alexzh3/codex-orchestrator) updates, we assess
 and cherry-pick — no automatic sync obligation. Keep an `UPSTREAM` manifest (forge's
 pattern) recording both upstream refs and deliberate deviations.
@@ -197,7 +197,7 @@ reviewers) held up — these harden the operational shell around it.
 | Resume-degradation warning, launch mechanics, `-C`+resume incompatibility | PR to alexzh3/codex-orchestrator |
 | Journal-shape pitfalls (docs), SHA discipline | PR to alexzh3/codex-orchestrator |
 | Gate naming convention + Level-B `validate` profile | Fork-only; offer upstream as opt-in profile |
-| DVRR wiring, constitution, gate chain, worktree/locks, kill-switch, evals | claude-forge only |
+| DVRR wiring, constitution, gate chain, worktree/locks, kill-switch, evals | forge-plugin only |
 
 ## Retained forge Assets (Claude + Codex only)
 

@@ -1,4 +1,4 @@
-# claude-forge
+# forge-plugin
 
 A Claude Code plugin merging **forge** (DVRR governance: gate chain, adversarial
 review constitution, worktree discipline, kill-switch, evals) with
