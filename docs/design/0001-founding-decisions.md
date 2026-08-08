@@ -100,20 +100,24 @@ unfilled regions → Gate 1 refuses to pass. `/forge-init` shrinks to: region fi
 AGENTS.md splice + `.codex/` config (agents TOML, execpolicy rules, hooks) +
 gitignore block + eval fixtures.
 
-### D4 — Gate recording in the journal: RESOLVED — Level A now, Level B fast-follow
+### D4 — Gate recording in the journal: RESOLVED — Level B from day one (2026-08-08)
 
-- **Level A (ship first):** gates recorded as ordinary `verification` entries with a
-  naming convention — `criterion: "gate-1: project tests"`, `"gate-3: review-final
-  verdict"`, etc. Schema stays the upstream seven entry types; `validate` untouched;
-  journals remain upstream-valid. Enforcement is prompt-level.
-- **Level B (fast-follow):** extend `validate` to recognize `gate:`-prefixed criteria
-  and add checks: `run_closed` with `judgment: passed` is an issue unless a passing
-  `gate: review-final` verification exists after the last repo-mutating execution; a
-  failed gate verification with no subsequent passing recheck is an issue. No new
-  entry types. **This makes fail-closed mechanical** — something upstream forge never
-  achieved on any harness. Candidate upstream contribution as an opt-in profile flag.
-- **Level C (rejected):** a new `gate` entry type. Breaks upstream journal
-  compatibility with no current justification.
+Ship **Level B**: gates are recorded as ordinary `verification` entries with a naming
+convention (`criterion: "gate-1: project tests"`, `"gate-3: review-final verdict"`,
+etc. — Level A's convention), **and** the `validate` tool is extended to enforce it:
+
+- `run_closed` with `judgment: passed` is an **issue** unless a passing
+  `gate: review-final` verification exists after the last repo-mutating execution;
+- a failed gate verification with no subsequent passing recheck is an issue.
+
+No new entry types — the schema stays the upstream seven, so journals remain readable
+by upstream tooling; the gate checks are additive. **This makes fail-closed
+mechanical** — something upstream forge never achieved on any harness. Candidate
+upstream contribution as an opt-in profile flag.
+
+Rejected: Level A alone (prompt-level enforcement only — the exact gap forge always
+had) and Level C (a new `gate` entry type — breaks upstream journal compatibility
+with no current justification).
 
 Every `validate` change is control-class by forge's own rules (it is a gate), and
 Level B deliberately shifts the upstream philosophy ("validation detects omissions;
@@ -217,6 +221,6 @@ reviewers) held up — these harden the operational shell around it.
 1. Full specification (spec-first; adversarial review before implementation)
 2. Repo skeleton: plugin manifest, skills layout, `UPSTREAM` manifest, vendored
    sources
-3. Implementation per spec; Level A journal convention from day one
-4. Level B `validate` profile as fast-follow
-5. Upstream PRs to alexzh3 per the contribution table
+3. Implementation per spec; Level B (gate convention + `validate` enforcement) from
+   day one
+4. Upstream PRs to alexzh3 per the contribution table
