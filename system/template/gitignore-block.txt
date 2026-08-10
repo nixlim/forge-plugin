@@ -1,0 +1,6 @@
+# --- forge agent system --- #
+/.forge/tmp/
+.worktrees/
+/AGENT_HALT
+/AGENT_HALT_*
+*.local.md

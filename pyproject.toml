@@ -1,0 +1,17 @@
+# Dev-tooling config only; NOT a package/build manifest - plugin runs via bare python3 <path>.
+
+[project]
+name = "codex-orchestrator"
+version = "0.5.0"
+description = "Coordinate reusable monitored OpenAI Codex agents from Claude Code."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "alexzh3" }]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

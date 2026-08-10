@@ -1,0 +1,79 @@
+# Upstream Sources
+
+## nixlim/codex-orchestrator
+
+- Repository: https://github.com/nixlim/codex-orchestrator
+- Vendored commit: ca0141b9354398af785ae43fd191f5eedc582dbb
+- Vendoring date: 2026-08-08
+- Content: orchestration engine, tests, fixtures, replay scaffold, contract documentation, development tooling, and the workflow, orchestrate, and report skills.
+
+## nixlim/forge
+
+- Repository: https://github.com/nixlim/forge
+- Vendored commit: e3c2c27f2c71eee66d2fe1f13f7d036b5e12e546
+- Vendoring date: 2026-08-08
+- Content: governance rules and reviewer agent, project/installer templates, init seeds, commit/worktree gate chains, halt/commit-lock scripts, telemetry aggregation, and the evaluation runner.
+
+## Deviations
+
+- Plugin manifests: renamed the plugin to `forge` and updated its description, owner, author, homepage, and keywords for the merged plugin.
+- Skill namespace: mechanically renamed upstream skill frontmatter to `forge-workflow`, `forge-orchestrate`, and `forge-report`; no Markdown deviation markers are added for this rename.
+- `tests/test_docs_contract.py::documentation_paths`: restricted contract discovery to the vendored operational contract and skills so unrelated design/spec prose is not treated as runtime documentation.
+- `tests/test_docs_contract.py::test_readme_diagrams_the_full_workflow`: migrated from the non-vendored upstream README diagram to equivalent full-lifecycle assertions over `skills/workflow/SKILL.md`.
+- `tests/test_docs_contract.py::test_readme_usage_examples_a_focused_independent_review`: migrated from upstream README usage prose to equivalent namespace and independent-review assertions over the vendored skill prose.
+- `tests/test_docs_contract.py::test_historical_benchmark_distinguishes_target_from_release_tag`: removed because `docs/benchmarks.md` is historical release material outside the task-01 vendoring scope.
+- Validation profile: added opt-in `--gates` checks and a `profile` payload key while preserving plain validation behavior and output shape.
+- Workflow close sequence: replaced the upstream single descriptive close check with advisory pre-close and mandatory post-close gated checks, embedding the pre-close payload verbatim.
+- Report precondition: the report skill refuses to write `report.md` while post-close gated validation reports issues.
+- Single-active-run rule: the workflow refuses a new run while any journal is unclosed unless the user explicitly designates and records a successor run in its goal.
+- Constitution project regions: relocated the inline `project-triggers` and `completeness-project-items` blocks to runtime references to the target repository's root-level `forge-project.md` regions.
+- Governance rules: condensed the seven engine rules for plugin delivery and re-rooted transient state to `.forge/tmp/` and executable references to `${CLAUDE_PLUGIN_ROOT}/scripts/forge/`.
+- Final reviewer runtime references: re-rooted the constitution to `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md` and replaced unavailable installed-template paths with the repository region-file convention.
+- Governance doctrine: wove journal, verification, measurement, leak-check, independent-planning, input/authority, concurrency, worktree, and session requirements into the workflow and orchestrate skills.
+- Region configuration: relocated all nine project-specific regions from upstream rule and skill bodies to `system/template/forge-project.md`; commit, worktree-merge, and workflow read the rendered root-level `forge-project.md` exclusively, eliminating the upstream triplication of `gate1-test-command` (FR-073).
+- FR-070: replaced distributed project placeholders with one fail-closed `system/template/forge-project.md` containing the static DVRR spine and nine ordered sentinel-bearing regions.
+- Commit workflow delivery: merged `.opencode/rules/commit-workflow.md` and `.agents/skills/commit/SKILL.md` into `skills/commit/SKILL.md`; re-rooted the review constitution to `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`, the evaluation harness to `${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh`, and governance commands to `${CLAUDE_PLUGIN_ROOT}/scripts/forge/{check-halt,acquire-commit-lock,release-commit-lock}.sh`.
+- Commit authorization: strengthened upstream review handling with blocking secret detection and explicit unstaging, exact staged-diff SHA-256 authorization markers invalidated on every new or failed attempt and withheld until control approval, in-lock hash re-verification, durable skip records, explicit-run-only gate journaling, and gated approval for control-class commits (FR-050..FR-057).
+- FR-050: made the five commit stages an explicit fail-closed chain and confined the commit lock to the final halt/hash/commit stage.
+- FR-051: replaced legacy control paths with the non-narrowable Forge plugin control set, control evals, binding review-final, and candidate-bound user approval.
+- FR-052: split fresh distinct review routing by authority class and replaced secret redaction or silent exclusion with block, full-file unstage, and user disclosure.
+- FR-053: made revalidation after fixes, above-MINOR user disposition, and the eight-review no-commit residual-risk escalation explicit.
+- FR-054: added exact staged-diff SHA-256 authorization, preflight and failure invalidation, a 30-minute PASS time, and deletion after every commit attempt.
+- FR-055: re-rooted halt and commit-lock scripts, renamed ownership to `FORGE_SESSION_PID`, and added the mandatory in-lock marker hash check plus interrupt-safe release.
+- FR-056: replaced permissive skip handling with the exact directive mapping, warnings, a three-line user-directed marker for review skips, and immediate durable decision or audit records.
+- FR-057: added explicit-run-only DM-001 records for every applicable validation and review execution and prohibited latest-run inference.
+- Worktree-merge delivery: merged `.opencode/rules/worktree-workflow.md` steps 3-8 and `.agents/skills/worktree-merge/SKILL.md` into `skills/worktree-merge/SKILL.md`; re-rooted the halt command to `${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh`, the review constitution to `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`, and all gate configuration to the target repository's root-level `forge-project.md`.
+- FR-060: replaced upstream `origin/master` and automatic Gate 4 with default-branch full-diff classification, four fail-closed gates, and explicit candidate-HEAD approval for control diffs.
+- FR-061: added fail-closed root-file and sentinel checks for all three required gate regions with the exact init error.
+- FR-062: moved the rebase mutex to the absolute Git common directory, re-rooted the halt check, required the 300-second flock-or-mkdir lock path, and prohibited merge-based reintegration.
+- FR-063: moved upstream post-push Gate 1 verification in-lock and pre-push, added Gate 2 for every integrated rewrite/default advance and Gate 3 for conflicts or a rewritten candidate SHA, and rebound any control approval before pushing that same HEAD.
+- FR-064: replaced upstream forced worktree removal and unconditional branch deletion with checked non-forced removal after successful push and ancestry-confirmed branch deletion.
+- FR-065: changed agent-reported gate results to claims and required the orchestrator to re-run Gates 1-2 in the integration target before reintegration.
+- Halt script: ported `.opencode/scripts/check-halt.sh` to `scripts/forge/check-halt.sh` and re-rooted its audit state from `.tmp/halt-audit.log` to the target repository's `.forge/tmp/halt-audit.log`.
+- Commit-lock acquisition script: ported `.opencode/scripts/acquire-commit-lock.sh` to `scripts/forge/acquire-commit-lock.sh`, re-rooted `.tmp/.commit-lock` to the Git-common-dir main checkout's `.forge/tmp/commit-lock`, renamed session ownership from `OPENCODE_SESSION_PID` to `FORGE_SESSION_PID`, renamed the test timeout override to `FORGE_COMMIT_LOCK_TIMEOUT`, fixed polling at the specified 2 seconds, replaced process-list inspection with same-operator `kill -0` liveness, and serialized stale takeover with a non-orphanable `flock`/`lockf` state lock while recovering dead-owner and ownerless legacy mutex directories.
+- Commit-lock release script: ported `.opencode/scripts/release-commit-lock.sh` to `scripts/forge/release-commit-lock.sh`, re-rooted `.tmp/.commit-lock` to the Git-common-dir main checkout's `.forge/tmp/commit-lock`, renamed session ownership from `OPENCODE_SESSION_PID` to `FORGE_SESSION_PID`, and retained fail-closed foreign-owner refusal with strict two-field record parsing.
+- Review constitution placeholder: replaced `{{FORGE_PROJECT_NAME}}` with generic target-repository wording so the shipped plugin contains no unrendered project-name placeholder.
+- Review constitution version placeholder: removed `({{FORGE_INSTALL_DATE}})` because the static profile-set version is not installation-specific.
+- Final reviewer placeholder: replaced `{{FORGE_PROJECT_NAME}}` with generic target-repository wording so the shipped agent contains no unrendered project-name placeholder.
+- Codex project layer: reduced the upstream agent registry to `implementer` and `review-cheap`, set the FR-038 root policy and thread/depth limits, and added the stable `forge-managed` ownership signature used by idempotent collision handling.
+- Codex implementer routing: changed the upstream model/effort to `gpt-5.6-sol`/`ultra`, retained `workspace-write`, permitted commits only inside the assigned worktree, and prohibited pushes, other branches, and destructive Git commands (FR-030..FR-031).
+- Codex first-pass review routing: changed the upstream model to `gpt-5.6-terra`, retained `medium` reasoning and `read-only`, re-rooted the constitution to `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`, and made project context a launch-time injection from `forge-project.md` (FR-030, FR-032, FR-037).
+- FR-039: retained the four upstream exec-policy deny rules verbatim and added a fifth prefix rule denying every `git push` invocation because only the orchestrator owns reintegration.
+- Codex Stop hooks: retained the notification, re-rooted telemetry execution to `${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh`, moved decisions and CSV output to `.forge/tmp/`, and embedded the stable ownership signature without adding a nonstandard JSON field.
+- DM-007 gitignore block: replaced upstream `.tmp` entries and the tracked scratch placeholder exception with the exact repo-local `/.forge/tmp/`, worktree, halt-sentinel, and local-document patterns.
+- Seed protocol paths: re-rooted generated eval fixtures and baselines to `.forge/evals/tasks/`, centralized project configuration in the nine `forge-project.md` regions, and updated brownfield exploration to match the plugin install collision and user-confirmation workflow.
+- Seed template path: re-rooted the injection fixture's untrusted-input authority to `${CLAUDE_PLUGIN_ROOT}/rules/untrusted-input.md`; the planted-bug and clean-change templates remain upstream-identical.
+- Installer and init delivery: rewrote the upstream workflow as `skills/init/SKILL.md` plus portable `scripts/forge/install.sh`, re-rooted inputs to plugin-owned template and Codex paths, centralized region merge and AGENTS.md splice behavior, and made manifest completion explicit-approval-only.
+- Codex exec-policy documentation: removed references to unshipped harness configurations while preserving the four upstream rule blocks byte-identically.
+- Codex role prompt templates: added plugin-owned implementer and first-pass-review templates under `system/codex/prompts/`, including the implementer worktree boundary, read-only reviewer isolation, goal/criteria/constraint skeletons, and the unchanged six-heading handoff contract; launch-time assembly injects only the target repository's `agent-project-context` region before the concrete assignment.
+- FR-034 launch mechanics: extended the upstream `codex exec` shape with explicit role model and `model_reasoning_effort` config, strict preparation/journal ordering, literal absolute redirects, detached process groups, three-line PID sidecars, and a prohibition on ephemeral or harness-managed launches.
+- FR-034 CLI compatibility: verified the installed `codex-cli 0.147.0` without launching a session; `codex exec --help` accepts TOML `-c key=value` overrides, its non-session feature-list command accepts the spec value through `-c model_reasoning_effort="ultra"`, and the official Codex config reference documents `model_reasoning_effort`, so no effort-key substitution is required.
+- Codex session lifecycle: prohibited every implementer resume and retained resume only for a same-reviewer confirmation round in the next execution directory, using the recorded session ID and no `-C`.
+- Reviewer launch isolation: replaced upstream orchestration guidance that used `workspace-write` with fresh `gpt-5.6-terra`/`medium` launches under `-s read-only`, exact-SHA prompts, and explicit exclusion of handoffs, claimed tests, earlier verdicts, and tentative conclusions.
+- Monitor hardening: added a maximum 60-minute re-arm interval, halt checks between cycles, PID/PGID plus events/handoff/worktree inspection for stale streams, event-type dumping without inference for unknown formats, and all-target state rechecks after sleep gaps.
+- FR-130 overlap scheduling: tightened upstream parallel-work guidance so every overlap in files, contracts, or shared resources executes serially; isolated worktrees permit concurrency only for disjoint ownership.
+- Commit guard hook: added the forge-new Claude Code `PreToolUse` enforcement surface; upstream forge has no equivalent segment-aware commit authorization hook or redacted block-audit contract.
+- Telemetry aggregation: ported `.opencode/scripts/aggregate-telemetry.sh` to `scripts/forge/aggregate-telemetry.sh`, re-rooted state and Stop-hook outputs to `.forge/tmp/`, and made non-forge working directories a silent no-op.
+- Evaluation runner: ported `.opencode/evals/run-evals.sh` to `scripts/forge/run-evals.sh` and re-rooted fixtures from `.opencode/evals/tasks/` to `.forge/evals/tasks/` while preserving dependency-free verdict regression semantics.
+- README harness scope: neutrally describes other-harness support as out of scope instead of naming the unshipped upstream harness.
+- Launch documentation contract tests: replaced upstream implementation-resume and writable-review assertions with the forge reviewer-only resume, read-only sandbox, routed model/effort, detached-launch, PID-sidecar, literal-redirect, and ambiguity-protocol contract.

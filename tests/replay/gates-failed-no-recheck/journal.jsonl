@@ -1,0 +1,4 @@
+{"type":"run_started","run_id":"gates-failed-no-recheck"}
+{"type":"task","id":"task-01","status":"complete"}
+{"type":"verification","id":"gate-1-failed","task":"task-01","criterion":"gate-1: project tests","method":"command","check":"python3 -m unittest","result":"failed","observation":"tests failed"}
+{"type":"run_closed","judgment":"blocked"}

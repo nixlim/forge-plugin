@@ -3,3 +3,5 @@
 # auto-generated CLAUDE.md stubs (claude-mem hook) — root CLAUDE.md stays trackable
 **/CLAUDE.md
 !/CLAUDE.md
+.upstream/
+__pycache__/

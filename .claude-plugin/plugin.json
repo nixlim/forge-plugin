@@ -1,0 +1,18 @@
+{
+  "name": "forge",
+  "description": "Coordinate reusable monitored OpenAI Codex agents from Claude Code with forge governance.",
+  "version": "0.5.0",
+  "author": {
+    "name": "nixlim"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/nixlim/forge-plugin",
+  "keywords": [
+    "codex",
+    "orchestration",
+    "claude-code",
+    "code-review",
+    "workflow",
+    "governance"
+  ]
+}

@@ -1,0 +1,7 @@
+{"type":"run_started","run_id":"gates-missing-gate-3"}
+{"type":"task","id":"task-01","status":"complete"}
+{"type":"execution","task":"task-01","agent":"codex-fixture-01","execution":"execution-01","role":"implementation","handoff":"handoff.md"}
+{"type":"execution_result","task":"task-01","agent":"codex-fixture-01","execution":"execution-01","status":"complete","handoff":"handoff.md"}
+{"type":"verification","id":"gate-1-pass","task":"task-01","criterion":"gate-1: project tests","method":"command","check":"python3 -m unittest","result":"passed","observation":"tests passed"}
+{"type":"verification","id":"gate-2-pass","task":"task-01","criterion":"gate-2: lint and types","method":"command","check":"ruff check .","result":"passed","observation":"lint passed"}
+{"type":"run_closed","judgment":"passed"}

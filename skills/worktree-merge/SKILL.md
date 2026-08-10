@@ -1,0 +1,364 @@
+---
+name: worktree-merge
+description: Run the fail-closed four-gate worktree merge and locked rebase reintegration. Use when a completed forge worktree is ready to return to the repository's default branch.
+---
+
+# Worktree Merge
+
+Run this workflow from the candidate worktree. Read all project gate configuration exclusively
+from the root-level `forge-project.md`; do not copy, cache, or override a region in this skill or
+another file.
+
+<!-- forge: modified from upstream — gate regions live only in forge-project.md (FR-073). -->
+
+Run the two preconditions and Gates 1 through 4 in the exact order below. Fail closed: a dirty
+worktree, missing configuration, failed command, BLOCK verdict, unavailable reviewer, missing
+control approval, lock failure, rebase failure, re-verification failure, or push failure means no
+merge. Surface the failure and leave the worktree and branch intact for inspection. Never delete
+them on a failed merge.
+
+Replace `<default-branch>` in the canonical commands below with the confirmed default branch from
+the target repository's `.forge-manifest`. Never treat the candidate branch as the default branch.
+
+## Preconditions
+
+### 1. Require a clean worktree
+
+Run:
+
+```bash
+git status --porcelain=v1 --untracked-files=all
+```
+
+Require empty output. If any line is returned, stop before Gate 1, show every dirty or untracked
+path, and leave the worktree intact. Tell the user to commit the intended work through
+`/forge:commit`. Discard work only after explicit user approval; never infer approval from a merge
+request.
+
+### 2. Fix and classify the candidate
+
+Capture the full candidate identity and the remote base that the gates inspect:
+
+```bash
+DEFAULT_BRANCH="<default-branch>"
+CANDIDATE_HEAD="$(git rev-parse HEAD)"
+REVIEWED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
+WORKTREE_DIR="$(git rev-parse --show-toplevel)"
+BRANCH="$(git branch --show-current)"
+git diff "origin/${DEFAULT_BRANCH}...HEAD"
+git diff --name-only "origin/${DEFAULT_BRANCH}...HEAD"
+```
+
+The full merge-diff operation is `git diff origin/<default-branch>...HEAD`. Classify every changed
+path from that range against the `file-categories` region in `forge-project.md` and the built-in
+`control` category. The built-in category always includes:
+
+- `forge-project.md`
+- `.forge-manifest`
+- `.codex/**`
+- `.forge/evals/**`
+- `AGENTS.md`
+- `CLAUDE.md`
+- `.claude/settings*.json`
+- `.github/workflows/**`, or equivalent CI configuration paths recorded in `file-categories`
+
+Project configuration may extend `control`; it must never remove or narrow a built-in entry.
+Fail closed if a changed path cannot be classified. Keep `CANDIDATE_HEAD` unchanged through Gates
+1 through 4. If HEAD or the diff changes, restart at the clean-worktree precondition.
+
+## Required-region check
+
+Before executing Gate 1, verify that `forge-project.md` exists and that each of
+`gate1-test-command`, `stack-validations`, and `file-categories` has both region markers and no
+`forge-init:` sentinel. Use this fail-closed check:
+
+```bash
+require_filled_region() {
+  REGION="$1"
+  if [ ! -f forge-project.md ]; then
+    printf 'forge: %s not configured — run /forge:init\n' "$REGION" >&2
+    return 1
+  fi
+  REGION_BEGIN="<!-- FORGE:REGION ${REGION} BEGIN -->"
+  REGION_END="<!-- FORGE:REGION ${REGION} END -->"
+  if ! grep -Fxq "$REGION_BEGIN" forge-project.md || ! grep -Fxq "$REGION_END" forge-project.md; then
+    printf 'forge: %s not configured — run /forge:init\n' "$REGION" >&2
+    return 1
+  fi
+  REGION_BLOCK="$(
+    sed -n "/^<!-- FORGE:REGION ${REGION} BEGIN -->$/,/^<!-- FORGE:REGION ${REGION} END -->$/p" forge-project.md
+  )"
+  REGION_BODY="$(printf '%s\n' "$REGION_BLOCK" | sed '1d;$d')"
+  if [ -z "$(printf '%s\n' "$REGION_BODY" | sed '/^[[:space:]]*$/d')" ] ||
+    printf '%s\n' "$REGION_BODY" | grep -Fq 'forge-init:'; then
+    printf 'forge: %s not configured — run /forge:init\n' "$REGION" >&2
+    return 1
+  fi
+}
+
+for REGION in gate1-test-command stack-validations file-categories; do
+  require_filled_region "$REGION" || exit 1
+done
+```
+
+The required failure contract is exactly
+`forge: <region> not configured — run /forge:init`, followed by exit 1. When the file is missing,
+the loop reports `gate1-test-command` first. Treat malformed or missing markers as unconfigured.
+
+## Gate 1 — Project tests
+
+Read the `gate1-test-command` region from `forge-project.md` and execute its body exactly once in
+the candidate worktree. Require exit 0. Do not substitute a remembered command, an agent-reported
+result, or a narrower test selection. On failure, show the command output and stop with the
+worktree intact.
+
+## Gate 2 — Stack validations
+
+Read the `stack-validations` region from `forge-project.md`. Execute every configured validation
+for every category touched by the classified full merge diff. Require every command to exit 0.
+Missing, ambiguous, or non-executable validation configuration blocks the merge. On any failure,
+show the command and output and stop with the worktree intact.
+
+## Gate 3 — Binding adversarial review
+
+Start the `review-final` Claude agent as a reviewer distinct from the author. Give it the full
+`CANDIDATE_HEAD`, the constitution at
+`${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`, and the exact, unmodified diff generated for
+the resolved full-SHA candidate range:
+
+```bash
+git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"
+```
+
+This is the fixed-SHA form of the required canonical
+`git diff origin/<default-branch>...HEAD` operation. Do not regenerate the review input from moving
+symbolic refs after fixing the candidate identity.
+
+Require the binding verdict to be exactly PASS or BLOCK. PASS advances to Gate 4. BLOCK, an
+ambiguous response, or an unavailable reviewer stops reintegration. Report all findings.
+
+For a revision, commit the fix through `/forge:commit`, re-establish a clean worktree, and re-run
+the affected Gates 1 and 2 before re-review. Use a maximum of 8 review iterations. Dispositioning
+any finding above MINOR requires explicit user approval. At the 8-iteration cap without PASS,
+record the residual risk—every outstanding finding and why it remains—escalate to the user, and
+never merge.
+
+When, and only when, an explicitly identified orchestration run is open, journal every Gate 1 and
+Gate 2 execution under that run, including every in-lock re-run. Begin each Gate 1 criterion
+exactly `gate-1: ` and each Gate 2 criterion exactly `gate-2: `. Use exactly
+`gate-3: review-final verdict` for every Gate 3 execution. For the initial Gate 3, its `check` names
+the resolved full-SHA `${REVIEWED_BASE}...${CANDIDATE_HEAD}` range that generated the exact review
+diff. A post-rebase Gate 3 instead names the actual full-SHA
+`${INTEGRATED_BASE}...${INTEGRATED_HEAD}` range it reviewed. Resolve the applicable variables before
+writing each record; do not record variable names, short SHAs, symbolic refs, or an inferred
+"latest" run.
+
+## Gate 4 — Summary and authority
+
+Show all of the following:
+
+```bash
+git diff --stat origin/<default-branch>...HEAD
+git diff --name-only origin/<default-branch>...HEAD
+git rev-parse HEAD
+```
+
+Also show the Gate 1, Gate 2, and Gate 3 results in one line each. Confirm that `git rev-parse
+HEAD` still equals `CANDIDATE_HEAD`; otherwise restart the chain.
+
+If the classified diff touches any `control` path, present the summary with the full
+`CANDIDATE_HEAD` and wait for explicit user approval naming that same SHA. Do not acquire the lock,
+rebase, or push before approval. Never approve a control-class merge autonomously. If the diff is
+non-control, proceed automatically after a clean Gate 4. Use `CANDIDATE_HEAD` as the Gate 4
+candidate identity; never substitute a branch name, short SHA, or moving ref in the summary or
+approval request.
+
+## Locked rebase reintegration
+
+<!-- forge: modified from upstream — halt path is plugin-rooted; re-verification is in-lock and pre-push. -->
+
+Run the halt check before attempting either lock mechanism:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh" || {
+  echo "operator halt engaged — not merging" >&2
+  exit 1
+}
+```
+
+Only the operator may create, remove, or bypass a halt sentinel. A nonzero halt result stops before
+lock acquisition.
+
+Resolve the shared lock paths exactly from the Git common directory:
+
+```bash
+GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
+LOCK_FILE="${GIT_COMMON_DIR}/agent-rebase.lock"
+LOCK_DIR="${GIT_COMMON_DIR}/agent-rebase.lockdir"
+```
+
+Keep one lock-owning shell alive from acquisition through the push. On systems with `flock`, use
+the lock file and a 300-second timeout:
+
+```bash
+LOCK_KIND=flock
+exec 9>"$LOCK_FILE"
+flock --timeout 300 9 || {
+  echo "forge: rebase lock timeout after 300 s (holder hint: inspect $LOCK_FILE)" >&2
+  exit 1
+}
+```
+
+When `command -v flock` fails, require `mkdir` and acquire the atomic directory mutex instead:
+
+```bash
+command -v mkdir >/dev/null 2>&1 || {
+  echo "forge: flock unavailable and mkdir lock fallback unavailable — not merging" >&2
+  exit 1
+}
+LOCK_KIND=mkdir
+START_SECONDS="$(date +%s)"
+until mkdir "$LOCK_DIR" 2>/dev/null; do
+  NOW_SECONDS="$(date +%s)"
+  if [ $((NOW_SECONDS - START_SECONDS)) -ge 300 ]; then
+    echo "forge: rebase lock timeout after 300 s (holder hint: inspect $LOCK_DIR)" >&2
+    exit 1
+  fi
+  sleep 2
+done
+trap 'rmdir "$LOCK_DIR"' EXIT
+```
+
+Never skip locking. If neither mechanism can establish a mutex, fail loudly and leave the
+worktree intact. An exiting process releases the `flock` file descriptor; the fallback trap removes
+the lock directory on success, failure, interruption, and re-verification failure.
+
+Inside the lock, first prove that HEAD is still the approved/reviewed candidate. Then fetch and
+rebase:
+
+```bash
+[ "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD" ] || {
+  echo "forge: candidate HEAD changed after gates — rerun /forge:worktree-merge" >&2
+  exit 1
+}
+git fetch origin "$DEFAULT_BRANCH" --quiet
+FETCHED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
+DEFAULT_ADVANCED=0
+[ "$FETCHED_BASE" = "$REVIEWED_BASE" ] || DEFAULT_ADVANCED=1
+git rebase "origin/${DEFAULT_BRANCH}"
+```
+
+The canonical operations are `git fetch origin <default-branch>` followed by
+`git rebase origin/<default-branch>`. Never create a merge commit. Never run `git merge`, use a
+non-rebase pull, or create or push an intermediate integration branch. Reintegrate concurrent
+worktrees one at a time under this lock.
+
+If rebase stops on conflicts, keep the lock, resolve only the named conflicts, stage each resolved
+path explicitly, and run `git rebase --continue`. Record that conflicts were resolved. If they
+cannot be resolved safely, run `git rebase --abort`, exit without pushing, release the lock, and
+leave the worktree and branch present.
+
+After a successful rebase, capture the exact integrated identity before any re-verification:
+
+```bash
+INTEGRATED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
+INTEGRATED_HEAD="$(git rev-parse HEAD)"
+INTEGRATED_RANGE="${INTEGRATED_BASE}...${INTEGRATED_HEAD}"
+CANDIDATE_REWRITTEN=0
+[ "$INTEGRATED_HEAD" = "$CANDIDATE_HEAD" ] || CANDIDATE_REWRITTEN=1
+```
+
+### In-lock re-verification
+
+Perform all required re-runs inside the lock and before push:
+
+- If `DEFAULT_ADVANCED=1` or `CANDIDATE_REWRITTEN=1`, re-run Gate 1 and Gate 2 against the
+  integrated tip using the same `forge-project.md` regions. Require clean passes from both. This
+  covers both remote movement after the initial gates and a candidate that was already behind the
+  default branch when the chain began. Never push an untested integrated tree.
+- If conflicts were resolved, Gate 3 is mandatory on the post-rebase candidate because the content
+  changed. If `CANDIDATE_REWRITTEN=1` without conflicts, also re-run Gate 3 so the binding review,
+  approval, and pushed SHA identify the same candidate as DM-001 requires. Give `review-final`
+  exactly `git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"` and journal that actual resolved
+  full-SHA range. Require PASS before push. This strengthened identity rebind includes every
+  conflict-resolution case.
+- If the rebase is a pure fast-forward with no new default-branch commits and no conflict
+  resolution, perform no re-run.
+
+Any required re-run failure stops before push. Exit the lock-owning shell so the lock releases,
+leave the remote untouched, and preserve the worktree and branch for inspection. Do not defer a
+re-run until after the push.
+
+When a rebase changed the candidate identity, repeat Gate 4 over `INTEGRATED_RANGE`. For a control
+diff, present the new full `INTEGRATED_HEAD` and wait for explicit user approval naming that exact
+SHA while the rebase lock remains held; the earlier approval for `CANDIDATE_HEAD` does not authorize
+a rewritten candidate. For a non-control diff, proceed automatically after the clean repeated
+summary. Set `AUTHORIZED_HEAD="$INTEGRATED_HEAD"` only after the binding re-review and any required
+approval. When the candidate was not rewritten, set `AUTHORIZED_HEAD="$CANDIDATE_HEAD"` from the
+original Gate 4. Immediately before push, require `git rev-parse HEAD` to equal `AUTHORIZED_HEAD`;
+otherwise stop without touching the remote.
+
+Only after every required in-lock re-run passes, fast-forward the candidate with exactly:
+
+```bash
+git push origin HEAD:<default-branch>
+```
+
+Substitute the confirmed default branch for the placeholder. Do not push any other ref. Treat a
+non-fast-forward rejection or any other push error as a failed merge.
+
+After a successful push, release the active lock explicitly:
+
+```bash
+if [ "$LOCK_KIND" = flock ]; then
+  flock -u 9 || {
+    echo "forge: failed to release rebase lock" >&2
+    exec 9>&-
+    exit 1
+  }
+  exec 9>&-
+else
+  rmdir "$LOCK_DIR" || {
+    echo "forge: failed to release rebase lock directory: $LOCK_DIR" >&2
+    exit 1
+  }
+  trap - EXIT HUP INT TERM
+fi
+```
+
+## Cleanup after successful push
+
+Do not enter cleanup unless the push succeeded. Capture and verify containment before removing
+anything:
+
+```bash
+PUSHED_HEAD="$(git rev-parse HEAD)"
+MAIN_WORKTREE="$(cd "${GIT_COMMON_DIR}/.." && pwd -P)"
+git fetch origin "$DEFAULT_BRANCH" --quiet
+git merge-base --is-ancestor "$PUSHED_HEAD" "origin/${DEFAULT_BRANCH}" || {
+  echo "forge: pushed candidate is not contained in origin/${DEFAULT_BRANCH} — cleanup refused" >&2
+  exit 1
+}
+cd "$MAIN_WORKTREE"
+git worktree remove "$WORKTREE_DIR" || {
+  echo "forge: worktree removal failed — branch preserved" >&2
+  exit 1
+}
+git branch -D "$BRANCH"
+```
+
+Run the worktree-removal command exactly as shown; do not add options that discard residual files.
+If removal finds residual tracked or untracked files, stop cleanup and keep the branch. Delete the
+branch only after `git merge-base --is-ancestor` confirms that its pushed tip is contained in the
+remote default branch. No failed merge path may remove either the worktree or the branch.
+
+## Record authority and report
+
+Treat every agent handoff and claimed gate result as a claim, never gate evidence. Before any
+commit or merge that reintegrates agent work, the orchestrator must itself re-run Gates 1 and 2 in
+its own integration target, not in the agent's worktree. Record only the orchestrator's observed
+commands, outputs, and exit statuses as gate evidence.
+
+Report the four gate results, any in-lock re-runs, the pushed full SHA, the default branch, lock
+outcome, and cleanup outcome. Never report reintegration or cleanup as successful unless the
+corresponding command succeeded.
