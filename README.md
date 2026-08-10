@@ -23,6 +23,7 @@ The repository is its own plugin marketplace. From any Claude Code session:
 ```
 /plugin marketplace add nixlim/forge-plugin
 /plugin install forge@forge
+/reload-plugins
 ```
 
 (For a local checkout, pass the absolute path to the repo instead of the GitHub
