@@ -10,12 +10,20 @@ unavailable command or reviewer as a PASS. Any non-skipped failure stops the cha
 failure, and leaves the change uncommitted. Hold the commit lock only during Step 5, never during
 the Step 4 review loop.
 
-Use the root-level `forge-project.md` as the exclusive source of project gate configuration. Do not
-read duplicated gate defaults from another rule, skill, prompt, or generated harness file. Before
-Step 1, require `forge-project.md` and require the `file-categories`, `stack-validations`, and
-`gate1-test-command` regions to contain no `forge-init:` sentinel. For a missing file, missing
-region, or unfilled region, print `forge: <region> not configured — run /forge:init` with the
-affected region name and exit 1.
+Resolve all project gate configuration from committed HEAD. At the start of the chain, run
+`git show HEAD:forge-project.md` and use only those returned bytes for every policy read in Steps
+1–4, including classification, executable commands, changelog policy, review context, invariants,
+and risk routing. Never open the working-tree `forge-project.md`, a rendered copy, or duplicated
+defaults for policy. If HEAD changes before the commit, discard the snapshot and restart the chain.
+Before Step 1, require the committed `file-categories`, `stack-validations`, and
+`gate1-test-command` regions to contain no `forge-init:` sentinel. For a missing committed file,
+missing region, or unfilled region, print `forge: <region> not configured — run /forge:init` with
+the affected region name and exit 1. The only missing-HEAD exception is `/forge:init`'s fixed,
+plugin-owned first-policy bootstrap flow; it must execute no candidate policy command or prompt.
+For every non-mutation executable policy cell, use the FR-149 runner discipline described in Step
+2: repository-root working directory, `bash -c <complete-cell> forge`, separate later argv
+parameters, an isolated process group, a 65,536-byte combined-output cap, and a fixed 300-second
+fail-closed timeout. This applies to stack validations and gate commands as well as invariants.
 
 Only consult an orchestration journal when an open run has been explicitly identified by a run ID
 passed by the orchestrator or confirmed by the user. Never infer the latest run. With no explicitly
@@ -49,10 +57,61 @@ commits autonomously.
 
 ## Step 2 — Validate
 
-Run every executable command in the `stack-validations` region for every category touched by the
-target paths. Run all applicable commands when categories overlap. Prefer execution evidence over
-static inspection, and treat any missing applicable command, nonzero exit, malformed result, or
-unavailable tool as failure.
+Run the committed `gate1-test-command` first, targeted to the explicit target paths while retaining
+its configured always-run blast-radius suite. Invoke its complete command unchanged from the
+repository root as exactly one argument to `bash -c`, followed by literal `forge` as `$0` and every
+derived repository-relative test path or scope as a separate subsequent argv element consumed via
+`"$@"`. Never concatenate or interpolate target paths into the command. Use an isolated process
+group, a 65,536-byte combined stdout/stderr cap, and the fixed 300-second timeout. A nonzero exit,
+launch failure, output-limit breach, timeout, missing command, or malformed command blocks Step 2.
+
+Run every executable command in the committed `stack-validations` region for every category
+touched by the target paths. Run all applicable commands when categories overlap. Prefer execution
+evidence over static inspection, and treat any missing applicable command, nonzero exit, malformed
+result, or unavailable tool as failure.
+
+Validate the entire committed `invariants` region before executing any row. It accepts only the
+table `| invariant | check command | enforcement point |`, with nonempty invariant and command
+cells and an enforcement point exactly equal to `commit`, `merge`, or `hook`. An empty command,
+malformed row, multi-row command, unknown enforcement point, or otherwise unparseable nonempty
+region prints this exact first line and blocks Step 2 without executing any invariant row:
+
+```text
+forge: executable policy row malformed
+```
+
+Run every `commit` row from the validated table. From the repository root, invoke the complete
+command cell unchanged as exactly one argument to `bash -c`, followed by the literal `forge` as
+`$0`. Never concatenate, interpolate, source-wrap, or `eval` a command cell. When a check has
+parameters, pass each repository-relative path or scope as one subsequent argv element for the
+cell to consume through `"$@"`; never splice a path, diff, invariant name, or region text into the
+command string. Give every check its own process group, cap combined stdout and stderr at 65,536
+bytes, and enforce a 300-second timeout that kills the complete process group.
+
+A nonzero exit, launch failure, or output-limit breach blocks with this exact first line, followed
+only by capped diagnostics:
+
+```text
+forge: invariant failed (commit): <invariant>
+```
+
+A timeout blocks with this exact first line:
+
+```text
+forge: invariant timed out (commit): <invariant>
+```
+
+Derive every touched test file mechanically from the explicit target paths. When at least one is
+touched, run all paths as separate argv elements after `--`:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-test-quality.py" -- <touched-test-path>...
+```
+
+Exit 1 from the Python AST branch and exit 2 for sensor failure both block Step 2. Exit 0 is a
+pass for gate flow, but preserve every non-Python advisory, missing-heuristic notice, and valid
+waiver path plus reason in Step 2 and review evidence. A waiver suppresses only that file's
+assertion sensor; it never skips tests, mutation checks, invariants, or another file.
 
 For a control-class commit, additionally run:
 
@@ -76,10 +135,10 @@ collapse distinct gate executions.
 
 ## Step 3 — Apply the Changelog Policy
 
-Read and apply the `changelog-policy` region exactly. When it requires an entry, update it and add
-that exact path to the explicit commit target set before Step 4. When it states that no changelog
-gate is configured, report Step 3 as not applicable. Any ambiguity or unmet requirement blocks the
-chain unless the user explicitly invokes the matching skip directive.
+Read and apply the committed `changelog-policy` region exactly. When it requires an entry, update
+it and add that exact path to the explicit commit target set before Step 4. When it states that no
+changelog gate is configured, report Step 3 as not applicable. Any ambiguity or unmet requirement
+blocks the chain unless the user explicitly invokes the matching skip directive.
 
 ## Step 4 — Stage, Scan, and Review
 
@@ -134,8 +193,8 @@ The reviewer must always be a distinct agent from the author. A reused author co
 reviewer, launch error, missing verdict, or anything other than an explicit PASS is not a PASS.
 
 Give the reviewer the following upstream review instruction. Replace each angle-bracket slot with
-the byte-for-byte interior of the named region from root-level `forge-project.md`; do not source the
-content elsewhere:
+the byte-for-byte interior of the named region from the committed HEAD snapshot obtained at chain
+start; do not source the content elsewhere:
 
 ```text
 Review these changes adversarially using `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`.

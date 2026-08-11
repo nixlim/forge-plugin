@@ -183,6 +183,42 @@ python3 -m unittest discover -s tests -p 'test_*.py' -q
 Implementations are confined to the assigned linked worktree.
 Reviews are read-only and target an exact full Git SHA.
 Use only Python standard-library checks.""",
+            "mutation-testing": (
+                "No mutation tool available for python — assertion-quality fallback only."
+            ),
+            "invariants": "",
+            "risk-tiers": """| tier | path patterns |
+|---|---|
+| fast | docs/**, .forge/history/**, @formatting-only |
+
+| formatting-only category |
+|---|
+| docs |
+
+<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->
+package.json
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+requirements*.txt
+pyproject.toml
+poetry.lock
+uv.lock
+Cargo.toml
+Cargo.lock
+go.mod
+go.sum
+Gemfile
+Gemfile.lock
+pom.xml
+build.gradle*
+composer.json
+composer.lock
+<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->""",
+            "drift-config": """cadence: 14d
+retention: forever
+event-retention: 400d""",
+            "trigger-paths": "No trigger paths configured.",
         }
         for name, body in regions.items():
             pattern = re.compile(

@@ -143,7 +143,7 @@ validate_and_merge_regions() {
         my ($fresh_path, $previous_path) = @ARGV;
 
         sub parse_regions {
-            my ($document, $label) = @_;
+            my ($document, $label, $order) = @_;
             my $marker_like_count = () =
                 $document =~ /<!-- FORGE:REGION\b/g;
             my @markers;
@@ -180,11 +180,29 @@ validate_and_merge_regions() {
                     $open->{end},
                     $marker->{start} - $open->{end},
                 );
+                push @{$order}, $open->{name} if defined $order;
                 undef $open;
             }
             die "$label has an unmatched Forge region BEGIN marker\n"
                 if defined $open;
             return \%regions;
+        }
+
+        sub dependency_manifest_block {
+            my ($body) = @_;
+            my $begin = "<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->";
+            my $end = "<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->";
+            my $begin_count = () = $body =~ /\Q$begin\E/g;
+            my $end_count = () = $body =~ /\Q$end\E/g;
+            my $start = index($body, $begin);
+            my $end_start = index($body, $end);
+            die "forge: dependency-manifest block malformed — repair forge-project.md\n"
+                unless $begin_count == 1
+                    && $end_count == 1
+                    && $start >= 0
+                    && $end_start > $start;
+            my $after_end = $end_start + length($end);
+            return (substr($body, $start, $after_end - $start), $start, $after_end);
         }
 
         open my $fresh_fh, "<", $fresh_path
@@ -193,7 +211,12 @@ validate_and_merge_regions() {
         my $fresh = <$fresh_fh>;
         close $fresh_fh or die "cannot close $fresh_path: $!\n";
 
-        my $fresh_regions = parse_regions($fresh, "fresh forge-project template");
+        my @fresh_order;
+        my $fresh_regions = parse_regions(
+            $fresh,
+            "fresh forge-project template",
+            \@fresh_order,
+        );
         my @required = qw(
             project-overview
             file-categories
@@ -204,7 +227,13 @@ validate_and_merge_regions() {
             project-triggers
             completeness-project-items
             agent-project-context
+            mutation-testing
+            invariants
+            risk-tiers
+            drift-config
+            trigger-paths
         );
+        my @legacy_required = @required[0 .. 8];
         my %required = map { $_ => 1 } @required;
         for my $name (@required) {
             die "fresh forge-project template is missing region $name\n"
@@ -214,6 +243,11 @@ validate_and_merge_regions() {
             die "fresh forge-project template has unexpected region $name\n"
                 unless exists $required{$name};
         }
+        die "fresh forge-project template has regions out of order\n"
+            unless join("\0", @fresh_order) eq join("\0", @required);
+        my ($fresh_dependency_block) = dependency_manifest_block(
+            $fresh_regions->{"risk-tiers"},
+        );
 
         if (length $previous_path) {
             open my $previous_fh, "<", $previous_path
@@ -223,19 +257,39 @@ validate_and_merge_regions() {
             $previous = "" unless defined $previous;
             close $previous_fh or die "cannot close $previous_path: $!\n";
 
+            my @previous_order;
             my $previous_regions = parse_regions(
                 $previous,
                 "existing forge-project.md",
+                \@previous_order,
             );
             for my $name (keys %{$previous_regions}) {
                 die "existing forge-project.md has unexpected region $name\n"
                     unless exists $required{$name};
             }
+            my $previous_inventory = join("\0", @previous_order);
+            my $current_inventory = join("\0", @required);
+            my $legacy_inventory = join("\0", @legacy_required);
+            die "existing forge-project.md has missing or reordered regions\n"
+                unless $previous_inventory eq $current_inventory
+                    || $previous_inventory eq $legacy_inventory;
             my %filled = map {
                 $_ => $previous_regions->{$_}
             } grep {
                 $previous_regions->{$_} !~ /forge-init:/
             } keys %{$previous_regions};
+
+            if (exists $filled{"risk-tiers"}) {
+                my $body = $filled{"risk-tiers"};
+                my (undef, $start, $after_end) = dependency_manifest_block($body);
+                substr(
+                    $body,
+                    $start,
+                    $after_end - $start,
+                    $fresh_dependency_block,
+                );
+                $filled{"risk-tiers"} = $body;
+            }
 
             $fresh =~ s{(<!-- FORGE:REGION (\S+) BEGIN -->).*?(<!-- FORGE:REGION \2 END -->)}{
                 exists $filled{$2} ? $1 . $filled{$2} . $3 : $&
@@ -457,7 +511,11 @@ ensure_claude_import
 install_codex_layer
 append_gitignore_block
 ensure_directory "${TARGET_ROOT}/.forge/evals/tasks" ".forge/evals/tasks/"
+ensure_directory "${TARGET_ROOT}/.forge/history/runs" ".forge/history/runs/"
+ensure_directory "${TARGET_ROOT}/.forge/history/drift" ".forge/history/drift/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp" ".forge/tmp/"
+ensure_directory "${TARGET_ROOT}/.forge/tmp/drift" ".forge/tmp/drift/"
+ensure_directory "${TARGET_ROOT}/.forge/tmp/decisions" ".forge/tmp/decisions/"
 
 printf 'forge install: summary: %d taken, %d skipped\n' \
     "${TAKEN_COUNT}" "${SKIPPED_COUNT}"

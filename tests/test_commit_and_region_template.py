@@ -13,6 +13,9 @@ TEMPLATE = (ROOT / "system" / "template" / "forge-project.md").read_text(
 COMMIT_SKILL = (ROOT / "skills" / "commit" / "SKILL.md").read_text(
     encoding="utf-8"
 )
+STACKS_SEED = (
+    ROOT / "system" / "seeds" / "validation-snippets" / "stacks.md"
+).read_text(encoding="utf-8")
 
 REGIONS = [
     "project-overview",
@@ -24,6 +27,44 @@ REGIONS = [
     "project-triggers",
     "completeness-project-items",
     "agent-project-context",
+    "mutation-testing",
+    "invariants",
+    "risk-tiers",
+    "drift-config",
+    "trigger-paths",
+]
+
+DEPENDENCY_MANIFEST_PATHS = [
+    "package.json",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "requirements*.txt",
+    "pyproject.toml",
+    "poetry.lock",
+    "uv.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+    "Gemfile",
+    "Gemfile.lock",
+    "pom.xml",
+    "build.gradle*",
+    "composer.json",
+    "composer.lock",
+]
+
+SEEDED_STACKS = [
+    "node",
+    "python",
+    "go",
+    "rust",
+    "java-maven",
+    "java-gradle-kotlin",
+    "terraform",
+    "docker",
+    "helm",
 ]
 
 GATE1_DEFAULT = (
@@ -45,7 +86,7 @@ def region_body(name: str) -> str:
 
 
 class ForgeProjectTemplateTests(unittest.TestCase):
-    def test_nine_regions_are_complete_and_in_contract_order(self) -> None:
+    def test_fourteen_regions_are_complete_and_in_contract_order(self) -> None:
         begins = re.findall(r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->", TEMPLATE)
         ends = re.findall(r"<!-- FORGE:REGION ([a-z0-9-]+) END -->", TEMPLATE)
         self.assertEqual(begins, REGIONS)
@@ -53,6 +94,66 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         for name in REGIONS:
             with self.subTest(region=name):
                 self.assertIn("<!-- forge-init:", region_body(name))
+
+    def test_revision_two_region_defaults_are_conservative_and_complete(self) -> None:
+        self.assertIn("fail closed", region_body("invariants"))
+        self.assertIn("No mutation-testing policy is configured.", region_body("mutation-testing"))
+        self.assertIn(
+            "| fast | docs/**, .forge/history/**, @formatting-only |",
+            region_body("risk-tiers"),
+        )
+        self.assertIn("| docs |", region_body("risk-tiers"))
+
+        drift = re.sub(r"<!--.*?-->", "", region_body("drift-config"), flags=re.DOTALL)
+        self.assertEqual(
+            [line for line in drift.splitlines() if line],
+            ["cadence: 14d", "retention: forever", "event-retention: 400d"],
+        )
+        trigger_paths = re.sub(
+            r"<!--.*?-->", "", region_body("trigger-paths"), flags=re.DOTALL
+        ).strip()
+        self.assertEqual(trigger_paths, "No trigger paths configured.")
+
+    def test_dependency_manifest_block_is_the_exact_fixed_floor(self) -> None:
+        body = region_body("risk-tiers")
+        match = re.search(
+            r"<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->\n(.*?)\n"
+            r"<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->",
+            body,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1).splitlines(), DEPENDENCY_MANIFEST_PATHS)
+
+    def test_every_seeded_stack_declares_test_quality_mining_triple(self) -> None:
+        headings = re.findall(r"^## ([a-z0-9-]+) ", STACKS_SEED, flags=re.MULTILINE)
+        self.assertEqual(headings, SEEDED_STACKS)
+
+        for index, stack in enumerate(SEEDED_STACKS):
+            start = STACKS_SEED.index(f"## {stack} ")
+            if index + 1 < len(SEEDED_STACKS):
+                end = STACKS_SEED.index(f"## {SEEDED_STACKS[index + 1]} ")
+            else:
+                end = STACKS_SEED.index("## Gate 1 command derivation")
+            section = STACKS_SEED[start:end]
+            with self.subTest(stack=stack):
+                self.assertIn("Test file patterns:", section)
+                self.assertTrue(
+                    re.search(
+                        r"^Assertion heuristic: (?:regex|literal): `[^`]+`$",
+                        section,
+                        flags=re.MULTILINE,
+                    )
+                    or f"No seeded assertion heuristic for {stack}." in section
+                )
+                self.assertTrue(
+                    "Mutation tool:" in section
+                    or f"No mutation tool available for {stack}." in section
+                )
+                self.assertTrue(
+                    "Property library:" in section
+                    or f"No property library available for {stack}." in section
+                )
 
     def test_gate1_unfilled_body_has_exact_fail_closed_command(self) -> None:
         body = re.sub(r"<!--.*?-->", "", region_body("gate1-test-command"), flags=re.DOTALL)
@@ -95,6 +196,19 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("distinct agent from the author", COMMIT_SKILL)
         self.assertIn("Project configuration may extend this list", COMMIT_SKILL)
         self.assertIn("must never remove or narrow", COMMIT_SKILL)
+
+    def test_step_two_uses_committed_policy_for_every_quality_surface(self) -> None:
+        step_two = COMMIT_SKILL.split("## Step 2 — Validate", 1)[1].split(
+            "## Step 3 —", 1
+        )[0]
+        self.assertIn("git show HEAD:forge-project.md", COMMIT_SKILL)
+        self.assertIn("committed `gate1-test-command`", step_two)
+        self.assertIn("committed `stack-validations`", step_two)
+        self.assertIn("committed `invariants`", step_two)
+        self.assertIn("check-test-quality.py", step_two)
+        self.assertIn('literal `forge` as `$0`', step_two)
+        self.assertIn("65,536-byte", step_two)
+        self.assertIn("300-second timeout", step_two)
 
     def test_review_loop_and_candidate_marker_contract(self) -> None:
         self.assertIn("git diff --cached", COMMIT_SKILL)

@@ -35,11 +35,13 @@ class PluginLoadContractTests(unittest.TestCase):
             self.assertIn("\ndescription:", contents, name)
         self.assertFalse((ROOT / "commands").exists())
 
-    def test_hooks_json_discovers_exact_pretooluse_and_stop_hooks(self) -> None:
+    def test_hooks_json_discovers_commit_invariant_and_stop_hooks(self) -> None:
         hook_file = ROOT / "hooks" / "hooks.json"
         loaded = json.loads(hook_file.read_text(encoding="utf-8"))
         self.assertEqual(set(loaded), {"hooks"})
-        self.assertEqual(set(loaded["hooks"]), {"PreToolUse", "Stop"})
+        self.assertEqual(
+            set(loaded["hooks"]), {"PreToolUse", "PostToolUse", "Stop"}
+        )
 
         pretool = loaded["hooks"]["PreToolUse"]
         self.assertEqual(
@@ -51,6 +53,24 @@ class PluginLoadContractTests(unittest.TestCase):
                         {
                             "type": "command",
                             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/forge/commit-guard.sh",
+                        }
+                    ],
+                }
+            ],
+        )
+        posttool = loaded["hooks"]["PostToolUse"]
+        self.assertEqual(
+            posttool,
+            [
+                {
+                    "matcher": "Edit|Write",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": (
+                                "${CLAUDE_PLUGIN_ROOT}/scripts/forge/"
+                                "invariant-guard.sh"
+                            ),
                         }
                     ],
                 }
@@ -78,6 +98,10 @@ class PluginLoadContractTests(unittest.TestCase):
 
         guard = ROOT / "scripts/forge/commit-guard.sh"
         self.assertTrue(stat.S_IMODE(guard.stat().st_mode) & stat.S_IXUSR)
+        invariant_guard = ROOT / "scripts/forge/invariant-guard.sh"
+        self.assertTrue(
+            stat.S_IMODE(invariant_guard.stat().st_mode) & stat.S_IXUSR
+        )
 
 
 if __name__ == "__main__":

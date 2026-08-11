@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "forge" / "install.sh"
+DCG_CONFIGURATOR = ROOT / "scripts" / "forge" / "configure-dcg.sh"
 TEMPLATE = ROOT / "system" / "template" / "forge-project.md"
 BEGIN = "<!-- FORGE:BEGIN -->"
 END = "<!-- FORGE:END -->"
@@ -123,7 +124,11 @@ class InstallerIntegrationTests(unittest.TestCase):
             },
         )
         self.assertTrue((self.repo / ".forge/evals/tasks").is_dir())
+        self.assertTrue((self.repo / ".forge/history/runs").is_dir())
+        self.assertTrue((self.repo / ".forge/history/drift").is_dir())
         self.assertTrue((self.repo / ".forge/tmp").is_dir())
+        self.assertTrue((self.repo / ".forge/tmp/drift").is_dir())
+        self.assertTrue((self.repo / ".forge/tmp/decisions").is_dir())
         self.assertEqual(
             self.read(".gitignore"),
             (self.plugin / "system/template/gitignore-block.txt").read_text(),
@@ -152,6 +157,12 @@ class InstallerIntegrationTests(unittest.TestCase):
         installed = self.read("forge-project.md")
         filled_body = "\n\n  Keep leading and trailing bytes.  \n\n"
         installed = replace_region(installed, "project-overview", filled_body)
+        mutation_absence = (
+            "\nNo mutation tool available for python — assertion-quality fallback only.\n"
+        )
+        installed = replace_region(installed, "mutation-testing", mutation_absence)
+        empty_triggers = "\nNo trigger paths configured.\n"
+        installed = replace_region(installed, "trigger-paths", empty_triggers)
         (self.repo / "forge-project.md").write_text(installed, encoding="utf-8")
 
         fresh_path = self.plugin / "system/template/forge-project.md"
@@ -186,6 +197,8 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertEqual(
             region_body(merged, "changelog-policy"), refreshed_unfilled
         )
+        self.assertEqual(region_body(merged, "mutation-testing"), mutation_absence)
+        self.assertEqual(region_body(merged, "trigger-paths"), empty_triggers)
         self.assertEqual(fixture.read_bytes(), b"fixture bytes\x00stay\n")
         self.assertEqual(baseline.read_bytes(), b"PASS\nexisting baseline\n")
         self.assertEqual(self.read("AGENTS.md").count(BEGIN), 1)
@@ -194,6 +207,128 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertEqual(
             self.read(".gitignore").count("# --- forge agent system --- #"), 1
         )
+
+    def test_reinstall_refreshes_only_the_fixed_dependency_manifest_block(self) -> None:
+        first = self.install()
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        project = self.read("forge-project.md")
+        canonical_risk = region_body(project, "risk-tiers")
+        fixed_match = re.search(
+            r"<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->.*?"
+            r"<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->",
+            canonical_risk,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(fixed_match)
+        fixed_block = fixed_match.group(0)
+        owner_prefix = "\nowner risk policy prefix  \n"
+        owner_suffix = "\n\towner risk policy suffix\n"
+        altered_block = fixed_block.replace("package.json", "owner-only.lock", 1)
+        filled_risk = owner_prefix + altered_block + owner_suffix
+        project = replace_region(project, "risk-tiers", filled_risk)
+        (self.repo / "forge-project.md").write_text(project, encoding="utf-8")
+
+        second = self.install()
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        merged_risk = region_body(self.read("forge-project.md"), "risk-tiers")
+        self.assertEqual(merged_risk, owner_prefix + fixed_block + owner_suffix)
+        self.assertNotIn("owner-only.lock", merged_risk)
+
+    def test_malformed_filled_dependency_manifest_block_stops_before_write(self) -> None:
+        base = (self.plugin / "system/template/forge-project.md").read_text(
+            encoding="utf-8"
+        )
+        canonical = region_body(base, "risk-tiers")
+        canonical = re.sub(r"<!-- forge-init:.*?-->\n", "", canonical, flags=re.DOTALL)
+        begin = "<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->"
+        end = "<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->"
+        malformed_bodies = {
+            "missing": canonical.replace(begin, "", 1),
+            "duplicate": canonical.replace(begin, f"{begin}\n{begin}", 1),
+            "misordered": canonical.replace(begin, "TOKEN", 1)
+            .replace(end, begin, 1)
+            .replace("TOKEN", end, 1),
+        }
+
+        for label, body in malformed_bodies.items():
+            with self.subTest(case=label):
+                project = replace_region(base, "risk-tiers", body)
+                before = project.encode("utf-8")
+                (self.repo / "forge-project.md").write_bytes(before)
+
+                result = self.install()
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "forge: dependency-manifest block malformed — repair forge-project.md",
+                    result.stderr,
+                )
+                self.assertEqual((self.repo / "forge-project.md").read_bytes(), before)
+                self.assertFalse((self.repo / "AGENTS.md").exists())
+
+    def test_reinstall_migrates_the_exact_legacy_nine_region_inventory(self) -> None:
+        first = self.install()
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        project = self.read("forge-project.md")
+        legacy = project.split("\n## Mutation Testing\n", 1)[0] + "\n"
+        legacy_body = "\nlegacy project overview stays byte-identical\n"
+        legacy = replace_region(legacy, "project-overview", legacy_body)
+        (self.repo / "forge-project.md").write_text(legacy, encoding="utf-8")
+
+        second = self.install()
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        migrated = self.read("forge-project.md")
+        self.assertEqual(region_body(migrated, "project-overview"), legacy_body)
+        self.assertEqual(
+            re.findall(
+                r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
+                migrated,
+            ),
+            [
+                "project-overview",
+                "file-categories",
+                "stack-validations",
+                "gate1-test-command",
+                "changelog-policy",
+                "review-prompt-project-focus",
+                "project-triggers",
+                "completeness-project-items",
+                "agent-project-context",
+                "mutation-testing",
+                "invariants",
+                "risk-tiers",
+                "drift-config",
+                "trigger-paths",
+            ],
+        )
+
+    def test_reinstall_rejects_a_missing_region_outside_the_legacy_shape(self) -> None:
+        first = self.install()
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        project = self.read("forge-project.md")
+        project, replacements = re.subn(
+            r"<!-- FORGE:REGION invariants BEGIN -->.*?"
+            r"<!-- FORGE:REGION invariants END -->",
+            "",
+            project,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(replacements, 1)
+        before_project = project.encode("utf-8")
+        before_agents = (self.repo / "AGENTS.md").read_bytes()
+        (self.repo / "forge-project.md").write_bytes(before_project)
+
+        second = self.install()
+
+        self.assertNotEqual(second.returncode, 0)
+        self.assertIn("missing or reordered regions", second.stderr)
+        self.assertEqual((self.repo / "forge-project.md").read_bytes(), before_project)
+        self.assertEqual((self.repo / "AGENTS.md").read_bytes(), before_agents)
 
     def test_existing_agent_content_outside_markers_is_byte_preserved(self) -> None:
         before = b"owner instructions without a trailing newline"
@@ -323,6 +458,168 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertEqual((codex / "hooks.json.forge-new").read_bytes(), owner_sidecar)
 
 
+class DcgConfigurationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="forge-dcg-")
+        self.addCleanup(self.temp_dir.cleanup)
+        self.scratch = Path(self.temp_dir.name)
+        self.fake_bin = self.scratch / "bin"
+        self.fake_bin.mkdir()
+        self.log = self.scratch / "dcg-argv"
+
+    def install_fake_dcg(self) -> None:
+        fake_dcg = self.fake_bin / "dcg"
+        fake_dcg.write_text(
+            """#!/usr/bin/env bash
+set -u
+{
+    printf '%s\\0' "$#"
+    printf '%s\\0' "$@"
+} >> "${FAKE_DCG_LOG}"
+
+if [ "$#" -eq 2 ] && [ "$1" = allowlist ] && [ "$2" = list ]; then
+    printf '%s' "${FAKE_DCG_LIST_OUTPUT-}"
+    exit "${FAKE_DCG_LIST_STATUS-0}"
+fi
+
+if [ "${1-}" = allow ]; then
+    exit "${FAKE_DCG_ALLOW_STATUS-0}"
+fi
+
+exit 97
+""",
+            encoding="utf-8",
+        )
+        fake_dcg.chmod(0o755)
+
+    def configure(
+        self,
+        *,
+        list_output: str = "",
+        list_status: int = 0,
+        allow_status: int = 0,
+        fake_dcg: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        if fake_dcg:
+            self.install_fake_dcg()
+        search_path = str(self.fake_bin)
+        if fake_dcg:
+            search_path += f"{os.pathsep}/usr/bin{os.pathsep}/bin"
+        environment = {
+            **os.environ,
+            "PATH": search_path,
+            "FAKE_DCG_LOG": str(self.log),
+            "FAKE_DCG_LIST_OUTPUT": list_output,
+            "FAKE_DCG_LIST_STATUS": str(list_status),
+            "FAKE_DCG_ALLOW_STATUS": str(allow_status),
+        }
+        return subprocess.run(
+            ["/bin/bash", str(DCG_CONFIGURATOR)],
+            cwd=self.scratch,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def logged_invocations(self) -> list[list[str]]:
+        fields = self.log.read_bytes().split(b"\0")
+        self.assertEqual(fields.pop(), b"")
+        invocations: list[list[str]] = []
+        while fields:
+            count = int(fields.pop(0))
+            invocations.append(
+                [fields.pop(0).decode("utf-8") for _ in range(count)]
+            )
+        return invocations
+
+    def test_absent_dcg_is_skipped_without_error(self) -> None:
+        result = self.configure(fake_dcg=False)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            result.stdout,
+            "forge: dcg not found — no project allowlist change\n",
+        )
+        self.assertEqual(result.stderr, "")
+        self.assertFalse(self.log.exists())
+
+    def test_missing_project_rule_invokes_exact_allow_command(self) -> None:
+        result = self.configure(
+            list_output=(
+                "Allowlist entries:\n\n"
+                '{"type":"rule","value":"core.git:branch-force-delete"} [user]\n'
+                '{"type":"rule","value":"core.git:status"} [project]\n'
+            )
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            result.stdout,
+            "forge: dcg allowlisted core.git:branch-force-delete for this project\n",
+        )
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            self.logged_invocations(),
+            [
+                ["allowlist", "list"],
+                [
+                    "allow",
+                    "core.git:branch-force-delete",
+                    "--project",
+                    "--reason",
+                    "forge worktree-merge deletes branches only after merge-base containment proof",
+                ],
+            ],
+        )
+
+    def test_existing_project_rule_is_not_mutated(self) -> None:
+        result = self.configure(
+            list_output=(
+                "Allowlist entries:\n\n"
+                '{ "type" : "rule", "value" : '
+                '"core.git:branch-force-delete" }   [ project ]\n'
+            )
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            result.stdout,
+            "forge: dcg allowlist already contains "
+            "core.git:branch-force-delete for this project\n",
+        )
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(self.logged_invocations(), [["allowlist", "list"]])
+
+    def test_allowlist_inspection_failure_is_nonfatal(self) -> None:
+        result = self.configure(list_status=23)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "forge: dcg allowlist update failed\n")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(self.logged_invocations(), [["allowlist", "list"]])
+
+    def test_allowlist_update_failure_is_nonfatal(self) -> None:
+        result = self.configure(allow_status=24)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "forge: dcg allowlist update failed\n")
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            self.logged_invocations(),
+            [
+                ["allowlist", "list"],
+                [
+                    "allow",
+                    "core.git:branch-force-delete",
+                    "--project",
+                    "--reason",
+                    "forge worktree-merge deletes branches only after merge-base containment proof",
+                ],
+            ],
+        )
+
+
 class InstallerPayloadContractTests(unittest.TestCase):
     def test_codex_config_and_agents_match_routing_contract(self) -> None:
         config = (ROOT / "system/codex/config.toml").read_text(encoding="utf-8")
@@ -416,6 +713,30 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "CANDIDATE_ID",
             "sha256sum",
             "shasum -a 256",
+            "all fourteen regions filled",
+            ".forge/history/runs/",
+            ".forge/history/drift/",
+            ".forge/tmp/drift/",
+            ".forge/tmp/decisions/",
+            "scripts/forge/configure-dcg.sh",
+            "command -v dcg",
+            "dcg allowlist list",
+            (
+                "dcg allow core.git:branch-force-delete --project --reason "
+                '"forge worktree-merge deletes branches only after merge-base '
+                'containment proof"'
+            ),
+            "forge: dcg not found — no project allowlist change",
+            "forge: dcg allowlisted core.git:branch-force-delete for this project",
+            "forge: dcg allowlist already contains core.git:branch-force-delete for this project",
+            "No mutation tool available for <stack> — assertion-quality fallback only.",
+            "No trigger paths configured.",
+            "forge: executable policy row malformed",
+            "git show HEAD:forge-project.md",
+            "isolated clean checkout",
+            "first-policy bootstrap",
+            "two-line reviewed marker",
+            "second explicit approval",
         ):
             self.assertIn(required, skill)
 

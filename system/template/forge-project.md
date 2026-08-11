@@ -152,3 +152,80 @@ every Codex agent prompt. -->
 
 _Agent project context is not configured._
 <!-- FORGE:REGION agent-project-context END -->
+
+## Mutation Testing
+
+<!-- FORGE:REGION mutation-testing BEGIN -->
+<!-- forge-init: replace this sentinel with one category / command / changed-files form / timeout
+row for each detected stack with a usable mutation tool, or the exact assertion-quality fallback
+declaration for each detected stack where mutation is infeasible. -->
+
+No mutation-testing policy is configured. Run `/forge:init` before relying on mutation evidence.
+<!-- FORGE:REGION mutation-testing END -->
+
+## Executable Invariants
+
+<!-- FORGE:REGION invariants BEGIN -->
+<!-- forge-init: replace this sentinel with executable invariant rows mined from existing property,
+fuzz, or invariant suites; move propositions that cannot be checked deterministically into review
+or completeness prose. -->
+
+No executable invariants are configured. Commit and merge checks fail closed until `/forge:init`
+fills this region.
+<!-- FORGE:REGION invariants END -->
+
+## Risk Tiers
+
+<!-- FORGE:REGION risk-tiers BEGIN -->
+<!-- forge-init: validate these conservative initial rules against the mined file categories; fast
+may remain available only for documentation, Forge history, and eligible formatting-only changes. -->
+
+| tier | path patterns |
+|---|---|
+| fast | docs/**, .forge/history/**, @formatting-only |
+
+| formatting-only category |
+|---|
+| docs |
+
+<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->
+package.json
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+requirements*.txt
+pyproject.toml
+poetry.lock
+uv.lock
+Cargo.toml
+Cargo.lock
+go.mod
+go.sum
+Gemfile
+Gemfile.lock
+pom.xml
+build.gradle*
+composer.json
+composer.lock
+<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->
+<!-- FORGE:REGION risk-tiers END -->
+
+## Drift Configuration
+
+<!-- FORGE:REGION drift-config BEGIN -->
+<!-- forge-init: confirm or replace these defaults with exactly one valid cadence, retention, and
+event-retention line; event-retention must be at least 366 days. -->
+
+cadence: 14d
+retention: forever
+event-retention: 400d
+<!-- FORGE:REGION drift-config END -->
+
+## Trigger Paths
+
+<!-- FORGE:REGION trigger-paths BEGIN -->
+<!-- forge-init: replace this sentinel with mechanically validated positive repository-relative Git
+pathspec globs, one per Path pattern row, or retain the explicit no-trigger statement. -->
+
+No trigger paths configured.
+<!-- FORGE:REGION trigger-paths END -->

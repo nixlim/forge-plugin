@@ -6,8 +6,16 @@ description: Run the fail-closed four-gate worktree merge and locked rebase rein
 # Worktree Merge
 
 Run this workflow from the candidate worktree. Read all project gate configuration exclusively
-from the root-level `forge-project.md`; do not copy, cache, or override a region in this skill or
-another file.
+from the root-level `forge-project.md` committed at HEAD, obtained with
+`git show HEAD:forge-project.md`. Never open the working-tree file, a rendered copy, or duplicated
+defaults for policy. Retain the exact committed snapshot only for the current fixed candidate; if
+HEAD changes, discard it and obtain the new current policy from `git show` before rerunning gates.
+For every non-mutation executable policy cell, run from the repository root as
+`bash -c <complete-cell> forge`: the complete unchanged cell is one argv element, literal `forge`
+is `$0`, and every parameter is a separate later argv element. Never concatenate, interpolate,
+wrap, or `eval` cells or parameters. Isolate each process group, cap combined output at 65,536
+bytes, and enforce the fixed 300-second fail-closed timeout. This discipline applies to Gate 1,
+stack validations, and invariants; scoped mutation uses its committed per-row timeout below.
 
 <!-- forge: modified from upstream — gate regions live only in forge-project.md (FR-073). -->
 
@@ -50,8 +58,9 @@ git diff --name-only "origin/${DEFAULT_BRANCH}...HEAD"
 ```
 
 The full merge-diff operation is `git diff origin/<default-branch>...HEAD`. Classify every changed
-path from that range against the `file-categories` region in `forge-project.md` and the built-in
-`control` category. The built-in category always includes:
+path from that range against the committed `file-categories` region returned by
+`git show HEAD:forge-project.md` and the built-in `control` category. The built-in category always
+includes:
 
 - `forge-project.md`
 - `.forge-manifest`
@@ -68,25 +77,28 @@ Fail closed if a changed path cannot be classified. Keep `CANDIDATE_HEAD` unchan
 
 ## Required-region check
 
-Before executing Gate 1, verify that `forge-project.md` exists and that each of
+Before executing Gate 1, obtain the committed policy and verify that each of
 `gate1-test-command`, `stack-validations`, and `file-categories` has both region markers and no
-`forge-init:` sentinel. Use this fail-closed check:
+`forge-init:` sentinel. Use this fail-closed check, which never reads the working-tree policy:
 
 ```bash
+if ! COMMITTED_POLICY="$(git show HEAD:forge-project.md 2>/dev/null)"; then
+  printf 'forge: %s not configured — run /forge:init\n' 'gate1-test-command' >&2
+  exit 1
+fi
+
 require_filled_region() {
   REGION="$1"
-  if [ ! -f forge-project.md ]; then
-    printf 'forge: %s not configured — run /forge:init\n' "$REGION" >&2
-    return 1
-  fi
   REGION_BEGIN="<!-- FORGE:REGION ${REGION} BEGIN -->"
   REGION_END="<!-- FORGE:REGION ${REGION} END -->"
-  if ! grep -Fxq "$REGION_BEGIN" forge-project.md || ! grep -Fxq "$REGION_END" forge-project.md; then
+  if ! printf '%s\n' "$COMMITTED_POLICY" | grep -Fxq "$REGION_BEGIN" ||
+    ! printf '%s\n' "$COMMITTED_POLICY" | grep -Fxq "$REGION_END"; then
     printf 'forge: %s not configured — run /forge:init\n' "$REGION" >&2
     return 1
   fi
   REGION_BLOCK="$(
-    sed -n "/^<!-- FORGE:REGION ${REGION} BEGIN -->$/,/^<!-- FORGE:REGION ${REGION} END -->$/p" forge-project.md
+    printf '%s\n' "$COMMITTED_POLICY" |
+      sed -n "/^<!-- FORGE:REGION ${REGION} BEGIN -->$/,/^<!-- FORGE:REGION ${REGION} END -->$/p"
   )"
   REGION_BODY="$(printf '%s\n' "$REGION_BLOCK" | sed '1d;$d')"
   if [ -z "$(printf '%s\n' "$REGION_BODY" | sed '/^[[:space:]]*$/d')" ] ||
@@ -107,17 +119,75 @@ the loop reports `gate1-test-command` first. Treat malformed or missing markers 
 
 ## Gate 1 — Project tests
 
-Read the `gate1-test-command` region from `forge-project.md` and execute its body exactly once in
-the candidate worktree. Require exit 0. Do not substitute a remembered command, an agent-reported
-result, or a narrower test selection. On failure, show the command output and stop with the
-worktree intact.
+Read the `gate1-test-command` region from the committed policy snapshot and execute its body
+exactly once in the candidate worktree. Require exit 0. Do not substitute a remembered command,
+an agent-reported result, a working-tree policy edit, or a narrower test selection. On failure,
+show the command output and stop with the worktree intact.
+
+### Scoped mutation evidence after Gate 1
+
+After Gate 1 passes, determine mechanically whether the fixed candidate diff touches a test file
+or adds a source file. If it does, validate the complete committed `mutation-testing` region before
+running any row. A valid table is `| category | command | changed-files form | timeout |`; the
+executable cells are nonempty, single-line command cells, and a nonempty timeout is a positive
+base-10 integer. A legacy row with no timeout column or an empty timeout cell uses 600 seconds.
+The exact infeasible-stack declarations written by `/forge:init` are evidence, not executable
+rows.
+
+If the region or any row is malformed, execute no mutation row, print exactly
+`forge: executable policy row malformed` as the first line, carry the skip into Gate 3 evidence,
+and continue to Gate 2. Malformed mutation policy never blocks or satisfies a gate.
+
+For every applicable valid row, derive the repository-relative changed-file scope from the fixed
+candidate diff and execute the row's complete `changed-files form` cell unchanged as exactly one
+argument to `bash -c`, with literal `forge` as `$0` and every scoped path as one subsequent argv
+element consumed through `"$@"`. Never concatenate the full-suite command with the changed-files
+form, interpolate paths or diff content into the command cell, or use `eval`; commit and merge
+paths must not substitute an unscoped/full mutation run. Run from the repository root in an
+isolated process group, cap combined stdout and stderr at 65,536 bytes, use the row timeout, and
+kill the complete process group on timeout.
+
+A nonzero result, timeout, output-limit breach, launch failure, or surviving mutant is advisory:
+surface it in Gate 3 evidence and continue. It never blocks merge and never satisfies Gate 1,
+Gate 2, or Gate 3. For an explicitly identified open run, record each result as an ordinary
+`verification` with criterion exactly `mutation: <scope>`; record command, outcome, scoped files,
+timeout, and completed/timed-out/malformed-skip state in the existing fields. Never use a `gate-`
+prefix for mutation evidence.
 
 ## Gate 2 — Stack validations
 
-Read the `stack-validations` region from `forge-project.md`. Execute every configured validation
-for every category touched by the classified full merge diff. Require every command to exit 0.
-Missing, ambiguous, or non-executable validation configuration blocks the merge. On any failure,
-show the command and output and stop with the worktree intact.
+Read the `stack-validations` region from the committed policy snapshot. Execute every configured
+validation for every category touched by the classified full merge diff. Require every command to
+exit 0. Missing, ambiguous, or non-executable validation configuration blocks the merge. On any
+failure, show the command and output and stop with the worktree intact.
+
+Before executing an invariant, validate the complete committed `invariants` region as exactly the
+table `| invariant | check command | enforcement point |`. Every data row needs nonempty invariant
+and single-line command cells and an enforcement point exactly equal to `commit`, `merge`, or
+`hook`. On an empty command, malformed row, multi-row command, unknown point, or otherwise
+unparseable nonempty region, execute no invariant and fail Gate 2 with the exact first line
+`forge: executable policy row malformed`.
+
+Run every `merge` row from the validated table. From the repository root, invoke the complete
+command cell unchanged as exactly one argument to `bash -c`, followed by literal `forge` as `$0`.
+Pass each parameter as one subsequent argv element consumed through `"$@"`; never concatenate,
+interpolate, source-wrap, or `eval` a cell. Use an isolated process group, cap combined stdout and
+stderr at 65,536 bytes, and enforce a fixed 300-second timeout that kills the complete process
+group. A nonzero result, launch failure, or output-limit breach fails Gate 2 with exact first line
+`forge: invariant failed (merge): <invariant>`. A timeout fails with exact first line
+`forge: invariant timed out (merge): <invariant>`. Only capped diagnostics may follow.
+
+Derive touched test paths mechanically from the fixed candidate diff. If any are touched, run:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-test-quality.py" -- <touched-test-path>...
+```
+
+Pass each path as its own argv element. Exit 1 from the Python AST branch or exit 2 from sensor
+failure blocks Gate 2. Exit 0 advances, while every non-Python advisory, no-heuristic notice, and
+valid waiver path plus reason remains in Gate 2 and Gate 3 evidence. A waiver affects only the
+assertion sensor for its one file; it never skips tests, scoped mutation, invariants, or sensing in
+another file.
 
 ## Gate 3 — Binding adversarial review
 
@@ -273,9 +343,12 @@ CANDIDATE_REWRITTEN=0
 Perform all required re-runs inside the lock and before push:
 
 - If `DEFAULT_ADVANCED=1` or `CANDIDATE_REWRITTEN=1`, re-run Gate 1 and Gate 2 against the
-  integrated tip using the same `forge-project.md` regions. Require clean passes from both. This
-  covers both remote movement after the initial gates and a candidate that was already behind the
-  default branch when the chain began. Never push an untested integrated tree.
+  integrated tip. First discard the earlier policy snapshot and obtain current policy again with
+  `git show HEAD:forge-project.md`; between the two gates, also run the applicable advisory scoped
+  mutation checks. Re-derive changed paths and assertion-sensor inputs from `INTEGRATED_RANGE`;
+  require clean Gate 1 and Gate 2 passes while preserving mutation findings as Gate 3 evidence.
+  This covers both remote movement after the initial gates and a candidate that was already behind
+  the default branch when the chain began. Never push an untested integrated tree.
 - If conflicts were resolved, Gate 3 is mandatory on the post-rebase candidate because the content
   changed. If `CANDIDATE_REWRITTEN=1` without conflicts, also re-run Gate 3 so the binding review,
   approval, and pushed SHA identify the same candidate as DM-001 requires. Give `review-final`
