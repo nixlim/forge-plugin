@@ -248,6 +248,12 @@ seconds; use 600 seconds only when carrying a legacy row whose timeout cell is a
 No mutation tool available for <stack> — assertion-quality fallback only.
 ```
 
+That exact declared-absence sentence is the detected stack's filled `mutation-testing` state: remove
+the region's `forge-init:` sentinel, record `region: mutation-testing` in Phase 5, and preserve the
+filled body byte-for-byte on re-init. It is never a silent skip. In a mixed-stack repository keep
+all executable rows under one table header and place one exact declared-absence sentence outside
+the table for each infeasible detected stack.
+
 Fill `invariants` only with deterministic executable rows in this exact shape, using an enforcement
 point of exactly `commit`, `merge`, or `hook`:
 
@@ -270,8 +276,10 @@ once, require the exact table headers and separators, and reject stray nonempty 
 Every invariant row must have exactly three nonempty logical cells, a one-line nonempty command, and
 an enforcement point exactly equal to `commit`, `merge`, or `hook`. An empty invariants region is
 valid. Every configured mutation row must have four nonempty logical cells, one-line nonempty
-`command` and `changed-files form` cells, and a timeout matching `[1-9][0-9]*`; only a carried-forward
-legacy three-column row receives the 600-second default. Outside a mutation table, allow only one
+`command` and `changed-files form` cells, and a timeout matching ASCII `[0-9]+` whose numeric value
+is greater than zero. A new mined row must have an explicit nonempty timeout; a carried-forward
+legacy row whose timeout column or cell is absent receives the 600-second default. Outside a
+mutation table, allow only one
 exact `No mutation tool available for <stack> — assertion-quality fallback only.` declaration per
 infeasible detected stack. A duplicate header, missing separator, empty or multi-row executable cell,
 unknown enforcement point, invalid timeout, or any otherwise malformed nonempty row stops init before

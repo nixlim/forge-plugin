@@ -11,7 +11,12 @@ class WorktreeMergeSkillTests(unittest.TestCase):
     def test_frontmatter_and_single_region_source(self) -> None:
         self.assertTrue(SKILL.startswith("---\nname: worktree-merge\n"))
         self.assertIn("exclusively\nfrom the root-level `forge-project.md`", SKILL)
-        for region in ("gate1-test-command", "stack-validations", "file-categories"):
+        for region in (
+            "gate1-test-command",
+            "stack-validations",
+            "file-categories",
+            "mutation-testing",
+        ):
             with self.subTest(region=region):
                 self.assertIn(region, SKILL)
         self.assertIn("forge: <region> not configured — run /forge:init", SKILL)
@@ -65,6 +70,28 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn('git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"', SKILL)
         self.assertIn("wait for explicit user approval naming that exact SHA", flattened)
         self.assertIn('require `git rev-parse HEAD` to equal `AUTHORIZED_HEAD`', SKILL)
+
+    def test_scoped_mutation_runner_is_ordered_advisory_and_reviewed(self) -> None:
+        gate_1_pass = SKILL.index("Require exit 0. Do not substitute")
+        mutation = SKILL.index(
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-scoped-mutation.py"'
+        )
+        gate_2 = SKILL.index("## Gate 2 — Stack validations")
+        gate_3 = SKILL.index("## Gate 3 — Binding adversarial review")
+        evidence_handoff = SKILL.index(
+            "Also give the reviewer the complete contents of `MUTATION_EVIDENCE_FILE`"
+        )
+        self.assertLess(gate_1_pass, mutation)
+        self.assertLess(mutation, gate_2)
+        self.assertLess(gate_2, gate_3)
+        self.assertGreater(evidence_handoff, gate_3)
+        self.assertIn('--base "$REVIEWED_BASE" --head "$CANDIDATE_HEAD"', SKILL)
+        self.assertIn('--base "$INTEGRATED_BASE"', SKILL)
+        self.assertIn('--head "$INTEGRATED_HEAD"', SKILL)
+        self.assertIn("A nonzero result, timeout, output-limit breach, launch failure", SKILL)
+        self.assertIn("It never blocks merge and never satisfies Gate 1", SKILL)
+        self.assertIn("criterion exactly `mutation: <scope>`", SKILL)
+        self.assertIn("Never use\na `gate-` prefix for mutation evidence.", SKILL)
 
     def test_locked_rebase_contract_is_complete(self) -> None:
         for command in (

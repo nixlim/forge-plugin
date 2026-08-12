@@ -86,7 +86,7 @@ Inputs: `docs/design/0001-founding-decisions.md` (D1–D5), `docs/design/0002-ve
 - Plugin PostToolUse hook (`scripts/forge/invariant-guard.sh`) — advisory invariant feedback after Edit/Write
 - Plugin Stop/SessionStart hooks — the Stop union of telemetry aggregation plus a drift-staleness nudge, and the SessionStart drift-staleness nudge, in forge-initialized repos
 - `agents/review-final.md` — read-only Claude reviewer with binding verdict
-- `scripts/forge/{check-halt.sh,acquire-commit-lock.sh,release-commit-lock.sh,run-evals.sh,invariant-guard.sh,configure-dcg.sh,drift-check.sh,drift-staleness.sh}` and `scripts/forge/check-test-quality.py` — governance scripts invoked by path
+- `scripts/forge/{check-halt.sh,acquire-commit-lock.sh,release-commit-lock.sh,run-evals.sh,invariant-guard.sh,configure-dcg.sh,drift-check.sh,drift-staleness.sh}` and `scripts/forge/{check-test-quality.py,run-scoped-mutation.py}` — governance scripts invoked by path
 
 ### Modified surfaces
 

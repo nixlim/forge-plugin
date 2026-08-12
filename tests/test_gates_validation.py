@@ -301,25 +301,59 @@ class GatesValidationTests(unittest.TestCase):
 
     def test_unknown_gate_criteria_are_exact_issues(self) -> None:
         unknown_gate_4 = gate_verification("check-gate-4", "gate-4: security scan")
+        unknown_gate_1m = gate_verification("check-gate-1m", "gate-1m: mutation")
         missing_space = gate_verification("check-gate-1-typo", "gate-1:project tests")
         known_gate_3_prefix = gate_verification("check-gate-3-other", "gate-3: candidate note")
         with tempfile.TemporaryDirectory() as tmp:
             run_dir, _ = self.make_run(
                 Path(tmp),
                 role="review",
-                after_result=[unknown_gate_4, missing_space, known_gate_3_prefix],
+                after_result=[
+                    unknown_gate_4,
+                    unknown_gate_1m,
+                    missing_space,
+                    known_gate_3_prefix,
+                ],
             )
             payload = validate_run(run_dir, gates=True)
 
         self.assertFalse(payload["ok"])
-        self.assertEqual(len(payload["issues"]), 2)
+        self.assertEqual(len(payload["issues"]), 3)
         self.assertCountEqual(
             payload["issues"],
             [
                 "unknown gate criterion: gate-4: security scan",
+                "unknown gate criterion: gate-1m: mutation",
                 "unknown gate criterion: gate-1:project tests",
             ],
         )
+
+    def test_mutation_verification_is_visible_but_cannot_satisfy_a_gate(self) -> None:
+        mutation = gate_verification("mutation-python", "mutation: python", "failed")
+        mutation["check"] = 'mutmut run --paths-to-mutate "$@"'
+        mutation["observation"] = (
+            "tool=mutmut; scope=python; outcome=completed; exit_code=1; "
+            'timeout=600s; scoped_files=["src/new.py"]'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, _ = self.make_run(Path(tmp), after_result=[mutation])
+            plain_payload = validate_run(run_dir)
+            gates_payload = validate_run(run_dir, gates=True)
+
+        expected_visible = {
+            "id": "mutation-python",
+            "task": "task-01",
+            "criterion": "mutation: python",
+            "result": "failed",
+            "check": 'mutmut run --paths-to-mutate "$@"',
+            "observation": mutation["observation"],
+        }
+        self.assertTrue(plain_payload["ok"])
+        self.assertEqual(plain_payload["issues"], [])
+        self.assertEqual(plain_payload["non_passing_verifications"], [expected_visible])
+        self.assertFalse(gates_payload["ok"])
+        self.assertEqual(gates_payload["issues"], list(MISSING_GATE_ISSUES.values()))
+        self.assertEqual(gates_payload["non_passing_verifications"], [expected_visible])
 
     def test_profile_is_opt_in_and_plain_payload_is_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

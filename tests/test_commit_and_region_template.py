@@ -147,13 +147,43 @@ class ForgeProjectTemplateTests(unittest.TestCase):
                     or f"No seeded assertion heuristic for {stack}." in section
                 )
                 self.assertTrue(
-                    "Mutation tool:" in section
-                    or f"No mutation tool available for {stack}." in section
+                    re.search(
+                        r"^Mutation tool: `[^`]+`; changed-files form: `[^`]+`$",
+                        section,
+                        flags=re.MULTILINE,
+                    )
+                    or (
+                        f"No mutation tool available for {stack}." in section
+                        and section.count(
+                            "Mutation-testing region fallback: "
+                            f"`No mutation tool available for {stack} — "
+                            "assertion-quality fallback only.`"
+                        )
+                        == 1
+                    )
                 )
                 self.assertTrue(
                     "Property library:" in section
                     or f"No property library available for {stack}." in section
                 )
+
+    def test_init_declares_absence_as_a_filled_mixed_stack_state(self) -> None:
+        init_skill = (ROOT / "skills" / "init" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "That exact declared-absence sentence is the detected stack's filled "
+            "`mutation-testing` state",
+            init_skill,
+        )
+        self.assertIn("It is never a silent skip.", init_skill)
+        self.assertIn(
+            "In a mixed-stack repository keep\nall executable rows under one table header",
+            init_skill,
+        )
+        self.assertIn(
+            "one exact declared-absence sentence outside\nthe table for each infeasible "
+            "detected stack",
+            init_skill,
+        )
 
     def test_gate1_unfilled_body_has_exact_fail_closed_command(self) -> None:
         body = re.sub(r"<!--.*?-->", "", region_body("gate1-test-command"), flags=re.DOTALL)

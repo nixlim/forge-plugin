@@ -126,13 +126,37 @@ show the command output and stop with the worktree intact.
 
 ### Scoped mutation evidence after Gate 1
 
-After Gate 1 passes, determine mechanically whether the fixed candidate diff touches a test file
-or adds a source file. If it does, validate the complete committed `mutation-testing` region before
-running any row. A valid table is `| category | command | changed-files form | timeout |`; the
-executable cells are nonempty, single-line command cells, and a nonempty timeout is a positive
-base-10 integer. A legacy row with no timeout column or an empty timeout cell uses 600 seconds.
-The exact infeasible-stack declarations written by `/forge:init` are evidence, not executable
-rows.
+After Gate 1 passes, run the plugin-owned scoped runner exactly once over the fixed candidate
+range. The runner obtains policy itself with `git show HEAD:forge-project.md`, reads test-pattern
+mining guidance from `${CLAUDE_PLUGIN_ROOT}/system/seeds/validation-snippets/stacks.md`, and derives
+the qualifying repository-relative paths from the fixed diff. It selects a category only when that
+diff touches one of the category's test files or has status `A` for one of its source files;
+modified-only source is not a trigger. It executes at most one changed-files row per selected
+category and passes only that category's selected paths.
+
+```bash
+MUTATION_EVIDENCE_FILE=".forge/tmp/mutation-evidence-${CANDIDATE_HEAD}.log"
+mkdir -p .forge/tmp
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-scoped-mutation.py" \
+  --base "$REVIEWED_BASE" --head "$CANDIDATE_HEAD" \
+  >"$MUTATION_EVIDENCE_FILE" 2>&1 ||
+  printf '%s\n' '{"type":"mutation_evidence","criterion":"mutation: policy","result":"inconclusive","check":"scoped mutation runner","observation":"tool=mutation-testing runner; scope=policy; outcome=unavailable"}' \
+    >>"$MUTATION_EVIDENCE_FILE"
+cat "$MUTATION_EVIDENCE_FILE"
+```
+
+When, and only when, an explicitly identified orchestration run is open, add both
+`--journal <that-run-dir>/journal.jsonl` and `--task <that-run-task-id>` to this single invocation.
+Pass both values as separate argv elements and never infer a "latest" run. The runner appends one
+ordinary `verification` per applicable execution. Without those explicit values it prints the same
+evidence without creating or selecting a journal.
+
+The runner validates the complete committed `mutation-testing` region before running any row. A
+valid table is `| category | command | changed-files form | timeout |`; the executable cells are
+nonempty, single-line command cells, and a nonempty timeout is ASCII base-10 digits whose numeric
+value is greater than zero. A legacy row with no timeout column or an empty timeout cell uses 600
+seconds. The exact infeasible-stack declarations written by `/forge:init` are evidence, not
+executable rows.
 
 If the region or any row is malformed, execute no mutation row, print exactly
 `forge: executable policy row malformed` as the first line, carry the skip into Gate 3 evidence,
@@ -151,8 +175,9 @@ A nonzero result, timeout, output-limit breach, launch failure, or surviving mut
 surface it in Gate 3 evidence and continue. It never blocks merge and never satisfies Gate 1,
 Gate 2, or Gate 3. For an explicitly identified open run, record each result as an ordinary
 `verification` with criterion exactly `mutation: <scope>`; record command, outcome, scoped files,
-timeout, and completed/timed-out/malformed-skip state in the existing fields. Never use a `gate-`
-prefix for mutation evidence.
+timeout, and completed/timed-out/malformed-skip state in the existing fields. The stable execution
+scope is the mutation row's category; a whole-region malformed skip uses scope `policy`. Never use
+a `gate-` prefix for mutation evidence.
 
 ## Gate 2 — Stack validations
 
@@ -203,6 +228,12 @@ git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"
 This is the fixed-SHA form of the required canonical
 `git diff origin/<default-branch>...HEAD` operation. Do not regenerate the review input from moving
 symbolic refs after fixing the candidate identity.
+
+Also give the reviewer the complete contents of `MUTATION_EVIDENCE_FILE` as a distinct evidence
+block, including passing runs, nonzero exits, timeouts, output-limit or launch failures, exact
+declared-absence notices, and `forge: executable policy row malformed` skips. Do not edit or
+summarize away an advisory outcome before review. This evidence informs Gate 3; it never counts as
+or satisfies the Gate 3 verdict.
 
 Require the binding verdict to be exactly PASS or BLOCK. PASS advances to Gate 4. BLOCK, an
 ambiguous response, or an unavailable reviewer stops reintegration. Report all findings.
@@ -345,8 +376,11 @@ Perform all required re-runs inside the lock and before push:
 - If `DEFAULT_ADVANCED=1` or `CANDIDATE_REWRITTEN=1`, re-run Gate 1 and Gate 2 against the
   integrated tip. First discard the earlier policy snapshot and obtain current policy again with
   `git show HEAD:forge-project.md`; between the two gates, also run the applicable advisory scoped
-  mutation checks. Re-derive changed paths and assertion-sensor inputs from `INTEGRATED_RANGE`;
-  require clean Gate 1 and Gate 2 passes while preserving mutation findings as Gate 3 evidence.
+  mutation checks by repeating the plugin runner invocation with `--base "$INTEGRATED_BASE"` and
+  `--head "$INTEGRATED_HEAD"`, replacing the earlier mutation evidence file (and passing the same
+  explicitly selected journal/task pair when a run is open). Re-derive changed paths and
+  assertion-sensor inputs from `INTEGRATED_RANGE`; require clean Gate 1 and Gate 2 passes while
+  preserving mutation findings as Gate 3 evidence.
   This covers both remote movement after the initial gates and a candidate that was already behind
   the default branch when the chain began. Never push an untested integrated tree.
 - If conflicts were resolved, Gate 3 is mandatory on the post-rebase candidate because the content
