@@ -44,15 +44,58 @@ main_root="$(resolve_main_root)" || {
     exit 1
 }
 
-lock_dir="$main_root/.forge/tmp"
-lock_file="$lock_dir/commit-lock"
+internal_state_critical=0
+explicit_lock_path=0
+lock_path=".forge/tmp/commit-lock"
+if [[ "${1:-}" == "--state-critical" ]]; then
+    internal_state_critical=1
+    if [[ "$#" -eq 2 ]]; then
+        lock_path="$2"
+        explicit_lock_path=1
+    elif [[ "$#" -ne 1 ]]; then
+        echo "forge: invalid internal commit-lock invocation" >&2
+        exit 1
+    fi
+elif [[ "$#" -eq 1 ]]; then
+    lock_path="$1"
+    explicit_lock_path=1
+elif [[ "$#" -ne 0 ]]; then
+    echo "forge: acquire-commit-lock.sh accepts at most one repository-relative lock path" >&2
+    exit 1
+fi
+
+if [[ -z "$lock_path" ]] || [[ "$lock_path" == /* ]] || [[ "$lock_path" == *$'\n'* ]] ||
+    [[ "$lock_path" == "." ]] || [[ "$lock_path" == ".." ]] ||
+    [[ "$lock_path" == ./* ]] || [[ "$lock_path" == */./* ]] ||
+    [[ "$lock_path" == ../* ]] || [[ "$lock_path" == */../* ]] ||
+    [[ "$lock_path" == */. ]] || [[ "$lock_path" == */.. ]] ||
+    [[ "$lock_path" == *//* ]]; then
+    echo "forge: lock path must be a normalized repository-relative path: $lock_path" >&2
+    exit 1
+fi
+
+lock_file="$main_root/$lock_path"
+lock_dir="$(dirname "$lock_file")"
 # A kernel-backed, short-lived state lock serializes stale removal with atomic
 # lock creation and is released automatically if its process dies.
 # forge: modified from upstream — close the stale-takeover race with a non-orphanable portable state lock
-legacy_state_guard="$lock_dir/commit-lock.state"
-state_lock_file="$lock_dir/commit-lock.state.lock"
+if [[ "$explicit_lock_path" -eq 0 ]]; then
+    # Preserve the historical no-argument paths byte-for-byte.  Explicit lock
+    # names receive their own state namespace beside the lock record.
+    legacy_state_guard="$lock_dir/commit-lock.state"
+    state_lock_file="$lock_dir/commit-lock.state.lock"
+else
+    legacy_state_guard="$lock_file.state"
+    state_lock_file="$lock_file.state.lock"
+fi
 # forge: modified from upstream — namespace the diagnostic timeout override for the forge plugin
-max_wait_seconds="${FORGE_COMMIT_LOCK_TIMEOUT:-300}"
+if [[ "$explicit_lock_path" -eq 1 ]] && [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+    # FR-157's advisory event stream has its own hard bound and never inherits
+    # the 300-second commit-lock diagnostic override.
+    max_wait_seconds=5
+else
+    max_wait_seconds="${FORGE_COMMIT_LOCK_TIMEOUT:-300}"
+fi
 poll_interval=2
 
 if ! [[ "$max_wait_seconds" =~ ^[0-9]+$ ]] || [[ "$max_wait_seconds" -eq 0 ]]; then
@@ -126,11 +169,19 @@ recover_legacy_state_guard() {
     # A process can die between mkdir and writing its owner. Give a live creator
     # one bounded grace period, then recover an ownerless directory.
     if [[ "$saw_owner" -eq 0 ]]; then
-        sleep 1
+        if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+            sleep 0.1
+        else
+            sleep 1
+        fi
         for owner_path in "$legacy_state_guard"/owner "$legacy_state_guard"/owner.*; do
             [[ -f "$owner_path" ]] && return 1
         done
-        echo "forge: recovering ownerless commit-lock state mutex" >&2
+        if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+            echo "forge: recovering ownerless event-lock state mutex" >&2
+        else
+            echo "forge: recovering ownerless commit-lock state mutex" >&2
+        fi
     fi
 
     rmdir "$legacy_state_guard" 2>/dev/null || return 1
@@ -167,7 +218,14 @@ create_lock() {
 
 state_critical_attempt() {
     if is_lock_stale "$lock_file"; then
-        echo "forge: removing stale commit lock" >&2
+        if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+            # FR-157 confines fail-closed ownership handling to release.  A
+            # dead or malformed event-lock owner is stale for acquisition and
+            # may be taken over just like the ordinary commit lock.
+            echo "forge: removing stale event lock" >&2
+        else
+            echo "forge: removing stale commit lock" >&2
+        fi
         rm -f "$lock_file"
     fi
 
@@ -179,19 +237,12 @@ state_critical_attempt() {
     return 75
 }
 
-if [[ "${1:-}" == "--state-critical" ]]; then
-    [[ "$#" -eq 1 ]] || {
-        echo "forge: invalid internal commit-lock invocation" >&2
-        exit 1
-    }
+if [[ "$internal_state_critical" -eq 1 ]]; then
     if state_critical_attempt; then
         exit 0
     else
         exit $?
     fi
-elif [[ "$#" -ne 0 ]]; then
-    echo "forge: acquire-commit-lock.sh does not accept arguments" >&2
-    exit 1
 fi
 
 script_path="${BASH_SOURCE[0]}"
@@ -214,15 +265,20 @@ fi
 
 run_state_critical() {
     local state_status=0
+    local internal_args=(--state-critical)
+
+    if [[ "$explicit_lock_path" -eq 1 ]]; then
+        internal_args+=("$lock_path")
+    fi
 
     if [[ "$state_lock_backend" == "flock" ]]; then
-        if flock -E 75 -n "$state_lock_file" bash "$script_path" --state-critical; then
+        if flock -E 75 -n "$state_lock_file" bash "$script_path" "${internal_args[@]}"; then
             return 0
         else
             state_status=$?
         fi
     else
-        if lockf -k -t 0 "$state_lock_file" bash "$script_path" --state-critical; then
+        if lockf -k -t 0 "$state_lock_file" bash "$script_path" "${internal_args[@]}"; then
             return 0
         else
             state_status=$?
@@ -242,7 +298,11 @@ show_lock_holder() {
     [[ -f "$candidate" ]] || return 0
     IFS=' ' read -r lock_pid lock_timestamp lock_extra <"$candidate" || true
     if ! [[ "$lock_pid" =~ ^[0-9]+$ ]] || ! [[ "$lock_timestamp" =~ ^[0-9]+$ ]]; then
-        echo "forge: commit lock holder record is malformed ($candidate)" >&2
+        if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+            echo "forge: event lock holder record is malformed ($candidate)" >&2
+        else
+            echo "forge: commit lock holder record is malformed ($candidate)" >&2
+        fi
         return 0
     fi
 
@@ -252,13 +312,41 @@ show_lock_holder() {
     else
         age=0
     fi
-    echo "forge: commit lock held by PID $lock_pid (age ${age}s)" >&2
+    if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+        echo "forge: event lock held by PID $lock_pid (age ${age}s)" >&2
+    else
+        echo "forge: commit lock held by PID $lock_pid (age ${age}s)" >&2
+    fi
 }
 
-start_time="$(date +%s)"
+events_lock_profile=0
+if [[ "$explicit_lock_path" -eq 1 ]] && [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+    events_lock_profile=1
+    start_millis="$(python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)')" || {
+        echo "forge: cannot initialize the event-lock monotonic clock" >&2
+        exit 1
+    }
+else
+    start_time="$(date +%s)"
+fi
 announced=0
 
 while true; do
+    # The first acquisition attempt is immediate. Every retry checks the
+    # event-lock deadline before entering recovery/critical-section work.
+    if [[ "$events_lock_profile" -eq 1 ]] && [[ "$announced" -eq 1 ]]; then
+        now_millis="$(python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)')" || {
+            echo "forge: cannot read the event-lock monotonic clock" >&2
+            exit 1
+        }
+        elapsed_millis=$((now_millis - start_millis))
+        if [[ "$elapsed_millis" -ge $((max_wait_seconds * 1000)) ]]; then
+            echo "forge: failed to acquire event lock after ${max_wait_seconds}s" >&2
+            show_lock_holder "$lock_file"
+            echo "forge: inspect the holder before retrying or removing $lock_file" >&2
+            exit 1
+        fi
+    fi
     acquired=0
     state_status=75
     if [[ -d "$legacy_state_guard" ]]; then
@@ -280,20 +368,43 @@ while true; do
     fi
 
     if [[ "$acquired" -eq 1 ]]; then
-        echo "forge: commit lock acquired (PID $session_pid)"
+        if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+            echo "forge: event lock acquired (PID $session_pid)"
+        else
+            echo "forge: commit lock acquired (PID $session_pid)"
+        fi
         exit 0
     fi
 
-    now="$(date +%s)"
-    elapsed=$((now - start_time))
+    if [[ "$events_lock_profile" -eq 1 ]]; then
+        now_millis="$(python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)')" || {
+            echo "forge: cannot read the event-lock monotonic clock" >&2
+            exit 1
+        }
+        elapsed_millis=$((now_millis - start_millis))
+        elapsed=$((elapsed_millis / 1000))
+    else
+        now="$(date +%s)"
+        elapsed=$((now - start_time))
+    fi
     if [[ "$announced" -eq 0 ]]; then
-        echo "forge: another session is committing; waiting up to ${max_wait_seconds}s" >&2
+        if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+            echo "forge: another session is appending events; waiting up to ${max_wait_seconds}s" >&2
+        else
+            echo "forge: another session is committing; waiting up to ${max_wait_seconds}s" >&2
+        fi
         show_lock_holder "$lock_file"
         announced=1
     fi
 
-    if [[ "$elapsed" -ge "$max_wait_seconds" ]]; then
-        echo "forge: failed to acquire commit lock after ${max_wait_seconds}s" >&2
+    if { [[ "$events_lock_profile" -eq 1 ]] &&
+        [[ "$elapsed_millis" -ge $((max_wait_seconds * 1000)) ]]; } ||
+        { [[ "$events_lock_profile" -eq 0 ]] && [[ "$elapsed" -ge "$max_wait_seconds" ]]; }; then
+        if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
+            echo "forge: failed to acquire event lock after ${max_wait_seconds}s" >&2
+        else
+            echo "forge: failed to acquire commit lock after ${max_wait_seconds}s" >&2
+        fi
         show_lock_holder "$lock_file"
         if [[ -d "$legacy_state_guard" ]]; then
             echo "forge: legacy commit-lock state mutex is still held at $legacy_state_guard" >&2
@@ -302,10 +413,19 @@ while true; do
         exit 1
     fi
 
-    remaining=$((max_wait_seconds - elapsed))
-    sleep_for="$poll_interval"
-    if [[ "$remaining" -lt "$sleep_for" ]]; then
-        sleep_for="$remaining"
+    if [[ "$events_lock_profile" -eq 1 ]]; then
+        remaining_millis=$((max_wait_seconds * 1000 - elapsed_millis))
+        sleep_millis=$((poll_interval * 1000))
+        if [[ "$remaining_millis" -lt "$sleep_millis" ]]; then
+            sleep_millis="$remaining_millis"
+        fi
+        sleep_for="$((sleep_millis / 1000)).$(printf '%03d' "$((sleep_millis % 1000))")"
+    else
+        remaining=$((max_wait_seconds - elapsed))
+        sleep_for="$poll_interval"
+        if [[ "$remaining" -lt "$sleep_for" ]]; then
+            sleep_for="$remaining"
+        fi
     fi
     sleep "$sleep_for"
 done

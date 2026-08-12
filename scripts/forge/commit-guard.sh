@@ -15,6 +15,7 @@ IFS= read -r -d '' python_code <<'PY' || true
 from __future__ import annotations
 
 from dataclasses import dataclass
+import dataclasses
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -29,6 +30,7 @@ import sys
 
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
 HASH = re.compile(r"[0-9a-f]{64}")
+COMMIT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 HALT_MESSAGE = re.compile(r"forge: operator halt engaged \(([^)]+)\)")
 REDIRECTION = re.compile(
     r"(?:\d*(?:<<<|<<-?|>>|<>|>\||<&|>&|<|>)|&>>?)(.*)",
@@ -86,12 +88,16 @@ class GitAction:
     shell_cwd: Path
     structural_globals: tuple[str, ...]
     assignments: tuple[tuple[str, str], ...]
+    subcommand_args: tuple[str, ...]
+    preceded_by_command: bool = False
 
 
 @dataclass(frozen=True)
 class RepoContext:
     action: GitAction
     worktree_root: Path
+    git_dir: Path
+    index_file: Path
     common_dir: Path
     main_root: Path
     git_env: dict[str, str]
@@ -133,7 +139,7 @@ def split_segments(command: str) -> list[tuple[str, str | None]]:
         separator: str | None = None
         if command.startswith("&&", index) or command.startswith("||", index):
             separator = command[index : index + 2]
-        elif char in ";|\n":
+        elif char in ";|&\n":
             separator = char
         if separator is not None:
             segments.append(("".join(current), separator))
@@ -399,6 +405,7 @@ def parse_action(tokens: list[str], cwd: Path) -> GitAction | None:
         shell_cwd=cwd,
         structural_globals=tuple(structural),
         assignments=tuple(assignments),
+        subcommand_args=tuple(tokens[index + 1 :]),
     )
 
 
@@ -424,6 +431,7 @@ def updated_cwd(tokens: list[str], cwd: Path, separator: str | None) -> Path:
 def find_actions(command: str) -> list[GitAction]:
     actions: list[GitAction] = []
     cwd = Path.cwd().resolve()
+    executable_seen = False
     for segment, separator in split_segments(command):
         try:
             tokens = shlex.split(segment, comments=False, posix=True)
@@ -433,9 +441,64 @@ def find_actions(command: str) -> list[GitAction]:
         for candidate_tokens in (tokens, command_tokens):
             action = parse_action(candidate_tokens, cwd)
             if action is not None and action not in actions:
-                actions.append(action)
+                actions.append(dataclasses.replace(action, preceded_by_command=executable_seen))
+        if command_tokens and command_tokens[0] != "cd":
+            executable_seen = True
         cwd = updated_cwd(command_tokens, cwd, separator)
     return actions
+
+
+def commit_candidate_is_stable(action: GitAction, command: str) -> bool:
+    """Reject commit argv/shell forms that can change or select candidate bytes."""
+    if action.subcommand != "commit":
+        return True
+    if action.preceded_by_command:
+        return False
+    if "$(" in command or "`" in command or "<(" in command or ">(" in command:
+        return False
+    args = list(action.subcommand_args)
+    options_with_values = {
+        "-m", "--message", "--author", "--date", "--cleanup",
+        "--trailer", "--fixup", "--squash",
+    }
+    benign_flags = {
+        "-q", "--quiet", "-v", "--verbose", "-n", "--no-verify",
+        "-s", "--signoff", "--no-edit", "-S", "--gpg-sign",
+    }
+    unsafe_flags = {
+        "-a", "--all", "-i", "--include", "-o", "--only",
+        "--amend", "--allow-empty", "--allow-empty-message",
+        "-p", "--patch", "--interactive",
+    }
+    unsafe_options_with_values = {
+        "-F", "--file", "-C", "--reuse-message", "-c", "--reedit-message",
+    }
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "--":
+            return False
+        if token in unsafe_flags or token in unsafe_options_with_values or token.startswith((
+            "--file=", "--reuse-message=", "--reedit-message=", "--fixup=",
+            "--squash=", "--pathspec-from-file=", "--pathspec-file-nul"
+        )):
+            return False
+        if token in benign_flags:
+            index += 1
+            continue
+        if token in options_with_values:
+            index += 2
+            continue
+        if token.startswith(("--message=", "--author=", "--date=", "--cleanup=", "--trailer=", "--gpg-sign=")):
+            index += 1
+            continue
+        if token.startswith("-S") and token not in ("-S", "-S-"):
+            index += 1
+            continue
+        if token.startswith("-"):
+            return False
+        return False
+    return True
 
 
 def action_environment(action: GitAction) -> dict[str, str]:
@@ -455,6 +518,36 @@ def run_action_git(
         ["git", *action.structural_globals, *arguments],
         cwd=action.shell_cwd,
         env=action_environment(action),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=text,
+        check=False,
+    )
+
+
+def context_environment(context: RepoContext) -> dict[str, str]:
+    """Pin every post-resolution Git consumer to one repository and index."""
+    environment = context.git_env.copy()
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
+        environment.pop(key, None)
+    environment["GIT_DIR"] = str(context.git_dir)
+    environment["GIT_COMMON_DIR"] = str(context.common_dir)
+    environment["GIT_INDEX_FILE"] = str(context.index_file)
+    if not context.bare:
+        environment["GIT_WORK_TREE"] = str(context.worktree_root)
+    return environment
+
+
+def run_context_git(
+    context: RepoContext,
+    *arguments: str,
+    text: bool = False,
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=context.worktree_root,
+        env=context_environment(context),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -515,6 +608,56 @@ def repo_context(action: GitAction) -> RepoContext | None:
         return None
 
     try:
+        git_dir_result = run_action_git(
+            action,
+            "rev-parse",
+            "--absolute-git-dir",
+            text=True,
+        )
+        if git_dir_result.returncode != 0:
+            git_dir_result = run_action_git(
+                action,
+                "rev-parse",
+                "--git-dir",
+                text=True,
+            )
+        index_result = run_action_git(
+            action,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "index",
+            text=True,
+        )
+        if index_result.returncode != 0:
+            index_result = run_action_git(
+                action,
+                "rev-parse",
+                "--git-path",
+                "index",
+                text=True,
+            )
+    except OSError:
+        return None
+    if git_dir_result.returncode != 0 or index_result.returncode != 0:
+        return None
+    try:
+        raw_git_dir = Path(git_dir_result.stdout.strip())
+        if not raw_git_dir.is_absolute():
+            raw_git_dir = effective_git_cwd(action) / raw_git_dir
+        git_dir = raw_git_dir.resolve(strict=True)
+        # An inherited alternate index need not exist yet (and its parent may
+        # be created later), so canonicalize the selected pathname lexically.
+        # Legacy `rev-parse --git-path index` already expresses a relative
+        # result from Git's effective cwd (including any setup-time chdir).
+        raw_index = Path(index_result.stdout.strip())
+        if not raw_index.is_absolute():
+            raw_index = effective_git_cwd(action) / raw_index
+        index_file = Path(os.path.abspath(os.path.normpath(raw_index)))
+    except (OSError, RuntimeError):
+        return None
+
+    try:
         common_result = run_action_git(
             action,
             "rev-parse",
@@ -546,6 +689,8 @@ def repo_context(action: GitAction) -> RepoContext | None:
     return RepoContext(
         action=action,
         worktree_root=worktree_root,
+        git_dir=git_dir,
+        index_file=index_file,
         common_dir=common_dir,
         main_root=common_dir.parent,
         git_env=action_environment(action),
@@ -623,19 +768,79 @@ def emit_deny(reason: str) -> None:
             ensure_ascii=False,
         )
     )
+    sys.stdout.flush()
 
 
-def halt_sentinel(context: RepoContext, check_halt: Path) -> str | None:
-    environment = os.environ.copy()
+def emit_decision_event(
+    emitter: Path,
+    context: RepoContext,
+    *,
+    event: str,
+    candidate: str,
+    policy_sha: str,
+    reason: str,
+) -> None:
+    """Best-effort telemetry after the denial has already been delivered."""
+    environment = context_environment(context)
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                str(emitter),
+                "--event",
+                event,
+                "--candidate",
+                candidate,
+                "--policy-sha",
+                policy_sha,
+                "--reason",
+                reason,
+                "--surface",
+                "commit-guard",
+            ],
+            cwd=context.worktree_root,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=8,
+        )
+    except subprocess.TimeoutExpired:
+        pass
+    except OSError:
+        pass
+
+
+def staged_candidate(context: RepoContext) -> str:
+    try:
+        result = run_context_git(context, "diff", "--cached")
+    except OSError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return hashlib.sha256(result.stdout).hexdigest()
+
+
+def head_policy_sha(context: RepoContext) -> str:
+    try:
+        result = run_context_git(context, "rev-parse", "HEAD", text=True)
+    except OSError:
+        return ""
+    value = result.stdout.strip() if result.returncode == 0 else ""
+    return value if COMMIT_SHA.fullmatch(value) is not None else ""
+
+
+def run_halt_check(
+    context: RepoContext, check_halt: Path, *, probe_only: bool
+) -> tuple[int, str]:
+    environment = context_environment(context)
     # check-halt.sh intentionally accepts only a scope. Supply the already
-    # resolved repository identity via Git's standard environment so explicit
-    # --git-dir/--work-tree invocations retain the same main-checkout root.
-    environment["GIT_DIR"] = str(context.common_dir)
-    environment["GIT_COMMON_DIR"] = str(context.common_dir)
-    if context.bare:
-        environment.pop("GIT_WORK_TREE", None)
+    # resolved repository and index identity via Git's standard environment.
+    if probe_only:
+        environment["FORGE_HALT_PROBE_ONLY"] = "1"
     else:
-        environment["GIT_WORK_TREE"] = str(context.worktree_root)
+        environment.pop("FORGE_HALT_PROBE_ONLY", None)
     try:
         result = subprocess.run(
             ["bash", str(check_halt), "commit"],
@@ -649,10 +854,21 @@ def halt_sentinel(context: RepoContext, check_halt: Path) -> str | None:
             check=False,
         )
     except OSError:
+        return 0, ""
+    return result.returncode, result.stderr
+
+
+def halt_sentinel(context: RepoContext, check_halt: Path) -> str | None:
+    status, stderr = run_halt_check(context, check_halt, probe_only=True)
+    if status == 0:
         return None
-    if result.returncode == 0:
-        return None
-    match = HALT_MESSAGE.search(result.stderr)
+    # Probe mode is intentionally silent, so resolve the sentinel name from
+    # the shared main-checkout state without starting advisory event work.
+    candidates = [context.main_root / "AGENT_HALT", context.main_root / "AGENT_HALT_commit"]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.name
+    match = HALT_MESSAGE.search(stderr)
     return match.group(1) if match is not None else None
 
 
@@ -660,8 +876,8 @@ def manifest_requires_marker(context: RepoContext) -> bool:
     if not context.bare and os.path.lexists(context.worktree_root / ".forge-manifest"):
         return True
     try:
-        result = run_action_git(
-            context.action,
+        result = run_context_git(
+            context,
             "cat-file",
             "-e",
             "HEAD:.forge-manifest",
@@ -671,42 +887,149 @@ def manifest_requires_marker(context: RepoContext) -> bool:
     return result.returncode == 0
 
 
-def marker_failure(context: RepoContext) -> str | None:
+def policy_region(policy: bytes, name: str) -> bytes | None:
+    """Extract one complete committed policy region, including its delimiters."""
+    begin = f"<!-- FORGE:REGION {name} BEGIN -->".encode()
+    end = f"<!-- FORGE:REGION {name} END -->".encode()
+    if policy.count(begin) != 1 or policy.count(end) != 1:
+        return None
+    start = policy.find(begin)
+    finish = policy.find(end, start + len(begin))
+    if finish < 0:
+        return None
+    return policy[start : finish + len(end)]
+
+
+def committed_policy(context: RepoContext, revision: str) -> bytes | None:
+    try:
+        result = run_context_git(context, "show", f"{revision}:forge-project.md")
+    except OSError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def policy_drift(context: RepoContext, revision: str) -> bool:
+    """Authenticate a historical policy and compare its enforcement regions."""
+    if COMMIT_SHA.fullmatch(revision) is None:
+        return True
+    try:
+        resolved = run_context_git(
+            context,
+            "rev-parse",
+            "--verify",
+            f"{revision}^{{commit}}",
+            text=True,
+        )
+        ancestor = run_context_git(
+            context,
+            "merge-base",
+            "--is-ancestor",
+            revision,
+            "HEAD",
+        )
+    except OSError:
+        return True
+    if (
+        resolved.returncode != 0
+        or resolved.stdout.strip() != revision
+        or ancestor.returncode != 0
+    ):
+        return True
+    current = committed_policy(context, "HEAD")
+    historical = committed_policy(context, revision)
+    if current is None or historical is None:
+        return True
+    for name in ("risk-tiers", "trigger-paths", "file-categories"):
+        current_region = policy_region(current, name)
+        historical_region = policy_region(historical, name)
+        if name == "trigger-paths" and current_region is None and historical_region is None:
+            continue
+        if current_region is None or historical_region is None:
+            return True
+        if current_region != historical_region:
+            return True
+    return False
+
+
+def classifier_eligible(context: RepoContext, revision: str, classifier: Path) -> bool:
+    """Independently derive fast eligibility for the exact staged diff."""
+    environment = context_environment(context)
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(classifier),
+                "--repo",
+                str(context.worktree_root),
+                "--policy-sha",
+                revision,
+                "--staged",
+                "--declared-tier",
+                "fast",
+                "--require-effective",
+                "fast",
+            ],
+            cwd=context.worktree_root,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def marker_failure(context: RepoContext, classifier: Path) -> str | None:
     marker = context.main_root / ".forge" / "tmp" / "commit-authorized"
     try:
         lines = marker.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
-        return "missing"
+        return "marker missing"
     except (OSError, UnicodeError):
-        return "malformed"
+        return "marker malformed"
 
-    if len(lines) not in (2, 3):
-        return "malformed"
+    if len(lines) not in (2, 3, 4):
+        return "marker malformed"
     if HASH.fullmatch(lines[0]) is None:
-        return "malformed"
+        return "marker malformed"
     if len(lines) == 3 and lines[2] != "skip: user-directed":
-        return "malformed"
+        return "marker malformed"
+    policy_sha: str | None = None
+    if len(lines) == 4:
+        if lines[2] != "tier: fast" or not lines[3].startswith("policy: "):
+            return "marker malformed"
+        policy_sha = lines[3][len("policy: ") :]
+        if COMMIT_SHA.fullmatch(policy_sha) is None:
+            return "marker malformed"
     try:
         reviewed_at = datetime.strptime(lines[1], "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=timezone.utc
         )
     except ValueError:
-        return "malformed"
+        return "marker malformed"
     age_seconds = (datetime.now(timezone.utc) - reviewed_at).total_seconds()
     # More than two minutes ahead is malformed; smaller skew remains acceptable.
     if age_seconds < -120:
-        return "malformed"
+        return "marker malformed"
     if age_seconds > 1800:
-        return "stale"
+        return "marker stale"
 
     try:
-        diff = run_action_git(context.action, "diff", "--cached")
+        diff = run_context_git(context, "diff", "--cached")
     except OSError:
-        return "hash mismatch"
+        return "marker hash mismatch"
     if diff.returncode != 0:
-        return "hash mismatch"
+        return "marker hash mismatch"
     if hashlib.sha256(diff.stdout).hexdigest() != lines[0]:
-        return "hash mismatch"
+        return "marker hash mismatch"
+    if policy_sha is None:
+        return None
+    if policy_drift(context, policy_sha):
+        return "fast-path policy drift"
+    if not classifier_eligible(context, policy_sha, classifier):
+        return "fast-path eligibility drift"
     return None
 
 
@@ -727,6 +1050,8 @@ def main() -> int:
     actions = find_actions(command)
     contexts = [(action, repo_context(action)) for action in actions]
     check_halt = Path(sys.argv[1])
+    classifier = Path(sys.argv[2])
+    emitter = Path(sys.argv[3])
 
     # Halt is the first authority check across every relevant segment.
     for action, context in contexts:
@@ -738,6 +1063,19 @@ def main() -> int:
         reason = f"forge: operator halt engaged ({sentinel})"
         audit_block(context, action.executable, "operator-halt", command)
         emit_deny(reason)
+        # The deny JSON above is flushed before either advisory event append.
+        # Record the guard denial separately from check-halt's halt metric.
+        emit_decision_event(
+            emitter,
+            context,
+            event="guard_deny",
+            candidate=staged_candidate(context),
+            policy_sha=head_policy_sha(context),
+            reason="operator-halt",
+        )
+        # Preserve the primary hook decision while check-halt records its own
+        # audit and halt_event append.
+        run_halt_check(context, check_halt, probe_only=False)
         return 0
 
     for action, context in contexts:
@@ -745,12 +1083,34 @@ def main() -> int:
             continue
         if not manifest_requires_marker(context):
             continue
-        failure = marker_failure(context)
+        marker_state = marker_failure(context, classifier)
+        failure = (
+            marker_state
+            if marker_state is not None
+            else (None if commit_candidate_is_stable(action, command) else "marker hash mismatch")
+        )
         if failure is None:
             continue
-        reason = f"forge: commit not authorized — run /forge:commit (marker {failure})"
-        audit_block(context, action.executable, f"marker-{failure.replace(' ', '-')}", command)
+        reason = f"forge: commit not authorized — run /forge:commit ({failure})"
+        audit_block(context, action.executable, failure.replace(" ", "-"), command)
         emit_deny(reason)
+        if failure == "fast-path policy drift":
+            event = "fast_denied_policy"
+            event_reason = "fast-path-policy-drift"
+        elif failure == "fast-path eligibility drift":
+            event = "fast_denied_eligibility"
+            event_reason = "fast-path-eligibility-drift"
+        else:
+            event = "guard_deny"
+            event_reason = failure.replace(" ", "-")
+        emit_decision_event(
+            emitter,
+            context,
+            event=event,
+            candidate=staged_candidate(context),
+            policy_sha=head_policy_sha(context),
+            reason=event_reason,
+        )
         return 0
     return 0
 
@@ -761,4 +1121,7 @@ except BrokenPipeError:
     raise SystemExit(0)
 PY
 
-exec python3 -c "$python_code" "$script_dir/check-halt.sh"
+exec python3 -c "$python_code" \
+    "$script_dir/check-halt.sh" \
+    "$script_dir/risk_tier.py" \
+    "$script_dir/emit-decision-event.py"

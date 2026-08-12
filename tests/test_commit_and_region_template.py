@@ -221,7 +221,7 @@ class CommitSkillTests(unittest.TestCase):
             ".github/workflows/**",
         ):
             self.assertIn(path, COMMIT_SKILL)
-        self.assertIn("fresh Codex `review-cheap`", COMMIT_SKILL)
+        self.assertIn("fresh, read-only Codex `review-cheap`", COMMIT_SKILL)
         self.assertIn("`review-final` Claude agent", COMMIT_SKILL)
         self.assertIn("distinct agent from the author", COMMIT_SKILL)
         self.assertIn("Project configuration may extend this list", COMMIT_SKILL)
@@ -231,7 +231,8 @@ class CommitSkillTests(unittest.TestCase):
         step_two = COMMIT_SKILL.split("## Step 2 — Validate", 1)[1].split(
             "## Step 3 —", 1
         )[0]
-        self.assertIn("git show HEAD:forge-project.md", COMMIT_SKILL)
+        self.assertIn('git show "${policy_sha}:forge-project.md"', COMMIT_SKILL)
+        self.assertIn("set `policy_sha` to the full result of `git rev-parse HEAD`", COMMIT_SKILL)
         self.assertIn("committed `gate1-test-command`", step_two)
         self.assertIn("committed `stack-validations`", step_two)
         self.assertIn("committed `invariants`", step_two)
@@ -263,6 +264,70 @@ class CommitSkillTests(unittest.TestCase):
         self.assertLess(COMMIT_SKILL.index(invalidation), COMMIT_SKILL.index(control_wait))
         self.assertLess(COMMIT_SKILL.index(control_wait), COMMIT_SKILL.index(pass_write))
         self.assertIn("leaves no authorization marker behind", COMMIT_SKILL)
+
+    def test_gate_time_tiering_is_exact_promote_only_and_non_narrowable(self) -> None:
+        invocation = (
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \\\n'
+            '  --repo "$PWD" --policy-sha "$policy_sha" --staged \\\n'
+            '  "${declared_args[@]}"'
+        )
+        self.assertIn(invocation, COMMIT_SKILL)
+        self.assertIn('declared_tier="${declared_tier:-}"', COMMIT_SKILL)
+        self.assertIn('declared_args=()', COMMIT_SKILL)
+        self.assertIn('"${declared_args[@]}"', COMMIT_SKILL)
+        self.assertIn('fast|standard|hard)', COMMIT_SKILL)
+        self.assertIn('effective_tier="$(python3 -c', COMMIT_SKILL)
+        self.assertIn('json.load(sys.stdin).get("effective_tier")', COMMIT_SKILL)
+        self.assertIn('echo "forge: invalid risk-tier evidence"', COMMIT_SKILL)
+        classifier = COMMIT_SKILL.split("Before selecting a reviewer", 1)[1].split(
+            "Route the review as follows:", 1
+        )[0]
+        for evidence in (
+            "exact staged\npath list",
+            "every matched tier/trigger/category row",
+            "every formatting-category decision",
+            "dependency-floor decision",
+            "`declared_tier`",
+            "`derived_tier`",
+            "promote-only `effective_tier`",
+            "full `policy_sha`",
+        ):
+            self.assertIn(evidence, classifier)
+        self.assertIn("no gate-time demotion is possible", classifier)
+        self.assertIn("non-narrowable hard floor", classifier)
+        self.assertIn("malformed nonempty trigger row makes the whole candidate hard", classifier)
+        self.assertIn("matching no tier row defaults to standard", classifier)
+        self.assertIn("unknown\nmanifest membership impose at least standard", classifier)
+
+    def test_fast_skips_only_review_and_writes_exact_four_line_marker(self) -> None:
+        routing = COMMIT_SKILL.split("Route the review as follows:", 1)[1].split(
+            "Give the reviewer", 1
+        )[0]
+        self.assertIn("`fast`: skip only this adversarial reviewer", routing)
+        for retained in (
+            "classification",
+            "validation",
+            "invariants",
+            "assertion-quality",
+            "changelog",
+            "secret scan",
+            "halt",
+            "lock",
+            "staged-diff re-verification",
+            "guard recomputation",
+            "marker",
+        ):
+            with self.subTest(retained=retained):
+                self.assertIn(retained, routing)
+        marker_write = (
+            "printf '%s\\n%s\\n%s\\n%s\\n' \"$reviewed_diff_sha256\" \"$reviewed_at\" \\\n"
+            "  'tier: fast' \"policy: $policy_sha\" > .forge/tmp/commit-authorized"
+        )
+        self.assertIn(marker_write, COMMIT_SKILL)
+        self.assertIn("if len(lines) not in (2, 3, 4):", COMMIT_SKILL)
+        self.assertIn('lines[2] != "tier: fast"', COMMIT_SKILL)
+        self.assertIn(r'r"policy: (?:[0-9a-f]{40}|[0-9a-f]{64})"', COMMIT_SKILL)
+        self.assertIn("duplicated/combined/reordered annotation", COMMIT_SKILL)
 
     def test_skip_mapping_is_exact(self) -> None:
         rows = {
@@ -305,9 +370,10 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("beginning exactly `gate-2: ` for", COMMIT_SKILL)
         self.assertIn("criterion must be exactly `gate-3: review-final verdict`", COMMIT_SKILL)
         self.assertIn('`result: "failed"`', COMMIT_SKILL)
-        self.assertIn("exact two-line PASS marker", COMMIT_SKILL)
+        self.assertIn("exact two-line standard/hard PASS marker", COMMIT_SKILL)
         self.assertIn("exact three-line user-skip marker", COMMIT_SKILL)
-        self.assertIn("30-minute freshness", COMMIT_SKILL)
+        self.assertIn("exact four-line fast marker", COMMIT_SKILL)
+        self.assertIn("exact four-line fast marker younger than 30 minutes", COMMIT_SKILL)
         self.assertIn("set -o pipefail", COMMIT_SKILL)
         self.assertIn('if ! current_hash="$(git diff --cached | shasum -a 256', COMMIT_SKILL)
         self.assertIn("forge: could not hash staged diff — commit blocked", COMMIT_SKILL)
@@ -318,6 +384,27 @@ class CommitSkillTests(unittest.TestCase):
         self.assertLess(COMMIT_SKILL.index(release_call), COMMIT_SKILL.index(clear_traps))
         for condition in ("missing", "malformed", "stale"):
             self.assertIn(condition, COMMIT_SKILL)
+
+    def test_decision_events_follow_the_primary_outcome_and_remain_advisory(self) -> None:
+        commit = COMMIT_SKILL.index('git commit -m "$commit_message"')
+        release = COMMIT_SKILL.index("\nrelease_commit_gate\nrelease_status=$?\n")
+        gate_event = COMMIT_SKILL.index("--event gate_commit")
+        fast_event = COMMIT_SKILL.index("--event fast_allowed")
+        release_failure = COMMIT_SKILL.index(
+            'if [ "$release_status" -ne 0 ]; then\n    exit "$release_status"',
+            fast_event,
+        )
+        self.assertLess(commit, release)
+        self.assertLess(release, gate_event)
+        self.assertLess(gate_event, fast_event)
+        self.assertLess(fast_event, release_failure)
+        self.assertIn("--surface /forge:commit || :", COMMIT_SKILL)
+        self.assertIn("event `review_block`", COMMIT_SKILL)
+        self.assertIn("`user_skip` event", COMMIT_SKILL)
+        self.assertIn("First deliver acceptance of the skip as the primary outcome", COMMIT_SKILL)
+        self.assertIn("2-second polling and hard 5-second bound", COMMIT_SKILL)
+        self.assertIn("event-append-lock-timeout", COMMIT_SKILL)
+        self.assertIn("deduplicates both events by `(event, candidate)`", COMMIT_SKILL)
 
     def test_forbidden_legacy_and_blanket_staging_forms_are_absent(self) -> None:
         shipped = TEMPLATE + COMMIT_SKILL

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -13,6 +14,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT_GUARD = ROOT / "scripts" / "forge" / "commit-guard.sh"
 MARKER_REASON = "forge: commit not authorized — run /forge:commit"
+DEPENDENCY_PATHS = (
+    "package.json",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "requirements*.txt",
+    "pyproject.toml",
+    "poetry.lock",
+    "uv.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+    "Gemfile",
+    "Gemfile.lock",
+    "pom.xml",
+    "build.gradle*",
+    "composer.json",
+    "composer.lock",
+)
 
 
 class CommitGuardTests(unittest.TestCase):
@@ -86,16 +107,15 @@ class CommitGuardTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
-        self.assertEqual(
-            json.loads(result.stdout),
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
-                }
-            },
-        )
+        expected = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+        self.assertEqual(result.stdout, json.dumps(expected, ensure_ascii=False) + "\n")
+        self.assertEqual(json.loads(result.stdout), expected)
 
     def track_manifest(self, *, cwd: Path | None = None) -> None:
         repo = cwd or self.repo
@@ -115,9 +135,74 @@ class CommitGuardTests(unittest.TestCase):
         ).stdout.strip()
         self.git("update-ref", "HEAD", commit, cwd=repo)
 
+    def policy_text(
+        self,
+        *,
+        fast_patterns: str = "docs/**, .forge/history/**, @formatting-only",
+        triggers: str = "No trigger paths configured.",
+    ) -> str:
+        dependencies = "\n".join(DEPENDENCY_PATHS)
+        return f"""# Forge policy
+<!-- FORGE:REGION file-categories BEGIN -->
+| Category | File patterns |
+|---|---|
+| `docs` | `*.md`, `docs/**` |
+| `python` | `*.py`, `pyproject.toml` |
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**` |
+<!-- FORGE:REGION file-categories END -->
+<!-- FORGE:REGION risk-tiers BEGIN -->
+| tier | path patterns |
+|---|---|
+| fast | {fast_patterns} |
+| standard | src/** |
+| hard | forge-project.md |
+
+| formatting-only category |
+|---|
+| docs |
+<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->
+{dependencies}
+<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->
+<!-- FORGE:REGION risk-tiers END -->
+<!-- FORGE:REGION trigger-paths BEGIN -->
+{triggers}
+<!-- FORGE:REGION trigger-paths END -->
+"""
+
+    def commit_policy(
+        self,
+        *,
+        fast_patterns: str = "docs/**, .forge/history/**, @formatting-only",
+        triggers: str = "No trigger paths configured.",
+        cwd: Path | None = None,
+    ) -> str:
+        repo = cwd or self.repo
+        (repo / "forge-project.md").write_text(
+            self.policy_text(fast_patterns=fast_patterns, triggers=triggers),
+            encoding="utf-8",
+        )
+        (repo / ".forge-manifest").write_text(
+            "forge_version: 1\ninit_completed: true\n", encoding="utf-8"
+        )
+        self.git("add", "forge-project.md", ".forge-manifest", cwd=repo)
+        tree = self.git("write-tree", cwd=repo).stdout.strip()
+        parent = self.git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+        commit = self.git(
+            "commit-tree",
+            tree,
+            "-p",
+            parent,
+            cwd=repo,
+            input_text="commit tier policy\n",
+        ).stdout.strip()
+        self.git("update-ref", "HEAD", commit, cwd=repo)
+        return commit
+
     def stage_change(self, *, cwd: Path | None = None, name: str = "change.txt") -> None:
         repo = cwd or self.repo
-        (repo / name).write_text("reviewed change\n", encoding="utf-8")
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("reviewed change\n", encoding="utf-8")
         self.git("add", name, cwd=repo)
 
     def staged_hash(self, *, cwd: Path | None = None) -> str:
@@ -137,6 +222,7 @@ class CommitGuardTests(unittest.TestCase):
         digest: str | None = None,
         timestamp: str | None = None,
         third_line: str | None = None,
+        fourth_line: str | None = None,
     ) -> Path:
         root = marker_root or self.repo
         marker = root / ".forge" / "tmp" / "commit-authorized"
@@ -147,6 +233,8 @@ class CommitGuardTests(unittest.TestCase):
         lines = [digest or self.staged_hash(cwd=cwd), reviewed_at]
         if third_line is not None:
             lines.append(third_line)
+        if fourth_line is not None:
+            lines.append(fourth_line)
         marker.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return marker
 
@@ -193,7 +281,7 @@ class CommitGuardTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(audit.stat().st_mode), 0o600)
         self.assertEqual(len(audit.read_text(encoding="utf-8").splitlines()), 4)
 
-    def test_only_exact_two_and_three_line_marker_shapes_are_accepted(self) -> None:
+    def test_only_exact_two_and_three_line_legacy_marker_shapes_are_accepted(self) -> None:
         (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
         self.stage_change()
 
@@ -217,6 +305,161 @@ class CommitGuardTests(unittest.TestCase):
                     self.invoke("git commit"),
                     f"{MARKER_REASON} (marker malformed)",
                 )
+
+    def test_fast_marker_is_admitted_only_for_independently_eligible_diff(self) -> None:
+        policy_sha = self.commit_policy()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker(
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        self.assert_allowed(self.invoke("git commit"))
+
+    def test_fast_marker_permutations_and_malformed_annotations_are_denied(self) -> None:
+        policy_sha = self.commit_policy()
+        self.stage_change(name="docs/guide.md")
+        digest = self.staged_hash()
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        malformed = (
+            f"{digest}\n{timestamp}\npolicy: {policy_sha}\ntier: fast\n",
+            f"{digest}\n{timestamp}\ntier: fast\npolicy: {policy_sha[:12]}\n",
+            f"{digest}\n{timestamp}\ntier: fast\npolicy:{policy_sha}\n",
+            f"{digest}\n{timestamp}\nskip: user-directed\ntier: fast\n",
+            f"{digest}\n{timestamp}\ntier: fast\npolicy: {policy_sha}\nextra\n",
+        )
+        marker = self.repo / ".forge/tmp/commit-authorized"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        for contents in malformed:
+            with self.subTest(contents=contents):
+                marker.write_text(contents, encoding="utf-8")
+                self.assert_denied(
+                    self.invoke("git commit"),
+                    f"{MARKER_REASON} (marker malformed)",
+                )
+
+    def test_fast_marker_policy_region_drift_is_denied_exactly(self) -> None:
+        policy_sha = self.commit_policy()
+        (self.repo / "forge-project.md").write_text(
+            self.policy_text(fast_patterns="docs/private/**"), encoding="utf-8"
+        )
+        self.git("add", "forge-project.md")
+        tree = self.git("write-tree").stdout.strip()
+        descendant = self.git(
+            "commit-tree",
+            tree,
+            "-p",
+            policy_sha,
+            input_text="narrow policy\n",
+        ).stdout.strip()
+        self.git("update-ref", "HEAD", descendant)
+        self.stage_change(name="docs/guide.md")
+        self.write_marker(
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (fast-path policy drift)",
+        )
+
+    def test_each_complete_policy_region_is_independently_continuity_checked(self) -> None:
+        mutations = (
+            ("risk-tiers", {"fast_patterns": "docs/private/**"}),
+            ("trigger-paths", {"triggers": "| src/** | security |"}),
+            ("file-categories", {}),
+        )
+        for region, changes in mutations:
+            with self.subTest(region=region):
+                repo = self.scratch / f"{region} checkout"
+                self.init_repo(repo)
+                policy_sha = self.commit_policy(cwd=repo)
+                updated = self.policy_text(**changes)
+                if region == "file-categories":
+                    updated = updated.replace(
+                        "| `docs` | `*.md`, `docs/**` |",
+                        "| `docs` | `*.md`, `docs/**`, `guides/**` |",
+                    )
+                (repo / "forge-project.md").write_text(updated, encoding="utf-8")
+                self.git("add", "forge-project.md", cwd=repo)
+                tree = self.git("write-tree", cwd=repo).stdout.strip()
+                descendant = self.git(
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    policy_sha,
+                    cwd=repo,
+                    input_text=f"change {region}\n",
+                ).stdout.strip()
+                self.git("update-ref", "HEAD", descendant, cwd=repo)
+                self.stage_change(cwd=repo, name="docs/guide.md")
+                self.write_marker(
+                    cwd=repo,
+                    marker_root=repo,
+                    third_line="tier: fast",
+                    fourth_line=f"policy: {policy_sha}",
+                )
+
+                self.assert_denied(
+                    self.invoke("git commit", cwd=repo),
+                    f"{MARKER_REASON} (fast-path policy drift)",
+                )
+
+    def test_fast_marker_nonancestor_policy_is_denied_exactly(self) -> None:
+        head_policy = self.commit_policy()
+        tree = self.git("rev-parse", f"{head_policy}^{{tree}}").stdout.strip()
+        unrelated = self.git(
+            "commit-tree", tree, input_text="unrelated policy commit\n"
+        ).stdout.strip()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker(
+            third_line="tier: fast",
+            fourth_line=f"policy: {unrelated}",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (fast-path policy drift)",
+        )
+
+    def test_fast_marker_standard_diff_is_promoted_and_denied_exactly(self) -> None:
+        policy_sha = self.commit_policy()
+        self.stage_change(name="src/service.py")
+        self.write_marker(
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (fast-path eligibility drift)",
+        )
+
+        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        emitted = [json.loads(line) for line in events.read_text().splitlines()]
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["event"], "fast_denied_eligibility")
+        self.assertEqual(emitted[0]["candidate"], self.staged_hash())
+        self.assertEqual(emitted[0]["policy_sha"], policy_sha)
+        self.assertEqual(emitted[0]["reason"], "fast-path-eligibility-drift")
+        self.assertFalse(any(item["event"] == "guard_deny" for item in emitted))
+
+    def test_fast_classification_never_reads_working_tree_policy(self) -> None:
+        policy_sha = self.commit_policy()
+        self.stage_change(name="src/service.py")
+        (self.repo / "forge-project.md").write_text(
+            self.policy_text(fast_patterns="**"), encoding="utf-8"
+        )
+        self.write_marker(
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (fast-path eligibility drift)",
+        )
 
     def test_future_marker_timestamp_allows_only_clock_skew(self) -> None:
         (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
@@ -278,6 +521,89 @@ class CommitGuardTests(unittest.TestCase):
 
         self.assert_allowed(self.invoke("git commit -m ordinary"))
         self.assert_allowed(self.invoke("git push origin HEAD"))
+
+    def test_authorized_candidate_rejects_index_mutation_and_commit_selection_forms(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker()
+        unsafe = (
+            "git add src/evil.py && git commit",
+            "git commit -a",
+            "git commit --all",
+            "git commit --include src/evil.py",
+            "git commit --only src/evil.py",
+            "git commit src/evil.py",
+            "git commit --patch",
+            "git commit --interactive",
+            "git commit --pathspec-from-file=paths.txt",
+            "git commit -amessage",
+            "git commit -C HEAD",
+            "git commit --reuse-message HEAD",
+            "git commit --reuse-message=HEAD",
+            "git commit -c HEAD",
+            "git commit --reedit-message HEAD",
+            "git commit --reedit-message=HEAD",
+            "git commit -F message.txt",
+            "git commit --file message.txt",
+            "git commit --file=message.txt",
+            "git add src/evil.py & git commit",
+            'git commit -m "$(git add src/evil.py)"',
+            'git commit -m "<(git add src/evil.py)"',
+        )
+        for command in unsafe:
+            with self.subTest(command=command):
+                self.assert_denied(
+                    self.invoke(command),
+                    f"{MARKER_REASON} (marker hash mismatch)",
+                )
+
+    def test_authorized_candidate_accepts_value_less_benign_commit_flags(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker()
+        benign = (
+            "git commit -q -m x",
+            "git commit --quiet -m x",
+            "git commit -v -m x",
+            "git commit --verbose -m x",
+            "git commit -n -m x",
+            "git commit --no-verify -m x",
+            "git commit -s -m x",
+            "git commit --signoff -m x",
+            "git commit --no-edit",
+        )
+        for command in benign:
+            with self.subTest(command=command):
+                self.assert_allowed(self.invoke(command))
+
+    def test_signing_flags_do_not_swallow_unsafe_commit_options(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker()
+        bypasses = (
+            "git commit -S --amend -m x",
+            "git commit -S -a -m x",
+            "git commit --gpg-sign --amend -m x",
+            "git commit -m x -S --amend",
+            "git commit -S- --amend -m x",
+        )
+        for command in bypasses:
+            with self.subTest(command=command):
+                self.assert_denied(
+                    self.invoke(command),
+                    f"{MARKER_REASON} (marker hash mismatch)",
+                )
+
+    def test_attached_signing_keys_preserve_clean_commit_candidate(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker()
+        for command in (
+            "git commit -S0123456789ABCDEF -m x",
+            "git commit --gpg-sign=0123456789ABCDEF -m x",
+        ):
+            with self.subTest(command=command):
+                self.assert_allowed(self.invoke(command))
 
     def test_all_required_command_forms_are_detected(self) -> None:
         (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
@@ -421,6 +747,26 @@ class CommitGuardTests(unittest.TestCase):
             "forge: operator halt engaged (AGENT_HALT)",
         )
 
+    def test_halt_denial_emits_exactly_one_operator_halt_guard_event(self) -> None:
+        self.stage_change(name="halted.txt")
+        expected_candidate = self.staged_hash()
+        expected_policy = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.repo / "AGENT_HALT").write_text("operator pause\n", encoding="utf-8")
+
+        self.assert_denied(
+            self.invoke("git push origin HEAD"),
+            "forge: operator halt engaged (AGENT_HALT)",
+        )
+
+        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        emitted = [json.loads(line) for line in events.read_text().splitlines()]
+        guard_denials = [item for item in emitted if item["event"] == "guard_deny"]
+        self.assertEqual(len(guard_denials), 1)
+        self.assertEqual(guard_denials[0]["candidate"], expected_candidate)
+        self.assertEqual(guard_denials[0]["policy_sha"], expected_policy)
+        self.assertEqual(guard_denials[0]["reason"], "operator-halt")
+        self.assertEqual(guard_denials[0]["surface"], "commit-guard")
+
     def test_non_utf8_halt_contents_still_emit_a_deny(self) -> None:
         (self.repo / "AGENT_HALT").write_bytes(b"operator pause: \xff\n")
         self.assert_denied(
@@ -457,7 +803,10 @@ class CommitGuardTests(unittest.TestCase):
             "private-key-bytes",
         ):
             self.assertNotIn(secret, contents)
-        guard_line = contents.splitlines()[-1]
+        guard_line = next(
+            line for line in contents.splitlines()
+            if "executable=git deny=operator-halt" in line
+        )
         self.assertIn("executable=git deny=operator-halt", guard_line)
         self.assertIn("[REDACTED]", guard_line)
         self.assertIn("[REDACTED PEM BLOCK]", guard_line)
@@ -482,6 +831,165 @@ class CommitGuardTests(unittest.TestCase):
         self.assertTrue((self.repo / ".forge/tmp/halt-audit.log").is_file())
         self.assertFalse((linked / ".forge/tmp/halt-audit.log").exists())
 
+    def test_linked_worktree_fast_marker_reclassifies_linked_index(self) -> None:
+        policy_sha = self.commit_policy()
+        linked = self.scratch / "linked fast worktree"
+        self.git("worktree", "add", "--quiet", "-b", "linked-fast", str(linked))
+        self.stage_change(cwd=linked, name="docs/guide.md")
+        self.write_marker(
+            cwd=linked,
+            marker_root=self.repo,
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        self.assert_allowed(self.invoke("git commit", cwd=linked))
+
+    def test_linked_fast_classifier_does_not_forward_ambient_repository_globals(self) -> None:
+        policy_sha = self.commit_policy()
+        linked = self.scratch / "linked ambient worktree"
+        self.git("worktree", "add", "--quiet", "-b", "linked-ambient", str(linked))
+        self.stage_change(cwd=linked, name="docs/guide.md")
+        self.write_marker(
+            cwd=linked,
+            marker_root=self.repo,
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+        invocation_cwd = linked / "nested"
+        invocation_cwd.mkdir()
+        linked_git_dir = Path(
+            self.git("rev-parse", "--absolute-git-dir", cwd=linked).stdout.strip()
+        )
+        environment = os.environ.copy()
+        environment["GIT_DIR"] = os.path.relpath(
+            linked_git_dir, invocation_cwd.resolve()
+        )
+        environment["GIT_WORK_TREE"] = os.path.relpath(
+            linked.resolve(), invocation_cwd.resolve()
+        )
+
+        self.assert_allowed(
+            self.invoke("git commit", cwd=invocation_cwd, environment=environment)
+        )
+
+    def test_ambient_main_git_dir_cannot_authorize_linked_hard_index_as_fast(self) -> None:
+        policy_sha = self.commit_policy()
+        linked = self.scratch / "linked split worktree"
+        self.git("worktree", "add", "--quiet", "-b", "linked-split", str(linked))
+        self.stage_change(cwd=linked, name="docs/guide.md")
+        (self.repo / "forge-project.md").write_text(
+            self.policy_text() + "\nambient hard change\n",
+            encoding="utf-8",
+        )
+        self.git("add", "forge-project.md", cwd=self.repo)
+        self.write_marker(
+            cwd=self.repo,
+            marker_root=self.repo,
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+        environment = os.environ.copy()
+        environment["GIT_DIR"] = str(self.repo / ".git")
+
+        self.assert_denied(
+            self.invoke("git commit", cwd=linked, environment=environment),
+            f"{MARKER_REASON} (fast-path eligibility drift)",
+        )
+
+    def test_fast_marker_preserves_inherited_alternate_index(self) -> None:
+        policy_sha = self.commit_policy()
+        alternate_index = self.scratch / "alternate.index"
+        environment = os.environ.copy()
+        environment["GIT_INDEX_FILE"] = str(alternate_index)
+        subprocess.run(
+            ["git", "read-tree", "HEAD"],
+            cwd=self.repo,
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+        alternate_doc = self.repo / "docs" / "alternate.md"
+        alternate_doc.parent.mkdir(parents=True)
+        alternate_doc.write_text("alternate index\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "docs/alternate.md"],
+            cwd=self.repo,
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+        alternate_diff = subprocess.run(
+            ["git", "diff", "--cached"],
+            cwd=self.repo,
+            env=environment,
+            check=True,
+            capture_output=True,
+        ).stdout
+        self.write_marker(
+            digest=hashlib.sha256(alternate_diff).hexdigest(),
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        self.assert_allowed(self.invoke("git commit", environment=environment))
+
+    def test_legacy_git_path_fallback_preserves_relative_alternate_index(self) -> None:
+        policy_sha = self.commit_policy()
+        nested = self.repo / "nested" / "deeper"
+        nested.mkdir(parents=True)
+        environment = os.environ.copy()
+        environment["GIT_INDEX_FILE"] = "alternate.index"
+        subprocess.run(
+            ["git", "read-tree", "HEAD"],
+            cwd=self.repo,
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+        alternate_doc = self.repo / "docs" / "legacy-alternate.md"
+        alternate_doc.parent.mkdir(parents=True)
+        alternate_doc.write_text("legacy alternate index\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "docs/legacy-alternate.md"],
+            cwd=self.repo,
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+        alternate_diff = subprocess.run(
+            ["git", "diff", "--cached"],
+            cwd=self.repo,
+            env=environment,
+            check=True,
+            capture_output=True,
+        ).stdout
+        self.write_marker(
+            digest=hashlib.sha256(alternate_diff).hexdigest(),
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        fake_bin = self.scratch / "legacy git bin"
+        fake_bin.mkdir()
+        git_wrapper = fake_bin / "git"
+        git_wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [[ "$1" == "rev-parse" && "$2" == "--path-format=absolute" ]]; then\n'
+            "  exit 129\n"
+            "fi\n"
+            f"exec {shlex_quote(Path(real_git or ''))} \"$@\"\n",
+            encoding="utf-8",
+        )
+        git_wrapper.chmod(0o755)
+        environment["PATH"] = f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}"
+
+        self.assert_allowed(
+            self.invoke("git commit", cwd=nested, environment=environment)
+        )
+
     def test_explicit_external_git_dir_and_work_tree_keep_repository_context(self) -> None:
         external_git_dir = self.scratch / "external admin.git"
         (self.repo / ".git").rename(external_git_dir)
@@ -505,6 +1013,24 @@ class CommitGuardTests(unittest.TestCase):
             self.invoke(push_command, cwd=self.scratch),
             "forge: operator halt engaged (AGENT_HALT)",
         )
+
+    def test_fast_classifier_uses_explicit_git_dir_and_work_tree_identity(self) -> None:
+        policy_sha = self.commit_policy()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker(
+            cwd=self.repo,
+            marker_root=self.scratch,
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+        external_git_dir = self.scratch / "external fast admin.git"
+        (self.repo / ".git").rename(external_git_dir)
+        command = (
+            f"git --git-dir={shlex_quote(external_git_dir)} "
+            f"--work-tree={shlex_quote(self.repo)} commit"
+        )
+
+        self.assert_allowed(self.invoke(command, cwd=self.scratch))
 
 
 def shlex_quote(value: Path) -> str:

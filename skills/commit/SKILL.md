@@ -10,11 +10,14 @@ unavailable command or reviewer as a PASS. Any non-skipped failure stops the cha
 failure, and leaves the change uncommitted. Hold the commit lock only during Step 5, never during
 the Step 4 review loop.
 
-Resolve all project gate configuration from committed HEAD. At the start of the chain, run
-`git show HEAD:forge-project.md` and use only those returned bytes for every policy read in Steps
-1–4, including classification, executable commands, changelog policy, review context, invariants,
-and risk routing. Never open the working-tree `forge-project.md`, a rendered copy, or duplicated
-defaults for policy. If HEAD changes before the commit, discard the snapshot and restart the chain.
+Resolve all project gate configuration from one authenticated committed revision. At the start of
+the chain, set `policy_sha` to the full result of `git rev-parse HEAD`, load the policy only with
+`git show "${policy_sha}:forge-project.md"`, and use only those returned bytes for every policy read
+in Steps 1–4, including classification, executable commands, changelog policy, review context,
+invariants, `risk-tiers`, its fixed `FORGE:DEPENDENCY-MANIFEST-PATHS` block, `trigger-paths`, and
+`file-categories`. Never open the working-tree `forge-project.md`, a rendered copy, or duplicated
+defaults for policy. Keep the full `policy_sha` with the gate evidence. If HEAD changes before the
+commit, discard the snapshot and restart the chain; never relabel an older snapshot as current.
 Before Step 1, require the committed `file-categories`, `stack-validations`, and
 `gate1-test-command` regions to contain no `forge-init:` sentinel. For a missing committed file,
 missing region, or unfilled region, print `forge: <region> not configured — run /forge:init` with
@@ -50,6 +53,13 @@ failure cannot leave prior authorization usable.
    `.claude/settings*.json`, and CI workflow definitions at `.github/workflows/**` or the project's
    equivalent CI paths recorded in `file-categories`. Project configuration may extend this list;
    it must never remove or narrow a built-in entry.
+
+Record the task's declared/decomposed tier as `declared_tier`; it is advisory and may influence
+implementer routing only. If the task/journal supplies no tier, leave it absent; the committed
+exact-diff derivation remains authoritative. Accept only exact `fast`, `standard`, or `hard` when
+one is supplied; stop on any other value.
+Do not use it to authorize a gate. Final tier derivation occurs from the exact staged candidate in
+Step 4, where gate-time classification may promote this declaration but can never demote it.
 
 If any target is `control`, classify the whole commit as control-class. Control-class work is
 `gated-approval`, runs the evaluation harness in Step 2, uses `review-final` in Step 4, and never
@@ -183,14 +193,59 @@ if ! reviewed_diff_sha256="$(git diff --cached | shasum -a 256 | awk '{print $1}
 fi
 ```
 
+Before selecting a reviewer, mechanically classify those exact staged bytes against the same
+committed policy snapshot. Invoke the shared classifier with the full immutable revision and the
+advisory declaration; its default diff is the index, so do not pass working-tree paths or a
+different range:
+
+```bash
+declared_tier="${declared_tier:-}"
+declared_args=()
+if [ -n "$declared_tier" ]; then
+  case "$declared_tier" in
+    fast|standard|hard) declared_args=(--declared-tier "$declared_tier") ;;
+    *) echo "forge: invalid declared risk tier: $declared_tier" >&2; exit 1 ;;
+  esac
+fi
+TIER_EVIDENCE="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \
+  --repo "$PWD" --policy-sha "$policy_sha" --staged \
+  "${declared_args[@]}")" || exit 1
+effective_tier="$(python3 -c \
+  'import json,sys; value=json.load(sys.stdin).get("effective_tier"); sys.exit(2) if value not in {"fast","standard","hard"} else print(value)' \
+  <<<"$TIER_EVIDENCE")" || {
+  echo "forge: invalid risk-tier evidence" >&2
+  exit 1
+}
+```
+
+Preserve the classifier's compact JSON object as gate evidence. It must identify the exact staged
+path list, every matched tier/trigger/category row, every formatting-category decision, the
+dependency-floor decision, `declared_tier`, `derived_tier`, promote-only `effective_tier`, and the
+full `policy_sha`. Treat an unknown tier as failure. `effective_tier` is the higher of declared and
+derived (`hard > standard > fast`): no gate-time demotion is possible. The classifier applies the
+non-narrowable hard floor formed by the built-in and project-extended control category plus every
+`trigger-paths` match; a malformed nonempty trigger row makes the whole candidate hard. A path
+matching no tier row defaults to standard. The committed dependency-manifest block and unknown
+manifest membership impose at least standard, and the formatting-only exclusion/predicate in
+FR-156 cannot be relaxed by project rows. Never reconstruct, narrow, or override any classifier
+floor in this skill.
+
 Route the review as follows:
 
-- For a non-control commit, launch a fresh Codex `review-cheap` execution. When an explicitly
-  identified run is open, record that execution in its journal before launch.
-- For a control-class commit, launch the `review-final` Claude agent.
+- `fast`: skip only this adversarial reviewer. Continue every remaining Step 4 operation and all of
+  Step 5; fast never skips classification, validation, invariants, assertion-quality, changelog,
+  secret scan, halt, lock, staged-diff re-verification, guard recomputation, or the marker.
+- `standard`: launch a fresh, read-only Codex `review-cheap` execution with the complete iteration
+  protocol below. When an explicitly identified run is open, record it before launch.
+- `hard`: launch the `review-final` Claude agent. Every control or trigger-path match is hard, and
+  control-class hard candidates retain explicit candidate-bound human approval.
 
-The reviewer must always be a distinct agent from the author. A reused author context, unavailable
-reviewer, launch error, missing verdict, or anything other than an explicit PASS is not a PASS.
+When a reviewer is required, it must be a distinct agent from the author. A reused author context,
+unavailable reviewer, launch error, missing verdict, or anything other than explicit PASS/BLOCK is
+not a PASS. On each BLOCK, first preserve the primary BLOCK result, then make exactly one advisory
+append attempt with `emit-decision-event.py` using event `review_block`, candidate
+`$reviewed_diff_sha256`, full `$policy_sha`, surface `/forge:commit`, and a stable non-secret reason. Do not
+let event failure change the BLOCK outcome or its exit status.
 
 Give the reviewer the following upstream review instruction. Replace each angle-bracket slot with
 the byte-for-byte interior of the named region from the committed HEAD snapshot obtained at chain
@@ -259,6 +314,10 @@ time:
 reviewed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 ```
 
+For fast, perform the same post-classification staged-diff re-hash immediately before capturing
+`reviewed_at`; any mismatch restarts Step 4 and reclassifies the replacement candidate. Here the
+timestamp is the mechanical fast authorization time, not a review verdict time.
+
 For a control-class commit, present the change, PASS verdict, and that exact SHA-256 to the user,
 then wait for explicit approval naming the reviewed candidate. Keep the authorization marker absent
 while waiting; a PASS alone does not authorize a control commit. After approval, recompute the
@@ -275,8 +334,19 @@ printf '%s\n%s\n' "$reviewed_diff_sha256" "$reviewed_at" > .forge/tmp/commit-aut
 ```
 
 The review-PASS marker has exactly two lines: the reviewed staged-diff SHA-256 and the UTC PASS
-timestamp. The only other valid shape is the exact three-line user-skip marker below. Any missing
-marker, other line count, malformed hash or timestamp, or unexpected third-line content is invalid.
+timestamp. For an eligible fast candidate, instead write exactly this four-line marker, using the
+same full policy revision that supplied every tier region:
+
+```bash
+printf '%s\n%s\n%s\n%s\n' "$reviewed_diff_sha256" "$reviewed_at" \
+  'tier: fast' "policy: $policy_sha" > .forge/tmp/commit-authorized
+```
+
+The only other valid shape is the exact three-line user-skip marker below. Any missing marker,
+other line count, malformed hash or timestamp, duplicated/combined/reordered annotation, or
+unexpected value is invalid. The fast annotation is a guard input, never proof: the commit guard
+independently validates policy ancestry and byte continuity and recomputes eligibility from the
+exact staged diff.
 
 ## Step 5 — Halt, Lock, Re-verify, Commit, Release
 
@@ -332,10 +402,15 @@ try:
 except (FileNotFoundError, OSError, UnicodeError):
     deny("missing" if not marker.exists() else "malformed")
 
-if len(lines) not in (2, 3):
+if len(lines) not in (2, 3, 4):
     deny("malformed")
 if len(lines) == 3 and lines[2] != "skip: user-directed":
     deny("malformed")
+if len(lines) == 4:
+    if lines[2] != "tier: fast" or re.fullmatch(
+        r"policy: (?:[0-9a-f]{40}|[0-9a-f]{64})", lines[3]
+    ) is None:
+        deny("malformed")
 if re.fullmatch(r"[0-9a-f]{64}", lines[0]) is None:
     deny("malformed")
 try:
@@ -364,6 +439,9 @@ fi
 
 git commit -m "$commit_message"
 commit_status=$?
+if [ "$commit_status" -eq 0 ]; then
+    committed_sha="$(git rev-parse HEAD)" || commit_status=$?
+fi
 
 release_commit_gate
 release_status=$?
@@ -371,7 +449,21 @@ trap - EXIT HUP INT TERM
 if [ "$commit_status" -ne 0 ]; then
     exit "$commit_status"
 fi
-exit "$release_status"
+
+# The successful commit outcome above is already final. Event writes are advisory.
+event_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/emit-decision-event.py" \
+  --at "$event_at" --candidate "$committed_sha" --event gate_commit \
+  --policy-sha "$policy_sha" --reason '' --surface /forge:commit || :
+if [ "$effective_tier" = fast ]; then
+    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/emit-decision-event.py" \
+      --at "$event_at" --candidate "$committed_sha" --event fast_allowed \
+      --policy-sha "$policy_sha" --reason '' --surface /forge:commit || :
+fi
+if [ "$release_status" -ne 0 ]; then
+    exit "$release_status"
+fi
+exit 0
 ```
 
 The cleanup trap is active before the halt check and remains active through explicit release, so a
@@ -387,10 +479,19 @@ whether commit succeeds, commit fails, hash verification detects restaging, or t
 an interruption. A hash mismatch means staging drifted: do not commit; restart Step 4. Never create,
 delete, or bypass an operator halt sentinel without explicit user direction.
 
-Step 5 accepts only an exact two-line PASS marker or exact three-line user-skip marker younger than
-30 minutes. It fails closed on a missing, malformed, or stale marker before committing. The
-PreToolUse commit guard independently enforces the same 30-minute freshness and exact shape at
-`git commit`; never bypass or reinterpret its decision.
+Step 5 accepts only an exact two-line standard/hard PASS marker, exact three-line user-skip marker,
+or exact four-line fast marker younger than 30 minutes. It fails closed on a missing, malformed, or
+stale marker before committing. The PreToolUse commit guard independently enforces freshness and
+shape and recomputes fast eligibility at `git commit`; never bypass or reinterpret its decision.
+
+The two post-success calls occur only after the commit succeeds and mandatory marker cleanup has
+run; a release diagnostic may already have been reported without retracting that commit. `gate_commit` supplies the eligible-commit denominator; a fast commit additionally owns
+the sole `fast_allowed` event. The emitter holds `.forge/tmp/events.lock` only for its one compact
+sorted-key JSONL append, with its local 2-second polling and hard 5-second bound. Its stable timeout
+code is `event-append-lock-timeout`. A timeout, append failure, or release failure may be reported
+but must never change, undo, or misreport the already-delivered commit result. Downstream
+aggregation deduplicates both events by `(event, candidate)` when the resulting full commit SHA is
+nonempty.
 
 ## User-Directed Skips
 
@@ -406,7 +507,11 @@ Map skip directives exactly:
 Warn in the reply about every skipped step. Do not infer a skip from urgency or convenience. Steps
 1 and 5 are never skipped by these directives. Record every user-directed skip durably as soon as
 the directive is accepted, before the next step can fail, including a Step 2-only or Step 3-only
-skip. When an explicitly identified run is open, append a journal `decision` naming the user's
+skip. First deliver acceptance of the skip as the primary outcome, then make exactly one advisory
+`user_skip` event attempt through `emit-decision-event.py` using the staged-diff SHA-256 when staged
+state is available (otherwise `""`), the full `policy_sha`, surface `/forge:commit`, and a stable non-secret
+reason identifying the mapped skip. Event failure never retracts the accepted skip or changes any
+subsequent gate status. When an explicitly identified run is open, append a journal `decision` naming the user's
 directive, skipped steps, candidate SHA-256 when already available, and user authority. With no such
 run, append the audit line shown below immediately.
 

@@ -5,11 +5,12 @@ description: Run the fail-closed four-gate worktree merge and locked rebase rein
 
 # Worktree Merge
 
-Run this workflow from the candidate worktree. Read all project gate configuration exclusively
-from the root-level `forge-project.md` committed at HEAD, obtained with
-`git show HEAD:forge-project.md`. Never open the working-tree file, a rendered copy, or duplicated
-defaults for policy. Retain the exact committed snapshot only for the current fixed candidate; if
-HEAD changes, discard it and obtain the new current policy from `git show` before rerunning gates.
+Run this workflow from the candidate worktree. Set `policy_sha` to the full output of
+`git rev-parse HEAD`, and read all project gate configuration exclusively from that root-level
+committed revision with `git show "${policy_sha}:forge-project.md"`. Never open the working-tree
+file, a rendered copy, or duplicated defaults for policy. Retain the exact committed snapshot and
+full SHA only for the current fixed candidate; if HEAD changes, discard both and resolve a new
+revision before rerunning gates.
 For every non-mutation executable policy cell, run from the repository root as
 `bash -c <complete-cell> forge`: the complete unchanged cell is one argv element, literal `forge`
 is `$0`, and every parameter is a separate later argv element. Never concatenate, interpolate,
@@ -50,6 +51,7 @@ Capture the full candidate identity and the remote base that the gates inspect:
 ```bash
 DEFAULT_BRANCH="<default-branch>"
 CANDIDATE_HEAD="$(git rev-parse HEAD)"
+policy_sha="$CANDIDATE_HEAD"
 REVIEWED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
 WORKTREE_DIR="$(git rev-parse --show-toplevel)"
 BRANCH="$(git branch --show-current)"
@@ -75,6 +77,38 @@ Project configuration may extend `control`; it must never remove or narrow a bui
 Fail closed if a changed path cannot be classified. Keep `CANDIDATE_HEAD` unchanged through Gates
 1 through 4. If HEAD or the diff changes, restart at the clean-worktree precondition.
 
+Derive merge-tier evidence mechanically from this exact candidate range and committed policy:
+
+```bash
+declared_tier="${declared_tier:-}"
+declared_args=()
+if [ -n "$declared_tier" ]; then
+  case "$declared_tier" in
+    fast|standard|hard) declared_args=(--declared-tier "$declared_tier") ;;
+    *) echo "forge: invalid declared risk tier: $declared_tier" >&2; exit 1 ;;
+  esac
+fi
+TIER_EVIDENCE="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \
+  --repo "$PWD" --policy-sha "$policy_sha" "${declared_args[@]}" \
+  --range "${REVIEWED_BASE}...${CANDIDATE_HEAD}")" || exit 1
+```
+
+If the task/journal supplies a declared/decomposed tier, set `declared_tier` to that exact
+`fast`, `standard`, or `hard` value before this block. Otherwise omit the advisory declaration;
+never pass an empty or invented tier.
+
+The compact JSON evidence must retain the exact path list, matched tier/trigger/category rows,
+formatting-category decisions, dependency-floor decision, declared, derived, and promote-only
+effective tiers, and full policy SHA. The effective tier is the higher of declared and derived and
+can never be demoted at gate time. Apply the same non-narrowable floors as commit: built-in plus
+project-extended control and all `trigger-paths` matches are hard; malformed nonempty trigger rows
+make the range hard; unmatched paths default standard; the committed dependency-manifest block and
+unknown manifest membership are at least standard; and no policy row can weaken FR-156's
+formatting-only exclusions. Do not reconstruct these predicates or read any working-tree policy.
+Tier evidence routes reporting and control approval, but never removes a merge gate. In particular,
+Gate 3 remains `review-final` and mandatory even if this range and every constituent commit are
+fast.
+
 ## Required-region check
 
 Before executing Gate 1, obtain the committed policy and verify that each of
@@ -82,7 +116,7 @@ Before executing Gate 1, obtain the committed policy and verify that each of
 `forge-init:` sentinel. Use this fail-closed check, which never reads the working-tree policy:
 
 ```bash
-if ! COMMITTED_POLICY="$(git show HEAD:forge-project.md 2>/dev/null)"; then
+if ! COMMITTED_POLICY="$(git show "${policy_sha}:forge-project.md" 2>/dev/null)"; then
   printf 'forge: %s not configured — run /forge:init\n' 'gate1-test-command' >&2
   exit 1
 fi
@@ -216,6 +250,10 @@ another file.
 
 ## Gate 3 — Binding adversarial review
 
+Gate 3 is unconditional. Do not skip, downgrade, replace, or auto-PASS it for an effective-fast
+range, for a branch composed entirely of four-line fast-marker commits, or for prior commit-level
+review evidence. Merge composition and integration risk are assessed independently here.
+
 Start the `review-final` Claude agent as a reviewer distinct from the author. Give it the full
 `CANDIDATE_HEAD`, the constitution at
 `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`, and the exact, unmodified diff generated for
@@ -236,7 +274,12 @@ summarize away an advisory outcome before review. This evidence informs Gate 3; 
 or satisfies the Gate 3 verdict.
 
 Require the binding verdict to be exactly PASS or BLOCK. PASS advances to Gate 4. BLOCK, an
-ambiguous response, or an unavailable reviewer stops reintegration. Report all findings.
+ambiguous response, or an unavailable reviewer stops reintegration. Report all findings. On every
+explicit BLOCK, first deliver and preserve the binding BLOCK outcome, then make exactly one
+advisory append attempt through `${CLAUDE_PLUGIN_ROOT}/scripts/forge/emit-decision-event.py` with
+event `review_block`, candidate equal to the lowercase SHA-256 of the exact reviewed merge diff,
+full `policy_sha`, surface `/forge:worktree-merge`, and a stable non-secret reason. An event timeout or append
+failure never changes the Gate 3 verdict or exit status.
 
 For a revision, commit the fix through `/forge:commit`, re-establish a clean worktree, and re-run
 the affected Gates 1 and 2 before re-review. Use a maximum of 8 review iterations. Dispositioning
@@ -375,7 +418,17 @@ Perform all required re-runs inside the lock and before push:
 
 - If `DEFAULT_ADVANCED=1` or `CANDIDATE_REWRITTEN=1`, re-run Gate 1 and Gate 2 against the
   integrated tip. First discard the earlier policy snapshot and obtain current policy again with
-  `git show HEAD:forge-project.md`; between the two gates, also run the applicable advisory scoped
+  a fresh full `policy_sha="$(git rev-parse HEAD)"` and
+  `git show "${policy_sha}:forge-project.md"`; then replace the earlier tier evidence fail closed:
+
+  ```bash
+  TIER_EVIDENCE="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \
+    --repo "$PWD" --policy-sha "$policy_sha" "${declared_args[@]}" \
+    --range "${INTEGRATED_BASE}...${INTEGRATED_HEAD}")" || exit 1
+  ```
+
+  Preserve this replacement evidence as the only tier authority for the integrated candidate.
+  Between the two gates, also run the applicable advisory scoped
   mutation checks by repeating the plugin runner invocation with `--base "$INTEGRATED_BASE"` and
   `--head "$INTEGRATED_HEAD"`, replacing the earlier mutation evidence file (and passing the same
   explicitly selected journal/task pair when a run is open). Re-derive changed paths and
@@ -460,6 +513,13 @@ branch only after `git merge-base --is-ancestor` confirms that its pushed tip is
 remote default branch. No failed merge path may remove either the worktree or the branch.
 
 ## Record authority and report
+
+Every decision append is advisory and occurs only after its primary outcome has been delivered.
+The emitter alone acquires `.forge/tmp/events.lock` for one compact sorted-key JSONL record, polls
+at 2 seconds, stops after 5 seconds with stable code `event-append-lock-timeout`, and never inherits
+the rebase/commit lock's 300-second wait. Event append, timeout, and lock-release failures cannot
+alter a permission decision, review BLOCK, push, cleanup, or its exit status. Aggregation
+deduplicates merge review blocks by `(event, candidate)`.
 
 Treat every agent handoff and claimed gate result as a claim, never gate evidence. Before any
 commit or merge that reintegrates agent work, the orchestrator must itself re-run Gates 1 and 2 in

@@ -262,17 +262,197 @@ serialisation.review_wait_s: 4
         self.assertEqual(
             csv_path.read_text(encoding="utf-8").splitlines(),
             [
-                "unit,feature,model,elapsed_s,critical_path_s,tokens,cost_usd,review_iterations,rework_s",
-                "task-06,enforcement,terra,40,30,120,1.25,2,5",
+                "unit,feature,model,elapsed_s,critical_path_s,tokens,cost_usd,review_iterations,rework_s,eligible_commits,fast_allowed,fast_denied_policy,fast_denied_eligibility,user_skips,review_blocks,halt_events,guard_denies",
+                "task-06,enforcement,terra,40,30,120,1.25,2,5,,,,,,,,",
+                "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0",
             ],
         )
+
+    def test_events_only_csv_applies_window_and_candidate_dedupe(self) -> None:
+        (self.repo / ".forge-manifest").write_text("forge_version: 1\n", encoding="utf-8")
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        candidate = "a" * 40
+        events = [
+            {"at": "2026-08-12T10:00:00Z", "candidate": candidate,
+             "event": event, "policy_sha": "b" * 40, "reason": "ok",
+             "surface": "/forge:commit"}
+            for event in ("gate_commit", "gate_commit", "fast_allowed")
+        ]
+        events.extend([
+            {"at": "2026-08-12T10:01:00Z", "candidate": "", "event": "halt_event",
+             "policy_sha": "", "reason": "AGENT_HALT", "surface": "check-halt"},
+            {"at": "2026-08-12T10:02:00Z", "candidate": "c" * 64,
+             "event": "fast_denied_policy", "policy_sha": "b" * 40,
+             "reason": "policy-drift", "surface": "commit-guard"},
+            {"at": "2026-08-12T10:03:00Z", "candidate": "",
+             "event": "review_block", "policy_sha": "b" * 40,
+             "reason": "review-block", "surface": "/forge:commit"},
+            {"at": "2026-08-12T10:04:00Z", "candidate": "",
+             "event": "review_block", "policy_sha": "b" * 40,
+             "reason": "review-block", "surface": "/forge:commit"},
+        ])
+        import json
+        (decisions / "events.jsonl").write_text(
+            "\n".join(json.dumps(item, sort_keys=True, separators=(",", ":")) for item in events) + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY, str(decisions), "--csv", "events.csv",
+            "--since", "2026-08-12T00:00:00Z", "--until", "2026-08-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.repo / "events.csv").read_text(encoding="utf-8").splitlines()[-1],
+            "__decision_totals__,,,,,,,,,1,1,1,0,0,2,1,1",
+        )
+
+    def test_every_event_counter_dedupes_nonempty_candidates(self) -> None:
+        (self.repo / ".forge-manifest").write_text("forge_version: 1\n", encoding="utf-8")
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        import json
+        commit_candidate = "a" * 40
+        diff_candidates = {
+            event: chr(ord("b") + index) * 64
+            for index, event in enumerate((
+                "fast_denied_policy", "fast_denied_eligibility", "user_skip",
+                "review_block", "guard_deny",
+            ))
+        }
+        events = []
+        for event in ("gate_commit", "fast_allowed"):
+            record = {"at": "2026-08-12T10:00:00Z", "candidate": commit_candidate,
+                      "event": event, "policy_sha": "f" * 40, "reason": "ok",
+                      "surface": "/forge:commit"}
+            events.extend((record, dict(record)))
+        for event, candidate in diff_candidates.items():
+            record = {"at": "2026-08-12T10:00:00Z", "candidate": candidate,
+                      "event": event, "policy_sha": "f" * 40, "reason": "decision",
+                      "surface": "commit-guard"}
+            events.extend((record, dict(record)))
+        halt = {"at": "2026-08-12T10:00:00Z", "candidate": "e" * 64,
+                "event": "halt_event", "policy_sha": "f" * 40,
+                "reason": "AGENT_HALT", "surface": "check-halt"}
+        events.extend((halt, dict(halt)))
+        (decisions / "events.jsonl").write_text(
+            "\n".join(json.dumps(item, sort_keys=True, separators=(",", ":")) for item in events) + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY, str(decisions), "--csv", "events.csv",
+            "--since", "2026-08-12T00:00:00Z", "--until", "2026-08-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.repo / "events.csv").read_text(encoding="utf-8").splitlines()[-1],
+            "__decision_totals__,,,,,,,,,1,1,1,1,1,1,2,3",
+        )
+
+    def test_empty_events_file_still_writes_zero_decision_totals(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        (decisions / "events.jsonl").write_text("", encoding="utf-8")
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--csv",
+            "events.csv",
+            "--since",
+            "2026-08-12T00:00:00Z",
+            "--until",
+            "2026-08-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.repo / "events.csv").read_text(encoding="utf-8").splitlines(),
+            [
+                "unit,feature,model,elapsed_s,critical_path_s,tokens,cost_usd,review_iterations,rework_s,eligible_commits,fast_allowed,fast_denied_policy,fast_denied_eligibility,user_skips,review_blocks,halt_events,guard_denies",
+                "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0",
+            ],
+        )
+
+    def test_malformed_or_out_of_window_events_still_write_zero_totals(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        (decisions / "events.jsonl").write_text(
+            "not-json\n"
+            '{"at":"not-a-time","candidate":"","event":"halt_event",'
+            '"policy_sha":"","reason":"","surface":"check-halt"}\n'
+            '{"at":"2026-08-11T23:59:59Z","candidate":"","event":"halt_event",'
+            '"policy_sha":"","reason":"","surface":"check-halt"}\n',
+            encoding="utf-8",
+        )
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--csv",
+            "events.csv",
+            "--since",
+            "2026-08-12T00:00:00Z",
+            "--until",
+            "2026-08-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ignoring malformed decision event", result.stderr)
+        self.assertEqual(
+            (self.repo / "events.csv").read_text(encoding="utf-8").splitlines()[-1],
+            "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0",
+        )
+
+    def test_unpaired_reversed_and_malformed_windows_exit_two(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        cases = (
+            ("--since", "2026-08-12T00:00:00Z"),
+            (
+                "--since",
+                "2026-08-13T00:00:00Z",
+                "--until",
+                "2026-08-12T00:00:00Z",
+            ),
+            (
+                "--since",
+                "not-a-time",
+                "--until",
+                "2026-08-12T00:00:00Z",
+            ),
+        )
+        for extra in cases:
+            with self.subTest(extra=extra):
+                result = self.run_script(
+                    AGGREGATE_TELEMETRY,
+                    ".forge/tmp/decisions",
+                    "--csv",
+                    "events.csv",
+                    *extra,
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
     def test_forge_repo_without_decisions_uses_re_rooted_default(self) -> None:
         (self.repo / ".forge-manifest").write_text(
             "forge_version: 1\n", encoding="utf-8"
         )
 
-        result = self.run_script(AGGREGATE_TELEMETRY)
+        result = self.run_script(
+            AGGREGATE_TELEMETRY, ".forge/tmp/decisions", "--csv",
+            ".forge/tmp/telemetry-latest.csv",
+        )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(

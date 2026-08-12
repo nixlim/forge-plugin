@@ -10,7 +10,7 @@ SKILL = (ROOT / "skills/worktree-merge/SKILL.md").read_text(encoding="utf-8")
 class WorktreeMergeSkillTests(unittest.TestCase):
     def test_frontmatter_and_single_region_source(self) -> None:
         self.assertTrue(SKILL.startswith("---\nname: worktree-merge\n"))
-        self.assertIn("exclusively\nfrom the root-level `forge-project.md`", SKILL)
+        self.assertIn("exclusively from that root-level\ncommitted revision", SKILL)
         for region in (
             "gate1-test-command",
             "stack-validations",
@@ -35,6 +35,33 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("Fail closed", SKILL)
         self.assertIn("maximum of 8 review iterations", SKILL)
         self.assertIn("never merge", SKILL)
+
+    def test_merge_derives_tier_from_exact_committed_candidate_policy(self) -> None:
+        invocation = (
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \\\n'
+            '  --repo "$PWD" --policy-sha "$policy_sha" "${declared_args[@]}" \\\n'
+            '  --range "${REVIEWED_BASE}...${CANDIDATE_HEAD}"'
+        )
+        self.assertIn('policy_sha="$CANDIDATE_HEAD"', SKILL)
+        self.assertIn('git show "${policy_sha}:forge-project.md"', SKILL)
+        self.assertIn('declared_tier="${declared_tier:-}"', SKILL)
+        self.assertIn('declared_args=()', SKILL)
+        self.assertIn(invocation, SKILL)
+        tiering = SKILL.split("Derive merge-tier evidence", 1)[1].split("Before Gate 1", 1)[0]
+        for evidence in (
+            "exact path list",
+            "matched tier/trigger/category rows",
+            "formatting-category decisions",
+            "dependency-floor decision",
+            "declared, derived, and promote-only\neffective tiers",
+            "full policy SHA",
+        ):
+            self.assertIn(evidence, tiering)
+        self.assertIn("can never be demoted at gate time", tiering)
+        self.assertIn("non-narrowable floors", tiering)
+        self.assertIn("malformed nonempty trigger rows\nmake the range hard", tiering)
+        self.assertIn("unmatched paths default standard", tiering)
+        self.assertIn("unknown manifest membership are at least standard", tiering)
 
     def test_control_category_and_approval_are_fail_closed(self) -> None:
         for path in (
@@ -71,6 +98,27 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("wait for explicit user approval naming that exact SHA", flattened)
         self.assertIn('require `git rev-parse HEAD` to equal `AUTHORIZED_HEAD`', SKILL)
 
+    def test_gate_three_is_unconditional_after_all_fast_commits(self) -> None:
+        gate3 = SKILL.split("## Gate 3", 1)[1].split("## Gate 4", 1)[0]
+        self.assertIn("Gate 3 is unconditional", gate3)
+        self.assertIn("effective-fast\nrange", gate3)
+        self.assertIn("branch composed entirely of four-line fast-marker commits", gate3)
+        self.assertIn("`review-final`", gate3)
+        self.assertIn("never removes a merge gate", SKILL)
+
+    def test_merge_review_block_event_is_post_outcome_and_advisory(self) -> None:
+        gate3 = SKILL.split("## Gate 3", 1)[1].split("## Gate 4", 1)[0]
+        delivered = gate3.index("first deliver and preserve the binding BLOCK outcome")
+        emitted = gate3.index("emit-decision-event.py")
+        self.assertLess(delivered, emitted)
+        self.assertIn("event `review_block`", gate3)
+        self.assertIn("SHA-256 of the exact reviewed merge diff", gate3)
+        self.assertIn("surface `/forge:worktree-merge`", gate3)
+        self.assertIn("never changes the Gate 3 verdict or exit status", gate3)
+        self.assertIn("polls\nat 2 seconds, stops after 5 seconds", SKILL)
+        self.assertIn("event-append-lock-timeout", SKILL)
+        self.assertIn("deduplicates merge review blocks by `(event, candidate)`", SKILL)
+
     def test_scoped_mutation_runner_is_ordered_advisory_and_reviewed(self) -> None:
         gate_1_pass = SKILL.index("Require exit 0. Do not substitute")
         mutation = SKILL.index(
@@ -86,8 +134,12 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertLess(gate_2, gate_3)
         self.assertGreater(evidence_handoff, gate_3)
         self.assertIn('--base "$REVIEWED_BASE" --head "$CANDIDATE_HEAD"', SKILL)
-        self.assertIn('--base "$INTEGRATED_BASE"', SKILL)
-        self.assertIn('--head "$INTEGRATED_HEAD"', SKILL)
+        self.assertIn('--range "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"', SKILL)
+        integrated = SKILL.split("then replace the earlier tier evidence fail closed:", 1)[1]
+        self.assertIn('TIER_EVIDENCE="$(python3', integrated)
+        self.assertIn('--policy-sha "$policy_sha"', integrated)
+        self.assertIn('"${declared_args[@]}"', integrated)
+        self.assertIn(')" || exit 1', integrated)
         self.assertIn("A nonzero result, timeout, output-limit breach, launch failure", SKILL)
         self.assertIn("It never blocks merge and never satisfies Gate 1", SKILL)
         self.assertIn("criterion exactly `mutation: <scope>`", SKILL)

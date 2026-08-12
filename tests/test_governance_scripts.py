@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shlex
 import shutil
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK_HALT = ROOT / "scripts/forge/check-halt.sh"
 ACQUIRE_LOCK = ROOT / "scripts/forge/acquire-commit-lock.sh"
 RELEASE_LOCK = ROOT / "scripts/forge/release-commit-lock.sh"
+EMIT_EVENT = ROOT / "scripts/forge/emit-decision-event.py"
 
 
 class ScratchGitRepoTestCase(unittest.TestCase):
@@ -82,6 +84,23 @@ class CheckHaltScriptTests(ScratchGitRepoTestCase):
         r"\(pid [1-9]\d*, cwd .+, sentinel (?P<sentinel>AGENT_HALT(?:_[^)]+)?)\)$"
     )
 
+    def tearDown(self) -> None:
+        # check-halt deliberately returns the primary denial before its
+        # advisory event worker finishes. Drain any worker touching the
+        # scratch repository before TemporaryDirectory cleanup.
+        events_lock = self.repo / ".forge/tmp/events.lock"
+        deadline = time.monotonic() + 7
+        while time.monotonic() < deadline:
+            tmp = self.repo / ".forge/tmp"
+            state_locks = list(tmp.glob("events.lock.state*"))
+            pending = list(tmp.glob("halt-event-pending.*"))
+            if not events_lock.exists() and not state_locks and not pending:
+                time.sleep(0.03)
+                if not events_lock.exists() and not list(tmp.glob("halt-event-pending.*")):
+                    break
+            time.sleep(0.01)
+        super().tearDown()
+
     def audit_lines(self) -> list[str]:
         audit = self.repo / ".forge/tmp/halt-audit.log"
         return audit.read_text(encoding="utf-8").splitlines()
@@ -122,6 +141,73 @@ class CheckHaltScriptTests(ScratchGitRepoTestCase):
         match = self.AUDIT_LINE.fullmatch(lines[0])
         self.assertIsNotNone(match, lines[0])
         self.assertEqual(match.group("sentinel"), "AGENT_HALT_commit")
+
+    def test_halt_event_is_appended_after_primary_diagnostic(self) -> None:
+        (self.repo / "AGENT_HALT").write_text("operator pause\n", encoding="utf-8")
+        (self.repo / "staged.txt").write_text("candidate\n", encoding="utf-8")
+        self.git("add", "staged.txt")
+        staged_diff = self.git("diff", "--cached").stdout
+        expected_candidate = subprocess.run(
+            ["shasum", "-a", "256"], input=staged_diff,
+            capture_output=True, text=True, check=True,
+        ).stdout.split()[0]
+        expected_policy = self.git("rev-parse", "HEAD").stdout.strip()
+
+        result = self.run_script(CHECK_HALT)
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("forge: operator halt engaged", result.stderr)
+        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        deadline = time.monotonic() + 2
+        while not events.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(events.exists(), "advisory halt event was not appended")
+        item = json.loads(events.read_text(encoding="utf-8"))
+        self.assertEqual(item["event"], "halt_event")
+        self.assertEqual(item["candidate"], expected_candidate)
+        self.assertEqual(item["policy_sha"], expected_policy)
+        self.assertEqual(item["reason"], "AGENT_HALT")
+
+    def test_halt_event_worker_stops_waiting_after_two_hundred_probes(self) -> None:
+        (self.repo / "AGENT_HALT").write_text("operator pause\n", encoding="utf-8")
+        counter = self.scratch / "kill-count"
+        bash_env = self.scratch / "bounded-kill.bash"
+        bash_env.write_text(
+            "kill() {\n"
+            '  printf "x\\n" >>"${FORGE_TEST_KILL_COUNT:?}"\n'
+            '  count="$(wc -l <"${FORGE_TEST_KILL_COUNT:?}")"\n'
+            '  [[ "$count" -le 210 ]]\n'
+            "}\n"
+            "sleep() { :; }\n",
+            encoding="utf-8",
+        )
+        plugin_root = self.scratch / "fake-plugin"
+        emitter = plugin_root / "scripts/forge/emit-decision-event.py"
+        emitter.parent.mkdir(parents=True)
+        marker = self.scratch / "emitter-called"
+        emitter.write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            'Path(os.environ["FORGE_TEST_EMITTER_MARKER"]).write_text("called\\n")\n',
+            encoding="utf-8",
+        )
+
+        result = self.run_script(
+            CHECK_HALT,
+            env_overrides={
+                "BASH_ENV": str(bash_env),
+                "CLAUDE_PLUGIN_ROOT": str(plugin_root),
+                "FORGE_TEST_EMITTER_MARKER": str(marker),
+                "FORGE_TEST_KILL_COUNT": str(counter),
+            },
+        )
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        deadline = time.monotonic() + 3
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(marker.exists(), "bounded worker never invoked the emitter")
+        self.assertEqual(len(counter.read_text(encoding="utf-8").splitlines()), 200)
 
     def test_linked_worktree_resolves_sentinel_and_audit_to_main_checkout(self) -> None:
         linked = self.scratch / "linked worktree"
@@ -174,6 +260,293 @@ class CommitLockScriptTests(ScratchGitRepoTestCase):
         )
         self.assertEqual(released.returncode, 0, released.stderr)
         self.assertFalse(self.lock_file.exists())
+
+    def test_explicit_event_lock_is_acquired_and_released(self) -> None:
+        event_lock = self.repo / ".forge/tmp/events.lock"
+        session_pid = os.getpid()
+
+        acquired = self.run_script(
+            ACQUIRE_LOCK,
+            ".forge/tmp/events.lock",
+            env_overrides={"FORGE_SESSION_PID": str(session_pid)},
+        )
+
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        self.assertEqual(
+            acquired.stdout.strip(),
+            f"forge: event lock acquired (PID {session_pid})",
+        )
+        self.assertRegex(
+            event_lock.read_text(encoding="utf-8").strip(),
+            rf"^{session_pid} [0-9]+$",
+        )
+        released = self.run_script(
+            RELEASE_LOCK,
+            ".forge/tmp/events.lock",
+            env_overrides={"FORGE_SESSION_PID": str(session_pid)},
+        )
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertFalse(event_lock.exists())
+
+    def test_ownerless_event_state_mutex_gets_short_recovery_grace(self) -> None:
+        event_state_guard = self.repo / ".forge/tmp/events.lock.state"
+        event_state_guard.mkdir(parents=True)
+        sleep_log = self.scratch / "sleep.log"
+        real_sleep = shutil.which("sleep")
+        self.assertIsNotNone(real_sleep)
+        fake_bin = self.scratch / "fake-sleep-bin"
+        fake_bin.mkdir()
+        sleep_wrapper = fake_bin / "sleep"
+        sleep_wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "%s\\n" "$1" >>"${FORGE_TEST_SLEEP_LOG:?}"\n'
+            f"exec {shlex.quote(real_sleep or '')} \"$@\"\n",
+            encoding="utf-8",
+        )
+        sleep_wrapper.chmod(0o755)
+
+        acquired = self.run_script(
+            ACQUIRE_LOCK,
+            ".forge/tmp/events.lock",
+            env_overrides={
+                "FORGE_SESSION_PID": str(os.getpid()),
+                "FORGE_TEST_SLEEP_LOG": str(sleep_log),
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            },
+        )
+
+        self.assertEqual(acquired.returncode, 0, acquired.stderr)
+        self.assertEqual(sleep_log.read_text(encoding="utf-8").splitlines(), ["0.1"])
+        self.assertIn("recovering ownerless event-lock state mutex", acquired.stderr)
+        released = self.run_script(
+            RELEASE_LOCK,
+            ".forge/tmp/events.lock",
+            env_overrides={"FORGE_SESSION_PID": str(os.getpid())},
+        )
+        self.assertEqual(released.returncode, 0, released.stderr)
+
+    def test_explicit_event_lock_uses_hard_five_second_profile(self) -> None:
+        event_lock = self.repo / ".forge/tmp/events.lock"
+        event_lock.parent.mkdir(parents=True)
+        event_lock.write_text(f"{os.getpid()} {int(time.time())}\n", encoding="utf-8")
+        started = time.monotonic()
+
+        result = self.run_script(
+            ACQUIRE_LOCK,
+            ".forge/tmp/events.lock",
+            env_overrides={
+                "FORGE_SESSION_PID": str(os.getppid()),
+                "FORGE_COMMIT_LOCK_TIMEOUT": "1",
+            },
+        )
+
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertGreaterEqual(elapsed, 4.5)
+        self.assertLess(elapsed, 7)
+        self.assertIn("another session is appending events; waiting up to 5s", result.stderr)
+        self.assertIn("failed to acquire event lock after 5s", result.stderr)
+
+    def test_emitter_timeout_is_advisory_and_records_stable_failure(self) -> None:
+        event_lock = self.repo / ".forge/tmp/events.lock"
+        event_lock.parent.mkdir(parents=True)
+        event_lock.write_text(f"{os.getpid()} {int(time.time())}\n", encoding="utf-8")
+        started = time.monotonic()
+
+        env = os.environ.copy()
+        env["FORGE_SESSION_PID"] = str(os.getppid())
+        result = subprocess.run(
+            [
+                "python3", str(EMIT_EVENT),
+                "--candidate", "a" * 64,
+                "--event", "guard_deny",
+                "--policy-sha", self.git("rev-parse", "HEAD").stdout.strip(),
+                "--reason", "marker-missing",
+                "--surface", "commit-guard",
+            ],
+            cwd=self.repo, env=env, check=False, capture_output=True, text=True,
+        )
+
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreaterEqual(elapsed, 4.8)
+        self.assertLess(elapsed, 5.8)
+        self.assertFalse((self.repo / ".forge/tmp/decisions/events.jsonl").exists())
+        audit = (self.repo / ".forge/tmp/halt-audit.log").read_text(encoding="utf-8")
+        self.assertIn("event-append-lock-timeout", audit)
+
+    def test_corrupt_event_lock_release_fails_closed(self) -> None:
+        event_lock = self.repo / ".forge/tmp/events.lock"
+        event_lock.parent.mkdir(parents=True)
+        event_lock.write_text("corrupt\n", encoding="utf-8")
+
+        result = self.run_script(
+            RELEASE_LOCK,
+            ".forge/tmp/events.lock",
+            env_overrides={"FORGE_SESSION_PID": str(os.getpid())},
+        )
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            result.stderr.strip(),
+            "forge: corrupt event lock has no verifiable owner; refusing to release it",
+        )
+        self.assertTrue(event_lock.exists())
+
+    def test_missing_event_lock_release_fails_closed(self) -> None:
+        result = self.run_script(
+            RELEASE_LOCK,
+            ".forge/tmp/events.lock",
+            env_overrides={"FORGE_SESSION_PID": str(os.getpid())},
+        )
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            result.stderr.strip(),
+            "forge: event lock is missing; ownership is unverifiable; refusing release",
+        )
+
+    def test_event_emitter_appends_exact_sorted_json_shape(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(EMIT_EVENT), "--at", "2026-08-12T10:00:00Z",
+                "--candidate", "a" * 40, "--event", "gate_commit",
+                "--policy-sha", "b" * 40, "--reason", "admitted",
+                "--surface", "forge-commit",
+            ],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        line = (self.repo / ".forge/tmp/decisions/events.jsonl").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            line,
+            '{"at":"2026-08-12T10:00:00Z","candidate":"' + "a" * 40 +
+            '","event":"gate_commit","policy_sha":"' + "b" * 40 +
+            '","reason":"admitted","surface":"forge-commit"}\n',
+        )
+
+    def test_event_emitter_uses_current_utc_when_at_is_omitted(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(EMIT_EVENT),
+                "--candidate", "a" * 64, "--event", "guard_deny",
+                "--policy-sha", "b" * 40, "--reason", "marker-missing",
+                "--surface", "commit-guard",
+            ],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        item = json.loads(
+            (self.repo / ".forge/tmp/decisions/events.jsonl").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertRegex(
+            item["at"],
+            r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+        )
+
+    def test_event_emitter_accepts_all_eight_event_shapes(self) -> None:
+        policy_sha = self.git("rev-parse", "HEAD").stdout.strip()
+        event_shapes = (
+            ("gate_commit", "a" * 40), ("fast_allowed", "b" * 40),
+            ("fast_denied_policy", "c" * 64),
+            ("fast_denied_eligibility", "d" * 64),
+            ("user_skip", "e" * 64), ("review_block", "f" * 64),
+            ("guard_deny", "1" * 64), ("halt_event", "2" * 64),
+        )
+        for index, (event, candidate) in enumerate(event_shapes):
+            result = subprocess.run(
+                [
+                    "python3", str(EMIT_EVENT), "--at", f"2026-08-12T10:00:{index:02d}Z",
+                    "--candidate", candidate, "--event", event,
+                    "--policy-sha", policy_sha, "--reason", "decision",
+                    "--surface", "fixture",
+                ], cwd=self.repo, check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+        lines = (self.repo / ".forge/tmp/decisions/events.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        items = [json.loads(line) for line in lines]
+        self.assertEqual([item["event"] for item in items], [item[0] for item in event_shapes])
+        for line, item, (_event, candidate) in zip(lines, items, event_shapes):
+            self.assertEqual(
+                set(item), {"at", "candidate", "event", "policy_sha", "reason", "surface"}
+            )
+            self.assertEqual(item["candidate"], candidate)
+            self.assertNotIn(" ", line)
+
+    def test_event_emitter_accepts_sha256_git_object_ids(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(EMIT_EVENT),
+                "--candidate", "a" * 64, "--event", "gate_commit",
+                "--policy-sha", "b" * 64, "--reason", "admitted",
+                "--surface", "/forge:commit",
+            ],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        item = json.loads(
+            (self.repo / ".forge/tmp/decisions/events.jsonl").read_text(encoding="utf-8")
+        )
+        self.assertEqual(item["candidate"], "a" * 64)
+        self.assertEqual(item["policy_sha"], "b" * 64)
+
+    def test_event_emitter_rejects_empty_success_candidate(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(EMIT_EVENT),
+                "--candidate", "", "--event", "gate_commit",
+                "--policy-sha", "b" * 40, "--reason", "admitted",
+                "--surface", "/forge:commit",
+            ],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse((self.repo / ".forge/tmp/decisions/events.jsonl").exists())
+
+    def test_event_emitter_accepts_empty_gate_outcome_candidate(self) -> None:
+        result = subprocess.run(
+            [
+                "python3", str(EMIT_EVENT),
+                "--candidate", "", "--event", "review_block",
+                "--policy-sha", "b" * 40, "--reason", "review-block",
+                "--surface", "/forge:commit",
+            ],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        item = json.loads(
+            (self.repo / ".forge/tmp/decisions/events.jsonl").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(item["event"], "review_block")
+        self.assertEqual(item["candidate"], "")
 
     def test_concurrent_stale_takeover_has_exactly_one_winner(self) -> None:
         self.write_lock(999_999_999, 1)
