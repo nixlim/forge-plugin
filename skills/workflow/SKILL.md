@@ -11,6 +11,25 @@ execution, review, or verification cycle.
 
 ## Run Initialization
 
+<!-- forge: run-open refusal for operator-cleared CRITICAL drift (FR-163) -->
+Before inspecting journals or applying the successor-run exception, resolve the target repository
+root and check for the operator-cleared drift block:
+
+```bash
+REPO="$(git rev-parse --show-toplevel)" || exit 1
+if [ -e "$REPO/.forge/tmp/drift-block" ]; then
+  printf '%s\n' \
+    'forge: new run refused — CRITICAL drift block present at .forge/tmp/drift-block; operator clearance required' \
+    >&2
+  exit 1
+fi
+```
+
+This refusal applies to every new run, including a user-designated successor. After `/forge:drift`
+creates `.forge/tmp/drift-block`, only an operator may manually delete it after reading the named
+durable report. Forge agents and cleanup never delete, bypass, or replace it. This file is a
+run-open refusal, not an `AGENT_HALT` sentinel; agents never create or clear `AGENT_HALT` for drift.
+
 <!-- forge: modified from upstream — enforce the single-active-run successor rule -->
 Before opening a run, inspect every `.codex-orchestrator/runs/*/journal.jsonl` in the target
 repository. If any journal lacks a `run_closed` entry, refuse to open the new run and name each

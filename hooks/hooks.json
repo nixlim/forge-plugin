@@ -29,6 +29,21 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh .forge/tmp/decisions --csv .forge/tmp/telemetry-latest.csv"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/forge/drift-staleness.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/forge/drift-staleness.sh"
           }
         ]
       }

@@ -61,6 +61,7 @@ Separation of duties requires the reviewer to be distinct from the author.
 - Commit gate chain: `${CLAUDE_PLUGIN_ROOT}/skills/commit/SKILL.md`
 - Worktree reintegration: `${CLAUDE_PLUGIN_ROOT}/skills/worktree-merge/SKILL.md`
 - Final reporting: `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md`
+- Periodic drift sensing: `${CLAUDE_PLUGIN_ROOT}/skills/drift/SKILL.md`
 
 ## Project Overview
 

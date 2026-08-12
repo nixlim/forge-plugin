@@ -4,13 +4,12 @@
 # Usage:
 #   aggregate-telemetry.sh <decisions-dir> --csv <path>
 #       [--since <UTC-ISO-8601> --until <UTC-ISO-8601>]
-# Defaults: decisions-dir=.forge/tmp/decisions and the current UTC quarter.
+# The window defaults to the current UTC quarter.
 # forge: modified from upstream — state is re-rooted to .forge/tmp and non-Forge repos are silent
 set -uo pipefail
 
 [[ -f .forge-manifest ]] || exit 0
 
-decisions_dir=".forge/tmp/decisions"
 csv=""
 since=""
 until=""
@@ -27,6 +26,10 @@ while [[ $# -gt 0 ]]; do
             option="$1"
             [[ $# -ge 2 ]] || usage_error "$option requires a value"
             value="$2"
+            [[ -n "$value" ]] || usage_error "$option requires a nonempty value"
+            case "$value" in
+                --*|-h) usage_error "$option requires a value" ;;
+            esac
             shift 2
             case "$option" in
                 --csv) [[ -z "$csv" ]] || usage_error "--csv may be supplied once"; csv="$value" ;;
@@ -41,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --*) usage_error "unknown option $1" ;;
         *)
             [[ "$position_seen" -eq 0 ]] || usage_error "multiple decisions directories"
+            [[ -n "$1" ]] || usage_error "decisions directory must be nonempty"
             decisions_dir="$1"
             position_seen=1
             shift
@@ -49,6 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$csv" ]] || usage_error "--csv is required"
+[[ "$position_seen" -eq 1 ]] || usage_error "decisions directory is required"
 if [[ -n "$since" && -z "$until" ]] || [[ -z "$since" && -n "$until" ]]; then
     usage_error "--since and --until must be supplied together"
 fi
@@ -60,6 +65,7 @@ import csv
 import datetime as dt
 import json
 import re
+import stat
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -80,7 +86,7 @@ events = {
     "halt_event",
 }
 required = {"at", "candidate", "event", "policy_sha", "reason", "surface"}
-safe_text = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]*\Z")
+safe_text = re.compile(r"/?[A-Za-z0-9][A-Za-z0-9._:/-]*\Z")
 
 
 def fail(message: str) -> None:
@@ -120,9 +126,15 @@ else:
 if since >= until:
     fail("--since must precede --until")
 
-if not decisions_dir.is_dir():
+try:
+    decisions_mode = decisions_dir.stat().st_mode
+except FileNotFoundError:
     print(f"No decisions directory at '{decisions_dir}' — nothing to aggregate.")
     raise SystemExit(0)
+except OSError as exc:
+    fail(f"cannot inspect decisions directory '{decisions_dir}': {exc}")
+if not stat.S_ISDIR(decisions_mode):
+    fail(f"decisions path is not a directory: '{decisions_dir}'")
 
 
 def numeric(value: str, integer: bool = True):
@@ -172,7 +184,14 @@ except (OSError, UnicodeError) as exc:
 counts: Counter[str] = Counter()
 seen: set[tuple[str, str]] = set()
 events_path = decisions_dir / "events.jsonl"
-events_exists = events_path.exists()
+try:
+    events_path.stat()
+except FileNotFoundError:
+    events_exists = False
+except OSError as exc:
+    fail(f"cannot inspect decision events: {exc}")
+else:
+    events_exists = True
 if events_exists:
     try:
         with events_path.open(encoding="utf-8") as stream:
@@ -200,7 +219,7 @@ if events_exists:
                         raise ValueError("invalid optional diff candidate")
                     if item["policy_sha"] and not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", item["policy_sha"]):
                         raise ValueError("invalid policy_sha")
-                    if not item["surface"] or "\n" in item["surface"] or "\r" in item["surface"] or " " in item["surface"]:
+                    if not safe_text.fullmatch(item["surface"]):
                         raise ValueError("invalid surface")
                     if item["reason"] and not safe_text.fullmatch(item["reason"]):
                         raise ValueError("invalid reason")

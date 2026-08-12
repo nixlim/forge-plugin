@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -16,6 +17,9 @@ COMMIT_SKILL = (ROOT / "skills" / "commit" / "SKILL.md").read_text(
 STACKS_SEED = (
     ROOT / "system" / "seeds" / "validation-snippets" / "stacks.md"
 ).read_text(encoding="utf-8")
+DRIFT_CHECK = (ROOT / "scripts" / "forge" / "drift-check.sh").read_text(
+    encoding="utf-8"
+)
 
 REGIONS = [
     "project-overview",
@@ -167,6 +171,47 @@ class ForgeProjectTemplateTests(unittest.TestCase):
                     or f"No property library available for {stack}." in section
                 )
 
+    def test_drift_stacks_equal_all_seeded_category_rows(self) -> None:
+        python_body = DRIFT_CHECK.split("<<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0]
+        module = ast.parse(python_body)
+        assignments = [
+            node
+            for node in module.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "STACKS"
+        ]
+        self.assertEqual(len(assignments), 1)
+        stacks = ast.literal_eval(assignments[0].value)
+
+        seeded_rows = []
+        for match in re.finditer(
+            r"^## (?P<stack>[a-z0-9-]+) "
+            r"\(markers?: (?P<markers>[^;\n)]+)(?:;[^)]*)?\)\n\n"
+            r"Category row: `\| \\`(?P<category>[a-z0-9-]+)\\` \|",
+            STACKS_SEED,
+            flags=re.MULTILINE,
+        ):
+            seeded_rows.append(
+                (
+                    match.group("stack"),
+                    (
+                        tuple(re.findall(r"`([^`]+)`", match.group("markers"))),
+                        match.group("category"),
+                    ),
+                )
+            )
+        self.assertEqual(len(seeded_rows), 9)
+        actual_rows = [
+            (stack, (frozenset(markers), category))
+            for stack, (markers, category) in stacks.items()
+        ]
+        expected_rows = [
+            (stack, (frozenset(markers), category))
+            for stack, (markers, category) in seeded_rows
+        ]
+        self.assertEqual(actual_rows, expected_rows)
+
     def test_init_declares_absence_as_a_filled_mixed_stack_state(self) -> None:
         init_skill = (ROOT / "skills" / "init" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn(
@@ -198,7 +243,15 @@ class ForgeProjectTemplateTests(unittest.TestCase):
             "A gate satisfied by reducing its strength is a failure, not a pass.",
             TEMPLATE,
         )
-        for skill in ("init", "workflow", "orchestrate", "commit", "worktree-merge", "report"):
+        for skill in (
+            "init",
+            "workflow",
+            "orchestrate",
+            "commit",
+            "worktree-merge",
+            "report",
+            "drift",
+        ):
             self.assertIn(f"${{CLAUDE_PLUGIN_ROOT}}/skills/{skill}/SKILL.md", TEMPLATE)
 
 

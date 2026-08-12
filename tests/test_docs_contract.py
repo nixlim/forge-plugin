@@ -84,6 +84,85 @@ class DocumentationContractTests(unittest.TestCase):
         ):
             self.assertIn(step, workflow)
 
+    def test_workflow_refuses_drift_block_before_successor_logic(self) -> None:
+        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        refusal = (
+            "forge: new run refused — CRITICAL drift block present at "
+            ".forge/tmp/drift-block; operator clearance required"
+        )
+        self.assertEqual(workflow.count(refusal), 1)
+        self.assertLess(
+            workflow.index(".forge/tmp/drift-block"),
+            workflow.index("every `.codex-orchestrator/runs/*/journal.jsonl`"),
+        )
+        self.assertIn("applies to every new run, including a user-designated successor", workflow)
+        self.assertIn("only an operator may manually delete it", workflow)
+        self.assertIn("Forge agents and cleanup never delete, bypass, or replace it", workflow)
+        self.assertIn("run-open refusal, not an `AGENT_HALT` sentinel", workflow)
+        self.assertIn("agents never create or clear `AGENT_HALT` for drift", workflow)
+
+    def test_drift_skill_consumes_only_schema_json_and_blocks_only_critical(self) -> None:
+        drift = (ROOT / "skills/drift/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("review-periodic", drift)
+        self.assertIn("schema_version: 1", drift)
+        self.assertIn("only semantic\ninput is that stdout document", drift)
+        self.assertIn("Never read, derive, repair, or supplement", drift)
+        self.assertIn("`.forge/tmp/telemetry-latest.csv`", drift)
+        self.assertIn("forge: drift mechanical check failed", drift)
+        self.assertLess(
+            drift.index("forge: drift mechanical check failed"),
+            drift.index("## 2. Run the Periodic Semantic Review"),
+        )
+        self.assertIn("read-only mode", drift)
+        self.assertIn("YYYY-MM-DDTHHMMSSZ.md", drift)
+        self.assertIn("try `-02`, `-03`, and so on", drift)
+        self.assertIn("Never overwrite, amend, prune, rename, or delete", drift)
+        self.assertIn("exactly `check`,\n`code`, `evidence`, `severity`, and `summary`", drift)
+        self.assertIn("an `OBSERVATION` is not a drift finding", drift)
+        self.assertIn("valid preceding-quarter report with the greatest `generated_at`", drift)
+        self.assertLess(
+            drift.index("`/forge:commit` five-step chain"),
+            drift.index("## 4. Apply CRITICAL-Only Run Blocking"),
+        )
+        self.assertLess(
+            drift.index("proves that exact report is committed"),
+            drift.index("atomically write\n`.forge/tmp/drift-block`"),
+        )
+        self.assertIn("If and only if", drift)
+        self.assertIn("literal severity `CRITICAL`", drift)
+        self.assertIn(
+            "`MAJOR` and `MINOR` findings are advisory", drift
+        )
+        self.assertIn("only an operator clears", drift.lower())
+        self.assertIn("never create or clear `AGENT_HALT`", drift)
+
+    def test_readme_documents_a_mechanical_only_scheduled_job(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        start = readme.index("## Scheduled mechanical drift sensing")
+        end = readme.index("\n## ", start + 4)
+        section = readme[start:end]
+        self.assertIn(
+            "      - uses: actions/checkout@v4\n"
+            "        with:\n"
+            "          path: project\n"
+            "      - uses: actions/checkout@v4\n"
+            "        with:\n"
+            "          repository: nixlim/forge-plugin\n"
+            "          path: forge-plugin\n"
+            "      - name: Run Forge mechanical drift checks\n"
+            "        working-directory: project\n"
+            "        env:\n"
+            "          CLAUDE_PLUGIN_ROOT: ${{ github.workspace }}/forge-plugin\n"
+            "        run: '\"${CLAUDE_PLUGIN_ROOT}/scripts/forge/drift-check.sh\"'",
+            section,
+        )
+        self.assertIn("runs only the mechanical checker", section)
+        self.assertIn("does not invoke an\nLLM", section)
+        self.assertIn("never launches semantic review or any model", section)
+        self.assertNotIn("run: /forge:drift", section)
+        self.assertNotIn("run: codex", section.lower())
+        self.assertNotIn("run: claude", section.lower())
+
     # forge: modified from upstream — migrate README usage to namespaced skill review prose
     def test_orchestrate_skill_documents_a_focused_independent_review(self) -> None:
         orchestrate = (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8")

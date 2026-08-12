@@ -36,6 +36,28 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("maximum of 8 review iterations", SKILL)
         self.assertIn("never merge", SKILL)
 
+    def test_noncritical_drift_is_advisory_before_gate_one(self) -> None:
+        clean_tree = SKILL.index("git status --porcelain=v1 --untracked-files=all")
+        drift_contract = SKILL.index("### Drift state is not a merge input")
+        gate_one = SKILL.index("## Gate 1 — Project tests")
+        self.assertLess(clean_tree, drift_contract)
+        self.assertLess(drift_contract, gate_one)
+
+        contract = SKILL[drift_contract:gate_one]
+        required_in_order = (
+            "After the clean-worktree precondition passes",
+            "continue toward Gate 1 without consulting drift\nstate",
+            "do not read\n`.forge/history/drift/**` or `.forge/tmp/drift-block`",
+            "A recorded MAJOR or MINOR finding",
+            "advisory to merge and does not stop or change the merge gates",
+            "An existing drift-block is likewise\nnot a merge input",
+            "Proceed through the remaining configured preconditions to Gate 1",
+        )
+        positions = [contract.index(item) for item in required_in_order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("separate workflow-opening rule for CRITICAL drift", contract)
+        self.assertIn("does not authorize opening an orchestration run", contract)
+
     def test_merge_derives_tier_from_exact_committed_candidate_policy(self) -> None:
         invocation = (
             'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \\\n'

@@ -27,7 +27,7 @@ The repository is its own plugin marketplace. From any Claude Code session:
 
 (For a local checkout, pass the absolute path to the repo instead of the GitHub
 slug.) Restart the session afterwards so the skills and hooks load. You should see
-six skills:
+seven skills:
 
 | Skill | Purpose |
 |---|---|
@@ -37,11 +37,13 @@ six skills:
 | `/forge:report` | Author the final report after a gated close |
 | `/forge:commit` | The 5-step fail-closed commit gate chain |
 | `/forge:worktree-merge` | The 4-gate merge chain with locked rebase reintegration |
+| `/forge:drift` | Mechanical sensing followed by an operator-invoked periodic semantic drift review |
 
-Installing the plugin also registers two hooks: a **PreToolUse commit guard**
-(blocks `git commit`/`git push` under an operator halt, and requires a
-review-backed authorization marker in forge-initialized repos) and a **Stop
-telemetry hook** (aggregates decision telemetry; inert outside forge repos).
+Installing the plugin also registers a **PreToolUse commit guard**, an advisory
+**PostToolUse invariant guard**, a **Stop union** that independently runs telemetry
+aggregation and the drift-staleness nudge, and a **SessionStart drift-staleness
+nudge**. Every Stop and SessionStart member is silent and inert outside a
+forge-initialized repository.
 
 ## Per-repository setup
 
@@ -52,7 +54,7 @@ In the repo you want to govern:
 ```
 
 Init confirms the project name and default branch, installs `forge-project.md`
-(nine configuration regions rendered into both CLAUDE.md and AGENTS.md), the
+(fourteen configuration regions rendered into both CLAUDE.md and AGENTS.md), the
 `.codex/` layer (agent routing plus an execpolicy deny-list), the gitignore
 block, and `.forge/` state directories; mines your CI and git history to
 propose gate commands; seeds and baselines the eval suite; then presents the
@@ -73,13 +75,45 @@ Until init fills the regions, the gates fail closed: merges stop with
   `.forge/tmp/halt-audit.log`; orchestration history lives in the run journal
   under `.codex-orchestrator/runs/<run-id>/`.
 
+## Scheduled mechanical drift sensing
+
+Configure scheduled CI with `CLAUDE_PLUGIN_ROOT` set to the installed Forge plugin
+root. The scheduled job runs only the mechanical checker; it does not invoke an
+LLM:
+
+```yaml
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+jobs:
+  forge-drift-mechanical:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project
+      - uses: actions/checkout@v4
+        with:
+          repository: nixlim/forge-plugin
+          path: forge-plugin
+      - name: Run Forge mechanical drift checks
+        working-directory: project
+        env:
+          CLAUDE_PLUGIN_ROOT: ${{ github.workspace }}/forge-plugin
+        run: '"${CLAUDE_PLUGIN_ROOT}/scripts/forge/drift-check.sh"'
+```
+
+Scheduled CI never launches semantic review or any model. When the plugin's Stop
+or SessionStart nudge reports a stale drift report, the operator invokes
+`/forge:drift` interactively.
+
 ## Development
 
 ```
 python3 -m unittest discover -s tests
 ```
 
-176 tests, stdlib only. `UPSTREAM` records both vendored upstream SHAs and every
+The test suite is stdlib only. `UPSTREAM` records both vendored upstream SHAs and every
 deliberate deviation. Design background:
 [docs/design/0001-founding-decisions.md](docs/design/0001-founding-decisions.md);
 full specification: [docs/specs/forge-plugin-spec.md](docs/specs/forge-plugin-spec.md).

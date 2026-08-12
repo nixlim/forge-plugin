@@ -381,6 +381,35 @@ serialisation.review_wait_s: 4
             ],
         )
 
+    def test_csv_uses_rfc4180_quoting_for_legacy_fields(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        (decisions / "quoted.md").write_text(
+            "```telemetry\n"
+            "unit: quoted-unit\n"
+            'feature: has,comma and "quote"\n'
+            "model: terra\n"
+            "```\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--csv",
+            "quoted.csv",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = (self.repo / "quoted.csv").read_bytes().splitlines()
+        self.assertEqual(
+            rows[1],
+            b'quoted-unit,"has,comma and ""quote""",terra,0,0,0,0.0,0,0,,,,,,,,',
+        )
+
     def test_malformed_or_out_of_window_events_still_write_zero_totals(self) -> None:
         (self.repo / ".forge-manifest").write_text(
             "forge_version: 1\n", encoding="utf-8"
@@ -444,7 +473,122 @@ serialisation.review_wait_s: 4
                 )
                 self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
-    def test_forge_repo_without_decisions_uses_re_rooted_default(self) -> None:
+    def test_window_is_half_open_at_exact_boundaries(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        events = decisions / "events.jsonl"
+        common = (
+            '"candidate":"","event":"halt_event","policy_sha":"",'
+            '"reason":"","surface":"check-halt"}'
+        )
+        events.write_text(
+            '{"at":"2026-08-11T23:59:59Z",' + common + "\n"
+            '{"at":"2026-08-12T00:00:00Z",' + common + "\n"
+            '{"at":"2026-08-12T23:59:59Z",' + common + "\n"
+            '{"at":"2026-08-13T00:00:00Z",' + common + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--csv",
+            "window.csv",
+            "--since",
+            "2026-08-12T00:00:00Z",
+            "--until",
+            "2026-08-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            (self.repo / "window.csv").read_text(encoding="utf-8").splitlines()[-1],
+            "__decision_totals__,,,,,,,,,0,0,0,0,0,0,2,0",
+        )
+
+    def test_missing_duplicate_and_flag_shaped_values_exit_two_exactly(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        cases = (
+            ((), "--csv is required"),
+            (("--csv",), "--csv requires a value"),
+            (("--csv", "--since"), "--csv requires a value"),
+            (("--csv", ""), "--csv requires a nonempty value"),
+            (("--csv", "out.csv"), "decisions directory is required"),
+            (
+                ("--csv", "one.csv", "--csv", "two.csv"),
+                "--csv may be supplied once",
+            ),
+            (("--unknown",), "unknown option --unknown"),
+            (("one", "two", "--csv", "out.csv"), "multiple decisions directories"),
+        )
+        for args, reason in cases:
+            with self.subTest(args=args):
+                result = self.run_script(AGGREGATE_TELEMETRY, *args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(
+                    result.stderr,
+                    f"forge: invalid aggregate-telemetry arguments: {reason}\n",
+                )
+
+    def test_event_read_and_csv_write_failures_exit_two_without_success(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        (decisions / "events.jsonl").mkdir()
+
+        not_directory = self.repo / "not-a-directory"
+        not_directory.write_text("telemetry cannot live here\n", encoding="utf-8")
+        path_failure = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(not_directory),
+            "--csv",
+            "events.csv",
+        )
+
+        self.assertEqual(path_failure.returncode, 2, path_failure.stdout + path_failure.stderr)
+        self.assertEqual(path_failure.stdout, "")
+        self.assertEqual(
+            path_failure.stderr,
+            f"forge: aggregate telemetry failed: decisions path is not a directory: '{not_directory}'\n",
+        )
+
+        read_failure = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--csv",
+            "events.csv",
+        )
+
+        self.assertEqual(read_failure.returncode, 2, read_failure.stdout + read_failure.stderr)
+        self.assertEqual(read_failure.stdout, "")
+        self.assertIn("forge: aggregate telemetry failed: cannot read decision events:", read_failure.stderr)
+        self.assertNotIn("Per-unit CSV written", read_failure.stdout + read_failure.stderr)
+
+        (decisions / "events.jsonl").rmdir()
+        (decisions / "events.jsonl").write_text("", encoding="utf-8")
+        write_failure = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--csv",
+            "missing-parent/events.csv",
+        )
+
+        self.assertEqual(
+            write_failure.returncode, 2, write_failure.stdout + write_failure.stderr
+        )
+        self.assertEqual(write_failure.stdout, "")
+        self.assertIn("forge: aggregate telemetry failed: cannot write CSV", write_failure.stderr)
+        self.assertNotIn("Per-unit CSV written", write_failure.stdout + write_failure.stderr)
+
+    def test_explicit_decisions_path_with_no_decisions_reports_nothing_to_aggregate(self) -> None:
         (self.repo / ".forge-manifest").write_text(
             "forge_version: 1\n", encoding="utf-8"
         )

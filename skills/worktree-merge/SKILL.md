@@ -44,6 +44,17 @@ path, and leave the worktree intact. Tell the user to commit the intended work t
 `/forge:commit`. Discard work only after explicit user approval; never infer approval from a merge
 request.
 
+### Drift state is not a merge input
+
+After the clean-worktree precondition passes, continue toward Gate 1 without consulting drift
+state. `/forge:worktree-merge` itself ignores drift state: do not read
+`.forge/history/drift/**` or `.forge/tmp/drift-block`. A recorded MAJOR or MINOR finding is
+advisory to merge and does not stop or change the merge gates. An existing drift-block is likewise
+not a merge input. Proceed through the remaining configured preconditions to Gate 1.
+
+This merge contract does not change the separate workflow-opening rule for CRITICAL drift. It
+does not authorize opening an orchestration run that rule prevents from opening.
+
 ### 2. Fix and classify the candidate
 
 Capture the full candidate identity and the remote base that the gates inspect:
