@@ -727,6 +727,71 @@ class AuditCommitmentsTests(unittest.TestCase):
                     f"{corrected} (corrected from".encode(), result.stderr
                 )
 
+    def test_correction_block_stops_at_prose_after_applying_directives(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            records[3]["basis"] = ["missing/original.md"]
+            records.insert(
+                -1,
+                self.correction(
+                    "decision-correction",
+                    "decision-01 basis[0]: docs/repo-basis.md",
+                    "Each corrected target was verified before writing.",
+                    "decision-01 basis[0]: still/missing.md",
+                ),
+            )
+
+        self.mutate(change)
+        result = self.invoke()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            b"decision decision-correction applied to decision decision-01 basis[0]: "
+            b"missing/original.md -> docs/repo-basis.md",
+            result.stdout,
+        )
+        self.assertNotIn(b"still/missing.md", result.stdout)
+        self.assertEqual(b"", result.stderr)
+
+    def test_correction_block_starting_with_prose_applies_no_directives(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            records[3]["basis"] = ["missing/original.md"]
+            records.insert(
+                -1,
+                self.correction(
+                    "decision-correction",
+                    "This entry contains explanatory prose only.",
+                    "decision-01 basis[0]: docs/repo-basis.md",
+                ),
+            )
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            5,
+            b"forge: commitment audit failed \xe2\x80\x94 cited path does not exist "
+            b"within run or repository: missing/original.md "
+            b"(decision decision-01 basis[0])\n",
+        )
+
+    def test_mistyped_correction_directive_is_prose_and_leaves_citation_loud(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            records[3]["basis"] = ["missing/original.md"]
+            records.insert(
+                -1,
+                self.correction(
+                    "decision-correction",
+                    "decision-01 basis[0] docs/repo-basis.md",
+                ),
+            )
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            5,
+            b"forge: commitment audit failed \xe2\x80\x94 cited path does not exist "
+            b"within run or repository: missing/original.md "
+            b"(decision decision-01 basis[0])\n",
+        )
+
     def test_unknown_correction_target_has_distinct_exit_code_and_exact_diagnostic(self) -> None:
         def change(records: list[dict[str, object]]) -> None:
             records.insert(

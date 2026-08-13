@@ -241,9 +241,7 @@ def citation_corrections(
         lines = suffix.splitlines()
         if lines and not lines[0].strip():
             lines = lines[1:]
-        if not lines:
-            fail(2, f"decision {supplier} citation correction must contain at least one line")
-        for line_number, line in enumerate(lines, start=1):
+        for line in lines:
             decision_match = DECISION_CORRECTION.fullmatch(line)
             verification_match = VERIFICATION_CORRECTION.fullmatch(line)
             if decision_match is not None:
@@ -261,10 +259,7 @@ def citation_corrections(
                 )
                 corrected_path = verification_match.group("path")
             else:
-                fail(
-                    2,
-                    f"decision {supplier} citation correction line {line_number} is malformed",
-                )
+                break
             if target not in available:
                 if target[0] == "decision":
                     named_target = f"decision {target[1]} basis[{target[2]}]"
