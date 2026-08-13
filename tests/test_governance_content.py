@@ -37,6 +37,39 @@ def frontmatter(text: str) -> tuple[dict[str, str], list[str]]:
     return scalars, tools
 
 
+def assert_review_coding_verification_method(
+    test_case: unittest.TestCase, text: str
+) -> None:
+    requirements = (
+        "Profile set version: 1.1",
+        "Establish claims by execution wherever execution is available.",
+        "Drive a unit in-process",
+        "recompute a claimed hash",
+        "disable that control in\nmemory and confirm that the test fails",
+        "A test that still passes with the\ncontrol disabled is an axiom-3 finding, not coverage.",
+        "do not run repository mutation\ntooling",
+        "mutation thinking by read-only, in-process means",
+    )
+    missing = [requirement for requirement in requirements if requirement not in text]
+    test_case.assertEqual(missing, [], f"missing review-coding requirements: {missing!r}")
+
+
+def assert_final_reviewer_uses_coding_verification_method(
+    test_case: unittest.TestCase, text: str
+) -> None:
+    requirements = (
+        "constitution's `review-coding` verification method",
+        "execution-backed claim checks",
+        "read-only, in-memory control-disable checks as required review evidence",
+    )
+    missing = [requirement for requirement in requirements if requirement not in text]
+    test_case.assertEqual(
+        missing,
+        [],
+        f"missing final-review verification requirements: {missing!r}",
+    )
+
+
 class ReviewConstitutionContentTests(unittest.TestCase):
     def test_six_core_axioms_are_preserved(self) -> None:
         axioms = (
@@ -62,7 +95,7 @@ class ReviewConstitutionContentTests(unittest.TestCase):
         self.assertIn("| SEC-11 |", CONSTITUTION)
 
     def test_profile_set_and_all_profiles_are_preserved(self) -> None:
-        self.assertIn("Profile set version: 1.0", CONSTITUTION)
+        self.assertIn("Profile set version: 1.1", CONSTITUTION)
         for profile in (
             "review-coding",
             "review-specification",
@@ -75,6 +108,29 @@ class ReviewConstitutionContentTests(unittest.TestCase):
         ):
             with self.subTest(profile=profile):
                 self.assertIn(f"**{profile}**", CONSTITUTION)
+
+    def test_review_coding_requires_execution_and_load_bearing_tests(self) -> None:
+        assert_review_coding_verification_method(self, CONSTITUTION)
+
+    def test_review_coding_verification_method_mutants_are_killed(self) -> None:
+        mutations = (
+            ("Profile set version: 1.1", "Profile set version: 1.0"),
+            (
+                "Establish claims by execution wherever execution is available.",
+                "Establish claims from the available evidence.",
+            ),
+            (
+                "disable that control in\nmemory and confirm that the test fails",
+                "inspect that control and confirm that the test passes",
+            ),
+        )
+
+        for needle, replacement in mutations:
+            with self.subTest(disabled_control=needle):
+                self.assertIn(needle, CONSTITUTION)
+                mutant = CONSTITUTION.replace(needle, replacement, 1)
+                with self.assertRaises(AssertionError):
+                    assert_review_coding_verification_method(self, mutant)
 
     def test_verdict_is_binary_and_iteration_loop_has_a_hard_cap(self) -> None:
         self.assertIn("return ONE of", CONSTITUTION)
@@ -95,7 +151,7 @@ class ReviewFinalContentTests(unittest.TestCase):
     def test_frontmatter_has_exact_model_effort_and_tools(self) -> None:
         values, tools = frontmatter(REVIEW_FINAL)
 
-        self.assertEqual(values["model"], "fable")
+        self.assertEqual(values["model"], "opus")
         self.assertEqual(values["effort"], "high")
         self.assertEqual(tools, ["Read", "Bash", "Glob", "Grep", "LS"])
 
@@ -121,6 +177,26 @@ class ReviewFinalContentTests(unittest.TestCase):
         self.assertIn(blind_spot, REVIEW_FINAL)
         self.assertIn(read_only, REVIEW_FINAL)
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md", REVIEW_FINAL)
+        assert_final_reviewer_uses_coding_verification_method(self, REVIEW_FINAL)
+        self.assertNotIn("disable that control in memory", REVIEW_FINAL)
+
+    def test_coding_verification_method_adoption_mutant_is_killed(self) -> None:
+        control = (
+            "For code and tests, apply the constitution's `review-coding` verification method. "
+            "Treat its execution-backed claim checks and read-only, in-memory control-disable "
+            "checks as required review evidence."
+        )
+        self.assertEqual(REVIEW_FINAL.count(control), 1)
+        mutant = REVIEW_FINAL.replace(
+            control,
+            "For code and tests, the constitution's coding verification control is disabled.",
+            1,
+        )
+
+        with self.assertRaisesRegex(
+            AssertionError, "missing final-review verification requirements"
+        ):
+            assert_final_reviewer_uses_coding_verification_method(self, mutant)
 
 
 class GovernanceRuleContentTests(unittest.TestCase):

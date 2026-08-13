@@ -32,6 +32,12 @@ ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
 HASH = re.compile(r"[0-9a-f]{64}")
 COMMIT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 HALT_MESSAGE = re.compile(r"forge: operator halt engaged \(([^)]+)\)")
+HEAD_PLUGIN_REF_LINE = re.compile(br"^plugin_ref: ", re.MULTILINE)
+UPSTREAM_COMMIT_LINE = re.compile(br"^upstream_commit:(?: [^\r\n]*)?\r?$", re.MULTILINE)
+UPSTREAM_REGION_LINE = re.compile(
+    br"^region: [^ ()\t\r\n]+ \([^()\r\n]+\)\r?$",
+    re.MULTILINE,
+)
 REDIRECTION = re.compile(
     r"(?:\d*(?:<<<|<<-?|>>|<>|>\||<&|>&|<|>)|&>>?)(.*)",
     re.DOTALL,
@@ -873,18 +879,37 @@ def halt_sentinel(context: RepoContext, check_halt: Path) -> str | None:
 
 
 def manifest_requires_marker(context: RepoContext) -> bool:
-    if not context.bare and os.path.lexists(context.worktree_root / ".forge-manifest"):
-        return True
     try:
         result = run_context_git(
             context,
-            "cat-file",
-            "-e",
+            "show",
             "HEAD:.forge-manifest",
         )
     except OSError:
+        result = None
+    if (
+        result is not None
+        and result.returncode == 0
+        and HEAD_PLUGIN_REF_LINE.search(result.stdout) is not None
+    ):
+        return True
+
+    if context.bare:
         return False
-    return result.returncode == 0
+    manifest = context.worktree_root / ".forge-manifest"
+    if not os.path.lexists(manifest):
+        return False
+    try:
+        contents = manifest.read_bytes()
+    except OSError:
+        # A directory, broken link, or unreadable manifest is malformed rather
+        # than an upstream manifest, so it remains fail-closed.
+        return True
+    is_upstream = (
+        UPSTREAM_COMMIT_LINE.search(contents) is not None
+        or UPSTREAM_REGION_LINE.search(contents) is not None
+    )
+    return not is_upstream
 
 
 def policy_region(policy: bytes, name: str) -> bytes | None:

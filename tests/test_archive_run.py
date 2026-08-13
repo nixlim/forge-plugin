@@ -265,6 +265,28 @@ class ArchiveRunTests(unittest.TestCase):
         mutant.write_text(source.replace(needle, replacement), encoding="utf-8")
         return mutant
 
+    def install_repo_conformance_authority(self) -> str:
+        """Make the fixture a minimal forge-plugin source repository."""
+
+        sources = (
+            Path(".claude-plugin/plugin.json"),
+            Path("agents/review-final.md"),
+            Path("docs/specs/forge-plugin-spec.md"),
+            Path("system/codex/agents/implementer.toml"),
+            Path("system/codex/agents/review-cheap.toml"),
+            Path("tests/test_repo_conformance.py"),
+        )
+        for relative in sources:
+            target = self.repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((ROOT / relative).read_bytes())
+        # The conformance walk is fail closed when the governed script root is
+        # unavailable. This fixture has no governed executables of its own.
+        (self.repo / "scripts/forge").mkdir(parents=True)
+        self.git("add", *(relative.as_posix() for relative in sources))
+        self.git("commit", "--quiet", "-m", "install routing authority")
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
     def assert_archive_absent_and_unstaged(self) -> None:
         self.assertFalse(self.archive_path.exists())
         self.assertEqual(self.git("diff", "--cached", "--name-only").stdout, "")
@@ -340,6 +362,165 @@ class ArchiveRunTests(unittest.TestCase):
         archive = self.archive_path.read_bytes()
         self.assertIn((self.run_dir / "plan choice.yaml").read_bytes(), archive)
         self.assertIn((self.run_dir / "Makefile").read_bytes(), archive)
+
+    def test_citation_corrections_section_reaches_written_archive(self) -> None:
+        decision = next(record for record in self.records if record.get("type") == "decision")
+        decision["basis"] = ["missing/original.md"]
+        self.records.insert(
+            -1,
+            {
+                "type": "decision",
+                "id": "decision-citation-correction",
+                "finding": "Correct a citation.",
+                "outcome": "operator_decision",
+                "resolution": "citation-correction:\ndecision-07 basis[0]: claude-plan.md",
+                "basis": [],
+                "risk": "low",
+            },
+        )
+        self.write_journal()
+
+        result = self.invoke()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        text = self.archive_path.read_text(encoding="utf-8")
+        self.assertIn("## Citation Corrections\n", text)
+        self.assertIn(
+            "decision decision-citation-correction applied to decision decision-07 basis[0]: "
+            "missing/original.md -> claude-plan.md",
+            text,
+        )
+
+        self.git("reset", "--quiet")
+        self.archive_path.unlink()
+        mutant = self.mutant_archiver(
+            "citation-corrections-disabled",
+            'lines.extend(["", audit_fragment.rstrip("\\n"), "", "## Provenance", ""])',
+            'lines.extend(["", "## Residual Risks\\n\\n- none", "", "## Provenance", ""])',
+        )
+
+        disabled = self.invoke(archiver=mutant)
+
+        self.assertEqual(disabled.returncode, 0, disabled.stderr.decode())
+        disabled_text = self.archive_path.read_text(encoding="utf-8")
+        # Re-run the positive archive-layer sensor against the disabled control:
+        # these are the exact predicates above, negated only so this outer mutant
+        # test can prove that both original assertions would fail.
+        positive_assertions = (
+            "## Citation Corrections\n" in disabled_text,
+            (
+                "decision decision-citation-correction applied to decision "
+                "decision-07 basis[0]: missing/original.md -> claude-plan.md"
+                in disabled_text
+            ),
+        )
+        self.assertEqual(positive_assertions, (False, False))
+
+    def test_historical_routing_findings_reach_written_archive(self) -> None:
+        authority_head = self.install_repo_conformance_authority()
+        handoff = "routing-review-handoff.md"
+        (self.run_dir / handoff).write_text("Historical route reviewed.\n", encoding="utf-8")
+        executions = [
+            {
+                "type": "execution",
+                "agent": "codex-review-historical",
+                "execution": "execution-01",
+                "task": "task-07",
+                "provider": "codex",
+                "role": "review",
+                "head": authority_head,
+                "model": "gpt-5.6-terra",
+                "effort": "medium",
+                "handoff": handoff,
+                "event_source": "exec",
+            },
+            {
+                "type": "execution_result",
+                "agent": "codex-review-historical",
+                "execution": "execution-01",
+                "task": "task-07",
+                "status": "complete",
+                "handoff": handoff,
+            },
+            {
+                "type": "execution",
+                "agent": "claude-review-historical",
+                "execution": "execution-01",
+                "task": "task-07",
+                "provider": "claude",
+                "role": "review",
+                "head": authority_head,
+                "model": "fable",
+                "effort": "medium",
+                "handoff": handoff,
+                "event_source": "claude",
+            },
+            {
+                "type": "execution_result",
+                "agent": "claude-review-historical",
+                "execution": "execution-01",
+                "task": "task-07",
+                "status": "complete",
+                "handoff": handoff,
+            },
+        ]
+        self.records[-2:-2] = executions
+        self.write_journal()
+        journal_lines = {
+            record["agent"]: line_number
+            for line_number, record in enumerate(self.records, 1)
+            if record.get("type") == "execution"
+        }
+        expected = (
+            (
+                f"journal line {journal_lines['codex-review-historical']}: agent "
+                "'codex-review-historical' recorded model/effort "
+                "('gpt-5.6-terra', 'medium'); expected model/effort "
+                f"('gpt-5.6-sol', 'high') from {authority_head}:"
+                "system/codex/agents/review-cheap.toml"
+            ),
+            (
+                f"journal line {journal_lines['claude-review-historical']}: agent "
+                "'claude-review-historical' recorded model/effort "
+                "('fable', 'medium'); expected model/effort ('opus', 'high') "
+                f"from {authority_head}:agents/review-final.md"
+            ),
+        )
+
+        result = self.invoke()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        archive = self.archive_path.read_text(encoding="utf-8")
+        self.assertEqual(archive.count("## Historical Routing Findings\n"), 1)
+        for finding in expected:
+            self.assertIn(f"- {finding}\n", archive)
+
+        self.git("reset", "--quiet")
+        self.archive_path.unlink()
+        mutant = self.mutant_archiver(
+            "historical-routing-findings-disabled",
+            "    audit_fragment = run_audit(run_dir)\n",
+            (
+                "    audit_fragment = run_audit(run_dir)\n"
+                "    if audit_fragment.startswith(\"## Historical Routing Findings\\n\"):\n"
+                "        audit_fragment = (\"## Residual Risks\" + "
+                "audit_fragment.split(\"## Residual Risks\", 1)[1])\n"
+            ),
+        )
+
+        disabled = self.invoke(archiver=mutant)
+
+        self.assertEqual(disabled.returncode, 0, disabled.stderr.decode())
+        disabled_archive = self.archive_path.read_text(encoding="utf-8")
+        # These are the positive archive predicates above evaluated after the
+        # routing-finding inclusion control has been disabled in isolation.
+        self.assertEqual(
+            (
+                "## Historical Routing Findings\n" in disabled_archive,
+                *(f"- {finding}\n" in disabled_archive for finding in expected),
+            ),
+            (False, False, False),
+        )
 
     def test_output_is_byte_deterministic_across_equivalent_repositories(self) -> None:
         first = self.invoke()

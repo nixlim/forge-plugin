@@ -82,9 +82,10 @@ class CommitGuardTests(unittest.TestCase):
         cwd: Path | None = None,
         tool_name: str = "Bash",
         environment: dict[str, str] | None = None,
+        guard: Path = COMMIT_GUARD,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["bash", str(COMMIT_GUARD)],
+            ["bash", str(guard)],
             cwd=cwd or self.repo,
             input=json.dumps(
                 {"tool_name": tool_name, "tool_input": {"command": command}}
@@ -94,6 +95,15 @@ class CommitGuardTests(unittest.TestCase):
             text=True,
             env=environment,
         )
+
+    def mutant_guard(self, name: str, needle: str, replacement: str) -> Path:
+        mutant_root = self.scratch / name
+        shutil.copytree(ROOT / "scripts" / "forge", mutant_root / "scripts" / "forge")
+        guard = mutant_root / "scripts" / "forge" / "commit-guard.sh"
+        source = guard.read_text(encoding="utf-8")
+        self.assertEqual(source.count(needle), 1, needle)
+        guard.write_text(source.replace(needle, replacement), encoding="utf-8")
+        return guard
 
     def assert_allowed(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -120,7 +130,8 @@ class CommitGuardTests(unittest.TestCase):
     def track_manifest(self, *, cwd: Path | None = None) -> None:
         repo = cwd or self.repo
         (repo / ".forge-manifest").write_text(
-            "forge_version: 1\ninit_completed: true\n", encoding="utf-8"
+            "forge_version: 1\nplugin_ref: test-plugin\ninit_completed: true\n",
+            encoding="utf-8",
         )
         self.git("add", ".forge-manifest", cwd=repo)
         tree = self.git("write-tree", cwd=repo).stdout.strip()
@@ -182,7 +193,8 @@ class CommitGuardTests(unittest.TestCase):
             encoding="utf-8",
         )
         (repo / ".forge-manifest").write_text(
-            "forge_version: 1\ninit_completed: true\n", encoding="utf-8"
+            "forge_version: 1\nplugin_ref: test-plugin\ninit_completed: true\n",
+            encoding="utf-8",
         )
         self.git("add", "forge-project.md", ".forge-manifest", cwd=repo)
         tree = self.git("write-tree", cwd=repo).stdout.strip()
@@ -480,8 +492,85 @@ class CommitGuardTests(unittest.TestCase):
         self.write_marker(timestamp=one_minute_ahead)
         self.assert_allowed(self.invoke("git commit"))
 
-    def test_working_tree_only_manifest_requires_marker(self) -> None:
-        (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
+    def test_malformed_working_tree_manifest_requires_marker(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n"
+            "not_plugin_ref: decoy\n"
+            "not_upstream_commit: decoy\n"
+            "note: region: gates (forge-project.md)\n",
+            encoding="utf-8",
+        )
+        self.stage_change()
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+
+    def test_upstream_schema_working_tree_manifest_leaves_only_halt_check(self) -> None:
+        upstream_manifests = (
+            "forge_version: 1\nupstream_commit: abc123\n",
+            "forge_version: 1\nupstream_commit:\n",
+            "forge_version: 1\nregion: gates (.opencode/rules/gates.md)\n",
+        )
+
+        for index, contents in enumerate(upstream_manifests):
+            with self.subTest(contents=contents):
+                repo = self.scratch / f"upstream manifest {index}"
+                self.init_repo(repo)
+                (repo / ".forge-manifest").write_text(contents, encoding="utf-8")
+                self.git("add", ".forge-manifest", cwd=repo)
+                tree = self.git("write-tree", cwd=repo).stdout.strip()
+                parent = self.git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+                commit = self.git(
+                    "commit-tree",
+                    tree,
+                    "-p",
+                    parent,
+                    cwd=repo,
+                    input_text="track upstream manifest\n",
+                ).stdout.strip()
+                self.git("update-ref", "HEAD", commit, cwd=repo)
+                self.stage_change(cwd=repo)
+                self.assert_allowed(self.invoke("git commit", cwd=repo))
+
+                (repo / "AGENT_HALT_commit").write_text(
+                    "operator pause\n", encoding="utf-8"
+                )
+                self.assert_denied(
+                    self.invoke("git commit", cwd=repo),
+                    "forge: operator halt engaged (AGENT_HALT_commit)",
+                )
+
+    def test_head_plugin_ref_match_is_anchored_not_a_bare_substring(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\nnot_plugin_ref: decoy\n", encoding="utf-8"
+        )
+        self.git("add", ".forge-manifest")
+        tree = self.git("write-tree").stdout.strip()
+        parent = self.git("rev-parse", "HEAD").stdout.strip()
+        commit = self.git(
+            "commit-tree",
+            tree,
+            "-p",
+            parent,
+            input_text="track non-plugin manifest\n",
+        ).stdout.strip()
+        self.git("update-ref", "HEAD", commit)
+        (self.repo / ".forge-manifest").unlink()
+        self.stage_change()
+
+        self.assert_allowed(self.invoke("git commit"))
+
+    def test_bootstrap_manifest_with_plugin_ref_stripped_still_requires_marker(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n"
+            "installed: 2026-08-12\n"
+            "project_name: bootstrap-fixture\n"
+            "default_branch: main\n"
+            "init_completed: false\n",
+            encoding="utf-8",
+        )
         self.stage_change()
 
         self.assert_denied(
@@ -506,13 +595,85 @@ class CommitGuardTests(unittest.TestCase):
             f"{MARKER_REASON} (marker missing)",
         )
 
-    def test_head_tracked_manifest_still_requires_marker_when_staged_for_deletion(self) -> None:
+    def test_head_plugin_manifest_still_requires_marker_when_staged_for_deletion(self) -> None:
         self.track_manifest()
         (self.repo / ".forge-manifest").unlink()
         self.git("add", "-u", ".forge-manifest")
 
         self.assert_denied(
             self.invoke("git commit"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+
+    def test_head_plugin_manifest_still_requires_marker_when_deleted_unstaged(self) -> None:
+        self.track_manifest()
+        (self.repo / ".forge-manifest").unlink()
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+
+    def test_manifest_schema_predicate_mutants_are_killed(self) -> None:
+        disabled = self.mutant_guard(
+            "manifest-predicate-disabled",
+            "def manifest_requires_marker(context: RepoContext) -> bool:\n    try:\n",
+            "def manifest_requires_marker(context: RepoContext) -> bool:\n"
+            "    return False  # CONTROL DISABLED\n"
+            "    try:\n",
+        )
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\ninstalled: now\ninit_completed: false\n",
+            encoding="utf-8",
+        )
+        self.stage_change()
+
+        # The intact bootstrap/malformed-manifest tests expect denial. With the
+        # predicate removed, that same positive assertion fails because the
+        # commit is allowed.
+        self.assert_allowed(self.invoke("git commit", guard=disabled))
+
+        upstream_disabled = self.mutant_guard(
+            "upstream-schema-disabled",
+            "    return not is_upstream\n",
+            "    return True  # CONTROL DISABLED: upstream schema recognition\n",
+        )
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\nupstream_commit: abc123\n", encoding="utf-8"
+        )
+
+        # The intact upstream-schema test expects pass-through. Removing schema
+        # recognition makes its assertion fail by arming the marker requirement.
+        self.assert_denied(
+            self.invoke("git commit", guard=upstream_disabled),
+            f"{MARKER_REASON} (marker missing)",
+        )
+
+        substring = self.mutant_guard(
+            "head-plugin-ref-substring",
+            'HEAD_PLUGIN_REF_LINE = re.compile(br"^plugin_ref: ", re.MULTILINE)',
+            'HEAD_PLUGIN_REF_LINE = re.compile(br"plugin_ref: ", re.MULTILINE)',
+        )
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\nnot_plugin_ref: decoy\n", encoding="utf-8"
+        )
+        self.git("add", ".forge-manifest")
+        tree = self.git("write-tree").stdout.strip()
+        parent = self.git("rev-parse", "HEAD").stdout.strip()
+        commit = self.git(
+            "commit-tree",
+            tree,
+            "-p",
+            parent,
+            input_text="track non-plugin manifest\n",
+        ).stdout.strip()
+        self.git("update-ref", "HEAD", commit)
+        (self.repo / ".forge-manifest").unlink()
+
+        # The anchored-match test expects pass-through; a bare-substring mutant
+        # instead arms on not_plugin_ref and is therefore observably killed.
+        self.assert_denied(
+            self.invoke("git commit", guard=substring),
             f"{MARKER_REASON} (marker missing)",
         )
 

@@ -151,7 +151,10 @@ A nonzero inspection or update is non-fatal: record exactly
 `forge: dcg allowlisted core.git:branch-force-delete for this project`. If the project-scoped entry
 is already present, the helper does not invoke `dcg allow`; it records exactly
 `forge: dcg allowlist already contains core.git:branch-force-delete for this project`. Preserve this
-inspection-before-update behavior on re-init.
+inspection-before-update behavior on re-init. Retain the helper's exact recorded result for the
+Phase 6 approval summary; in particular, a non-fatal
+`forge: dcg allowlist update failed` result must remain visible there so the operator can connect it
+to any later denied branch deletion.
 
 ## Phase 2 — Brownfield mining
 
@@ -361,8 +364,11 @@ Treat the complete init output as a control-class change.
    ...
    ```
 
-   Derive `plugin_ref` from `${CLAUDE_PLUGIN_ROOT}` and the date from the current system date. Do
-   not mark the manifest complete yet.
+   Derive `plugin_ref` from `${CLAUDE_PLUGIN_ROOT}` and the date from the current system date. If
+   the derived ref ends in `-dirty`, retain that exact ref in the manifest and warn exactly
+   `forge: warning — plugin_ref is dirty and installation is not reproducible from a commit: <ref>`.
+   This warning does not block initialization, but it must also be repeated in the Phase 6 approval
+   summary. Do not mark the manifest complete yet.
 
 2. Run the strict suite and require exit 0:
 
@@ -428,7 +434,10 @@ concise summary of:
 - the confirmed blast-radius suite and clean-tree Gate 1/stack-validation results;
 - every eval fixture, preserved or new baseline, normal and strict eval results;
 - both execpolicy decisions, the binding `review-final` verdict, the Codex trust caveat, and any
-  residual risk.
+  residual risk;
+- the exact Phase 1 dcg integration result, including
+  `forge: dcg allowlist update failed` verbatim when that non-fatal failure occurred, and any dirty
+  `plugin_ref` reproducibility warning from Phase 5.
 
 Ask for explicit approval of that exact candidate ID and diff. The request to run `/forge:init` is
 not that approval. Do not flip the manifest while waiting. If approval is withheld, ambiguous,

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +53,88 @@ def toml_string(document: str, key: str) -> str:
     if match is None:
         raise AssertionError(f"missing TOML string key {key}")
     return match.group(1)
+
+
+@dataclass(frozen=True)
+class InitApprovalTrace:
+    phase1_recorded: tuple[str, ...]
+    phase5_reported: tuple[str, ...]
+    phase6_approval: tuple[str, ...]
+
+
+def init_phase(document: str, number: int) -> str:
+    match = re.search(
+        rf"^## Phase {number}\b.*?(?=^## Phase [0-6]\b|\Z)",
+        document,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    if match is None:
+        raise AssertionError(f"missing Phase {number}")
+    return match.group(0)
+
+
+def simulate_init_approval_reporting(
+    skill: str,
+    *,
+    dcg_result: str,
+    plugin_ref: str,
+) -> InitApprovalTrace:
+    """Compile the skill's cross-phase reporting contract and drive both branches."""
+
+    phase1 = init_phase(skill, 1)
+    phase5 = init_phase(skill, 5)
+    phase6 = init_phase(skill, 6)
+    dcg_failure = "forge: dcg allowlist update failed"
+    warning_template = (
+        "forge: warning — plugin_ref is dirty and installation is not reproducible "
+        "from a commit: <ref>"
+    )
+
+    if not re.search(
+        r"Retain the helper's exact recorded result for the\s+Phase 6 approval summary",
+        phase1,
+    ):
+        raise AssertionError("Phase 1 does not carry the exact dcg result to Phase 6")
+    if not re.search(
+        rf"non-fatal\s+`{re.escape(dcg_failure)}` result must remain visible there",
+        phase1,
+    ):
+        raise AssertionError("Phase 1 does not preserve a non-fatal dcg failure")
+    if not re.search(
+        rf"the exact Phase 1 dcg integration result, including\s+`{re.escape(dcg_failure)}` "
+        r"verbatim",
+        phase6,
+    ):
+        raise AssertionError("Phase 6 does not consume the exact Phase 1 dcg result")
+
+    if not re.search(
+        r"If\s+the derived ref ends in `-dirty`, retain that exact ref in the manifest "
+        r"and warn exactly",
+        phase5,
+    ):
+        raise AssertionError("Phase 5 does not condition the warning on a dirty ref")
+    if f"`{warning_template}`" not in phase5:
+        raise AssertionError("Phase 5 does not define the exact dirty-ref warning")
+    if not re.search(
+        r"This warning does not block initialization, but it must also be repeated in "
+        r"the Phase 6 approval\s+summary",
+        phase5,
+    ):
+        raise AssertionError("Phase 5 does not carry the dirty-ref warning to Phase 6")
+    if not re.search(
+        r"any dirty\s+`plugin_ref` reproducibility warning from Phase 5",
+        phase6,
+    ):
+        raise AssertionError("Phase 6 does not consume the Phase 5 dirty-ref warning")
+
+    phase5_reported: list[str] = []
+    if plugin_ref.endswith("-dirty"):
+        phase5_reported.append(warning_template.replace("<ref>", plugin_ref))
+    return InitApprovalTrace(
+        phase1_recorded=(dcg_result,),
+        phase5_reported=tuple(phase5_reported),
+        phase6_approval=(dcg_result, *phase5_reported),
+    )
 
 
 class InstallerIntegrationTests(unittest.TestCase):
@@ -700,7 +783,7 @@ class InstallerPayloadContractTests(unittest.TestCase):
 
         expected = {
             "implementer": ("gpt-5.6-sol", "ultra", "workspace-write"),
-            "review-cheap": ("gpt-5.6-terra", "medium", "read-only"),
+            "review-cheap": ("gpt-5.6-sol", "high", "read-only"),
         }
         for name, routing in expected.items():
             agent = (ROOT / f"system/codex/agents/{name}.toml").read_text(
@@ -797,6 +880,12 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "forge: dcg not found — no project allowlist change",
             "forge: dcg allowlisted core.git:branch-force-delete for this project",
             "forge: dcg allowlist already contains core.git:branch-force-delete for this project",
+            "Retain the helper's exact recorded result for the",
+            "must remain visible there",
+            "forge: warning — plugin_ref is dirty and installation is not reproducible from a commit: <ref>",
+            "This warning does not block initialization",
+            "the exact Phase 1 dcg integration result",
+            "any dirty\n  `plugin_ref` reproducibility warning from Phase 5",
             "No mutation tool available for <stack> — assertion-quality fallback only.",
             "No trigger paths configured.",
             "forge: executable policy row malformed",
@@ -822,6 +911,77 @@ class InstallerPayloadContractTests(unittest.TestCase):
         self.assertLess(approval_recheck, completion_flip)
         self.assertIn("byte-for-byte with the reviewed snapshot", skill)
         self.assertIn("invalidates both `review-final` PASS and", skill)
+
+    def test_init_approval_surface_controls_are_observed(self) -> None:
+        skill = (ROOT / "skills/init/SKILL.md").read_text(encoding="utf-8")
+        dcg_failure = "forge: dcg allowlist update failed"
+
+        dirty = simulate_init_approval_reporting(
+            skill,
+            dcg_result=dcg_failure,
+            plugin_ref="955ae34-dirty",
+        )
+        self.assertEqual(dirty.phase1_recorded, (dcg_failure,))
+        self.assertEqual(
+            dirty.phase5_reported,
+            (
+                "forge: warning — plugin_ref is dirty and installation is not "
+                "reproducible from a commit: 955ae34-dirty",
+            ),
+        )
+        self.assertEqual(
+            dirty.phase6_approval,
+            (*dirty.phase1_recorded, *dirty.phase5_reported),
+        )
+
+        clean = simulate_init_approval_reporting(
+            skill,
+            dcg_result="forge: dcg not found — no project allowlist change",
+            plugin_ref="955ae34",
+        )
+        self.assertEqual(clean.phase5_reported, ())
+        self.assertEqual(clean.phase6_approval, clean.phase1_recorded)
+
+        mutants = {
+            "dcg Phase 1 carry": (
+                "Retain the helper's exact recorded result for the\nPhase 6 approval summary",
+                "Retain the helper's result for later reporting",
+            ),
+            "dcg non-fatal failure preservation": (
+                "non-fatal\n`forge: dcg allowlist update failed` result must remain visible there",
+                "non-fatal dcg failures may be omitted",
+            ),
+            "dcg Phase 6 consumption": (
+                "the exact Phase 1 dcg integration result",
+                "the Phase 1 integration status",
+            ),
+            "dirty warning condition": (
+                "If\n   the derived ref ends in `-dirty`",
+                "If the derived ref is nonempty",
+            ),
+            "dirty warning text": (
+                "forge: warning — plugin_ref is dirty and installation is not reproducible from a commit: <ref>",
+                "forge: warning — plugin_ref could be dirty: <ref>",
+            ),
+            "dirty Phase 5 carry": (
+                "This warning does not block initialization, but it must also be repeated in the Phase 6 approval\n   summary",
+                "This warning does not block initialization",
+            ),
+            "dirty Phase 6 consumption": (
+                "any dirty\n  `plugin_ref` reproducibility warning from Phase 5",
+                "the Phase 5 plugin ref",
+            ),
+        }
+        for label, (control, replacement) in mutants.items():
+            with self.subTest(disabled_control=label):
+                self.assertEqual(skill.count(control), 1)
+                disabled = skill.replace(control, replacement, 1)
+                with self.assertRaises(AssertionError):
+                    simulate_init_approval_reporting(
+                        disabled,
+                        dcg_result=dcg_failure,
+                        plugin_ref="955ae34-dirty",
+                    )
 
 
 if __name__ == "__main__":

@@ -676,8 +676,8 @@ event-retention: 400d""",
             execution_cwd=reviewer_worktree,
             agent="codex-review-01",
             role="review",
-            model="gpt-5.6-terra",
-            effort="medium",
+            model="gpt-5.6-sol",
+            effort="high",
             sandbox="read-only",
             task_assignment=(
                 "# Review assignment\n\n"

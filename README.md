@@ -75,6 +75,20 @@ Until init fills the regions, the gates fail closed: merges stop with
   `.forge/tmp/halt-audit.log`; orchestration history lives in the run journal
   under `.codex-orchestrator/runs/<run-id>/`.
 
+Completed runs are commitment-audited before their durable archive is written under
+`.forge/history/runs/<run-id>.md`. The archive preserves the run intent, journal,
+verification and binding-review evidence, including an explicit `Citation Corrections`
+section whenever append-only citation repair was used.
+
+Golden control regressions live in `.forge/evals/tasks/`. Journal-derived fixtures
+preserve the exact recorded agent prompt and name both their source run and execution;
+their committed `.result` records the accepted verdict baseline. Routing, reviewer,
+constitution, or other control-class changes require strict evaluation:
+
+```sh
+STRICT=1 scripts/forge/run-evals.sh
+```
+
 ## Scheduled mechanical drift sensing
 
 Configure scheduled CI with `CLAUDE_PLUGIN_ROOT` set to the installed Forge plugin

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -75,9 +76,10 @@ class InvariantGuardTests(unittest.TestCase):
         timeout: float = 6.0,
         environment: dict[str, str] | None = None,
         launcher: str | None = None,
+        guard: Path = GUARD,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ([launcher, str(GUARD)] if launcher else [str(GUARD)]),
+            ([launcher, str(guard)] if launcher else [str(guard)]),
             cwd=cwd or self.repo,
             input=json.dumps(
                 {
@@ -92,6 +94,66 @@ class InvariantGuardTests(unittest.TestCase):
             check=False,
             env=environment,
         )
+
+    def isolated_path(self, *commands: str) -> tuple[Path, dict[str, str]]:
+        fake_bin = self.repo / f"isolated-bin-{len(list(self.repo.glob('isolated-bin-*')))}"
+        fake_bin.mkdir()
+        for command in commands:
+            resolved = shutil.which(command)
+            if resolved is None:
+                self.fail(f"required test command is unavailable: {command}")
+            (fake_bin / command).symlink_to(resolved)
+        return fake_bin, {**os.environ, "PATH": str(fake_bin)}
+
+    def invoke_python_unavailable(
+        self, *, guard: Path = GUARD
+    ) -> subprocess.CompletedProcess[str]:
+        _fake_bin, environment = self.isolated_path("git")
+        return self.invoke(
+            environment=environment,
+            launcher="/bin/bash",
+            guard=guard,
+        )
+
+    def invoke_temporary_storage_unavailable(
+        self, *, guard: Path = GUARD
+    ) -> subprocess.CompletedProcess[str]:
+        fake_bin, environment = self.isolated_path("git", "python3")
+        fake_mktemp = fake_bin / "mktemp"
+        fake_mktemp.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        fake_mktemp.chmod(0o755)
+        return self.invoke(
+            environment=environment,
+            launcher="/bin/bash",
+            guard=guard,
+        )
+
+    def invoke_guard_execution_failure(
+        self, *, guard: Path = GUARD
+    ) -> subprocess.CompletedProcess[str]:
+        self.commit_policy("| shell emitter fallback | : | hook |")
+        fake_bin, environment = self.isolated_path(
+            "git", "mktemp", "rm", "rmdir"
+        )
+        fake_python = fake_bin / "python3"
+        fake_python.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+        fake_python.chmod(0o755)
+        return self.invoke(
+            environment=environment,
+            launcher="/bin/bash",
+            guard=guard,
+        )
+
+    def assert_shell_advisory(
+        self,
+        result: subprocess.CompletedProcess[str],
+        reason: str,
+    ) -> None:
+        self.assert_advisory(
+            result,
+            f"forge: invariant advisory — policy ({reason})",
+        )
+        self.assertEqual(result.stderr, "")
 
     def test_non_forge_working_directory_is_silent_and_inert(self) -> None:
         with tempfile.TemporaryDirectory() as unrelated:
@@ -109,6 +171,61 @@ class InvariantGuardTests(unittest.TestCase):
             "(committed forge-project.md unavailable)",
         )
         self.assertEqual(result.stderr, "")
+
+    def test_python_unavailable_uses_the_shell_json_advisory_emitter(self) -> None:
+        self.assert_shell_advisory(
+            self.invoke_python_unavailable(),
+            "python3 unavailable",
+        )
+
+    def test_temporary_storage_unavailable_uses_the_shell_json_advisory_emitter(
+        self,
+    ) -> None:
+        self.assert_shell_advisory(
+            self.invoke_temporary_storage_unavailable(),
+            "temporary storage unavailable",
+        )
+
+    def test_guard_execution_failure_uses_the_shell_json_advisory_emitter(self) -> None:
+        self.assert_shell_advisory(
+            self.invoke_guard_execution_failure(),
+            "guard execution failed",
+        )
+
+    def test_shell_advisory_branch_sensors_kill_disabled_emitter_mutant(self) -> None:
+        mutant = self.repo / "invariant-guard-disabled-emitter.sh"
+        source = GUARD.read_text(encoding="utf-8")
+        emitter = (
+            "    printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\","
+            "\"additionalContext\":\"forge: invariant advisory — policy (%s)\\\\n\"}}\\n' \"$1\""
+        )
+        self.assertIn(emitter, source)
+        mutant.write_text(
+            source.replace(emitter, "    : # MUTANT: suppress shell advisory output", 1),
+            encoding="utf-8",
+        )
+        mutant.chmod(GUARD.stat().st_mode)
+
+        def assert_sensor_kills_mutant(
+            result: subprocess.CompletedProcess[str], reason: str
+        ) -> None:
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            with self.assertRaises((AssertionError, json.JSONDecodeError)):
+                self.assert_shell_advisory(result, reason)
+
+        assert_sensor_kills_mutant(
+            self.invoke_python_unavailable(guard=mutant),
+            "python3 unavailable",
+        )
+        assert_sensor_kills_mutant(
+            self.invoke_temporary_storage_unavailable(guard=mutant),
+            "temporary storage unavailable",
+        )
+        assert_sensor_kills_mutant(
+            self.invoke_guard_execution_failure(guard=mutant),
+            "guard execution failed",
+        )
 
     def test_only_hook_enforcement_rows_execute(self) -> None:
         self.commit_policy(

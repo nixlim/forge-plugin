@@ -26,7 +26,7 @@ actually breaks this artefact type) and cuts noise (don't force-fit irrelevant
 generic concerns) — but a profile may never excuse skipping a baseline lens.
 
 <!-- forge: modified from upstream — removed the install-date placeholder from the static profile version -->
-**Profile set version: 1.0**. Changes to the baseline or any profile
+**Profile set version: 1.1**. Changes to the baseline or any profile
 require a version bump and a control-integrity review ([[control-integrity]]); the
 version applied is recorded in the decision log.
 
@@ -53,6 +53,19 @@ Rules:
 | **review-documentation** | docs, READMEs, runbooks | accuracy vs current behaviour, completeness, staleness, audience fit, runnable instructions, dead links/commands | doc + the code/system it describes | content is accurate, current, and executable as written |
 | **review-deployment** | deployment / infra changes | rollback characteristics, blast radius, progressive-delivery safety, observability/alerting, policy/security conformance, capacity impact | change + infra validation + policy checks | change is reversible, observable, and within policy |
 | **review-periodic** | scheduled health / drift / security sweeps | drift from standards, accumulating risk/debt, coverage gaps, regressions vs baseline, recurrence of known failure patterns | trend / baseline comparisons | no unflagged regression, drift, or recurring failure pattern |
+
+### `review-coding` verification method
+
+Establish claims by execution wherever execution is available. Drive a unit in-process, script a
+hook's input, or recompute a claimed hash instead of accepting prose, a handoff, or a test name as
+proof. Execution remains read-only with respect to the repository: do not run repository mutation
+tooling, because those tools write mutants to disk and the full mutation run belongs to D6's
+merge-time sensor.
+
+For any finding that relies on a test as proof that a control works, disable that control in
+memory and confirm that the test fails. This is mutation thinking by read-only, in-process means,
+not an instruction to run mutation tooling or write a mutant. A test that still passes with the
+control disabled is an axiom-3 finding, not coverage.
 
 The **Project-Specific Review Triggers** section below applies to **all
 reviews as part of the baseline** (the floor) — e.g. a *spec* or *plan* that

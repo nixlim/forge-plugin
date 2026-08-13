@@ -51,6 +51,47 @@ def jsonl_records(text: str) -> list[dict[str, object]]:
     ]
 
 
+def assert_repo_routing_close_control(workflow: str) -> None:
+    close = workflow.split(
+        "12. Create and commit the durable archive", maxsplit=1
+    )[1].split("13. Only after the archive commit", maxsplit=1)[0]
+    source_marker = (
+        "git ls-files --error-unmatch \\\n"
+        "  tests/test_repo_conformance.py .claude-plugin/plugin.json \\\n"
+        "  docs/specs/forge-plugin-spec.md"
+    )
+    route_audit = 'python3 tests/test_repo_conformance.py --run-dir "$RUN_DIR" || exit 1'
+    commitment_audit = 'audit-commitments.py" --run-dir "$RUN_DIR"'
+    archive = 'archive-run.py"'
+
+    for fragment in (source_marker, route_audit, commitment_audit, archive):
+        if close.count(fragment) != 1:
+            raise AssertionError(fragment)
+    positions = [
+        close.index(fragment)
+        for fragment in (route_audit, commitment_audit, archive)
+    ]
+    if positions != sorted(positions):
+        raise AssertionError("routing conformance must precede audit and archive")
+    normalized = " ".join(close.split())
+    if "repository dogfood control, not an installed-project requirement" not in normalized:
+        raise AssertionError("routing conformance must remain repository-specific")
+    required_contract = (
+        "Current agent-definition and `system/codex/agents/*.toml` routing must conform",
+        "remains fail closed on the command's nonzero exit",
+        "fully resolved historical model/effort mismatch is immutable journal evidence, not a refusal",
+        "names every mismatch under `## Historical Routing Findings`",
+        "journal line, agent, recorded value, expected value, and recorded-HEAD authority",
+        "commitment audit reruns that same routing-conformance command as defense in depth",
+        "sole source for the archive's routing findings",
+        "renderer independently reruns the commitment audit and embeds that exact output",
+        "making every historical routing finding part of the committed archive",
+    )
+    for fragment in required_contract:
+        if fragment not in normalized:
+            raise AssertionError(fragment)
+
+
 class DocumentationContractTests(unittest.TestCase):
     def test_skills_are_not_duplicated_by_command_stubs(self) -> None:
         self.assertEqual(list((ROOT / "commands").glob("*.md")), [])
@@ -270,8 +311,8 @@ class DocumentationContractTests(unittest.TestCase):
             "`gpt-5.6-sol`",
             "`ultra`",
             "`workspace-write`",
-            "`gpt-5.6-terra`",
-            "`medium`",
+            "`gpt-5.6-sol`",
+            "`high`",
             "`read-only`",
             "control-class change",
         ):
@@ -388,6 +429,39 @@ class DocumentationContractTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     self.assertEqual(mutated.count(fragment), archive_close.count(fragment))
 
+    def test_repo_routing_conformance_runs_before_audit_and_archive(self) -> None:
+        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+
+        assert_repo_routing_close_control(workflow)
+
+        # Disable the run-scoped control in memory: the contract sensor must fail.
+        disabled = workflow.replace(
+            'python3 tests/test_repo_conformance.py --run-dir "$RUN_DIR" || exit 1',
+            'true # routing conformance disabled',
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            assert_repo_routing_close_control(disabled)
+
+        # Removing the audit/archive finding-carriage contract in memory must
+        # fail this sensor even though the executable routing check remains.
+        findings_disabled = workflow.replace(
+            "making every historical routing finding part of the committed archive",
+            "historical routing findings may be omitted from the committed archive",
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            assert_repo_routing_close_control(findings_disabled)
+
+        # Inverting the two audits in memory must trip the ordering sensor.
+        route_audit = 'python3 tests/test_repo_conformance.py --run-dir "$RUN_DIR" || exit 1'
+        commitment_audit = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/audit-commitments.py" --run-dir "$RUN_DIR"'
+        reordered = workflow.replace(route_audit, "ROUTE_AUDIT", 1).replace(
+            commitment_audit, route_audit, 1
+        ).replace("ROUTE_AUDIT", commitment_audit, 1)
+        with self.assertRaises(AssertionError):
+            assert_repo_routing_close_control(reordered)
+
     # forge: modified from upstream — removed the non-vendored historical benchmark assertion
 
     def test_validation_is_documented_as_an_omission_check_not_a_schema(self) -> None:
@@ -442,7 +516,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("exact commit sha", review)
         self.assertIn("plain `codex exec`", review)
         self.assertIn("-s read-only", review)
-        self.assertIn('model="gpt-5.6-terra"', review)
+        self.assertIn('model="gpt-5.6-sol"', review)
         self.assertNotIn("-s workspace-write", review)
         self.assertNotIn(" review --json", review)
         self.assertNotIn("--commit", review)

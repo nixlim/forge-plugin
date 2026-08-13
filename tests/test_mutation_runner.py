@@ -105,10 +105,11 @@ class MutationRunnerTests(unittest.TestCase):
         journal: Path | None = None,
         task: str = "task-04",
         timeout: float = 8,
+        runner: Path = RUNNER,
     ) -> subprocess.CompletedProcess[str]:
         arguments = [
             "python3",
-            str(RUNNER),
+            str(runner),
             "--base",
             base,
             "--head",
@@ -142,6 +143,34 @@ class MutationRunnerTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
+
+    def invoke_bytes(
+        self,
+        base: str,
+        head: str,
+        *,
+        journal: Path | None = None,
+        task: str = "task-04",
+        runner: Path = RUNNER,
+    ) -> subprocess.CompletedProcess[bytes]:
+        arguments = [
+            "python3",
+            str(runner),
+            "--base",
+            base,
+            "--head",
+            head,
+        ]
+        if journal is not None:
+            arguments.extend(("--journal", str(journal), "--task", task))
+        return subprocess.run(
+            arguments,
+            cwd=self.repo,
+            capture_output=True,
+            check=False,
+            timeout=8,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8:strict"},
+        )
 
     def evidence(self, result: subprocess.CompletedProcess[str]) -> list[dict[str, object]]:
         return [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
@@ -1131,6 +1160,76 @@ class MutationRunnerTests(unittest.TestCase):
             verification["observation"][: 2_000 - len(marker)],
             observation[: 2_000 - len(marker)],
         )
+
+    def test_non_utf8_git_path_is_backslash_escaped_without_losing_evidence(self) -> None:
+        changed_form = "true"
+        self.write(
+            "forge-project.md",
+            policy_with_mutation(
+                mutation_table(f"| python | mutmut run | {changed_form} | 5 |")
+            ),
+        )
+        base = self.commit("base policy")
+        raw_relative = b"tests/test_invalid_\xff.py"
+        blob = subprocess.run(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=self.repo,
+            input=b"def test_value():\n    assert True\n",
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "update-index", "-z", "--index-info"],
+            cwd=self.repo,
+            input=b"100644 " + blob + b"\t" + raw_relative + b"\0",
+            check=True,
+        )
+        self.git("commit", "-q", "-m", "candidate with non-utf8 path")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        journal = self.repo / "journal.jsonl"
+
+        result = self.invoke_bytes(base, head, journal=journal)
+
+        stderr = result.stderr.decode("utf-8", errors="strict")
+        stdout = result.stdout.decode("utf-8", errors="strict")
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertEqual(stderr, "")
+        evidence = [
+            json.loads(line) for line in stdout.splitlines() if line.startswith("{")
+        ]
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0]["result"], "passed")
+        self.assertIn(r"tests/test_invalid_\udcff.py", evidence[0]["observation"])
+        verification = json.loads(journal.read_text(encoding="utf-8"))
+        self.assertEqual(verification["observation"], evidence[0]["observation"])
+
+        mutant_root = self.repo / "disabled-control-plugin"
+        mutant = mutant_root / "scripts/forge/run-scoped-mutation.py"
+        mutant.parent.mkdir(parents=True)
+        shutil.copytree(ROOT / "system/seeds", mutant_root / "system/seeds")
+        source = RUNNER.read_text(encoding="utf-8")
+        needle = 'return rendered.encode("utf-8", errors="backslashreplace").decode("utf-8")'
+        self.assertEqual(source.count(needle), 1)
+        mutant.write_text(source.replace(needle, "return rendered"), encoding="utf-8")
+        self.assertTrue(
+            (mutant_root / "system/seeds/validation-snippets/stacks.md").is_file()
+        )
+
+        disabled_journal = self.repo / "disabled-control-journal.jsonl"
+        disabled = self.invoke_bytes(
+            base,
+            head,
+            journal=disabled_journal,
+            runner=mutant,
+        )
+
+        disabled_stderr = disabled.stderr.decode("utf-8", errors="strict")
+        self.assertNotEqual(disabled.returncode, 0)
+        self.assertEqual(disabled.stdout, b"")
+        self.assertIn("UnicodeEncodeError", disabled_stderr)
+        self.assertIn("surrogates not allowed", disabled_stderr)
+        self.assertNotIn("stacks.md", disabled_stderr)
+        self.assertFalse(disabled_journal.exists())
 
 
 if __name__ == "__main__":

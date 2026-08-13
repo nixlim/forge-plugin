@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -45,10 +46,12 @@ No seeded assertion heuristic for rust.
         *paths: Path | str,
         seed: Path | None = None,
         stack: str | None = None,
+        sensor: Path = CHECK_TEST_QUALITY,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         command = [
             sys.executable,
-            str(CHECK_TEST_QUALITY),
+            str(sensor),
             "--stacks-file",
             str(seed or self.seed),
         ]
@@ -62,6 +65,7 @@ No seeded assertion heuristic for rust.
             check=False,
             capture_output=True,
             text=True,
+            env=environment,
         )
 
     def test_python_ast_finding_is_function_scoped_and_blocking(self) -> None:
@@ -482,6 +486,57 @@ def test_bad():
         self.assertEqual(
             result.stdout,
             f"forge: assertion waiver: {path}: generated invalid fixture\n",
+        )
+        self.assertEqual(result.stderr, "")
+
+    def test_waiver_is_checked_before_invalid_python_encoding_cookie(self) -> None:
+        path = self.scratch / "test_invalid_encoding_waived.py"
+        path.write_bytes(
+            b"# forge-assertion-waiver: generated fixture uses invalid source bytes\n"
+            b"# coding: definitely-not-an-encoding\n"
+            b"def test_generated():\n    generated_oracle()\n"
+        )
+
+        result = self.run_sensor(path)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            result.stdout,
+            f"forge: assertion waiver: {path}: generated fixture uses invalid source bytes\n",
+        )
+        self.assertEqual(result.stderr, "")
+
+        mutant = self.scratch / "check-test-quality-disabled.py"
+        source = CHECK_TEST_QUALITY.read_text(encoding="utf-8")
+        needle = """        if is_python:
+            waiver = _waiver_reason(_read_python_waiver_source(path), True)
+            if waiver is not None:
+                inputs.append((path_label, path, "", waiver))
+                continue
+"""
+        self.assertEqual(source.count(needle), 1)
+        mutant.write_text(source.replace(needle, ""), encoding="utf-8")
+
+        disabled = self.run_sensor(path, sensor=mutant)
+
+        self.assertEqual(disabled.returncode, 2)
+        self.assertEqual(disabled.stderr, "forge: test-quality check failed to execute\n")
+
+    def test_non_utf8_waiver_reason_is_backslash_escaped(self) -> None:
+        path = self.scratch / "test_non_utf8_waiver.py"
+        path.write_bytes(
+            b"# forge-assertion-waiver: caf\xe9 fixture\n"
+            b"def test_generated():\n    generated_oracle()\n"
+        )
+        environment = os.environ.copy()
+        environment["PYTHONIOENCODING"] = "utf-8:strict"
+
+        result = self.run_sensor(path, environment=environment)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            result.stdout,
+            f"forge: assertion waiver: {path}: caf\\xe9 fixture\n",
         )
         self.assertEqual(result.stderr, "")
 

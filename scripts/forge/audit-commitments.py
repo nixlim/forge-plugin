@@ -28,6 +28,12 @@ from scripts.codex_orchestrator.journal import (  # noqa: E402
 
 DIAGNOSTIC_PREFIX = "forge: commitment audit failed — "
 CORRECTION_TOKEN = "citation-correction:"
+FORGE_SOURCE_MARKERS = (
+    "tests/test_repo_conformance.py",
+    ".claude-plugin/plugin.json",
+    "docs/specs/forge-plugin-spec.md",
+)
+HISTORICAL_ROUTING_HEADING = "## Historical Routing Findings\n\n"
 DECISION_CORRECTION = re.compile(
     r"^(?P<id>\S+) basis\[(?P<index>[0-9]+)\]: (?P<path>.+)$"
 )
@@ -403,6 +409,90 @@ def render_section(title: str, values: list[str]) -> str:
     return f"## {title}\n\n{body}\n"
 
 
+def forge_source_root(start: dict[str, object]) -> Path | None:
+    """Return the recorded repository root only when all source markers are tracked."""
+
+    repo_value = start.get("repo")
+    if not isinstance(repo_value, str):
+        return None
+    try:
+        repo = Path(repo_value).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    try:
+        root_result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        fail(2, f"repository conformance could not identify the repository: {exc}")
+    if root_result.returncode != 0:
+        return None
+    try:
+        root = Path(root_result.stdout.decode("utf-8").strip()).resolve(strict=True)
+    except (OSError, UnicodeError, RuntimeError, ValueError):
+        fail(2, "repository conformance returned an invalid repository root")
+    if repo != root:
+        return None
+    try:
+        marker_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-files",
+                "--error-unmatch",
+                *FORGE_SOURCE_MARKERS,
+            ],
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        fail(2, f"repository conformance could not inspect source markers: {exc}")
+    return root if marker_result.returncode == 0 else None
+
+
+def audit_repo_conformance(
+    start: dict[str, object], run_dir: Path
+) -> str:
+    """Run forge-plugin dogfood conformance and return its archival Markdown."""
+
+    source_root = forge_source_root(start)
+    if source_root is None:
+        return ""
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(source_root / "tests/test_repo_conformance.py"),
+                "--run-dir",
+                str(run_dir),
+            ],
+            cwd=source_root,
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        fail(2, f"repository conformance could not execute: {exc}")
+
+    stdout = result.stdout.decode("utf-8", errors="backslashreplace")
+    stderr = result.stderr.decode("utf-8", errors="backslashreplace")
+    if result.returncode != 0:
+        details = []
+        if stderr.strip():
+            details.append(f"stderr: {stderr.strip()}")
+        if stdout.strip():
+            details.append(f"stdout: {stdout.strip()}")
+        suffix = f": {'; '.join(details)}" if details else ""
+        fail(result.returncode, f"repository conformance failed{suffix}")
+    if stderr:
+        fail(2, f"repository conformance emitted stderr: {stderr.strip()}")
+    if not stdout.startswith(HISTORICAL_ROUTING_HEADING) or not stdout.endswith("\n"):
+        fail(2, "repository conformance output is invalid")
+    return stdout
+
+
 def audit(run_dir: Path) -> str:
     records, start, close = closed_records(run_dir)
     source_citations = citations(records)
@@ -445,8 +535,13 @@ def audit(run_dir: Path) -> str:
         if correction_findings
         else ""
     )
+    # CONTROL repo-conformance BEGIN
+    conformance_section = audit_repo_conformance(start, run_dir)
+    conformance_prefix = conformance_section + "\n" if conformance_section else ""
+    # CONTROL repo-conformance END
     return (
-        correction_section
+        conformance_prefix
+        + correction_section
         + render_section("Residual Risks", risks)
         + "\n"
         + render_section("Follow-ups", follow_ups)

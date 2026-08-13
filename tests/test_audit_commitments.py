@@ -101,6 +101,38 @@ class AuditCommitmentsTests(unittest.TestCase):
         self.git("commit", "-m", "branch artifact")
         self.git("switch", "-")
 
+    def make_forge_source_repo(self, conformance_source: str) -> None:
+        """Turn the ordinary fixture repository into a tracked forge source."""
+
+        for relative in (
+            "tests/test_repo_conformance.py",
+            ".claude-plugin/plugin.json",
+            "docs/specs/forge-plugin-spec.md",
+        ):
+            target = self.repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                conformance_source if relative.startswith("tests/") else "fixture\n",
+                encoding="utf-8",
+            )
+        self.git("init")
+        self.git("config", "user.name", "Audit Fixture")
+        self.git("config", "user.email", "audit@example.invalid")
+        self.git("add", ".")
+        self.git("commit", "-m", "forge source fixture")
+
+    @staticmethod
+    def conformance_program(*, stdout: str, stderr: str = "", code: int = 0) -> str:
+        return (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "assert sys.argv[1] == '--run-dir'\n"
+            "assert Path(sys.argv[2], 'journal.jsonl').is_file()\n"
+            f"sys.stdout.write({stdout!r})\n"
+            f"sys.stderr.write({stderr!r})\n"
+            f"raise SystemExit({code})\n"
+        )
+
     @staticmethod
     def correction(
         supplier: str, *lines: str
@@ -120,6 +152,116 @@ class AuditCommitmentsTests(unittest.TestCase):
         self.assertEqual(0, result.returncode)
         self.assertEqual(EXPECTED, result.stdout)
         self.assertEqual(b"", result.stderr)
+
+    def test_forge_source_historical_routing_findings_are_prepended(self) -> None:
+        findings = (
+            "## Historical Routing Findings\n\n"
+            "- journal line 5: agent 'review-01' recorded model/effort "
+            "('gpt-5.6-terra', 'high'); expected model/effort "
+            "('gpt-5.6-terra', 'medium') from abc1234:agents/reviewer.toml\n"
+        )
+        self.make_forge_source_repo(self.conformance_program(stdout=findings))
+
+        result = self.invoke()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(findings.encode() + b"\n" + EXPECTED, result.stdout)
+        self.assertEqual(b"", result.stderr)
+
+    def test_forge_source_current_conformance_failure_refuses_without_stdout(
+        self,
+    ) -> None:
+        report = "## Historical Routing Findings\n\nNone recorded\n"
+        self.make_forge_source_repo(
+            self.conformance_program(
+                stdout=report,
+                stderr=(
+                    "forge repo conformance: system/codex/agents/review-cheap.toml "
+                    "does not match FR-030\n"
+                ),
+                code=1,
+            )
+        )
+
+        result = self.invoke()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual(b"", result.stdout)
+        self.assertIn(b"repository conformance failed", result.stderr)
+        self.assertIn(b"does not match FR-030", result.stderr)
+        self.assertIn(b"Historical Routing Findings", result.stderr)
+
+    def test_forge_source_malformed_conformance_output_refuses(self) -> None:
+        self.make_forge_source_repo(
+            self.conformance_program(stdout="historical finding without heading\n")
+        )
+
+        result = self.invoke()
+
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(b"", result.stdout)
+        self.assertIn(b"repository conformance output is invalid", result.stderr)
+
+    def test_nested_repo_path_inside_forge_source_is_not_misclassified(self) -> None:
+        self.make_forge_source_repo(
+            self.conformance_program(
+                stdout="## Historical Routing Findings\n\nNone recorded\n",
+                stderr="forge repo conformance: should not run\n",
+                code=1,
+            )
+        )
+        nested_repo = self.repo / "ordinary-nested-repo"
+        (nested_repo / "docs").mkdir(parents=True)
+        (nested_repo / "docs/repo-basis.md").write_text(
+            "# Nested repository basis\n", encoding="utf-8"
+        )
+        self.mutate(
+            lambda records: records[0].__setitem__("repo", str(nested_repo))
+        )
+
+        result = self.invoke()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(EXPECTED, result.stdout)
+        self.assertEqual(b"", result.stderr)
+
+    def test_repo_conformance_control_is_killed_when_disabled(self) -> None:
+        findings = (
+            "## Historical Routing Findings\n\n"
+            "- journal line 16: agent 'review-02' recorded model/effort "
+            "('gpt-5.6-terra', 'high'); expected model/effort "
+            "('gpt-5.6-terra', 'medium') from def5678:agents/reviewer.toml\n"
+        )
+        self.make_forge_source_repo(self.conformance_program(stdout=findings))
+        intact = self.invoke()
+        self.assertEqual(0, intact.returncode, intact.stderr)
+        self.assertIn(findings.encode(), intact.stdout)
+
+        mutant = self.disabled_control_copy(
+            AUDIT.read_text(encoding="utf-8"),
+            "repo-conformance",
+            '    conformance_prefix = ""  # CONTROL DISABLED\n',
+        )
+        disabled = self.invoke(mutant)
+        self.assertEqual(0, disabled.returncode, disabled.stderr)
+        with self.assertRaises(AssertionError):
+            self.assertIn(findings.encode(), disabled.stdout)
+
+        failing_source = self.conformance_program(
+            stdout="## Historical Routing Findings\n\nNone recorded\n",
+            stderr="forge repo conformance: current route drift\n",
+            code=1,
+        )
+        (self.repo / "tests/test_repo_conformance.py").write_text(
+            failing_source, encoding="utf-8"
+        )
+        self.git("add", "tests/test_repo_conformance.py")
+        self.git("commit", "-m", "current route drift fixture")
+        intact_failure = self.invoke()
+        self.assertNotEqual(0, intact_failure.returncode)
+        disabled_escape = self.invoke(mutant)
+        self.assertEqual(0, disabled_escape.returncode, disabled_escape.stderr)
+        self.assertEqual(EXPECTED, disabled_escape.stdout)
 
     def test_absent_commitment_arrays_render_none_recorded(self) -> None:
         def remove_arrays(records: list[dict[str, object]]) -> None:

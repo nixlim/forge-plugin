@@ -135,8 +135,8 @@ def enforce_production_routing(args: argparse.Namespace, is_review: bool) -> Non
     expected = (
         {
             "sandbox": "read-only",
-            "model": "gpt-5.6-terra",
-            "model_reasoning_effort": "medium",
+            "model": "gpt-5.6-sol",
+            "model_reasoning_effort": "high",
         }
         if is_review
         else {

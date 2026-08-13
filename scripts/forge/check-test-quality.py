@@ -365,6 +365,15 @@ def _read_source(path: Path) -> str:
         raise CheckFailure("could not read test file") from exc
 
 
+def _read_python_waiver_source(path: Path) -> str:
+    """Read Python bytes without consulting a possibly-invalid encoding cookie."""
+
+    try:
+        return path.read_bytes().decode("utf-8", errors="backslashreplace")
+    except OSError as exc:
+        raise CheckFailure("could not read test file") from exc
+
+
 def _python_comment_lines(source: str) -> list[str]:
     comments: list[str] = []
     try:
@@ -842,8 +851,14 @@ def check_files(
         path = Path(path_label)
         if not path.is_file():
             raise CheckFailure("test path is not a file")
+        is_python = path.suffix.lower() == ".py"
+        if is_python:
+            waiver = _waiver_reason(_read_python_waiver_source(path), True)
+            if waiver is not None:
+                inputs.append((path_label, path, "", waiver))
+                continue
         source = _read_source(path)
-        waiver = _waiver_reason(source, path.suffix.lower() == ".py")
+        waiver = _waiver_reason(source, False) if not is_python else None
         inputs.append((path_label, path, source, waiver))
 
     rules = parse_stack_rules(stacks_file)

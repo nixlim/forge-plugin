@@ -99,8 +99,8 @@ nohup codex exec --json \
   --output-last-message /absolute/path/to/run/codex-review-01/execution-02/handoff.md \
   -s read-only \
   -c approval_policy=never \
-  -c model="gpt-5.6-terra" \
-  -c model_reasoning_effort="medium" \
+  -c model="gpt-5.6-sol" \
+  -c model_reasoning_effort="high" \
   resume <session-id> - \
   < /absolute/path/to/run/codex-review-01/execution-02/prompt.md \
   > /absolute/path/to/run/codex-review-01/execution-02/events.jsonl &

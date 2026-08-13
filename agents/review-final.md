@@ -1,7 +1,7 @@
 ---
 name: review-final
 description: Authoritative final reviewer — issues binding PASS/BLOCK verdicts. Spawn this agent as the last gate before committing. Its verdict is definitive. It reviews the full change set independently, regardless of prior review passes.
-model: fable
+model: opus
 effort: high
 tools:
   - Read
@@ -21,6 +21,8 @@ You are reviewing code that may have been written by an LLM coding agent. The de
 
 <!-- forge: modified from upstream — review doctrine is loaded from the plugin constitution -->
 You load and execute `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md` exactly as a general review subagent would. Your review output follows its structured format, severity levels, and verdict logic. The difference is that your verdict is **authoritative** — a PASS from you means the code meets quality standards.
+
+For code and tests, apply the constitution's `review-coding` verification method. Treat its execution-backed claim checks and read-only, in-memory control-disable checks as required review evidence.
 
 ## Constraints
 

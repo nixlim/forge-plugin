@@ -38,7 +38,7 @@ For the first independent review:
   append the execution, and only then launch. Capture the event stream and exact handoff.
 
 Immediately before launch, require the forge halt checkpoint to exit 0. Run the reviewer with
-model `gpt-5.6-terra`, effort `medium`, and sandbox `read-only` in a detached process group. All
+model `gpt-5.6-sol`, effort `high`, and sandbox `read-only` in a detached process group. All
 redirect targets are literal absolute paths:
 
 ```bash
@@ -47,8 +47,8 @@ nohup codex exec --json \
   --output-last-message /absolute/path/to/run/codex-review-01/execution-01/handoff.md \
   -s read-only \
   -c approval_policy=never \
-  -c model="gpt-5.6-terra" \
-  -c model_reasoning_effort="medium" \
+  -c model="gpt-5.6-sol" \
+  -c model_reasoning_effort="high" \
   -C /absolute/path/to/review-worktree \
   - \
   < /absolute/path/to/run/codex-review-01/execution-01/prompt.md \

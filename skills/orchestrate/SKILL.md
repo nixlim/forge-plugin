@@ -20,7 +20,7 @@ focused phase is complete.
 |---|---|---|---|---|---|
 | Claude main session | Orchestrator/verifier; owns the journal, worktrees, gate chain, and all reintegration | n/a | host session | host session | host session |
 | Fresh Codex implementer | Scoped implementation in its assigned worktree | `implementation` | `gpt-5.6-sol` | `ultra` | `workspace-write` |
-| Fresh Codex first-pass reviewer | Independent, non-editing review of the supplied target | `review` | `gpt-5.6-terra` | `medium` | `read-only` |
+| Fresh Codex first-pass reviewer | Independent, non-editing review of the supplied target | `review` | `gpt-5.6-sol` | `high` | `read-only` |
 | Claude subagent `review-final` | Binding final review | n/a | project-configured | project-configured | orchestrator tree |
 
 The `model` and `effort` in every journal `execution` entry are the values actually passed at
@@ -104,7 +104,7 @@ launch_pgid="$(ps -o pgid= -p "$launch_pid" | tr -d ' ')"
 ```
 
 Use the identical preparation and detachment mechanics for a reviewer, substituting its
-`gpt-5.6-terra`, `medium`, and `read-only` role-table values.
+`gpt-5.6-sol`, `high`, and `read-only` role-table values.
 
 `set -m` gives the background launch its own process group. `setsid` is an acceptable equivalent
 where available, but the launch still uses `nohup ... &` and `disown`. Never use `--ephemeral`,

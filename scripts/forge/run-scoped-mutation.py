@@ -91,6 +91,14 @@ class RunOutcome:
     output: str
 
 
+def json_text(value: object, **options: object) -> str:
+    """Serialize JSON without letting surrogateescaped Git paths suppress evidence."""
+
+    options.setdefault("ensure_ascii", False)
+    rendered = json.dumps(value, **options)
+    return rendered.encode("utf-8", errors="backslashreplace").decode("utf-8")
+
+
 def region_body(policy: str, name: str) -> str:
     begin = f"<!-- FORGE:REGION {name} BEGIN -->"
     end = f"<!-- FORGE:REGION {name} END -->"
@@ -536,7 +544,7 @@ def observation_for(
     paths: list[str],
     outcome: RunOutcome,
 ) -> str:
-    path_json = json.dumps(paths, ensure_ascii=False, separators=(",", ":"))
+    path_json = json_text(paths, separators=(",", ":"))
     exit_part = "none" if outcome.exit_code is None else str(outcome.exit_code)
     output_part = outcome.output.rstrip("\n")
     return (
@@ -578,7 +586,7 @@ def append_record(path: Path, record: dict[str, object]) -> None:
             journal_record["observation"] = observation[:prefix_length] + JOURNAL_TRUNCATION_MARKER
         with path.open("a", encoding="utf-8") as stream:
             stream.write(
-                json.dumps(journal_record, ensure_ascii=False, separators=(",", ":")) + "\n"
+                json_text(journal_record, separators=(",", ":")) + "\n"
             )
             stream.flush()
     except (OSError, UnicodeError):
@@ -593,12 +601,12 @@ def emit_evidence(record: dict[str, object], *, diagnostic: str | None = None) -
     }
     if diagnostic is not None:
         evidence["diagnostic"] = diagnostic
-    print(json.dumps({"type": "mutation_evidence", **evidence}, ensure_ascii=False))
+    print(json_text({"type": "mutation_evidence", **evidence}))
 
 
 def emit_unavailable(diagnostic: str) -> None:
     print(
-        json.dumps(
+        json_text(
             {
                 "type": "mutation_evidence",
                 "criterion": "mutation: policy",
@@ -609,7 +617,6 @@ def emit_unavailable(diagnostic: str) -> None:
                     f"outcome=unavailable; diagnostic={diagnostic}"
                 ),
             },
-            ensure_ascii=False,
         )
     )
 
@@ -749,7 +756,7 @@ def main(argv: list[str] | None = None) -> int:
                 check=absence_text,
                 observation=(
                     f"tool=none; scope={category}; outcome=declared-absence; "
-                    f"scoped_files={json.dumps(paths, ensure_ascii=False, separators=(',', ':'))}; "
+                    f"scoped_files={json_text(paths, separators=(',', ':'))}; "
                     "timeout=not-applicable"
                 ),
                 method="inspection",
@@ -773,7 +780,7 @@ def main(argv: list[str] | None = None) -> int:
             observation=(
                 "tool=mutation-testing policy; scope=policy; outcome=not-applicable; "
                 "categories_evaluated="
-                + json.dumps(evaluated_categories, ensure_ascii=False, separators=(",", ":"))
+                + json_text(evaluated_categories, separators=(",", ":"))
             ),
             method="inspection",
         )

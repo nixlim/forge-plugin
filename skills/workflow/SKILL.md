@@ -166,16 +166,43 @@ test -n "$CLOSING_HEAD" || exit 1
 forge: archive refused — close tree contains unrelated changes
 ```
 
-    Run the commitment audit before archive generation. Its stdout is the sole source for the
-    archive's residual-risk and follow-up sections; a nonzero exit is fail closed, so do not create
-    an archive and therefore do not write a report:
+    Before the commitment audit, run the forge-plugin repository's routing-conformance audit when
+    the target is the forge-plugin source repository. This is a repository dogfood control, not an
+    installed-project requirement: ordinary target repositories do not ship
+    `tests/test_repo_conformance.py`. Identify the source repository by the tracked conformance
+    program and its authority files and run the check from its root. Current agent-definition and
+    `system/codex/agents/*.toml` routing must conform to the committed specification. A current
+    mismatch, or a recorded execution whose provider, role, recorded HEAD, or authority at that HEAD
+    cannot be resolved and parsed, is repairable or unauditable and therefore remains fail closed on
+    the command's nonzero exit. A fully resolved historical model/effort mismatch is immutable
+    journal evidence, not a refusal: the command exits zero and names every mismatch under
+    `## Historical Routing Findings`, including its journal line, agent, recorded value, expected
+    value, and recorded-HEAD authority. Never suppress or reclassify those findings:
+
+```bash
+REPO="$(git rev-parse --show-toplevel)" || exit 1
+cd "$REPO" || exit 1
+if git ls-files --error-unmatch \
+  tests/test_repo_conformance.py .claude-plugin/plugin.json \
+  docs/specs/forge-plugin-spec.md >/dev/null 2>&1; then
+  python3 tests/test_repo_conformance.py --run-dir "$RUN_DIR" || exit 1
+fi
+```
+
+    Run the commitment audit before archive generation. For the forge-plugin source repository the
+    commitment audit reruns that same routing-conformance command as defense in depth and prepends
+    its exact `## Historical Routing Findings` section to the audit output. Its stdout is the sole
+    source for the archive's routing findings, residual-risk, and follow-up sections; a nonzero exit
+    is fail closed, so do not create an archive and therefore do not write a report:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/audit-commitments.py" --run-dir "$RUN_DIR"
 ```
 
     Then invoke the renderer from the repository root using only the closing SHA and post-close
-    result captured directly above:
+    result captured directly above. The renderer independently reruns the commitment audit and
+    embeds that exact output, preserving the order direct routing conformance → commitment audit →
+    archive and making every historical routing finding part of the committed archive:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/archive-run.py" \
