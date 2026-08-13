@@ -32,13 +32,44 @@ Complete every precondition before running the installer.
    Stop if either command fails. Do not initialize a repository implicitly. Record the initial
    `git status --porcelain` so the eventual review diff can be limited to this init run.
 
-2. Detect `.forge-manifest`. When it exists, classify the run as a re-init, read and report its
-   installed version, plugin ref, project, branch, completion state, and region lines, then inspect
-   `forge-project.md` directly. A region is unfilled when its body contains `forge-init:` and filled
-   otherwise. The file is authoritative: do not infer filled state only from the manifest. Report
-   filled and unfilled regions. Preserve filled bodies byte-for-byte and process only unfilled
-   regions unless the user explicitly requests a change. Never overwrite an existing eval fixture
-   or `.result` baseline.
+2. Detect `.forge-manifest`. When it exists, classify its schema at this prior-manifest step, before
+   making any migration decision or target-repository mutation. Use the helper's read-only
+   classifier so its result exactly matches the mechanical installer:
+
+   ```bash
+   MANIFEST_SCHEMA="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/migrate-upstream.py" --classify .forge-manifest)" || exit 1
+   ```
+
+   A manifest containing an anchored `^plugin_ref: ` line is plugin schema. Otherwise, a manifest
+   containing an anchored `upstream_commit:` line or an anchored
+   `region: <name> (<file>)` line is upstream schema. Anything else is malformed: refuse without
+   mutation. Plugin schema takes the unchanged re-init branch below. Upstream schema takes the
+   migration branch, and must be reported as such. Presence of the legacy hidden configuration tree
+   or its root JSON configuration file may corroborate migration and must be reported when present,
+   but neither may determine classification. A manifest containing both signatures is plugin schema.
+
+   For plugin re-init, read and report its installed version, plugin ref, project, branch, completion
+   state, and region lines, then inspect `forge-project.md` directly. A region is unfilled when its
+   body contains `forge-init:` and filled otherwise. The file is authoritative: do not infer filled
+   state only from the manifest. Report filled and unfilled regions. Preserve filled bodies
+   byte-for-byte and process only unfilled regions unless the user explicitly requests a change.
+   Never overwrite an existing eval fixture or `.result` baseline.
+
+   For upstream migration, before continuing, enumerate every live `FORGE:REGION <name> BEGIN`
+   marker with the helper's read-only plan mode:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/migrate-upstream.py" --plan --target .
+   ```
+
+   The plan must exit 0 and list every marker name, source path, filled/unfilled state, and body
+   SHA-256 without changing the target repository. The migration helper reads the nine normative source paths, ignores sentinel-bearing
+   unfilled bodies, carries filled bodies byte-for-byte into their plugin destinations, and derives
+   orphans from the complete discovered marker set. It reports every copy. If any copies of one
+   destination region have divergent bodies, stop and present their source paths and SHA-256 values;
+   continue only after the operator explicitly chooses one source per divergent region. Pass each
+   approved choice as `--select '<region>=<source>'` when the helper is run immediately before the
+   installer in Phase 1. Never silently choose or merge divergent bodies.
 
    Separately record whether `git cat-file -e HEAD:forge-project.md` succeeds. That committed object,
    when present, is the only policy source that calibration or any enforcement surface may execute.
@@ -80,7 +111,7 @@ Complete every precondition before running the installer.
    A nonzero exit, rejected model, or unavailable model stops init immediately. Name the rejected
    model in the report; do not substitute a different model or lower its reasoning effort.
 
-6. Immediately before Phase 1, handle the manifest as the final precondition. On re-init, require
+6. Immediately before Phase 1, handle the manifest as the final precondition. On plugin re-init, require
    the existing `.forge-manifest` to be well formed before making any target-repository mutation:
    require exactly one nonempty value for each single-valued DM-005 key, exact
    `forge_version: 1`, exactly one completion line whose value is `true` or `false`, and unique
@@ -94,12 +125,35 @@ Complete every precondition before running the installer.
    temporary file, verify every other byte is unchanged, and atomically rename the temporary file
    over `.forge-manifest`. If it already contains the exact line `init_completed: false`, leave the
    file byte-identical and do not rewrite it. An inability to complete the atomic replacement stops
-   before Phase 1. On fresh init there is no manifest mutation here; create the first manifest only
-   in Phase 5.
+   before Phase 1. On fresh init or upstream migration there is no manifest mutation here; create
+   or replace the first plugin-schema manifest only in Phase 5. Upstream migration's first mutation
+   is the staged helper invocation in Phase 1; its analysis, divergence checks, committed-eval checks,
+   and report path reservation must all succeed before it installs any prepared output.
 
 ## Phase 1 — Mechanical install
 
-Run the initial mechanical installer pass from the repository root:
+On upstream migration, run the migration helper first from the repository root. Include only the
+operator-approved `--select` arguments recorded in Phase 0; omit them when no bodies diverge:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/migrate-upstream.py" \
+  --target . --plugin-root "${CLAUDE_PLUGIN_ROOT}" \
+  ${APPROVED_REGION_SELECTION_ARGS[@]+"${APPROVED_REGION_SELECTION_ARGS[@]}"}
+```
+
+Construct `APPROVED_REGION_SELECTION_ARGS` as an argv array containing one `--select` and one
+`<region>=<source>` element for each explicit Phase 0 choice; leave it unset when there are none.
+Do not use `eval` or concatenate shell command text. Verify the report attributes every salvaged
+body to the selected source recorded in Phase 0.
+
+The helper must exit 0 and name a newly reserved, collision-free UTC report under
+`.forge/history/migrations/`. Verify that it preserved complete upstream fixture and committed
+baseline bytes, wrote byte-identical `.pre-migration` backups for signed upstream Codex config and
+hooks, left every legacy tree and agent TOML on disk, and quoted each mechanically discovered orphan
+body in the report. Do not proceed on a differing eval collision, uncommitted or dirty upstream eval
+artifact, backup collision, divergent region without an approved selection, or incomplete report.
+
+Then run the initial mechanical installer pass from the repository root:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/install.sh" "${CLAUDE_PLUGIN_ROOT}"
@@ -108,8 +162,9 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/install.sh" "${CLAUDE_PLUGIN_ROOT}"
 Require exit 0 and inspect its written-versus-skipped summary. Verify that it rendered
 `forge-project.md`, refreshed one `<!-- FORGE:BEGIN -->` / `<!-- FORGE:END -->` block in
 `AGENTS.md`, ensured the exact line `@forge-project.md` in `CLAUDE.md`, installed `.codex/`,
-appended one guarded Forge gitignore block, and created `.forge/evals/tasks/`,
-`.forge/history/runs/`, `.forge/history/drift/`, `.forge/tmp/`, `.forge/tmp/drift/`, and
+reconciled one guarded Forge gitignore block by required content without duplicate effective entries,
+and created `.forge/evals/tasks/`, `.forge/history/runs/`, `.forge/history/drift/`,
+`.forge/history/migrations/`, `.forge/tmp/`, `.forge/tmp/drift/`, and
 `.forge/tmp/decisions/`. The installer must also prove the target repository's effective ignore
 rules ignore `.forge/tmp/` but do not ignore `.forge/history/`; either failure stops installation.
 Content outside the AGENTS markers must be unchanged.
@@ -316,7 +371,13 @@ application code, tests, or assertions merely to make calibration pass.
 
 ## Phase 4 — Eval baselines
 
-Create only missing fixtures in `.forge/evals/tasks/` from these seeds:
+On migration, the helper in Phase 1 has already imported upstream fixtures and committed `.result`
+baselines before this seed step. Record the imported fixture paths separately. An imported fixture
+is never eligible for baseline recording during this or any later init phase, even when its imported
+baseline is missing; that condition must remain PENDING and fail the strict gate instead of being
+laundered into a new baseline. Never overwrite or re-mint an imported baseline.
+
+Create only missing fixture IDs in `.forge/evals/tasks/` from these seeds:
 
 - `${CLAUDE_PLUGIN_ROOT}/system/seeds/eval-tasks/review-catches-planted-bug.template.md`
   with expected verdict `BLOCK`;
@@ -331,19 +392,21 @@ conventions, and realistic inline diff; keep the required `id`, `category`, `age
 target-relevant, the clean change must be genuinely correct and tested, and the injection text must
 remain quoted untrusted data rather than an instruction.
 
-For each fixture lacking a baseline, launch a fresh execution of the exact agent named in the
-fixture, pass the complete fixture Input, capture its explicit verdict, and write only that verdict
-to `.forge/evals/tasks/<id>.result`. Never reuse the author as reviewer. Never overwrite an
-existing fixture or `.result`, and never edit a result merely to make a gate pass. Treat a launch
-error, missing verdict, or unexpected verdict as a failure to investigate.
+Track the exact set of fixtures newly seeded in this phase. Only for a newly seeded fixture that did
+not receive an imported baseline, launch a fresh execution of the exact agent named in the fixture,
+pass the complete fixture Input, capture its explicit verdict, and write only that verdict to
+`.forge/evals/tasks/<id>.result`. Never launch a baseline-recording run for an imported or previously
+existing fixture. Never reuse the author as reviewer. Never overwrite an existing fixture or
+`.result`, and never edit a result merely to make a gate pass. Treat a launch error, missing verdict,
+or unexpected verdict as a failure to investigate.
 
 Run:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"
+STRICT=1 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"
 ```
 
-Require exit 0 before Phase 5. Exit 1 or 2 stops init; report malformed, missing, pending, or
+Require strict exit 0 before Phase 5. Exit 1 or 2 stops init; report malformed, missing, pending, or
 regressing tasks without weakening their expectations.
 
 ## Phase 5 — Self-review and manifest
@@ -400,6 +463,19 @@ Treat the complete init output as a control-class change.
    `mutation-testing` and `invariants` structural validation from Phase 3 and verify again that the
    AGENTS splice interior equals the full rendered `forge-project.md`.
 
+   On migration, also require the collision-free report named in Phase 1 to exist and be included in
+   the frozen candidate, and enumerate its facts from the live disk again. Refuse to continue if it
+   omits a live legacy artifact. Assert the effective ignore contract with these exact operands:
+
+   ```bash
+   git check-ignore -q -- .forge/tmp
+   ! git check-ignore -q -- .forge/history/
+   ```
+
+   Either failure blocks activation. Detect `.claude/agents/review-final.md`; while it exists, refuse
+   activation and identify that exact colliding path. Removal or rename belongs to the operator and
+   requires explicit approval; migration must never delete or rename it automatically.
+
 6. After every preceding Phase 5 check passes, freeze the review candidate. First prove
    `.forge/tmp/` is ignored. Then deterministically materialize the exact full install diff relative
    to the Phase 0 state into `.forge/tmp/init-candidate.diff`. Include binary patches, every tracked
@@ -454,6 +530,10 @@ obtain a new binding review, and ask for approval of the new ID.
 
 Only after that comparison passes, follow the applicable branch below.
 
+Immediately before either branch can write or commit `init_completed: true`, repeat the reviewer
+shadow check, the exact gitignore postconditions, and (for migration) the migration-report existence
+and candidate-inclusion check. Any failure invalidates approval and leaves the manifest false.
+
 For a first-policy bootstrap, the matching explicit approval authorizes only FR-083's first commit
 of that unchanged hard-tier snapshot. Stage exactly its install paths, prove `git diff --cached` is
 byte-identical to the reviewed snapshot, repeat the fixed staged-diff secret scan, write the ordinary
@@ -471,7 +551,27 @@ second explicit approval naming it. Only then may the ordinary control chain cre
 commit. A first approval never authorizes activation, and committed false remains fail-closed after
 any stop.
 
-For a re-init, only after the comparison passes, atomically change exactly
+For an upstream migration where Phase 0 found an already-committed `forge-project.md`, do not use the
+uncommitted re-init activation below. Apply FR-083's ordinary existing-policy rule: the explicit
+approval authorizes only leaving the exact unchanged reviewed migration candidate in the working tree
+with `init_completed: false`. The candidate includes its DM-009 report. Stop without staging,
+committing, pushing, launching a workflow, or writing `init_completed: true`; `/forge:init` never
+auto-commits this migration. The operator may separately invoke `/forge:commit` to process that exact
+candidate through the ordinary control-class chain while the committed manifest is still upstream
+schema.
+
+After the operator commits that candidate, a later `/forge:init` MUST classify the committed manifest
+as plugin schema and follow the unchanged plugin re-init branch; neither report presence nor
+prior conversational state may override FR-180 classification. In that generic re-init branch,
+detect a migration transition mechanically when `HEAD^:.forge-manifest` is upstream schema and
+`HEAD:.forge-manifest` is plugin schema with `init_completed: false`. Before any approved
+false-to-true flip for that transition, require at least one
+`.forge/history/migrations/*.md` path to have been added by that same commit, require every such live
+report to exist byte-identically in `HEAD`, and require no staged or unstaged report diff. A missing,
+uncommitted, or changed report blocks activation. Before any activation, a migration report must be
+committed, regardless of whether policy already existed at `HEAD`.
+
+For a plugin-schema re-init, only after the comparison passes, atomically change exactly
 `init_completed: false` to `init_completed: true` without changing any other byte, report the
 resulting uncommitted change, and stop. Apart from ignored candidate-snapshot scratch files, this
 explicitly approved false-to-true flip is the only mutation permitted after the candidate is frozen.

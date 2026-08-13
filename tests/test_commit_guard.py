@@ -511,7 +511,7 @@ class CommitGuardTests(unittest.TestCase):
         upstream_manifests = (
             "forge_version: 1\nupstream_commit: abc123\n",
             "forge_version: 1\nupstream_commit:\n",
-            "forge_version: 1\nregion: gates (.opencode/rules/gates.md)\n",
+            "forge_version: 1\nregion: gates (rules/gates.md)\n",
         )
 
         for index, contents in enumerate(upstream_manifests):

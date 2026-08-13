@@ -47,6 +47,7 @@ fi
 PROJECT_TEMPLATE="${PLUGIN_ROOT}/system/template/forge-project.md"
 CODEX_SOURCE="${PLUGIN_ROOT}/system/codex"
 GITIGNORE_SOURCE="${PLUGIN_ROOT}/system/template/gitignore-block.txt"
+MIGRATION_HELPER="${PLUGIN_ROOT}/scripts/forge/migrate-upstream.py"
 
 if [ ! -f "${PROJECT_TEMPLATE}" ]; then
     echo "forge install: missing project template: ${PROJECT_TEMPLATE}" >&2
@@ -59,6 +60,26 @@ fi
 if [ ! -f "${GITIGNORE_SOURCE}" ]; then
     echo "forge install: missing gitignore block: ${GITIGNORE_SOURCE}" >&2
     exit 2
+fi
+
+MANIFEST_SCHEMA="fresh"
+if [ -f "${TARGET_ROOT}/.forge-manifest" ]; then
+    if [ ! -f "${MIGRATION_HELPER}" ]; then
+        echo "forge install: missing migration helper: ${MIGRATION_HELPER}" >&2
+        exit 2
+    fi
+    MANIFEST_SCHEMA="$(python3 "${MIGRATION_HELPER}" --classify "${TARGET_ROOT}/.forge-manifest")" || exit 2
+    case "${MANIFEST_SCHEMA}" in
+        plugin|upstream) ;;
+        malformed)
+            echo "forge install: malformed .forge-manifest" >&2
+            exit 2
+            ;;
+        *)
+            echo "forge install: invalid manifest classifier result: ${MANIFEST_SCHEMA}" >&2
+            exit 2
+            ;;
+    esac
 fi
 
 INSTALL_DATE="$(date +%Y-%m-%d)"
@@ -423,6 +444,45 @@ is_forge_managed_codex_file() {
     esac
 }
 
+is_upstream_codex_file() {
+    local path="$1"
+    local relative="$2"
+    local normalized=""
+
+    normalized="$(mktemp)"
+    tr '\r' '\n' < "${path}" > "${normalized}" || {
+        rm -f "${normalized}"
+        return 1
+    }
+
+    case "${relative}" in
+        config.toml)
+            if grep -qxF '# forge-managed' "${normalized}" 2>/dev/null; then
+                rm -f "${normalized}"
+                return 1
+            fi
+            grep -qxF 'approval_policy = "on-failure"' "${normalized}" 2>/dev/null \
+                && grep -qxF 'sandbox_mode = "workspace-write"' "${normalized}" 2>/dev/null \
+                && grep -qxF '[agents."code-reviewer"]' "${normalized}" 2>/dev/null \
+                && grep -qxF '[agents."review-final"]' "${normalized}" 2>/dev/null \
+                && grep -qxF 'config_file = "./agents/review-final.toml"' "${normalized}" 2>/dev/null \
+                && grep -qxF '[agents."security-auditor"]' "${normalized}" 2>/dev/null
+            ;;
+        hooks.json)
+            grep -qF 'aggregate-telemetry.sh .tmp/decisions --csv .tmp/telemetry-latest.csv' "${normalized}" 2>/dev/null \
+                && grep -qF '.tmp/decisions' "${normalized}" 2>/dev/null \
+                && grep -qF '.tmp/telemetry-latest.csv' "${normalized}" 2>/dev/null
+            ;;
+        *)
+            rm -f "${normalized}"
+            return 1
+            ;;
+    esac
+    local status=$?
+    rm -f "${normalized}"
+    return "${status}"
+}
+
 install_codex_layer() {
     local source relative destination label
 
@@ -440,9 +500,26 @@ install_codex_layer() {
 
         case "${relative}" in
             config.toml|hooks.json)
+                if [ "${MANIFEST_SCHEMA}" = "upstream" ] \
+                    && [ -f "${destination}" ] \
+                    && is_upstream_codex_file "${destination}" "${relative}"; then
+                    backup="${destination}.pre-migration"
+                    if [ -f "${backup}" ] && ! cmp -s "${destination}" "${backup}"; then
+                        echo "forge install: refusing to overwrite pre-migration backup: ${backup}" >&2
+                        exit 2
+                    fi
+                    if [ ! -f "${backup}" ]; then
+                        cp -p "${destination}" "${backup}"
+                        record_taken ".codex/${relative}.pre-migration (created)"
+                    else
+                        record_skipped ".codex/${relative}.pre-migration (unchanged)"
+                    fi
+                fi
                 if [ -f "${destination}" ] \
                     && ! cmp -s "${ACTIVE_TMP}" "${destination}" \
-                    && ! is_forge_managed_codex_file "${destination}" "${relative}"; then
+                    && ! is_forge_managed_codex_file "${destination}" "${relative}" \
+                    && ! { [ "${MANIFEST_SCHEMA}" = "upstream" ] \
+                        && is_upstream_codex_file "${destination}" "${relative}"; }; then
                     destination="${destination}.forge-new"
                     label="${label}.forge-new (preserved non-forge ${relative})"
                     if [ -f "${destination}" ] \
@@ -461,12 +538,7 @@ install_codex_layer() {
 
 append_gitignore_block() {
     local destination="${TARGET_ROOT}/.gitignore"
-
-    if [ -f "${destination}" ] \
-        && grep -qxF '# --- forge agent system --- #' "${destination}"; then
-        record_skipped ".gitignore Forge block (already present)"
-        return 0
-    fi
+    local canonicalized
     if [ -e "${destination}" ] && [ ! -f "${destination}" ]; then
         echo "forge install: destination is not a regular file: ${destination}" >&2
         exit 2
@@ -478,13 +550,25 @@ append_gitignore_block() {
     else
         : > "${ACTIVE_TMP}"
     fi
+    canonicalized="$(mktemp "${destination}.forge-reconcile.XXXXXX")"
+    awk '
+        NR == FNR {
+            required[$0] = 1
+            next
+        }
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            if (line in required) next
+            print $0
+        }
+    ' "${GITIGNORE_SOURCE}" "${ACTIVE_TMP}" > "${canonicalized}"
+    mv "${canonicalized}" "${ACTIVE_TMP}"
     if [ -s "${ACTIVE_TMP}" ] && [ -n "$(tail -c 1 "${ACTIVE_TMP}")" ]; then
         printf '\n' >> "${ACTIVE_TMP}"
     fi
     cat "${GITIGNORE_SOURCE}" >> "${ACTIVE_TMP}"
-    if [ -n "$(tail -c 1 "${GITIGNORE_SOURCE}")" ]; then
-        printf '\n' >> "${ACTIVE_TMP}"
-    fi
     install_prepared "${destination}" ".gitignore Forge block"
 }
 
@@ -505,12 +589,12 @@ ensure_directory() {
 }
 
 verify_history_ignore_invariant() {
-    if git check-ignore -q -- ".forge/history/.forge-ignore-check"; then
+    if git check-ignore -q -- ".forge/history/"; then
         echo "forge install: .forge/history/ must not be ignored" >&2
         exit 2
     fi
 
-    if ! git check-ignore -q -- ".forge/tmp/.forge-ignore-check"; then
+    if ! git check-ignore -q -- ".forge/tmp"; then
         echo "forge install: .forge/tmp/ must be ignored" >&2
         exit 2
     fi
@@ -525,6 +609,7 @@ append_gitignore_block
 ensure_directory "${TARGET_ROOT}/.forge/evals/tasks" ".forge/evals/tasks/"
 ensure_directory "${TARGET_ROOT}/.forge/history/runs" ".forge/history/runs/"
 ensure_directory "${TARGET_ROOT}/.forge/history/drift" ".forge/history/drift/"
+ensure_directory "${TARGET_ROOT}/.forge/history/migrations" ".forge/history/migrations/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp" ".forge/tmp/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp/drift" ".forge/tmp/drift/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp/decisions" ".forge/tmp/decisions/"
