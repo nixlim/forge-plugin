@@ -57,7 +57,9 @@ class DocumentationContractTests(unittest.TestCase):
 
     # forge: modified from upstream — require ownership of the gated close sequence
     def test_workflow_skill_owns_the_exact_close_sequence(self) -> None:
-        phrase = " → ".join(("validate --gates", "run_closed", "validate --gates", "report.md"))
+        phrase = " → ".join(
+            ("validate --gates", "run_closed", "validate --gates", "archive", "report.md")
+        )
         owners = [
             path.relative_to(ROOT).as_posix()
             for path in documentation_paths()
@@ -70,7 +72,7 @@ class DocumentationContractTests(unittest.TestCase):
     def test_workflow_skill_documents_the_full_workflow(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
         close_sequence = " → ".join(
-            ("validate --gates", "run_closed", "validate --gates", "report.md")
+            ("validate --gates", "run_closed", "validate --gates", "archive", "report.md")
         )
 
         for step in (
@@ -357,6 +359,34 @@ class DocumentationContractTests(unittest.TestCase):
         )
         self.assertIn(refusal, workflow)
         self.assertIn(refusal, report)
+
+    def test_archive_controls_precede_report_and_survive_static_mutation(self) -> None:
+        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        archive_close = workflow.split(
+            "12. Create and commit the durable archive", maxsplit=1
+        )[1]
+        required = (
+            'git status --short --untracked-files=all',
+            'audit-commitments.py" --run-dir "$RUN_DIR"',
+            'archive-run.py"',
+            '/forge:commit',
+            'skills/report/SKILL.md',
+        )
+        positions = [archive_close.index(fragment) for fragment in required]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn(
+            "forge: archive refused — close tree contains unrelated changes",
+            workflow,
+        )
+        self.assertIn('CLOSING_HEAD="$(git rev-parse HEAD)"', workflow)
+
+        # Disabling each ordering control in a temporary string must trip this sensor.
+        for fragment in required[:-1]:
+            with self.subTest(disabled=fragment):
+                mutated = archive_close.replace(fragment, "DISABLED_CONTROL", 1)
+                self.assertEqual(mutated.count(fragment), archive_close.count(fragment) - 1)
+                with self.assertRaises(AssertionError):
+                    self.assertEqual(mutated.count(fragment), archive_close.count(fragment))
 
     # forge: modified from upstream — removed the non-vendored historical benchmark assertion
 

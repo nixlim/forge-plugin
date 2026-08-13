@@ -106,6 +106,10 @@ class ForgeProjectTemplateTests(unittest.TestCase):
             "| fast | docs/**, .forge/history/**, @formatting-only |",
             region_body("risk-tiers"),
         )
+        self.assertIn(
+            "| `docs` | `*.md`, `docs/**`, `.forge/history/**` |",
+            region_body("file-categories"),
+        )
         self.assertIn("| docs |", region_body("risk-tiers"))
 
         drift = re.sub(r"<!--.*?-->", "", region_body("drift-config"), flags=re.DOTALL)

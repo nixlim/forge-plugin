@@ -1,0 +1,8 @@
+{"type":"run_started","run_id":"archive-audit","goal":"Preserve durable intent.","repo":"__REPO__","repo_head":"1111111111111111111111111111111111111111"}
+{"type":"task","id":"task-07","goal":"Implement the archive.","acceptance":["Audit commitments."],"files":["scripts/forge/audit-commitments.py"],"status":"active"}
+{"type":"task","id":"task-08","goal":"Verify the archive.","acceptance":["Exercise all audit checks."],"files":["tests/test_audit_commitments.py"],"status":"active"}
+{"type":"decision","id":"decision-01","task":"task-07","resolution":"Complete task-07, then task-08.","basis":["plans/independent-plan.md (independent plan)","docs/repo-basis.md#accepted"],"risk":"None"}
+{"type":"verification","id":"verification-01","task":"task-08","check":"fixture","result":"passed","observation":"PASS; 0 CRITICAL/MAJOR findings; iteration 1 of 8. Evidence: `evidence/result.txt:12`. See https://example.com/not-a-citation/path."}
+{"type":"task","id":"task-07","status":"complete","outcome":"Implemented."}
+{"type":"task","id":"task-08","status":"complete","outcome":"Verified."}
+{"type":"run_closed","judgment":"passed","summary":"Archive ready.","validation":{"ok":true,"issues":[],"warnings":[],"non_passing_verifications":[],"profile":"gates"},"risks":["A residual compatibility risk remains."],"follow_ups":["Monitor the first archived run."]}

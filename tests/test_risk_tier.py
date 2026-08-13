@@ -307,6 +307,21 @@ class RiskTierTests(unittest.TestCase):
         self.assertEqual(evidence["derived_tier"], "standard")
         self.assertTrue(evidence["dependency_decision"][0]["unknown_manifest"])
 
+    def test_history_archive_is_docs_and_fast(self) -> None:
+        policy_sha = self.commit_policy(
+            category_rows=(
+                ("docs", "*.md, docs/**, .forge/history/**"),
+                ("control", "forge-project.md"),
+            )
+        )
+        self.stage(".forge/history/runs/run-001.md", b"archive\n")
+
+        result, evidence = self.classify(sha=policy_sha)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(evidence["derived_tier"], "fast")
+        self.assertEqual(evidence["paths"][0]["categories"], ["docs"])
+
     def test_unknown_stack_promotes_the_entire_docs_only_diff(self) -> None:
         policy_sha = self.commit_policy(
             category_rows=(

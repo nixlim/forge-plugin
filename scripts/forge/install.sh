@@ -504,6 +504,18 @@ ensure_directory() {
     record_taken "${label} (created)"
 }
 
+verify_history_ignore_invariant() {
+    if git check-ignore -q -- ".forge/history/.forge-ignore-check"; then
+        echo "forge install: .forge/history/ must not be ignored" >&2
+        exit 2
+    fi
+
+    if ! git check-ignore -q -- ".forge/tmp/.forge-ignore-check"; then
+        echo "forge install: .forge/tmp/ must be ignored" >&2
+        exit 2
+    fi
+}
+
 printf 'forge install: target=%s plugin=%s\n' "${TARGET_ROOT}" "${PLUGIN_ROOT}"
 install_forge_project
 splice_agents
@@ -516,6 +528,7 @@ ensure_directory "${TARGET_ROOT}/.forge/history/drift" ".forge/history/drift/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp" ".forge/tmp/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp/drift" ".forge/tmp/drift/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp/decisions" ".forge/tmp/decisions/"
+verify_history_ignore_invariant
 
 printf 'forge install: summary: %d taken, %d skipped\n' \
     "${TAKEN_COUNT}" "${SKIPPED_COUNT}"

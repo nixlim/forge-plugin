@@ -11,18 +11,41 @@ write an interim report here. Return to `${CLAUDE_PLUGIN_ROOT}/skills/orchestrat
 
 ## Preconditions
 
-<!-- forge: modified from upstream — refuse reports until gated post-close validation is clean -->
+<!-- forge: modified from upstream — refuse reports until validation and committed archive are clean -->
 Confirm that:
 
 - `run_closed.validation` contains the complete descriptive validation result — the verbatim
   pre-close `--gates` payload — including `profile: "gates"`;
 - every execution has a terminal execution result and every task is terminal;
 - `run_closed` is the final journal entry and contains `judgment: passed|blocked`;
-- the post-close `validate --gates` exited 0 and reported no issues;
+- a fresh rerun of the post-close `validate --gates` exits 0 and reports no issues;
+- `.forge/history/runs/<run-id>.md` exists in `HEAD` and has no unstaged or staged changes;
 - no further run work is planned.
 
 The report skill refuses to write `report.md` while the post-close `validate --gates` reports issues.
-If these conditions are not true, stop and return to orchestration. Never edit the journal merely to
+Rerun that check rather than trusting an earlier result:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" validate --gates \
+  .codex-orchestrator/runs/<run-id>
+```
+
+Then set `ARCHIVE_PATH=.forge/history/runs/<run-id>.md` and require all three commands to succeed:
+
+```bash
+git cat-file -e "HEAD:$ARCHIVE_PATH"
+git diff --quiet -- "$ARCHIVE_PATH"
+git diff --cached --quiet -- "$ARCHIVE_PATH"
+```
+
+If any archive command fails, refuse with exactly:
+
+```text
+forge: report refused — archive missing or uncommitted: .forge/history/runs/<run-id>.md
+```
+
+Do not treat the run as delivered and do not create or replace `report.md` unless all preconditions
+pass. If a condition is false, stop and return to orchestration. Never edit the journal merely to
 make the report look complete.
 
 Read the complete `journal.jsonl`, then ground each claim in its appropriate source:

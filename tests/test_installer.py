@@ -136,6 +136,24 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertEqual(
             self.read(".gitignore").count("# --- forge agent system --- #"), 1
         )
+        history_ignore = subprocess.run(
+            ["git", "check-ignore", "-q", "--", ".forge/history/.forge-ignore-check"],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        tmp_ignore = subprocess.run(
+            ["git", "check-ignore", "-q", "--", ".forge/tmp/.forge-ignore-check"],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(history_ignore.returncode, 1)
+        self.assertEqual(tmp_ignore.returncode, 0)
+        self.assertFalse((self.repo / ".forge/history/.forge-ignore-check").exists())
+        self.assertFalse((self.repo / ".forge/tmp/.forge-ignore-check").exists())
 
         gate1 = region_body(project, "gate1-test-command")
         command_match = re.search(r"```bash\n(.*?)\n```", gate1, flags=re.DOTALL)
@@ -353,6 +371,56 @@ class InstallerIntegrationTests(unittest.TestCase):
             b"owner-ignore-pattern\n"
             + (self.plugin / "system/template/gitignore-block.txt").read_bytes(),
         )
+
+    def test_repository_history_ignore_rule_fails_closed_with_exact_diagnostic(self) -> None:
+        (self.repo / ".gitignore").write_bytes(b"/.forge/history/\n")
+
+        result = self.install()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            result.stderr,
+            "forge install: .forge/history/ must not be ignored\n",
+        )
+        self.assertFalse((self.repo / ".forge/history/.forge-ignore-check").exists())
+        self.assertFalse((self.repo / ".forge/tmp/.forge-ignore-check").exists())
+
+    def test_ignore_check_does_not_use_history_as_transient_storage(self) -> None:
+        probe = self.repo / ".forge/history/.forge-ignore-check"
+        probe.parent.mkdir(parents=True)
+        probe.write_bytes(b"pre-existing history bytes\n")
+
+        result = self.install()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(probe.read_bytes(), b"pre-existing history bytes\n")
+
+    def test_missing_tmp_ignore_rule_fails_closed_with_exact_diagnostic(self) -> None:
+        block = self.plugin / "system/template/gitignore-block.txt"
+        block.write_text(
+            block.read_text(encoding="utf-8").replace("/.forge/tmp/\n", ""),
+            encoding="utf-8",
+        )
+
+        result = self.install()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            result.stderr,
+            "forge install: .forge/tmp/ must be ignored\n",
+        )
+        self.assertFalse((self.repo / ".forge/history/.forge-ignore-check").exists())
+        self.assertFalse((self.repo / ".forge/tmp/.forge-ignore-check").exists())
+
+    def test_disabling_ignore_invariant_is_detected_by_the_fixture(self) -> None:
+        installer = INSTALLER.read_text(encoding="utf-8")
+        self.assertEqual(installer.count("verify_history_ignore_invariant"), 2)
+
+        mutated = installer.replace("verify_history_ignore_invariant\n", "", 1)
+
+        self.assertEqual(mutated.count("verify_history_ignore_invariant"), 1)
+        with self.assertRaises(AssertionError):
+            self.assertEqual(mutated.count("verify_history_ignore_invariant"), 2)
 
     def test_malformed_existing_region_markers_fail_without_overwrite(self) -> None:
         malformed = (

@@ -42,6 +42,33 @@ class ReportSkillTests(unittest.TestCase):
         self.assertIn("no further run work is planned", normalized)
         self.assertNotIn("validate → run_closed → report.md", normalized)
 
+    def test_skill_refuses_until_archive_is_committed_and_clean(self) -> None:
+        skill = REPORT_SKILL.read_text(encoding="utf-8")
+        archive = ".forge/history/runs/<run-id>.md"
+        refusal = (
+            "forge: report refused — archive missing or uncommitted: " + archive
+        )
+
+        self.assertEqual(skill.count(refusal), 1)
+        self.assertIn('git cat-file -e "HEAD:$ARCHIVE_PATH"', skill)
+        self.assertIn('git diff --quiet -- "$ARCHIVE_PATH"', skill)
+        self.assertIn('git diff --cached --quiet -- "$ARCHIVE_PATH"', skill)
+        self.assertIn('codex_orch_tools.py" validate --gates', skill)
+        self.assertLess(skill.index("git cat-file -e"), skill.index("Create the final `report.md` once"))
+
+        controls = (
+            'git cat-file -e "HEAD:$ARCHIVE_PATH"',
+            'git diff --quiet -- "$ARCHIVE_PATH"',
+            'git diff --cached --quiet -- "$ARCHIVE_PATH"',
+            refusal,
+        )
+        for control in controls:
+            with self.subTest(disabled=control):
+                mutated = skill.replace(control, "disabled-control", 1)
+                self.assertNotIn(control, mutated)
+                with self.assertRaises(AssertionError):
+                    self.assertIn(control, mutated)
+
     def test_skill_uses_claim_specific_sources_and_creates_one_final_report(self) -> None:
         skill = " ".join(REPORT_SKILL.read_text(encoding="utf-8").lower().split())
 

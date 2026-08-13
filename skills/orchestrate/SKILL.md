@@ -157,8 +157,13 @@ Keep run material under:
     events.jsonl
     handoff.md
   evidence/                 # optional
-  report.md                 # after run_closed
+  report.md                 # after the committed durable archive
 ```
+
+The journal and execution material remain locally excluded working state. The workflow closes the
+run by writing and committing the durable archive at `.forge/history/runs/<run-id>.md` before this
+local `report.md` is written. `.forge/history/` is append-only committed repository documentation;
+never ignore, overwrite, amend, delete, or prune an archive.
 
 `journal.jsonl` is Claude's append-only orchestration journal. Read
 `${CLAUDE_PLUGIN_ROOT}/docs/orchestration-contract.md` before creating or interpreting journal

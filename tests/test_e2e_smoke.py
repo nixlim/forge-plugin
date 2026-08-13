@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "forge" / "install.sh"
 TOOLS = ROOT / "scripts" / "codex_orch_tools.py"
+ARCHIVER = ROOT / "scripts" / "forge" / "archive-run.py"
 FAKE_CODEX = ROOT / "tests" / "replay" / "long-run-001" / "fake_codex.py"
 PLAIN_KEYS = {"issues", "non_passing_verifications", "ok", "warnings"}
 
@@ -158,7 +159,7 @@ class ReleaseE2ESmokeTests(unittest.TestCase):
             "file-categories": """| Category | File patterns |
 |---|---|
 | `python` | `*.py` |
-| `docs` | `*.md`, `docs/**` |
+| `docs` | `*.md`, `docs/**`, `.forge/history/**` |
 | `config` | `.gitignore`, `*.toml`, `*.json` |
 | `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**` |""",
             "stack-validations": """Python syntax:
@@ -801,6 +802,48 @@ event-retention: 400d""",
         gated = self.validate(run_dir, gates=True)
         self.assertTrue(gated["ok"], gated)
         self.assertEqual(gated["profile"], "gates")
+        closing_head = self.git("rev-parse", "HEAD")
+        self.assertEqual(closing_head, target_sha)
+        post_close_path = self.repo / ".forge" / "tmp" / f"{run_id}-post-close.json"
+        post_close_path.write_text(
+            json.dumps(gated, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        archive_result = subprocess.run(
+            [
+                sys.executable,
+                str(ARCHIVER),
+                "--run-dir",
+                str(run_dir),
+                "--closing-head",
+                closing_head,
+                "--post-close-validation",
+                str(post_close_path),
+            ],
+            cwd=self.repo,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            archive_result.returncode,
+            0,
+            archive_result.stdout + archive_result.stderr,
+        )
+        archive_path = Path(archive_result.stdout.strip())
+        self.assertEqual(
+            archive_path,
+            Path(f".forge/history/runs/{run_dir.name}.md"),
+        )
+        self.assertEqual(
+            self.git("diff", "--cached", "--name-only").splitlines(),
+            [archive_path.as_posix()],
+        )
+        archive_commit = self.snapshot_repo(f"archive run {run_dir.name}")
+        self.assertNotEqual(archive_commit, closing_head)
+        self.git("cat-file", "-e", f"HEAD:{archive_path.as_posix()}")
+        self.assertEqual(self.git("diff", "--", archive_path.as_posix()), "")
+        self.assertEqual(self.git("diff", "--cached", "--", archive_path.as_posix()), "")
         report = self.write_report(run_dir, gated)
         self.assertTrue(report.is_file())
         plain = self.validate(run_dir, gates=False)
@@ -815,6 +858,7 @@ event-retention: 400d""",
 
         self.assertNotEqual(first, second)
         for run_dir in (first, second):
+            run_repo = run_dir.parents[2]
             records = [
                 json.loads(line)
                 for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
@@ -853,6 +897,18 @@ event-retention: 400d""",
                 gate_3["check"],
                 r"^review-final over git diff [0-9a-f]{40}\.\.[0-9a-f]{40}$",
             )
+            archive = run_repo / ".forge" / "history" / "runs" / f"{run_dir.name}.md"
+            self.assertTrue(archive.is_file())
+            self.git_at(
+                run_repo,
+                "cat-file",
+                "-e",
+                f"HEAD:{archive.relative_to(run_repo).as_posix()}",
+            )
+            archive_text = archive.read_text(encoding="utf-8")
+            self.assertIn("Implement and independently review the fixture feature.", archive_text)
+            self.assertIn("Focused tests pass", archive_text)
+            self.assertIn("gate-3: review-final verdict", archive_text)
             self.assertTrue((run_dir / "report.md").is_file())
 
 

@@ -81,7 +81,7 @@ project-equivalent CI paths; project rows may extend but never narrow the built-
 | Category | File patterns |
 |---|---|
 | `bash` | `*.sh` |
-| `docs` | `*.md`, `docs/**` |
+| `docs` | `*.md`, `docs/**`, `.forge/history/**` |
 | `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json` |
 | `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, and recorded equivalent CI paths |
 <!-- FORGE:REGION file-categories END -->

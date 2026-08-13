@@ -138,18 +138,65 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" validate --gates \
     `judgment: passed|blocked`, unresolved risks, and follow-ups; its `validation` field embeds the
     pre-close payload verbatim. An absent `profile: "gates"` in that payload means the gated close
     was skipped.
-11. After `run_closed`, run the post-close gates check:
+11. After `run_closed`, run the post-close gates check and persist its exact JSON stdout for the
+    archive renderer. Do not reconstruct that payload from the journal or from memory:
 
 ```bash
+RUN_DIR=".codex-orchestrator/runs/<run-id>"
+POST_CLOSE_VALIDATION_FILE="$RUN_DIR/post-close-validation.json"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" validate --gates \
-  .codex-orchestrator/runs/<run-id>
+  "$RUN_DIR" > "$POST_CLOSE_VALIDATION_FILE"
 ```
 
-    The post-close pass must exit 0 before invoking
-    `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md` to create `report.md` once.
-    The report skill refuses to write `report.md` while the post-close `validate --gates` reports issues.
+    The post-close pass must exit 0. Immediately after that successful command, before archive
+    generation or any other repository operation, capture the closed implementation commit from
+    command output:
 
-The canonical close sequence is `validate --gates → run_closed → validate --gates → report.md`.
+```bash
+CLOSING_HEAD="$(git rev-parse HEAD)" || exit 1
+test -n "$CLOSING_HEAD" || exit 1
+```
+
+12. Create and commit the durable archive before invoking the report skill. First prove the index
+    and tracked and untracked worktree are clean with `git status --short --untracked-files=all`;
+    require its stdout to be empty. Also require both `git diff --quiet` and
+    `git diff --cached --quiet` to succeed. If any proof fails, refuse with exactly:
+
+```text
+forge: archive refused — close tree contains unrelated changes
+```
+
+    Run the commitment audit before archive generation. Its stdout is the sole source for the
+    archive's residual-risk and follow-up sections; a nonzero exit is fail closed, so do not create
+    an archive and therefore do not write a report:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/audit-commitments.py" --run-dir "$RUN_DIR"
+```
+
+    Then invoke the renderer from the repository root using only the closing SHA and post-close
+    result captured directly above:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/archive-run.py" \
+  --run-dir "$RUN_DIR" \
+  --closing-head "$CLOSING_HEAD" \
+  --post-close-validation "$POST_CLOSE_VALIDATION_FILE"
+```
+
+    Require stdout to name exactly `.forge/history/runs/<run-id>.md`. Prove with
+    `git status --short --untracked-files=all` and `git diff --cached --name-only` that the archive
+    is the only changed or staged path. Any other path uses the same exact archive refusal above.
+    Commit exactly that one archive through `${CLAUDE_PLUGIN_ROOT}/skills/commit/SKILL.md`
+    (`/forge:commit`) as a docs-class change; never stage another path or bypass the commit chain.
+    Require the commit to succeed before proceeding.
+13. Only after the archive commit, invoke `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md` to create
+    `report.md` once. The report skill reruns the post-close gate validation and verifies the archive
+    is committed and clean before treating the run as delivered.
+
+The report skill refuses to write `report.md` while the post-close `validate --gates` reports issues.
+The canonical close sequence is
+`validate --gates → run_closed → validate --gates → archive → report.md`.
 Claude still decides the semantic judgment, while gated validation enforces the recorded gate
 conditions required for a clean accepted close. The final report never repairs or rewrites journal
 history.
