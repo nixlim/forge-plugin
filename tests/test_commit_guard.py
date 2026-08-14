@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -43,6 +44,47 @@ class CommitGuardTests(unittest.TestCase):
         self.scratch = Path(self.temp_dir.name)
         self.repo = self.scratch / "main checkout"
         self.init_repo(self.repo)
+
+    def tearDown(self) -> None:
+        # Guard telemetry is deliberately detached from the primary denial.
+        # Do not remove a scratch checkout while its advisory worker is using it.
+        pending_dir = self.repo / ".forge/tmp"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            pending = list(pending_dir.glob("decision-event-pending.*"))
+            if not pending:
+                break
+            time.sleep(0.01)
+        super().tearDown()
+
+    def wait_for_decision_workers(self, *, timeout: float = 5) -> None:
+        pending_dir = self.repo / ".forge/tmp"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            active_pending = list(pending_dir.glob("decision-event-pending.*"))
+            if not active_pending:
+                # Avoid observing the unlink immediately before the event file's
+                # directory entry becomes visible to this process.
+                time.sleep(0.03)
+                if not list(pending_dir.glob("decision-event-pending.*")):
+                    return
+            time.sleep(0.01)
+        self.fail(f"decision-event worker did not finish: {active_pending}")
+
+    def decision_failure_markers(self) -> list[Path]:
+        return list((self.repo / ".forge/tmp").glob("decision-event-failed.*"))
+
+    def wait_for_event_file(self, *, timeout: float = 5) -> Path:
+        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if events.stat().st_size:
+                    return events
+            except OSError:
+                pass
+            time.sleep(0.01)
+        self.fail("decision-event worker did not write events.jsonl")
 
     def init_repo(self, path: Path) -> None:
         subprocess.run(
@@ -237,12 +279,13 @@ class CommitGuardTests(unittest.TestCase):
         fourth_line: str | None = None,
     ) -> Path:
         root = marker_root or self.repo
-        marker = root / ".forge" / "tmp" / "commit-authorized"
+        marker_digest = digest or self.staged_hash(cwd=cwd)
+        marker = root / ".forge" / "tmp" / "authorized" / marker_digest
         marker.parent.mkdir(parents=True, exist_ok=True)
         reviewed_at = timestamp or datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-        lines = [digest or self.staged_hash(cwd=cwd), reviewed_at]
+        lines = [marker_digest, reviewed_at]
         if third_line is not None:
             lines.append(third_line)
         if fourth_line is not None:
@@ -260,7 +303,8 @@ class CommitGuardTests(unittest.TestCase):
             "forge_version: 1\n", encoding="utf-8"
         )
         self.stage_change()
-        marker = self.repo / ".forge" / "tmp" / "commit-authorized"
+        candidate = self.staged_hash()
+        marker = self.repo / ".forge" / "tmp" / "authorized" / candidate
         stale_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=31)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
@@ -270,7 +314,7 @@ class CommitGuardTests(unittest.TestCase):
             ("malformed", "not-a-marker\n"),
             (
                 "stale",
-                f"{self.staged_hash()}\n{stale_timestamp}\n",
+                f"{candidate}\n{stale_timestamp}\n",
             ),
             (
                 "hash mismatch",
@@ -293,6 +337,100 @@ class CommitGuardTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(audit.stat().st_mode), 0o600)
         self.assertEqual(len(audit.read_text(encoding="utf-8").splitlines()), 4)
 
+    def test_content_addressed_lookup_isolates_candidates_and_sweeps_only_after_validation(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        candidate = self.staged_hash()
+        authorized = self.repo / ".forge/tmp/authorized"
+        authorized.mkdir(parents=True)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        other = "1" * 64
+        other_marker = authorized / other
+        other_marker.write_text(f"{other}\n{now}\n", encoding="utf-8")
+        stale_other = "2" * 64
+        stale_other_marker = authorized / stale_other
+        stale_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        stale_other_marker.write_text(
+            f"{stale_other}\n{stale_at}\n", encoding="utf-8"
+        )
+
+        # Another candidate can coexist, but it cannot authorize this index.
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+        self.assertTrue(other_marker.is_file())
+        self.assertFalse(stale_other_marker.exists())
+
+        # A current stale marker must be diagnosed before the age sweep removes it.
+        current_marker = authorized / candidate
+        current_marker.write_text(f"{candidate}\n{stale_at}\n", encoding="utf-8")
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker stale)",
+        )
+        self.assertFalse(current_marker.exists())
+        self.assertTrue(other_marker.is_file())
+
+        # Exact same staged bytes select the same path and are admitted.
+        current_marker.write_text(f"{candidate}\n{now}\n", encoding="utf-8")
+        self.assert_allowed(self.invoke("git commit"))
+        self.assertTrue(current_marker.is_file())
+        self.assertTrue(other_marker.is_file())
+
+    def test_candidate_filename_and_record_hash_must_agree(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        candidate = self.staged_hash()
+        marker = self.write_marker(digest=candidate)
+        marker.write_text(
+            f"{'0' * 64}\n{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n",
+            encoding="utf-8",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker hash mismatch)",
+        )
+
+    def test_content_addressed_lookup_mutant_cannot_admit_another_candidate(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        other = "1" * 64
+        self.write_marker(digest=other)
+        mutant = self.mutant_guard(
+            "first-authorization-marker-mutant",
+            'marker = context.main_root / ".forge" / "tmp" / "authorized" / candidate',
+            'marker = next((context.main_root / ".forge" / "tmp" / "authorized").iterdir())',
+        )
+
+        # The mutant resolves another session's record, proving filename/hash
+        # agreement still kills cross-admission even if lookup is corrupted.
+        self.assert_denied(
+            self.invoke("git commit", guard=mutant),
+            f"{MARKER_REASON} (marker hash mismatch)",
+        )
+
+    def test_current_candidate_validation_precedes_stale_sweep_mutant(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        stale_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        self.write_marker(timestamp=stale_at)
+        mutant = self.mutant_guard(
+            "sweep-before-validation-mutant",
+            "        candidate = staged_candidate(context)\n        marker_state = (",
+            "        candidate = staged_candidate(context)\n        sweep_stale_markers(context)\n        marker_state = (",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit", guard=mutant),
+            f"{MARKER_REASON} (marker missing)",
+        )
+
     def test_only_exact_two_and_three_line_legacy_marker_shapes_are_accepted(self) -> None:
         (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
         self.stage_change()
@@ -311,7 +449,13 @@ class CommitGuardTests(unittest.TestCase):
             f"{self.staged_hash()}\nnot-a-timestamp\n",
         ):
             with self.subTest(contents=contents):
-                marker = self.repo / ".forge" / "tmp" / "commit-authorized"
+                marker = (
+                    self.repo
+                    / ".forge"
+                    / "tmp"
+                    / "authorized"
+                    / self.staged_hash()
+                )
                 marker.write_text(contents, encoding="utf-8")
                 self.assert_denied(
                     self.invoke("git commit"),
@@ -340,7 +484,7 @@ class CommitGuardTests(unittest.TestCase):
             f"{digest}\n{timestamp}\nskip: user-directed\ntier: fast\n",
             f"{digest}\n{timestamp}\ntier: fast\npolicy: {policy_sha}\nextra\n",
         )
-        marker = self.repo / ".forge/tmp/commit-authorized"
+        marker = self.repo / ".forge/tmp/authorized" / digest
         marker.parent.mkdir(parents=True, exist_ok=True)
         for contents in malformed:
             with self.subTest(contents=contents):
@@ -447,8 +591,9 @@ class CommitGuardTests(unittest.TestCase):
             self.invoke("git commit"),
             f"{MARKER_REASON} (fast-path eligibility drift)",
         )
+        self.wait_for_decision_workers()
 
-        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        events = self.wait_for_event_file()
         emitted = [json.loads(line) for line in events.read_text().splitlines()]
         self.assertEqual(len(emitted), 1)
         self.assertEqual(emitted[0]["event"], "fast_denied_eligibility")
@@ -918,8 +1063,9 @@ class CommitGuardTests(unittest.TestCase):
             self.invoke("git push origin HEAD"),
             "forge: operator halt engaged (AGENT_HALT)",
         )
+        self.wait_for_decision_workers()
 
-        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        events = self.wait_for_event_file()
         emitted = [json.loads(line) for line in events.read_text().splitlines()]
         guard_denials = [item for item in emitted if item["event"] == "guard_deny"]
         self.assertEqual(len(guard_denials), 1)
@@ -927,6 +1073,222 @@ class CommitGuardTests(unittest.TestCase):
         self.assertEqual(guard_denials[0]["policy_sha"], expected_policy)
         self.assertEqual(guard_denials[0]["reason"], "operator-halt")
         self.assertEqual(guard_denials[0]["surface"], "commit-guard")
+
+    def test_denial_returns_before_slow_event_worker_and_pending_marker_is_cleaned(self) -> None:
+        self.stage_change(name="slow-telemetry.txt")
+        self.track_manifest()
+        guard = self.mutant_guard(
+            "slow-event-worker",
+            "try:\n        result = subprocess.run(\n            sys.argv[5:],",
+            "__import__('time').sleep(1.5)\n    try:\n        result = subprocess.run(\n            sys.argv[5:],",
+        )
+
+        started = time.monotonic()
+        result = self.invoke("git commit", guard=guard)
+        elapsed = time.monotonic() - started
+
+        self.assert_denied(result, f"{MARKER_REASON} (marker missing)")
+        self.assertLess(elapsed, 1.0, "advisory telemetry delayed the primary denial")
+        pending_dir = self.repo / ".forge/tmp"
+        deadline = time.monotonic() + 1
+        markers: list[Path] = []
+        while not markers and time.monotonic() < deadline:
+            markers = list(pending_dir.glob("decision-event-pending.*"))
+            time.sleep(0.01)
+        self.assertTrue(markers, "slow detached worker did not advertise pending telemetry")
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            events = self.repo / ".forge/tmp/decisions/events.jsonl"
+            if events.exists() and not self.decision_failure_markers():
+                break
+            time.sleep(0.01)
+        self.assertFalse(self.decision_failure_markers())
+        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        records = [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([record["event"] for record in records], ["guard_deny"])
+
+    def test_event_worker_uses_birth_inode_when_pending_path_is_substituted(self) -> None:
+        self.stage_change(name="substituted-telemetry.txt")
+        self.track_manifest()
+        events = self.repo / ".forge/tmp/decisions/events.jsonl"
+        events.mkdir(parents=True)
+        guard = self.mutant_guard(
+            "substituted-event-marker",
+            "try:\n        result = subprocess.run(\n            sys.argv[5:],",
+            "__import__('time').sleep(1.5)\n    try:\n        result = subprocess.run(\n            sys.argv[5:],",
+        )
+
+        result = self.invoke("git commit", guard=guard)
+        self.assert_denied(result, f"{MARKER_REASON} (marker missing)")
+        pending_dir = self.repo / ".forge/tmp"
+        deadline = time.monotonic() + 1
+        markers: list[Path] = []
+        while not markers and time.monotonic() < deadline:
+            markers = list(pending_dir.glob("decision-event-pending.*"))
+            time.sleep(0.01)
+        self.assertEqual(len(markers), 1)
+
+        marker = markers[0]
+        original_inode = self.scratch / "original-marker-inode"
+        victim = self.scratch / "substitution-victim"
+        victim.write_text("do not touch\n", encoding="utf-8")
+        os.link(marker, original_inode)
+        marker.unlink()
+        marker.symlink_to(victim)
+
+        expected = "forge: decision event append skipped (event-append-write-failed)\n"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if original_inode.read_text(encoding="utf-8") == expected:
+                break
+            time.sleep(0.01)
+        self.assertEqual(original_inode.read_text(encoding="utf-8"), expected)
+        self.assertTrue(marker.is_symlink(), "worker removed the substituted pathname")
+        self.assertEqual(victim.read_text(encoding="utf-8"), "do not touch\n")
+        self.assertFalse(self.decision_failure_markers())
+        marker.unlink()
+
+    def test_failed_event_worker_is_counted_and_preserves_failure_marker(self) -> None:
+        self.stage_change(name="failed-telemetry.txt")
+        self.track_manifest()
+        guard = self.mutant_guard(
+            "failed-event-worker",
+            "worker_failed = result is None or result.returncode != 0",
+            "worker_failed = True",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit", guard=guard),
+            f"{MARKER_REASON} (marker missing)",
+        )
+        deadline = time.monotonic() + 5
+        failure_markers: list[Path] = []
+        while time.monotonic() < deadline:
+            failure_markers = self.decision_failure_markers()
+            if failure_markers:
+                break
+            time.sleep(0.01)
+        self.assertEqual(len(failure_markers), 1)
+        self.assertIn("event-append-launch-failed", failure_markers[0].read_text(encoding="utf-8"))
+        # This mutant forces the worker's durable failure branch after a real
+        # emitter invocation; the event may therefore already be present.
+        audit = (self.repo / ".forge/tmp/halt-audit.log").read_text(encoding="utf-8")
+        self.assertIn("decision event append skipped (code event-append-launch-failed)", audit)
+
+    def test_terminal_marker_write_failure_retains_honest_pending_marker(self) -> None:
+        self.stage_change(name="unconfirmed-telemetry.txt")
+        self.track_manifest()
+        guard = self.mutant_guard(
+            "unconfirmed-event-worker",
+            """def write_marker(payload):
+    try:
+        os.lseek(marker_descriptor, 0, os.SEEK_SET)
+""",
+            """def write_marker(payload):
+    return False
+    try:
+        os.lseek(marker_descriptor, 0, os.SEEK_SET)
+""",
+        )
+        source = guard.read_text(encoding="utf-8")
+        publish_needle = """def publish_failure_marker(payload):
+    descriptor = None
+    try:
+"""
+        publish_replacement = """def publish_failure_marker(payload):
+    return False
+    descriptor = None
+    try:
+"""
+        self.assertEqual(source.count(publish_needle), 1, publish_needle)
+        guard.write_text(
+            source.replace(publish_needle, publish_replacement), encoding="utf-8"
+        )
+        tmp = self.repo / ".forge/tmp"
+        audit = tmp / "halt-audit.log"
+        audit.mkdir(parents=True)
+        events = tmp / "decisions/events.jsonl"
+        events.mkdir(parents=True)
+
+        result = self.invoke("git commit", guard=guard)
+
+        self.assert_denied(result, f"{MARKER_REASON} (marker missing)")
+        deadline = time.monotonic() + 5
+        pending: list[Path] = []
+        while time.monotonic() < deadline:
+            pending = list(tmp.glob("decision-event-pending.*"))
+            if pending and not list(tmp.glob("decision-event-failed.*")):
+                time.sleep(0.05)
+                if list(tmp.glob("decision-event-pending.*")) == pending:
+                    break
+            time.sleep(0.01)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(
+            pending[0].read_text(encoding="utf-8"),
+            "forge: decision event outcome pending "
+            "(code event-append-outcome-unconfirmed)\n",
+        )
+        self.assertFalse(self.decision_failure_markers())
+        self.assertNotIn("event-append-write-failed", pending[0].read_text(encoding="utf-8"))
+        self.assertTrue(events.is_dir())
+        self.assertTrue(audit.is_dir())
+        pending[0].unlink()
+
+    def test_real_event_and_audit_failures_preserve_denial_and_failure_code(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="failed-destinations.txt")
+        tmp = self.repo / ".forge/tmp"
+        events = tmp / "decisions/events.jsonl"
+        events.mkdir(parents=True)
+        audit = tmp / "halt-audit.log"
+        audit.mkdir()
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+
+        deadline = time.monotonic() + 5
+        failure_markers: list[Path] = []
+        while time.monotonic() < deadline:
+            failure_markers = self.decision_failure_markers()
+            if failure_markers:
+                break
+            time.sleep(0.01)
+        self.assertEqual(len(failure_markers), 1)
+        self.assertEqual(
+            failure_markers[0].read_text(encoding="utf-8"),
+            "forge: decision event append skipped (event-append-write-failed)\n",
+        )
+        self.assertTrue(events.is_dir())
+        self.assertTrue(audit.is_dir())
+
+    def test_real_append_failure_is_counted_once_with_exact_code(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="single-failure.txt")
+        tmp = self.repo / ".forge/tmp"
+        events = tmp / "decisions/events.jsonl"
+        events.mkdir(parents=True)
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+        deadline = time.monotonic() + 5
+        failure_markers: list[Path] = []
+        while time.monotonic() < deadline:
+            failure_markers = self.decision_failure_markers()
+            if failure_markers:
+                break
+            time.sleep(0.01)
+        self.assertEqual(len(failure_markers), 1)
+        audit_lines = (tmp / "halt-audit.log").read_text(encoding="utf-8").splitlines()
+        append_failures = [
+            line for line in audit_lines if "decision event append skipped (code " in line
+        ]
+        self.assertEqual(len(append_failures), 1)
+        self.assertIn("code event-append-write-failed", append_failures[0])
+        self.assertNotIn("event-append-launch-failed", append_failures[0])
 
     def test_non_utf8_halt_contents_still_emit_a_deny(self) -> None:
         (self.repo / "AGENT_HALT").write_bytes(b"operator pause: \xff\n")
@@ -991,6 +1353,42 @@ class CommitGuardTests(unittest.TestCase):
         )
         self.assertTrue((self.repo / ".forge/tmp/halt-audit.log").is_file())
         self.assertFalse((linked / ".forge/tmp/halt-audit.log").exists())
+
+    def test_distinct_linked_indexes_resolve_their_own_candidate_concurrently(self) -> None:
+        self.track_manifest()
+        first = self.scratch / "linked first"
+        second = self.scratch / "linked second"
+        self.git("worktree", "add", "--quiet", "-b", "first", str(first))
+        self.git("worktree", "add", "--quiet", "-b", "second", str(second))
+        self.stage_change(cwd=first, name="first.txt")
+        self.stage_change(cwd=second, name="second.txt")
+        first_hash = self.staged_hash(cwd=first)
+        second_hash = self.staged_hash(cwd=second)
+        self.assertNotEqual(first_hash, second_hash)
+        first_marker = self.write_marker(cwd=first, marker_root=self.repo)
+        second_marker = self.write_marker(cwd=second, marker_root=self.repo)
+
+        processes = [
+            subprocess.Popen(
+                ["bash", str(COMMIT_GUARD)],
+                cwd=worktree,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for worktree in (first, second)
+        ]
+        payload = json.dumps(
+            {"tool_name": "Bash", "tool_input": {"command": "git commit"}}
+        )
+        results = [process.communicate(payload, timeout=10) for process in processes]
+        for process, (stdout, stderr) in zip(processes, results, strict=True):
+            self.assertEqual(process.returncode, 0)
+            self.assertEqual(stdout, "")
+            self.assertEqual(stderr, "")
+        self.assertTrue(first_marker.is_file())
+        self.assertTrue(second_marker.is_file())
 
     def test_linked_worktree_fast_marker_reclassifies_linked_index(self) -> None:
         policy_sha = self.commit_policy()

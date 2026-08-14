@@ -100,8 +100,9 @@ class PluginLoadContractTests(unittest.TestCase):
                             "type": "command",
                             "command": (
                                 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh "
-                                ".forge/tmp/decisions --csv "
-                                ".forge/tmp/telemetry-latest.csv"
+                                ".forge/tmp/decisions --append-csv "
+                                ".forge/tmp/telemetry.csv --session "
+                                '"${CLAUDE_SESSION_ID}"'
                             ),
                         },
                         {

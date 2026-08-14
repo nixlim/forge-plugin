@@ -32,14 +32,16 @@ Only consult an orchestration journal when an open run has been explicitly ident
 passed by the orchestrator or confirmed by the user. Never infer the latest run. With no explicitly
 identified open run, execute the complete chain without journal entries.
 
-Before Step 1, invalidate authorization from any earlier chain attempt:
+Before Step 1, compute no candidate and write no authorization. Authorization is content-addressed,
+so an earlier candidate cannot authorize different staged bytes; when this chain later identifies a
+candidate, it owns only that candidate path and must leave every other agent's marker untouched.
 
 ```bash
-rm -f .forge/tmp/commit-authorized
+reviewed_diff_sha256=''
+commit_marker=''
 ```
 
-This preflight invalidation is not a gate step. It ensures an early classification or validation
-failure cannot leave prior authorization usable.
+This preflight initialization is not a gate step.
 
 ## Step 1 — Classify
 
@@ -123,6 +125,16 @@ pass for gate flow, but preserve every non-Python advisory, missing-heuristic no
 waiver path plus reason in Step 2 and review evidence. A waiver suppresses only that file's
 assertion sensor; it never skips tests, mutation checks, invariants, or another file.
 
+After preserving the sensor's primary result, retain each surfaced disposition until Step 4 has
+computed the exact `reviewed_diff_sha256`. Then make exactly one advisory
+`emit-decision-event.py` append attempt for each surfaced result: `assertion_blocking` for each
+blocking finding, `assertion_advisory` for each advisory finding, absence, or inconclusive
+disposition, and `assertion_waived` for each accepted per-file waiver. Use
+`$reviewed_diff_sha256` as `--candidate`, the full `$policy_sha`, surface `/forge:commit`, and a
+stable non-secret finding/disposition code as `--reason`. A clean sensor result with no surfaced
+advisory disposition emits no assertion event. Event emission is advisory and occurs only after
+the sensor result is preserved; an emitter failure never changes Step 2's result or exit status.
+
 For a control-class commit, additionally run:
 
 ```bash
@@ -152,13 +164,15 @@ blocks the chain unless the user explicitly invokes the matching skip directive.
 
 ## Step 4 — Stage, Scan, and Review
 
-Delete any authorization left by an earlier attempt before staging or reviewing:
+Clear this chain's candidate variables before staging or reviewing. Do not delete markers belonging
+to other candidates:
 
 ```bash
-rm -f .forge/tmp/commit-authorized
+reviewed_diff_sha256=''
+commit_marker=''
 ```
 
-Repeat that deletion whenever Step 4 restarts. A secret finding, reviewer launch failure,
+Repeat that reset whenever Step 4 restarts. A secret finding, reviewer launch failure,
 unavailable reviewer, BLOCK, ambiguous verdict, hash mismatch, rejected control approval, or
 iteration-cap escalation leaves no authorization marker behind. A marker from an earlier PASS is
 never evidence for the current attempt, even when the staged bytes happen to be identical.
@@ -191,6 +205,11 @@ if ! reviewed_diff_sha256="$(git diff --cached | shasum -a 256 | awk '{print $1}
   echo "forge: could not hash staged diff — review blocked" >&2
   exit 1
 fi
+git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)" || exit 1
+forge_main_root="$(cd "$(dirname "$git_common_dir")" && pwd -P)" || exit 1
+commit_marker="$forge_main_root/.forge/tmp/authorized/$reviewed_diff_sha256"
+# Invalidate only this chain's same-candidate authorization before review.
+rm -f "$commit_marker" || exit 1
 ```
 
 Before selecting a reviewer, mechanically classify those exact staged bytes against the same
@@ -246,6 +265,16 @@ not a PASS. On each BLOCK, first preserve the primary BLOCK result, then make ex
 append attempt with `emit-decision-event.py` using event `review_block`, candidate
 `$reviewed_diff_sha256`, full `$policy_sha`, surface `/forge:commit`, and a stable non-secret reason. Do not
 let event failure change the BLOCK outcome or its exit status.
+
+After preserving each reviewer's complete primary verdict and findings, make exactly one advisory
+event append attempt per finding that invocation raised. A `review-cheap` invocation uses
+`review_cheap_finding`; a `review-final` invocation uses `review_final_finding`. Pass the exact
+`$reviewed_diff_sha256` as `--candidate`, the full `$policy_sha`, surface `/forge:commit`, and the
+finding's normalized stable severity (`CRITICAL`, `MAJOR`, or `MINOR`) as `--reason`. Count findings
+from every invocation, including a BLOCK later superseded by a fresh review. A reviewer invocation
+with no findings emits no finding event. These attempts occur after the verdict and findings are
+preserved and remain advisory: an emitter failure never changes the verdict, iteration, or exit
+status.
 
 Give the reviewer the following upstream review instruction. Replace each angle-bracket slot with
 the byte-for-byte interior of the named region from the committed HEAD snapshot obtained at chain
@@ -326,11 +355,12 @@ captured PASS time is now older than 30 minutes, delete any marker and restart S
 anything other than explicit candidate-bound approval leaves the marker absent and stops the chain.
 Do not enter Step 5 autonomously.
 
-Only after any required control approval and the final matching hash, write the marker:
+Only after any required control approval and the final matching hash, resolve the common
+main-checkout root from the invoking Git context and write only that candidate marker:
 
 ```bash
-mkdir -p .forge/tmp
-printf '%s\n%s\n' "$reviewed_diff_sha256" "$reviewed_at" > .forge/tmp/commit-authorized
+mkdir -p "$(dirname "$commit_marker")"
+printf '%s\n%s\n' "$reviewed_diff_sha256" "$reviewed_at" > "$commit_marker"
 ```
 
 The review-PASS marker has exactly two lines: the reviewed staged-diff SHA-256 and the UTC PASS
@@ -339,7 +369,7 @@ same full policy revision that supplied every tier region:
 
 ```bash
 printf '%s\n%s\n%s\n%s\n' "$reviewed_diff_sha256" "$reviewed_at" \
-  'tier: fast' "policy: $policy_sha" > .forge/tmp/commit-authorized
+  'tier: fast' "policy: $policy_sha" > "$commit_marker"
 ```
 
 The only other valid shape is the exact three-line user-skip marker below. Any missing marker,
@@ -355,7 +385,8 @@ check first, acquire the commit lock second, re-hash inside the lock, commit onl
 match, and release the lock after both successful and failed commit attempts:
 
 ```bash
-commit_marker='.forge/tmp/commit-authorized'
+# `commit_marker` is the absolute common-root candidate path established in Step 4.
+test -n "$commit_marker" || exit 1
 export FORGE_SESSION_PID=$$
 lock_maybe_acquired=0
 
@@ -486,12 +517,17 @@ shape and recomputes fast eligibility at `git commit`; never bypass or reinterpr
 
 The two post-success calls occur only after the commit succeeds and mandatory marker cleanup has
 run; a release diagnostic may already have been reported without retracting that commit. `gate_commit` supplies the eligible-commit denominator; a fast commit additionally owns
-the sole `fast_allowed` event. The emitter holds `.forge/tmp/events.lock` only for its one compact
-sorted-key JSONL append, with its local 2-second polling and hard 5-second bound. Its stable timeout
-code is `event-append-lock-timeout`. A timeout, append failure, or release failure may be reported
-but must never change, undo, or misreport the already-delivered commit result. Downstream
-aggregation deduplicates both events by `(event, candidate)` when the resulting full commit SHA is
-nonempty.
+the sole `fast_allowed` event. After preserving that primary outcome, the advisory emitter
+registers an in-flight writer but acquires no lock. It opens the canonical
+`.forge/tmp/decisions/events.jsonl` with `os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+0o600)`, makes exactly one `os.write()`, and treats a short write as a failure. The
+`.forge/tmp/events.lock` gates only drift-check's prune read-and-replace and its coordination with
+registered writers; it never serializes event appends. Registration or append failure may be
+reported but must never change, undo, or misreport the already-delivered commit result. This
+non-interleaving guarantee relies on POSIX `O_APPEND` semantics on a local filesystem on the
+supported macOS and Linux platforms; it does not extend to NFS/SMB network filesystems, and Windows
+is out of scope. Downstream aggregation deduplicates both events by `(event, candidate)` when the
+resulting full commit SHA is nonempty.
 
 ## User-Directed Skips
 
@@ -515,18 +551,23 @@ subsequent gate status. When an explicitly identified run is open, append a jour
 directive, skipped steps, candidate SHA-256 when already available, and user authority. With no such
 run, append the audit line shown below immediately.
 
-For a Step 4 skip, first delete any earlier authorization marker. Still stage only the explicit
+For a Step 4 skip, first reset this chain's candidate variables without deleting another
+candidate's authorization marker. Still stage only the explicit
 target paths and secret-scan the staged candidate; do not launch a reviewer. Hash the current staged
 diff and capture the skip time, but do not write the marker yet:
 
 ```bash
-rm -f .forge/tmp/commit-authorized
-mkdir -p .forge/tmp
+reviewed_diff_sha256=''
+commit_marker=''
 set -o pipefail
 if ! reviewed_diff_sha256="$(git diff --cached | shasum -a 256 | awk '{print $1}')"; then
   echo "forge: could not hash staged diff — review skip blocked" >&2
   exit 1
 fi
+git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)" || exit 1
+forge_main_root="$(cd "$(dirname "$git_common_dir")" && pwd -P)" || exit 1
+commit_marker="$forge_main_root/.forge/tmp/authorized/$reviewed_diff_sha256"
+rm -f "$commit_marker" || exit 1
 reviewed_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 ```
 
@@ -537,10 +578,13 @@ approval, recompute the staged-diff SHA-256 and require the same value. If stagi
 was refused, or the captured skip time is now older than 30 minutes, keep the marker absent and stop
 or restart Step 4 as applicable.
 
-Only after that control approval when required, write the user-directed marker:
+Only after that control approval when required, resolve the common main-checkout root as above,
+create `.forge/tmp/authorized/`, set `commit_marker` to the exact candidate path, and write the
+user-directed marker:
 
 ```bash
-printf '%s\n%s\n%s\n' "$reviewed_diff_sha256" "$reviewed_at" 'skip: user-directed' > .forge/tmp/commit-authorized
+mkdir -p "$(dirname "$commit_marker")"
+printf '%s\n%s\n%s\n' "$reviewed_diff_sha256" "$reviewed_at" 'skip: user-directed' > "$commit_marker"
 ```
 
 The third line must be exactly `skip: user-directed`, so this marker has exactly three lines. This

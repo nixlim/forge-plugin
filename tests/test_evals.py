@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import csv
+import json
 import subprocess
 import tempfile
 import unittest
@@ -200,6 +202,15 @@ class RunEvalsTests(ShellScriptTestCase):
 
 
 class AggregateTelemetryTests(ShellScriptTestCase):
+    HEADER = (
+        "unit,feature,model,elapsed_s,critical_path_s,tokens,cost_usd,"
+        "review_iterations,rework_s,eligible_commits,fast_allowed,"
+        "fast_denied_policy,fast_denied_eligibility,user_skips,review_blocks,"
+        "halt_events,guard_denies,assertion_blocking,assertion_advisory,"
+        "assertion_waived,review_cheap_findings,review_final_findings"
+    )
+    APPEND_HEADER = "session," + HEADER
+
     def test_non_forge_working_directory_is_a_silent_noop(self) -> None:
         result = self.run_script(
             AGGREGATE_TELEMETRY,
@@ -262,9 +273,9 @@ serialisation.review_wait_s: 4
         self.assertEqual(
             csv_path.read_text(encoding="utf-8").splitlines(),
             [
-                "unit,feature,model,elapsed_s,critical_path_s,tokens,cost_usd,review_iterations,rework_s,eligible_commits,fast_allowed,fast_denied_policy,fast_denied_eligibility,user_skips,review_blocks,halt_events,guard_denies",
-                "task-06,enforcement,terra,40,30,120,1.25,2,5,,,,,,,,",
-                "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0",
+                self.HEADER,
+                "task-06,enforcement,terra,40,30,120,1.25,2,5,,,,,,,,,,,,,",
+                "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0,0,0,0,0,0",
             ],
         )
 
@@ -292,7 +303,6 @@ serialisation.review_wait_s: 4
              "event": "review_block", "policy_sha": "b" * 40,
              "reason": "review-block", "surface": "/forge:commit"},
         ])
-        import json
         (decisions / "events.jsonl").write_text(
             "\n".join(json.dumps(item, sort_keys=True, separators=(",", ":")) for item in events) + "\n",
             encoding="utf-8",
@@ -306,14 +316,13 @@ serialisation.review_wait_s: 4
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             (self.repo / "events.csv").read_text(encoding="utf-8").splitlines()[-1],
-            "__decision_totals__,,,,,,,,,1,1,1,0,0,2,1,1",
+            "__decision_totals__,,,,,,,,,1,1,1,0,0,2,1,1,0,0,0,0,0",
         )
 
-    def test_every_event_counter_dedupes_nonempty_candidates(self) -> None:
+    def test_only_gate_outcomes_dedupe_nonempty_candidates(self) -> None:
         (self.repo / ".forge-manifest").write_text("forge_version: 1\n", encoding="utf-8")
         decisions = self.repo / ".forge/tmp/decisions"
         decisions.mkdir(parents=True)
-        import json
         commit_candidate = "a" * 40
         diff_candidates = {
             event: chr(ord("b") + index) * 64
@@ -337,6 +346,17 @@ serialisation.review_wait_s: 4
                 "event": "halt_event", "policy_sha": "f" * 40,
                 "reason": "AGENT_HALT", "surface": "check-halt"}
         events.extend((halt, dict(halt)))
+        for index, event in enumerate((
+            "assertion_blocking", "assertion_advisory", "assertion_waived",
+            "review_cheap_finding", "review_final_finding",
+        )):
+            record = {
+                "at": "2026-08-12T10:00:00Z",
+                "candidate": str(index + 3) * 64,
+                "event": event, "policy_sha": "f" * 40,
+                "reason": "MAJOR", "surface": "/forge:commit",
+            }
+            events.extend((record, dict(record)))
         (decisions / "events.jsonl").write_text(
             "\n".join(json.dumps(item, sort_keys=True, separators=(",", ":")) for item in events) + "\n",
             encoding="utf-8",
@@ -350,7 +370,7 @@ serialisation.review_wait_s: 4
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             (self.repo / "events.csv").read_text(encoding="utf-8").splitlines()[-1],
-            "__decision_totals__,,,,,,,,,1,1,1,1,1,1,2,3",
+            "__decision_totals__,,,,,,,,,1,1,1,1,1,1,2,3,2,2,2,2,2",
         )
 
     def test_empty_events_file_still_writes_zero_decision_totals(self) -> None:
@@ -376,8 +396,8 @@ serialisation.review_wait_s: 4
         self.assertEqual(
             (self.repo / "events.csv").read_text(encoding="utf-8").splitlines(),
             [
-                "unit,feature,model,elapsed_s,critical_path_s,tokens,cost_usd,review_iterations,rework_s,eligible_commits,fast_allowed,fast_denied_policy,fast_denied_eligibility,user_skips,review_blocks,halt_events,guard_denies",
-                "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0",
+                self.HEADER,
+                "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0,0,0,0,0,0",
             ],
         )
 
@@ -407,7 +427,7 @@ serialisation.review_wait_s: 4
         rows = (self.repo / "quoted.csv").read_bytes().splitlines()
         self.assertEqual(
             rows[1],
-            b'quoted-unit,"has,comma and ""quote""",terra,0,0,0,0.0,0,0,,,,,,,,',
+            b'quoted-unit,"has,comma and ""quote""",terra,0,0,0,0.0,0,0,,,,,,,,,,,,,',
         )
 
     def test_malformed_or_out_of_window_events_still_write_zero_totals(self) -> None:
@@ -440,7 +460,42 @@ serialisation.review_wait_s: 4
         self.assertIn("ignoring malformed decision event", result.stderr)
         self.assertEqual(
             (self.repo / "events.csv").read_text(encoding="utf-8").splitlines()[-1],
-            "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0",
+            "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,0,0,0,0,0,0",
+        )
+
+    def test_short_write_prefix_does_not_hide_later_intact_event(self) -> None:
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True)
+        prefix = {
+            "at": "2026-08-12T10:00:00Z", "candidate": "",
+            "event": "halt_event", "policy_sha": "", "reason": "",
+            "surface": "check-halt",
+        }
+        intact = {
+            "at": "2026-08-12T10:01:00Z", "candidate": "c" * 64,
+            "event": "guard_deny", "policy_sha": "b" * 40,
+            "reason": "marker-missing", "surface": "commit-guard",
+        }
+        (decisions / "events.jsonl").write_text(
+            json.dumps(prefix, sort_keys=True, separators=(",", ":"))
+            + json.dumps(intact, sort_keys=True, separators=(",", ":"))
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY, str(decisions), "--csv", "events.csv",
+            "--since", "2026-08-12T00:00:00Z", "--until", "2026-08-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ignoring malformed decision event prefix", result.stderr)
+        self.assertEqual(
+            (self.repo / "events.csv").read_text(encoding="utf-8").splitlines()[-1],
+            "__decision_totals__,,,,,,,,,0,0,0,0,0,0,0,1,0,0,0,0,0",
         )
 
     def test_unpaired_reversed_and_malformed_windows_exit_two(self) -> None:
@@ -506,7 +561,7 @@ serialisation.review_wait_s: 4
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             (self.repo / "window.csv").read_text(encoding="utf-8").splitlines()[-1],
-            "__decision_totals__,,,,,,,,,0,0,0,0,0,0,2,0",
+            "__decision_totals__,,,,,,,,,0,0,0,0,0,0,2,0,0,0,0,0,0",
         )
 
     def test_missing_duplicate_and_flag_shaped_values_exit_two_exactly(self) -> None:
@@ -603,6 +658,179 @@ serialisation.review_wait_s: 4
             result.stdout.strip(),
             "No decisions directory at '.forge/tmp/decisions' — nothing to aggregate.",
         )
+
+    def write_append_sources(self) -> Path:
+        subprocess.run(
+            ["git", "init", "--quiet", str(self.repo)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (self.repo / ".forge-manifest").write_text(
+            "forge_version: 1\n", encoding="utf-8"
+        )
+        decisions = self.repo / ".forge/tmp/decisions"
+        decisions.mkdir(parents=True, exist_ok=True)
+        (decisions / "events.jsonl").write_text(
+            json.dumps(
+                {
+                    "at": "2026-08-12T10:00:00Z",
+                    "candidate": "a" * 64,
+                    "event": "assertion_advisory",
+                    "policy_sha": "b" * 40,
+                    "reason": "inconclusive",
+                    "surface": "/forge:commit",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return decisions
+
+    def run_append(self, decisions: Path, session: str) -> subprocess.CompletedProcess[str]:
+        return self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--append-csv",
+            ".forge/tmp/telemetry.csv",
+            "--session",
+            session,
+            "--since",
+            "2026-08-12T00:00:00Z",
+            "--until",
+            "2026-08-13T00:00:00Z",
+        )
+
+    def test_append_mode_initializes_once_and_prefixes_every_row(self) -> None:
+        decisions = self.write_append_sources()
+        first = self.run_append(decisions, "session-a")
+        second = self.run_append(decisions, "session-b")
+
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        with (self.repo / ".forge/tmp/telemetry.csv").open() as stream:
+            rows = list(csv.reader(stream))
+        self.assertEqual(",".join(rows[0]), self.APPEND_HEADER)
+        self.assertEqual(sum(row == self.APPEND_HEADER.split(",") for row in rows), 1)
+        self.assertEqual([row[0] for row in rows[1:]], ["session-a", "session-b"])
+        self.assertTrue(all(len(row) == 23 for row in rows))
+        self.assertTrue(all(row[1] == "__decision_totals__" for row in rows[1:]))
+
+    def test_concurrent_append_preserves_complete_session_blocks(self) -> None:
+        decisions = self.write_append_sources()
+        processes = [
+            subprocess.Popen(
+                [
+                    "bash", str(AGGREGATE_TELEMETRY), str(decisions),
+                    "--append-csv", ".forge/tmp/telemetry.csv",
+                    "--session", f"session-{index}",
+                    "--since", "2026-08-12T00:00:00Z",
+                    "--until", "2026-08-13T00:00:00Z",
+                ],
+                cwd=self.repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for index in range(12)
+        ]
+        results = [process.communicate(timeout=20) + (process.returncode,) for process in processes]
+        self.assertTrue(all(code == 0 for _out, _err, code in results), results)
+        path = self.repo / ".forge/tmp/telemetry.csv"
+        with path.open() as stream:
+            rows = list(csv.reader(stream))
+        self.assertEqual(rows.count(self.APPEND_HEADER.split(",")), 1)
+        self.assertEqual(len(rows), 13)
+        self.assertEqual({row[0] for row in rows[1:]}, {f"session-{i}" for i in range(12)})
+        self.assertTrue(all(len(row) == 23 for row in rows))
+
+    def test_append_rejects_bad_header_and_preserves_prior_bytes(self) -> None:
+        decisions = self.write_append_sources()
+        target = self.repo / ".forge/tmp/telemetry.csv"
+        target.write_bytes(b"wrong,header\nprior,row\n")
+        before = target.read_bytes()
+
+        result = self.run_append(decisions, "session-a")
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_append_rejects_duplicate_header_and_preserves_prior_bytes(self) -> None:
+        decisions = self.write_append_sources()
+        target = self.repo / ".forge/tmp/telemetry.csv"
+        header = (self.APPEND_HEADER + "\n").encode()
+        target.write_bytes(header + header)
+        before = target.read_bytes()
+
+        result = self.run_append(decisions, "session-a")
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_append_refuses_live_foreign_lock_and_preserves_prior_bytes(self) -> None:
+        decisions = self.write_append_sources()
+        initialized = self.run_append(decisions, "session-a")
+        self.assertEqual(initialized.returncode, 0, initialized.stdout + initialized.stderr)
+        target = self.repo / ".forge/tmp/telemetry.csv"
+        before = target.read_bytes()
+        (self.repo / ".forge/tmp/telemetry.lock").write_text(
+            f"{os.getpid()} 1\n", encoding="utf-8"
+        )
+
+        result = self.run_script(
+            AGGREGATE_TELEMETRY,
+            str(decisions),
+            "--append-csv",
+            ".forge/tmp/telemetry.csv",
+            "--session",
+            "session-b",
+            "--since",
+            "2026-08-12T00:00:00Z",
+            "--until",
+            "2026-08-13T00:00:00Z",
+            env_overrides={"FORGE_COMMIT_LOCK_TIMEOUT": "1"},
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_missing_source_append_writes_nothing(self) -> None:
+        subprocess.run(
+            ["git", "init", "--quiet", str(self.repo)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
+
+        result = self.run_append(self.repo / ".forge/tmp/decisions", "session-a")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.repo / ".forge/tmp/telemetry.csv").exists())
+        self.assertFalse((self.repo / ".forge/tmp/telemetry.lock").exists())
+
+    def test_append_requires_nonempty_session_and_paired_mode(self) -> None:
+        (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
+        cases = (
+            (("decisions", "--append-csv", "out.csv"),
+             "--session is required with --append-csv"),
+            (("decisions", "--append-csv", "out.csv", "--session", ""),
+             "--session requires a nonempty value"),
+            (("decisions", "--csv", "one.csv", "--append-csv", "two.csv"),
+             "--csv and --append-csv are mutually exclusive"),
+            (("decisions", "--csv", "one.csv", "--session", "s"),
+             "--session requires --append-csv"),
+        )
+        for args, reason in cases:
+            with self.subTest(args=args):
+                result = self.run_script(AGGREGATE_TELEMETRY, *args)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(
+                    result.stderr,
+                    f"forge: invalid aggregate-telemetry arguments: {reason}\n",
+                )
 
 
 if __name__ == "__main__":

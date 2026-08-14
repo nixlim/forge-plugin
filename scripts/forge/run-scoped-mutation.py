@@ -578,17 +578,33 @@ def verification_record(
 
 
 def append_record(path: Path, record: dict[str, object]) -> None:
+    # forge: modified from upstream — load D13 ownership only for an actual
+    # journal append, so the standalone mutation sensor remains portable.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from codex_orchestrator.journal import (  # noqa: PLC0415
+            CoordinationRefusal,
+            JournalAppendRefusal,
+            append_owned_record,
+        )
+    except (ImportError, OSError):
+        return
+
     try:
         journal_record = record.copy()
         observation = journal_record.get("observation")
         if isinstance(observation, str) and len(observation) > JOURNAL_OBSERVATION_LIMIT:
             prefix_length = JOURNAL_OBSERVATION_LIMIT - len(JOURNAL_TRUNCATION_MARKER)
             journal_record["observation"] = observation[:prefix_length] + JOURNAL_TRUNCATION_MARKER
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write(
-                json_text(journal_record, separators=(",", ":")) + "\n"
-            )
-            stream.flush()
+        append_owned_record(path, journal_record)
+    except JournalAppendRefusal as exc:
+        # FR-191 ownership refusals are hard and operator-visible, while the
+        # mutation result itself retains its established advisory disposition.
+        print(str(exc), file=sys.stderr)
+        return
+    except CoordinationRefusal as exc:
+        print(str(exc), file=sys.stderr)
+        return
     except (OSError, UnicodeError):
         # Evidence is emitted before every append attempt. Journal persistence is
         # advisory, so a write failure degrades to that evidence-only record.

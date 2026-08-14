@@ -23,6 +23,8 @@ from typing import Any
 
 OUTPUT_LIMIT = 65_536
 NON_MUTATION_TIMEOUT = 300
+EVENT_RECOVERY_BYTES = 65_536
+EVENT_RECOVERY_CANDIDATES = 64
 CONFIG_WARNING = (
     "forge: malformed drift-config — using defaults "
     "(cadence: 14d, retention: forever, event-retention: 400d)"
@@ -36,6 +38,11 @@ EVENTS = {
     "review_block",
     "halt_event",
     "guard_deny",
+    "assertion_blocking",
+    "assertion_advisory",
+    "assertion_waived",
+    "review_cheap_finding",
+    "review_final_finding",
 }
 REGION_ORDER = (
     "project-overview",
@@ -53,7 +60,15 @@ REGION_ORDER = (
     "drift-config",
     "trigger-paths",
 )
-DEDUPE_EVENTS = EVENTS - {"halt_event"}
+DEDUPE_EVENTS = {
+    "gate_commit",
+    "fast_allowed",
+    "fast_denied_policy",
+    "fast_denied_eligibility",
+    "user_skip",
+    "review_block",
+    "guard_deny",
+}
 EVENT_KEYS = {"at", "candidate", "event", "policy_sha", "reason", "surface"}
 FULL_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 DIFF_SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -415,6 +430,15 @@ def parse_event(item: Any) -> tuple[dt.datetime, str, str, str]:
     if event in {"gate_commit", "fast_allowed"}:
         if not FULL_SHA.fullmatch(candidate):
             raise ValueError
+    elif event in {
+        "assertion_blocking",
+        "assertion_advisory",
+        "assertion_waived",
+        "review_cheap_finding",
+        "review_final_finding",
+    }:
+        if not DIFF_SHA.fullmatch(candidate):
+            raise ValueError
     elif candidate and not DIFF_SHA.fullmatch(candidate):
         raise ValueError
     if item["policy_sha"] and not FULL_SHA.fullmatch(item["policy_sha"]):
@@ -422,6 +446,30 @@ def parse_event(item: Any) -> tuple[dt.datetime, str, str, str]:
     if not SAFE_TEXT.fullmatch(item["surface"]) or (item["reason"] and not SAFE_TEXT.fullmatch(item["reason"])):
         raise ValueError
     return at, event, candidate, raw_at
+
+
+def parse_event_line(raw: bytes) -> tuple[dict[str, str], dt.datetime, str, str, str, bool]:
+    """Parse a normal event line or a bounded valid-object suffix after corruption."""
+    try:
+        item = json.loads(raw.decode("utf-8"))
+        at, event, candidate, raw_at = parse_event(item)
+        return item, at, event, candidate, raw_at, False
+    except (UnicodeError, json.JSONDecodeError, ValueError) as original:
+        window_start = max(1, len(raw) - EVENT_RECOVERY_BYTES)
+        offset = len(raw)
+        attempts = 0
+        while attempts < EVENT_RECOVERY_CANDIDATES:
+            offset = raw.rfind(b"{", window_start, offset)
+            if offset < window_start:
+                break
+            attempts += 1
+            try:
+                item = json.loads(raw[offset:].decode("utf-8"))
+                at, event, candidate, raw_at = parse_event(item)
+            except (UnicodeError, json.JSONDecodeError, ValueError):
+                continue
+            return item, at, event, candidate, raw_at, True
+        raise ValueError from original
 
 
 def quarter_start(now: dt.datetime) -> dt.datetime:
@@ -446,6 +494,56 @@ def atomic_replace(path: Path, payload: bytes) -> None:
         raise
 
 
+def registered_event_writer_pids(repo: Path) -> tuple[list[int], bool]:
+    writer_dir = repo / ".forge/tmp/event-writers"
+    try:
+        tokens = list(writer_dir.iterdir())
+    except FileNotFoundError:
+        return [], False
+    except OSError:
+        return [], True
+    live: list[int] = []
+    uncertain = False
+    for token in tokens:
+        if not token.is_file():
+            uncertain = True
+            continue
+        raw_pid = token.name.split("-", 1)[0]
+        if re.fullmatch(r"[1-9][0-9]*", raw_pid, re.ASCII) is None:
+            uncertain = True
+            continue
+        pid = int(raw_pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            try:
+                token.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                uncertain = True
+        except PermissionError:
+            uncertain = True
+        except OSError:
+            uncertain = True
+        else:
+            live.append(pid)
+    return live, uncertain
+
+
+def drain_event_writers(repo: Path) -> bool:
+    # The events lock is already held. A writer registers before checking that
+    # lock, so no writer can open the append target after an empty scan here.
+    deadline = time.monotonic() + 5
+    while True:
+        live, uncertain = registered_event_writer_pids(repo)
+        if not live and not uncertain:
+            return True
+        if uncertain or time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def aggregate_and_prune(repo: Path, plugin: Path, now: dt.datetime, retention_days: int) -> dict[str, Any]:
     window_start = quarter_start(now)
     counts = {event: 0 for event in EVENTS}
@@ -458,11 +556,12 @@ def aggregate_and_prune(repo: Path, plugin: Path, now: dt.datetime, retention_da
             raise Failure("telemetry-read", "telemetry", "telemetry aggregation failed") from exc
         for raw in raw_lines:
             try:
-                item = json.loads(raw.decode("utf-8"))
-                at, event, candidate, _raw_at = parse_event(item)
-            except (UnicodeError, json.JSONDecodeError, ValueError):
+                _item, at, event, candidate, _raw_at, recovered = parse_event_line(raw)
+            except ValueError:
                 print("forge: malformed decision event ignored", file=sys.stderr)
                 continue
+            if recovered:
+                print("forge: malformed decision event prefix ignored", file=sys.stderr)
             if window_start <= at < now:
                 key = (event, candidate)
                 if event in DEDUPE_EVENTS and candidate:
@@ -498,8 +597,12 @@ def aggregate_and_prune(repo: Path, plugin: Path, now: dt.datetime, retention_da
         telemetry["event_prune"]["failure"] = "event-prune-lock"
         return telemetry
     try:
+        if not drain_event_writers(repo):
+            telemetry["event_prune"]["failure"] = "event-prune-writer-drain"
+            return telemetry
         # Re-read while holding the lock: emitters may have appended between
-        # aggregation and acquisition. Re-parse for retention only.
+        # aggregation and acquisition. Registered emitters have drained, and
+        # new emitters observe this lock before opening the append target.
         try:
             current_lines = events_path.read_bytes().splitlines(keepends=True)
         except OSError:
@@ -523,15 +626,23 @@ def aggregate_and_prune(repo: Path, plugin: Path, now: dt.datetime, retention_da
         removed = 0
         for raw in current_lines:
             try:
-                item = json.loads(raw.decode("utf-8"))
-                at, _event, _candidate, raw_at = parse_event(item)
-            except (UnicodeError, json.JSONDecodeError, ValueError):
+                item, at, _event, _candidate, raw_at, recovered = parse_event_line(raw)
+            except ValueError:
                 removed += 1
                 continue
+            if recovered:
+                removed += 1
             if at < cutoff:
                 removed += 1
             else:
-                retained.append(raw if raw.endswith(b"\n") else raw + b"\n")
+                if recovered:
+                    retained.append(
+                        json.dumps(
+                            item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                        ).encode("utf-8") + b"\n"
+                    )
+                else:
+                    retained.append(raw if raw.endswith(b"\n") else raw + b"\n")
                 retained_times.append((at, raw_at))
         try:
             atomic_replace(events_path, b"".join(retained))

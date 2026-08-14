@@ -259,6 +259,17 @@ valid waiver path plus reason remains in Gate 2 and Gate 3 evidence. A waiver af
 assertion sensor for its one file; it never skips tests, scoped mutation, invariants, or sensing in
 another file.
 
+After preserving the sensor's primary result, hash the exact merge-diff bytes used for this gate
+candidate and make exactly one advisory `emit-decision-event.py` append attempt for each surfaced
+result: `assertion_blocking` for every blocking finding, `assertion_advisory` for every advisory
+finding, absence, or inconclusive disposition, and `assertion_waived` for every accepted per-file
+waiver. Use that lowercase SHA-256 as `--candidate`, the full `policy_sha`, surface
+`/forge:worktree-merge`, and a stable non-secret finding/disposition code as `--reason`. A clean
+sensor result with no surfaced advisory disposition emits no assertion event. Apply this same rule
+to an in-lock Gate 2 rerun, using the exact integrated merge diff it sensed. These attempts happen
+only after the sensor result is preserved and are advisory; an emitter failure never changes the
+Gate 2 result or exit status.
+
 ## Gate 3 — Binding adversarial review
 
 Gate 3 is unconditional. Do not skip, downgrade, replace, or auto-PASS it for an effective-fast
@@ -291,6 +302,15 @@ advisory append attempt through `${CLAUDE_PLUGIN_ROOT}/scripts/forge/emit-decisi
 event `review_block`, candidate equal to the lowercase SHA-256 of the exact reviewed merge diff,
 full `policy_sha`, surface `/forge:worktree-merge`, and a stable non-secret reason. An event timeout or append
 failure never changes the Gate 3 verdict or exit status.
+
+After preserving each `review-final` invocation's complete verdict and findings, make exactly one
+advisory `review_final_finding` append attempt per finding it raised. Use the lowercase SHA-256 of
+the exact reviewed merge diff as `--candidate`, the full `policy_sha`, surface
+`/forge:worktree-merge`, and the finding's normalized stable severity (`CRITICAL`, `MAJOR`, or
+`MINOR`) as `--reason`. Count findings from every invocation, including BLOCKs later superseded and
+every required in-lock review of the integrated range. An invocation with no findings emits no
+finding event. These attempts occur after the verdict and findings are preserved; emitter failure
+never changes the verdict, review iteration, or exit status.
 
 For a revision, commit the fix through `/forge:commit`, re-establish a clean worktree, and re-run
 the affected Gates 1 and 2 before re-review. Use a maximum of 8 review iterations. Dispositioning
@@ -526,11 +546,15 @@ remote default branch. No failed merge path may remove either the worktree or th
 ## Record authority and report
 
 Every decision append is advisory and occurs only after its primary outcome has been delivered.
-The emitter alone acquires `.forge/tmp/events.lock` for one compact sorted-key JSONL record, polls
-at 2 seconds, stops after 5 seconds with stable code `event-append-lock-timeout`, and never inherits
-the rebase/commit lock's 300-second wait. Event append, timeout, and lock-release failures cannot
-alter a permission decision, review BLOCK, push, cleanup, or its exit status. Aggregation
-deduplicates merge review blocks by `(event, candidate)`.
+The emitter registers an in-flight writer but acquires no lock. It opens the canonical
+`.forge/tmp/decisions/events.jsonl` with `os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+0o600)`, makes exactly one `os.write()`, and treats a short write as a failure. The
+`.forge/tmp/events.lock` gates only drift-check's prune read-and-replace and its coordination with
+registered writers; it never serializes event appends. Registration or append failures cannot
+alter a permission decision, review BLOCK, push, cleanup, or its exit status. This non-interleaving
+guarantee relies on POSIX `O_APPEND` semantics on a local filesystem on the supported macOS and
+Linux platforms; it does not extend to NFS/SMB network filesystems, and Windows is out of scope.
+Aggregation deduplicates merge review blocks by `(event, candidate)`.
 
 Treat every agent handoff and claimed gate result as a claim, never gate evidence. Before any
 commit or merge that reintegrates agent work, the orchestrator must itself re-run Gates 1 and 2 in

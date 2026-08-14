@@ -24,6 +24,7 @@ from pathlib import Path
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 
@@ -777,6 +778,335 @@ def emit_deny(reason: str) -> None:
     sys.stdout.flush()
 
 
+def audit_event_launch_failure(context: RepoContext) -> bool:
+    """Count an advisory emitter launch failure without changing hook output."""
+    audit_path = context.main_root / ".forge" / "tmp" / "halt-audit.log"
+    payload = (
+        f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} "
+        "decision event append skipped (code event-append-launch-failed)\n"
+    ).encode("utf-8")
+    try:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(
+            audit_path,
+            os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+            0o600,
+        )
+        try:
+            os.fchmod(descriptor, 0o600)
+            if os.write(descriptor, payload) != len(payload):
+                raise OSError("short audit write")
+        finally:
+            os.close(descriptor)
+        return True
+    except OSError:
+        return False
+
+
+def marker_matches_descriptor(marker: Path, descriptor: int) -> bool:
+    """Return whether marker still names the inode opened by this event."""
+    try:
+        marker_stat = marker.stat(follow_symlinks=False)
+        descriptor_stat = os.fstat(descriptor)
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(marker_stat.st_mode)
+        and stat.S_ISREG(descriptor_stat.st_mode)
+        and
+        marker_stat.st_dev == descriptor_stat.st_dev
+        and marker_stat.st_ino == descriptor_stat.st_ino
+    )
+
+
+def write_event_marker(descriptor: int, payload: bytes) -> bool:
+    """Replace marker contents through its already-open, identity-stable FD."""
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        if os.write(descriptor, payload) != len(payload):
+            raise OSError("short outcome-marker write")
+        os.ftruncate(descriptor, len(payload))
+        os.fsync(descriptor)
+        return True
+    except OSError:
+        return False
+
+
+def publish_event_failure_marker(marker: Path, payload: bytes) -> bool:
+    """Create a separate exact terminal marker without reusing pending text."""
+    failed_marker = marker.with_name(
+        marker.name.replace("decision-event-pending.", "decision-event-failed.", 1)
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            failed_marker,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        if os.write(descriptor, payload) != len(payload):
+            raise OSError("short failure-marker write")
+        os.fsync(descriptor)
+        if not marker_matches_descriptor(failed_marker, descriptor):
+            raise OSError("failure-marker identity changed")
+        return True
+    except OSError:
+        if descriptor is not None and marker_matches_descriptor(
+            failed_marker, descriptor
+        ):
+            try:
+                failed_marker.unlink()
+            except OSError:
+                pass
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def preserve_event_failure_marker(
+    marker: Path,
+    descriptor: int,
+    code: str,
+) -> bool:
+    """Leave one per-event diagnostic when detached emission cannot finish.
+
+    The marker is populated before launch, so it remains a countable fallback
+    even when the event stream and halt audit become unavailable together.
+    """
+    diagnostic = f"forge: decision event append skipped ({code})\n".encode("utf-8")
+    outcome_written = write_event_marker(descriptor, diagnostic)
+    failed_marker = marker.with_name(
+        marker.name.replace("decision-event-pending.", "decision-event-failed.", 1)
+    )
+    if outcome_written:
+        if marker_matches_descriptor(marker, descriptor):
+            try:
+                os.rename(marker, failed_marker)
+                return True
+            except OSError:
+                # The still-named marker already contains the exact code.
+                return True
+        # The birth inode contains the exact code, but its original name was
+        # substituted. Never mutate that pathname.
+        return True
+
+    # Do not rename unchanged outcome-unconfirmed text. Publish a fresh exact
+    # terminal marker; if even that fails, retain the pending marker as an
+    # honest, countable unknown outcome.
+    published = publish_event_failure_marker(marker, diagnostic)
+    if published and marker_matches_descriptor(marker, descriptor):
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+    return published
+
+
+def create_event_pending_marker(context: RepoContext) -> tuple[Path, int] | None:
+    pending_dir = context.main_root / ".forge" / "tmp"
+    try:
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        for _ in range(8):
+            marker = pending_dir / (
+                f"decision-event-pending.{os.getpid()}-{os.urandom(16).hex()}"
+            )
+            try:
+                descriptor = os.open(
+                    marker,
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                )
+            except FileExistsError:
+                continue
+            try:
+                payload = (
+                    "forge: decision event outcome pending "
+                    "(code event-append-outcome-unconfirmed)\n"
+                ).encode("utf-8")
+                if os.write(descriptor, payload) != len(payload):
+                    raise OSError("short pending-marker write")
+                os.fsync(descriptor)
+                if not marker_matches_descriptor(marker, descriptor):
+                    raise OSError("pending-marker identity changed")
+            except OSError:
+                if marker_matches_descriptor(marker, descriptor):
+                    try:
+                        marker.unlink()
+                    except OSError:
+                        pass
+                os.close(descriptor)
+                raise
+            return marker, descriptor
+    except OSError:
+        pass
+    audit_event_launch_failure(context)
+    return None
+
+
+EVENT_EMITTER_WORKER = """
+from pathlib import Path
+import os
+import stat
+import subprocess
+import sys
+
+marker = Path(sys.argv[1])
+marker_descriptor = int(sys.argv[2])
+audit_path = Path(sys.argv[3])
+audit_payload = sys.argv[4].encode("utf-8")
+failed_marker = marker.with_name(
+    marker.name.replace("decision-event-pending.", "decision-event-failed.", 1)
+)
+def marker_matches_descriptor():
+    try:
+        marker_stat = marker.stat(follow_symlinks=False)
+        descriptor_stat = os.fstat(marker_descriptor)
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(marker_stat.st_mode)
+        and stat.S_ISREG(descriptor_stat.st_mode)
+        and
+        marker_stat.st_dev == descriptor_stat.st_dev
+        and marker_stat.st_ino == descriptor_stat.st_ino
+    )
+
+def write_marker(payload):
+    try:
+        os.lseek(marker_descriptor, 0, os.SEEK_SET)
+        if os.write(marker_descriptor, payload) != len(payload):
+            raise OSError("short outcome-marker write")
+        os.ftruncate(marker_descriptor, len(payload))
+        os.fsync(marker_descriptor)
+        return True
+    except OSError:
+        return False
+
+def publish_failure_marker(payload):
+    descriptor = None
+    try:
+        descriptor = os.open(
+            failed_marker,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        if os.write(descriptor, payload) != len(payload):
+            raise OSError("short failure-marker write")
+        os.fsync(descriptor)
+        marker_stat = failed_marker.stat(follow_symlinks=False)
+        descriptor_stat = os.fstat(descriptor)
+        if not (
+            stat.S_ISREG(marker_stat.st_mode)
+            and stat.S_ISREG(descriptor_stat.st_mode)
+            and marker_stat.st_dev == descriptor_stat.st_dev
+            and marker_stat.st_ino == descriptor_stat.st_ino
+        ):
+            raise OSError("failure-marker identity changed")
+        return True
+    except OSError:
+        if descriptor is not None:
+            try:
+                marker_stat = failed_marker.stat(follow_symlinks=False)
+                descriptor_stat = os.fstat(descriptor)
+                if (
+                    marker_stat.st_dev == descriptor_stat.st_dev
+                    and marker_stat.st_ino == descriptor_stat.st_ino
+                ):
+                    failed_marker.unlink()
+            except OSError:
+                pass
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+try:
+    try:
+        result = subprocess.run(
+            sys.argv[5:],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        diagnostic = result.stderr or b""
+    except OSError:
+        result = None
+        diagnostic = b""
+    diagnostic_offset = diagnostic.find(
+        b"forge: decision event append skipped ("
+    )
+    emitter_failed = diagnostic_offset >= 0
+    worker_failed = result is None or result.returncode != 0
+    failed = emitter_failed or worker_failed
+    if worker_failed and not emitter_failed:
+        try:
+            descriptor = os.open(
+                audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
+            )
+            try:
+                os.fchmod(descriptor, 0o600)
+                if os.write(descriptor, audit_payload) != len(audit_payload):
+                    raise OSError("short audit write")
+            finally:
+                os.close(descriptor)
+        except OSError:
+            pass
+    if emitter_failed:
+        diagnostic_end = diagnostic.find(b"\\n", diagnostic_offset)
+        if diagnostic_end < 0:
+            diagnostic_end = len(diagnostic)
+        else:
+            diagnostic_end += 1
+        outcome_payload = diagnostic[diagnostic_offset:diagnostic_end]
+    elif failed:
+        outcome_payload = (
+            "forge: decision event append skipped (event-append-launch-failed)\\n"
+        ).encode("utf-8")
+    else:
+        outcome_payload = "forge: decision event appended\\n".encode("utf-8")
+    outcome_written = write_marker(outcome_payload)
+    if failed and outcome_written:
+        if marker_matches_descriptor():
+            try:
+                os.rename(marker, failed_marker)
+            except OSError:
+                # The pending pathname already contains the exact failure.
+                pass
+    elif failed:
+        # Never relabel unchanged outcome-unconfirmed text as an exact result.
+        # Prefer a separately created exact marker; retain pending when every
+        # durable exact-code destination is unavailable.
+        published = publish_failure_marker(outcome_payload)
+        if published and marker_matches_descriptor():
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+    elif outcome_written and marker_matches_descriptor():
+        try:
+            marker.unlink()
+        except OSError:
+            pass
+    # If a success-marker update fails, retain outcome-unconfirmed. It is an
+    # honest, countable fallback and must not be silently discarded.
+except BaseException:
+    # The pre-created pending marker deliberately remains outcome-unconfirmed.
+    # A later operator/pruner can count this crash without mistaking it for success.
+    raise
+"""
+
+
 def emit_decision_event(
     emitter: Path,
     context: RepoContext,
@@ -788,9 +1118,24 @@ def emit_decision_event(
 ) -> None:
     """Best-effort telemetry after the denial has already been delivered."""
     environment = context_environment(context)
+    pending = create_event_pending_marker(context)
+    if pending is None:
+        return
+    marker, marker_descriptor = pending
+    launch_failure_payload = (
+        f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} "
+        "decision event append skipped (code event-append-launch-failed)\n"
+    )
     try:
-        subprocess.run(
+        subprocess.Popen(
             [
+                sys.executable,
+                "-c",
+                EVENT_EMITTER_WORKER,
+                str(marker),
+                str(marker_descriptor),
+                str(context.main_root / ".forge" / "tmp" / "halt-audit.log"),
+                launch_failure_payload,
                 sys.executable,
                 str(emitter),
                 "--event",
@@ -809,13 +1154,18 @@ def emit_decision_event(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=8,
+            close_fds=True,
+            pass_fds=(marker_descriptor,),
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        pass
     except OSError:
-        pass
+        surfaced = preserve_event_failure_marker(
+            marker, marker_descriptor, "event-append-launch-failed"
+        )
+        counted = audit_event_launch_failure(context)
+        del surfaced, counted
+    finally:
+        os.close(marker_descriptor)
 
 
 def staged_candidate(context: RepoContext) -> str:
@@ -1006,8 +1356,12 @@ def classifier_eligible(context: RepoContext, revision: str, classifier: Path) -
     return result.returncode == 0
 
 
-def marker_failure(context: RepoContext, classifier: Path) -> str | None:
-    marker = context.main_root / ".forge" / "tmp" / "commit-authorized"
+def marker_failure(
+    context: RepoContext,
+    classifier: Path,
+    candidate: str,
+) -> str | None:
+    marker = context.main_root / ".forge" / "tmp" / "authorized" / candidate
     try:
         lines = marker.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -1041,13 +1395,7 @@ def marker_failure(context: RepoContext, classifier: Path) -> str | None:
     if age_seconds > 1800:
         return "marker stale"
 
-    try:
-        diff = run_context_git(context, "diff", "--cached")
-    except OSError:
-        return "marker hash mismatch"
-    if diff.returncode != 0:
-        return "marker hash mismatch"
-    if hashlib.sha256(diff.stdout).hexdigest() != lines[0]:
+    if candidate != lines[0]:
         return "marker hash mismatch"
     if policy_sha is None:
         return None
@@ -1056,6 +1404,33 @@ def marker_failure(context: RepoContext, classifier: Path) -> str | None:
     if not classifier_eligible(context, policy_sha, classifier):
         return "fast-path eligibility drift"
     return None
+
+
+def sweep_stale_markers(context: RepoContext) -> None:
+    """Best-effort cleanup after the invoking candidate has been validated."""
+    marker_dir = context.main_root / ".forge" / "tmp" / "authorized"
+    try:
+        markers = list(marker_dir.iterdir())
+    except OSError:
+        return
+
+    now = datetime.now(timezone.utc)
+    for marker in markers:
+        if HASH.fullmatch(marker.name) is None:
+            continue
+        try:
+            lines = marker.read_text(encoding="utf-8").splitlines()
+            reviewed_at = datetime.strptime(
+                lines[1], "%Y-%m-%dT%H:%M:%SZ"
+            ).replace(tzinfo=timezone.utc)
+        except (IndexError, OSError, UnicodeError, ValueError):
+            continue
+        if (now - reviewed_at).total_seconds() <= 1800:
+            continue
+        try:
+            marker.unlink()
+        except OSError:
+            pass
 
 
 def main() -> int:
@@ -1108,7 +1483,15 @@ def main() -> int:
             continue
         if not manifest_requires_marker(context):
             continue
-        marker_state = marker_failure(context, classifier)
+        candidate = staged_candidate(context)
+        marker_state = (
+            marker_failure(context, classifier, candidate)
+            if candidate
+            else "marker hash mismatch"
+        )
+        # FR-090 requires the current candidate's state to be determined before
+        # the age sweep, so a present stale marker retains its exact denial.
+        sweep_stale_markers(context)
         failure = (
             marker_state
             if marker_state is not None

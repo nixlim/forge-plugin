@@ -25,7 +25,9 @@
 - Validation profile: added opt-in `--gates` checks and a `profile` payload key while preserving plain validation behavior and output shape.
 - Workflow close sequence: replaced the upstream single descriptive close check with advisory pre-close and mandatory post-close gated checks, embedding the pre-close payload verbatim.
 - Report precondition: the report skill refuses to write `report.md` while post-close gated validation reports issues.
-- Single-active-run rule: the workflow refuses a new run while any journal is unclosed unless the user explicitly designates and records a successor run in its goal.
+- FR-190, DM-006, and DM-007: replaced singleton commit authorization with common-root content-addressed candidate markers, candidate-only consumption, cross-worktree isolation, and validate-before-stale-sweep ordering.
+- FR-014 and FR-192: replaced the upstream single-active-run workflow with an atomically reconciled canonical DM-011 registry that admits only disjoint positive repository pathspec scopes, contains every task file declaration, supports locked widening, and retires scope before successor reuse.
+- FR-191 and DM-010: added the exact three-line PID/host/start journal-owner sidecar, atomic ownership plus `run_started` opening, before-every-append proof, and same-host proven-dead takeover without adding a journal type.
 - Constitution project regions: relocated the inline `project-triggers` and `completeness-project-items` blocks to runtime references to the target repository's root-level `forge-project.md` regions.
 - Governance rules: condensed the seven engine rules for plugin delivery and re-rooted transient state to `.forge/tmp/` and executable references to `${CLAUDE_PLUGIN_ROOT}/scripts/forge/`.
 - Final reviewer runtime references: re-rooted the constitution to `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md` and replaced unavailable installed-template paths with the repository region-file convention.
@@ -77,6 +79,8 @@
 - Evaluation runner: ported `.opencode/evals/run-evals.sh` to `scripts/forge/run-evals.sh` and re-rooted fixtures from `.opencode/evals/tasks/` to `.forge/evals/tasks/` while preserving dependency-free verdict regression semantics.
 - FR-093, FR-160..FR-165: added Forge-only continuous mechanical drift sensing, schema-v1 summaries, locked decision-event pruning, staleness Stop/SessionStart nudges, and the operator-invoked `/forge:drift` semantic review; neither upstream ships this D9 control surface.
 - FR-155 and FR-157: extended upstream telemetry aggregation with paired half-open UTC windows, the events-only `__decision_totals__` row, strict decision-event validation, and drift-owned retention pruning.
+- FR-193: replaced the upstream-style overwrite-only Stop telemetry snapshot with a shared append-only, session-prefixed CSV serialized under `.forge/tmp/telemetry.lock`; upstream has no equivalent multi-session retention contract.
+- FR-194: added a real concurrent-repository harness for simultaneous complete commit and shared-destination merge chains, including marker, journal-owner, telemetry, deadlock, and fail-closed contention controls.
 - FR-163: added the Forge-only CRITICAL drift-block run-open refusal, distinct from the upstream run-journal and halt-sentinel protocols.
 - FR-166: added collision-free committed drift reports and prior-quarter committed-report baselines; upstream has no drift history lifecycle.
 - README harness scope: neutrally describes other-harness support as out of scope instead of naming the unshipped upstream harness.

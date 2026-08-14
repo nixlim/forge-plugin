@@ -7,12 +7,17 @@
 set -euo pipefail
 
 session_pid="${FORGE_SESSION_PID:-}"
-if [[ -z "$session_pid" ]]; then
+recovery_invocation=0
+if [[ "${1:-}" == "--recover-only" ]] || [[ "${1:-}" == "--state-critical-recover" ]]; then
+    recovery_invocation=1
+fi
+if [[ "$recovery_invocation" -eq 0 ]] && [[ -z "$session_pid" ]]; then
     echo "forge: FORGE_SESSION_PID must be exported before acquiring the commit lock" >&2
     echo "Usage: export FORGE_SESSION_PID=\$\$ && $0" >&2
     exit 1
 fi
-if ! [[ "$session_pid" =~ ^[0-9]+$ ]] || [[ "$session_pid" -eq 0 ]]; then
+if [[ "$recovery_invocation" -eq 0 ]] &&
+    { ! [[ "$session_pid" =~ ^[0-9]+$ ]] || [[ "$session_pid" -eq 0 ]]; }; then
     echo "forge: FORGE_SESSION_PID must be a positive integer, got: $session_pid" >&2
     exit 1
 fi
@@ -45,6 +50,7 @@ main_root="$(resolve_main_root)" || {
 }
 
 internal_state_critical=0
+state_operation="acquire"
 explicit_lock_path=0
 lock_path=".forge/tmp/commit-lock"
 if [[ "${1:-}" == "--state-critical" ]]; then
@@ -56,11 +62,35 @@ if [[ "${1:-}" == "--state-critical" ]]; then
         echo "forge: invalid internal commit-lock invocation" >&2
         exit 1
     fi
+elif [[ "${1:-}" == "--state-critical-recover" ]]; then
+    internal_state_critical=1
+    state_operation="recover"
+    if [[ "$#" -eq 2 ]]; then
+        lock_path="$2"
+        explicit_lock_path=1
+    else
+        echo "forge: invalid internal event-lock recovery invocation" >&2
+        exit 1
+    fi
+elif [[ "${1:-}" == "--recover-only" ]]; then
+    state_operation="recover"
+    if [[ "$#" -eq 2 ]]; then
+        lock_path="$2"
+        explicit_lock_path=1
+    else
+        echo "forge: --recover-only requires one repository-relative lock path" >&2
+        exit 1
+    fi
 elif [[ "$#" -eq 1 ]]; then
     lock_path="$1"
     explicit_lock_path=1
 elif [[ "$#" -ne 0 ]]; then
     echo "forge: acquire-commit-lock.sh accepts at most one repository-relative lock path" >&2
+    exit 1
+fi
+
+if [[ "$state_operation" == "recover" ]] && [[ "$lock_path" != ".forge/tmp/events.lock" ]]; then
+    echo "forge: recovery-only mode is restricted to .forge/tmp/events.lock" >&2
     exit 1
 fi
 
@@ -163,7 +193,7 @@ recover_legacy_state_guard() {
     done
 
     if [[ "$live_owner" -eq 1 ]]; then
-        return 1
+        return 75
     fi
 
     # A process can die between mkdir and writing its owner. Give a live creator
@@ -175,7 +205,7 @@ recover_legacy_state_guard() {
             sleep 1
         fi
         for owner_path in "$legacy_state_guard"/owner "$legacy_state_guard"/owner.*; do
-            [[ -f "$owner_path" ]] && return 1
+            [[ -f "$owner_path" ]] && return 75
         done
         if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
             echo "forge: recovering ownerless event-lock state mutex" >&2
@@ -184,7 +214,10 @@ recover_legacy_state_guard() {
         fi
     fi
 
-    rmdir "$legacy_state_guard" 2>/dev/null || return 1
+    if ! rmdir "$legacy_state_guard" 2>/dev/null; then
+        echo "forge: cannot recover legacy commit-lock state mutex: $legacy_state_guard" >&2
+        return 1
+    fi
     return 0
 }
 
@@ -217,6 +250,14 @@ create_lock() {
 }
 
 state_critical_attempt() {
+    if [[ -d "$legacy_state_guard" ]]; then
+        if recover_legacy_state_guard; then
+            :
+        else
+            return $?
+        fi
+    fi
+
     if is_lock_stale "$lock_file"; then
         if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
             # FR-157 confines fail-closed ownership handling to release.  A
@@ -237,8 +278,78 @@ state_critical_attempt() {
     return 75
 }
 
+event_lock_recovery_status() {
+    local lock_record=""
+    local lock_pid=""
+    local lock_timestamp=""
+    local lock_extra=""
+
+    # An unreadable record is infrastructure uncertainty, not proof that the
+    # live owner record is malformed. Preserve it and surface the failure.
+    if ! lock_record="$(<"$lock_file")"; then
+        echo "forge: cannot read event-lock ownership record; refusing recovery" >&2
+        return 1
+    fi
+    IFS=' ' read -r lock_pid lock_timestamp lock_extra <<<"$lock_record"
+
+    if [[ "$lock_record" == *$'\n'* ]] ||
+        ! [[ "$lock_pid" =~ ^[0-9]+$ ]] || [[ "$lock_pid" -eq 0 ]] ||
+        ! [[ "$lock_timestamp" =~ ^[0-9]+$ ]] || [[ -n "$lock_extra" ]]; then
+        return 0
+    fi
+    if kill -0 "$lock_pid" 2>/dev/null; then
+        return 75
+    fi
+    return 0
+}
+
+recover_event_lock_only() {
+    local recovered_kind=""
+    local recovery_status=0
+
+    if [[ -d "$legacy_state_guard" ]]; then
+        if recover_legacy_state_guard; then
+            :
+        else
+            return $?
+        fi
+    fi
+
+    # Re-read the primary record only after entering events.lock.state.lock.
+    # A symlink is not a valid owner record; unlinking it removes the link, not
+    # its target. Other non-regular nodes are infrastructure failures and are
+    # deliberately preserved.
+    if [[ ! -e "$lock_file" ]] && [[ ! -L "$lock_file" ]]; then
+        return 0
+    fi
+    if [[ -L "$lock_file" ]]; then
+        recovered_kind="malformed symlink"
+    elif [[ ! -f "$lock_file" ]]; then
+        echo "forge: event lock is not a regular ownership record; refusing recovery" >&2
+        return 1
+    elif event_lock_recovery_status; then
+        recovered_kind="malformed or dead-owner record"
+    else
+        recovery_status=$?
+        return "$recovery_status"
+    fi
+
+    echo "forge: recovering stale event lock ($recovered_kind)" >&2
+    rm -f -- "$lock_file" || return 1
+    if [[ -e "$lock_file" ]] || [[ -L "$lock_file" ]]; then
+        echo "forge: stale event lock remains after recovery" >&2
+        return 1
+    fi
+    return 0
+}
+
 if [[ "$internal_state_critical" -eq 1 ]]; then
-    if state_critical_attempt; then
+    if [[ "$state_operation" == "recover" ]]; then
+        state_critical_action="recover_event_lock_only"
+    else
+        state_critical_action="state_critical_attempt"
+    fi
+    if "$state_critical_action"; then
         exit 0
     else
         exit $?
@@ -267,6 +378,10 @@ run_state_critical() {
     local state_status=0
     local internal_args=(--state-critical)
 
+    if [[ "$state_operation" == "recover" ]]; then
+        internal_args=(--state-critical-recover)
+    fi
+
     if [[ "$explicit_lock_path" -eq 1 ]]; then
         internal_args+=("$lock_path")
     fi
@@ -286,6 +401,19 @@ run_state_critical() {
     fi
     return "$state_status"
 }
+
+if [[ "$state_operation" == "recover" ]]; then
+    if run_state_critical; then
+        exit 0
+    else
+        recovery_status=$?
+    fi
+    if [[ "$recovery_status" -eq 75 ]]; then
+        exit 75
+    fi
+    echo "forge: event-lock recovery critical section failed (status $recovery_status)" >&2
+    exit 1
+fi
 
 show_lock_holder() {
     local candidate="$1"
@@ -349,15 +477,10 @@ while true; do
     fi
     acquired=0
     state_status=75
-    if [[ -d "$legacy_state_guard" ]]; then
-        recover_legacy_state_guard || true
-    fi
-    if [[ ! -d "$legacy_state_guard" ]]; then
-        if run_state_critical; then
-            state_status=0
-        else
-            state_status=$?
-        fi
+    if run_state_critical; then
+        state_status=0
+    else
+        state_status=$?
     fi
 
     if [[ "$state_status" -eq 0 ]]; then
@@ -389,7 +512,7 @@ while true; do
     fi
     if [[ "$announced" -eq 0 ]]; then
         if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
-            echo "forge: another session is appending events; waiting up to ${max_wait_seconds}s" >&2
+            echo "forge: another session is pruning events; waiting up to ${max_wait_seconds}s" >&2
         else
             echo "forge: another session is committing; waiting up to ${max_wait_seconds}s" >&2
         fi

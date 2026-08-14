@@ -137,9 +137,44 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("SHA-256 of the exact reviewed merge diff", gate3)
         self.assertIn("surface `/forge:worktree-merge`", gate3)
         self.assertIn("never changes the Gate 3 verdict or exit status", gate3)
-        self.assertIn("polls\nat 2 seconds, stops after 5 seconds", SKILL)
-        self.assertIn("event-append-lock-timeout", SKILL)
+        self.assertIn("registers an in-flight writer but acquires no lock", SKILL)
+        self.assertIn("os.O_WRONLY | os.O_APPEND | os.O_CREAT", SKILL)
+        self.assertIn("makes exactly one `os.write()`", SKILL)
+        self.assertIn("treats a short write as a failure", SKILL)
+        self.assertIn("gates only drift-check's prune read-and-replace", SKILL)
+        self.assertIn("does not extend to NFS/SMB network filesystems", SKILL)
+        self.assertIn("Windows is out of scope", SKILL)
         self.assertIn("deduplicates merge review blocks by `(event, candidate)`", SKILL)
+
+    def test_assertion_and_reviewer_measurement_events_are_exact_and_advisory(self) -> None:
+        sensor = SKILL.split("After preserving the sensor's primary result", 1)[1].split(
+            "## Gate 3", 1
+        )[0]
+        for event in (
+            "`assertion_blocking`",
+            "`assertion_advisory`",
+            "`assertion_waived`",
+        ):
+            with self.subTest(event=event):
+                self.assertIn(event, sensor)
+        self.assertIn("exact merge-diff bytes", sensor)
+        self.assertIn("surface\n`/forge:worktree-merge`", sensor)
+        self.assertIn("clean\nsensor result", sensor)
+        self.assertIn("emits no assertion event", sensor)
+        self.assertIn("in-lock Gate 2 rerun", sensor)
+        self.assertIn("never changes the\nGate 2 result or exit status", sensor)
+
+        reviewer = SKILL.split(
+            "After preserving each `review-final` invocation's complete verdict", 1
+        )[1].split("For a revision", 1)[0]
+        self.assertIn("`review_final_finding`", reviewer)
+        self.assertIn("exact reviewed merge diff", reviewer)
+        self.assertIn("surface\n`/forge:worktree-merge`", reviewer)
+        for severity in ("`CRITICAL`", "`MAJOR`", "`MINOR`"):
+            self.assertIn(severity, reviewer)
+        self.assertIn("every required in-lock review", reviewer)
+        self.assertIn("no findings emits no\nfinding event", reviewer)
+        self.assertIn("never changes the verdict, review iteration, or exit status", reviewer)
 
     def test_scoped_mutation_runner_is_ordered_advisory_and_reviewed(self) -> None:
         gate_1_pass = SKILL.index("Require exit 0. Do not substitute")
