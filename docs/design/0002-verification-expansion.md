@@ -1,7 +1,11 @@
 # forge-plugin — Verification Expansion: Test Quality, Invariants, Risk Tiers, Drift, Durable Intent, and dcg Integration
 
-**Status:** Draft for review, 2026-08-11 (Igor + Claude). Records decisions D6–D14,
-extending `0001-founding-decisions.md`. Input for a spec revision; not the spec.
+**Status:** Implemented, 2026-08-14 (Igor + Claude). Records decisions D6–D14,
+extending `0001-founding-decisions.md`. Specified as Revisions 2 and 3 of
+`docs/specs/forge-plugin-spec.md` (FR-139..FR-205, DM-008..DM-011) and shipped in
+run `run-20260811-verification-expansion` across thirteen tasks, all merged to
+`main`. This document records the decisions; the spec is authoritative for what
+the code must do.
 **Revised:** 2026-08-11 after adversarial design review (codex-review-01: BLOCK, 2 CRITICAL /
 5 MAJOR — all findings accepted; adjudication in run journal decision-02).
 **Revised:** 2026-08-11 after binding review-final iteration 1 (BLOCK, 2 CRITICAL /

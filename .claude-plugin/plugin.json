@@ -1,7 +1,7 @@
 {
   "name": "forge",
-  "description": "Coordinate reusable monitored OpenAI Codex agents from Claude Code with forge governance.",
-  "version": "0.5.0",
+  "description": "Claude orchestrates Codex under forge governance: gate chains, adversarial review, risk tiers, drift sensing, durable archives, and concurrent-agent safety.",
+  "version": "0.6.0",
   "author": {
     "name": "nixlim"
   },
