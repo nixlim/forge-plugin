@@ -6,6 +6,12 @@ import unittest
 from pathlib import Path
 
 
+def _flat(text: str) -> str:
+    """Collapse whitespace so contract assertions test claims, not line wrapping."""
+    return " ".join(text.split())
+
+
+
 ROOT = Path(__file__).resolve().parents[1]
 LEARN_PATH = ROOT / "skills" / "learn" / "SKILL.md"
 WORKFLOW_PATH = ROOT / "skills" / "workflow" / "SKILL.md"
@@ -120,7 +126,7 @@ def assert_input_contract(test_case: unittest.TestCase, text: str) -> None:
     for anchor in INPUT_CONTROL_ANCHORS:
         test_case.assertIn(anchor, text)
     test_case.assertIn("one immutable input snapshot", text)
-    test_case.assertIn("Record `INPUT_HEAD`, each\ninput file identity", text)
+    test_case.assertIn("Record `INPUT_HEAD`, each input file identity", _flat(text))
     test_case.assertIn("every source path in the launch assignment", text)
     test_case.assertIn("Inputs 2 and 3 also embed their committed HEAD/path", text)
     test_case.assertIn("current committed", text.lower())
@@ -241,7 +247,7 @@ def assert_workflow_order(test_case: unittest.TestCase, text: str) -> None:
     section = text[text.index(heading) :]
     test_case.assertIn("Only after Step 13 has finished", section)
     test_case.assertIn("outside the canonical close sequence", section)
-    test_case.assertIn("never runs inside the archive\ncommit", section)
+    test_case.assertIn("never runs inside the archive commit", _flat(section))
     test_case.assertIn("must not reopen, block, delay, or change", section)
     test_case.assertIn("unstaged and uncommitted", section)
 
@@ -253,11 +259,11 @@ def assert_drift_order(test_case: unittest.TestCase, text: str) -> None:
     test_case.assertLess(text.index(block_heading), text.index(learn_heading))
     section = text[text.index(learn_heading) :]
     test_case.assertIn("Only after the durable drift report commit is verified", section)
-    test_case.assertIn("Section 4 has finished all applicable\nCRITICAL-block handling", section)
+    test_case.assertIn("Section 4 has finished all applicable CRITICAL-block handling", _flat(section))
     test_case.assertIn("primary drift outcome has been reported", section)
     test_case.assertIn("available `journal_patterns` object as learning Input 1", section)
-    test_case.assertIn("failure or refusal\ndoes not block drift completion", section)
-    test_case.assertIn("unstaged and\nuncommitted", section)
+    test_case.assertIn("failure or refusal does not block drift completion", _flat(section))
+    test_case.assertIn("unstaged and uncommitted", _flat(section))
 
 
 class LearnSkillContractTests(unittest.TestCase):
@@ -301,7 +307,7 @@ class LearnSkillContractTests(unittest.TestCase):
         assert_drift_order(self, DRIFT)
 
     def test_readme_and_project_pointers_expose_the_eighth_skill(self) -> None:
-        self.assertIn("You should see\neight skills:", README)
+        self.assertIn("You should see eight skills:", _flat(README))
         skill_rows = re.findall(r"^\| `/forge:[^`]+` \|", README, flags=re.MULTILINE)
         self.assertEqual(len(skill_rows), 8)
         self.assertIn("| `/forge:learn` | Advisory journal-derived learning", README)

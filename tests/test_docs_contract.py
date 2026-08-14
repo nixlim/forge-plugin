@@ -4,6 +4,12 @@ import json
 import unittest
 from pathlib import Path
 
+
+def _flat(text: str) -> str:
+    """Collapse whitespace so contract assertions test claims, not line wrapping."""
+    return " ".join(text.split())
+
+
 ROOT = Path(__file__).resolve().parents[1]
 JOURNAL_ENTRY_TYPES = {
     "run_started",
@@ -245,7 +251,7 @@ class DocumentationContractTests(unittest.TestCase):
         drift = (ROOT / "skills/drift/SKILL.md").read_text(encoding="utf-8")
         self.assertIn("review-periodic", drift)
         self.assertIn("schema_version: 1", drift)
-        self.assertIn("only semantic\ninput is that stdout document", drift)
+        self.assertIn("only semantic input is that stdout document", _flat(drift))
         self.assertIn("Never read, derive, repair, or supplement", drift)
         self.assertIn("`.forge/tmp/telemetry.csv`", drift)
         self.assertIn("forge: drift mechanical check failed", drift)
@@ -257,7 +263,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("YYYY-MM-DDTHHMMSSZ.md", drift)
         self.assertIn("try `-02`, `-03`, and so on", drift)
         self.assertIn("Never overwrite, amend, prune, rename, or delete", drift)
-        self.assertIn("exactly `check`,\n`code`, `evidence`, `severity`, and `summary`", drift)
+        self.assertIn("exactly `check`, `code`, `evidence`, `severity`, and `summary`", _flat(drift))
         self.assertIn("an `OBSERVATION` is not a drift finding", drift)
         self.assertIn("valid preceding-quarter report with the greatest `generated_at`", drift)
         self.assertLess(
@@ -297,7 +303,7 @@ class DocumentationContractTests(unittest.TestCase):
             section,
         )
         self.assertIn("runs only the mechanical checker", section)
-        self.assertIn("does not invoke an\nLLM", section)
+        self.assertIn("does not invoke an LLM", _flat(section))
         self.assertIn("never launches semantic review or any model", section)
         self.assertNotIn("run: /forge:drift", section)
         self.assertNotIn("run: codex", section.lower())

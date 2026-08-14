@@ -332,6 +332,10 @@ def check_current(repo: Path) -> list[str]:
             try:
                 mode = (repo / path_label).stat(follow_symlinks=False).st_mode
             except FileNotFoundError:
+                # Absence is the third drift direction. It cannot be judged from
+                # a synthetic fixture, which carries a deliberate subset of the
+                # inventory, so it is asserted against the real repository by
+                # test_every_inventoried_script_exists.
                 continue
             if not stat.S_ISREG(mode) or not mode & 0o111:
                 non_executable.append(path_label)
@@ -444,6 +448,18 @@ def report(errors: list[str], findings: list[str]) -> int:
 
 
 class RepoConformanceTests(unittest.TestCase):
+    def test_every_inventoried_script_exists(self) -> None:
+        """Third drift direction: a script listed in spec section 5 but deleted."""
+        spec = (ROOT / SPEC_PATH).read_text(encoding="utf-8")
+        missing = sorted(
+            path_label
+            for path_label in surface_inventory(spec)
+            if not (ROOT / path_label).exists()
+        )
+        self.assertEqual(
+            missing, [], f"spec section 5 lists absent scripts: {missing}"
+        )
+
     maxDiff = None
 
     def setUp(self) -> None:
