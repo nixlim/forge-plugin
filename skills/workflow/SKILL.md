@@ -258,3 +258,12 @@ The canonical close sequence is
 Claude still decides the semantic judgment, while gated validation enforces the recorded gate
 conditions required for a clean accepted close. The final report never repairs or rewrites journal
 history.
+
+## Post-Report Best-Effort Learning
+
+Only after Step 13 has finished and the archive commit plus `report.md` outcome are final, make one
+best-effort invocation of `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md` (`/forge:learn`). This
+advisory pass is outside the canonical close sequence above and never runs inside the archive
+commit. Its failure or refusal must not reopen, block, delay, or change the completed close or
+report outcome. Leave every candidate or gotcha proposal unstaged and uncommitted for a separate
+ordinary commit.

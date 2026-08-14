@@ -35,17 +35,25 @@ Every implementer gets a dedicated git worktree. Include this sentence verbatim 
 "You may commit inside this worktree. You must NEVER push, never touch any branch other than your
 own, and never run destructive git commands." The orchestrator alone performs reintegration.
 
-Build each Codex prompt at launch, in this order:
+Resolve `<worktree>` to the same absolute execution worktree that will be recorded in the journal
+and passed to `codex exec -C`. Build each Codex prompt at launch, in this order:
 
 1. The applicable plugin role template:
    `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/implementer.md` or
    `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`.
-1. Only the `agent-project-context` managed region from `forge-project.md`.
+1. Only the `agent-project-context` managed region extracted from the committed bytes returned by
+   `git -C <worktree> show HEAD:forge-project.md`.
+1. When it exists in that same committed `HEAD`, the exact committed bytes returned by
+   `git -C <worktree> show HEAD:.forge/history/gotchas.md`. Test presence with
+   `git -C <worktree> cat-file -e HEAD:.forge/history/gotchas.md`; omit this component only when the
+   object is absent, and stop the launch on any other read failure.
 1. The concrete task assignment, with its goal, acceptance criteria, constraints, owned files,
    and required handoff.
 
-Render the concrete values, then save those exact bytes as `prompt.md` before appending the
-journal `execution` entry. Handoffs retain the upstream six-heading contract shown below.
+The region and gotchas MUST NOT come from working-tree state, another checkout, or a rendered agent
+definition. Render the concrete values, then save those exact assembled bytes as `prompt.md` before
+appending the journal `execution` entry. Handoffs retain the upstream six-heading contract shown
+below.
 
 A first-pass reviewer is always a fresh agent and native session launched with `-s read-only`.
 Its prompt contains the goal, acceptance criteria, constraints, and exact target SHA. It must
@@ -114,10 +122,11 @@ exactly three lines (PID, PGID, UTC ISO-8601 launch timestamp) before arming the
 Never resume an implementation session: every implementer task gets a fresh named agent and fresh
 native session. The sole sanctioned resume is a targeted confirmation round by the same reviewer.
 Create the reviewer's next `execution-NN` directory, follow the same prepare/journal ordering, and
-use its recorded `session_id` with `codex exec ... resume <session_id> -`. Do not pass `-C` on a
-resume; the resumed session inherits its working directory. The resumed command still records its
-events and handoff under the new execution directory, uses literal absolute redirect paths, and
-runs detached with a new three-line `pid` sidecar.
+use its recorded `session_id` with `codex exec ... resume <session_id> -`. Assemble the new prompt
+from the preceding execution's recorded worktree and that worktree's current committed `HEAD`.
+Do not pass `-C` on a resume; the resumed session inherits its working directory. The resumed
+command still records its events and handoff under the new execution directory, uses literal
+absolute redirect paths, and runs detached with a new three-line `pid` sidecar.
 
 ## Forge Monitor Lifecycle And Ambiguity Protocol
 

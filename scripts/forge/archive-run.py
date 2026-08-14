@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +31,7 @@ from commitment_paths import path_tokens
 CONTAMINATION = "forge: archive refused — close tree contains unrelated changes"
 NONE = "None recorded"
 HEX_HEAD = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+LEARNING_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 HEAD_IN_TEXT = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?:[0-9a-f]{24})?(?![0-9a-f])")
 HEAD_RANGE_IN_TEXT = re.compile(
     r"(?<![0-9a-f])[0-9a-f]{40}(?:[0-9a-f]{24})?"
@@ -157,6 +160,125 @@ def canonical_json(value: object) -> list[str]:
     if value is None:
         return [NONE]
     return ["```json", json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2), "```"]
+
+
+def learning_text(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and "\x00" not in value
+        and value.splitlines() == [value]
+    )
+
+
+def learning_segment(value: object) -> bool:
+    return (
+        learning_text(value)
+        and value not in {".", ".."}
+        and LEARNING_SAFE_SEGMENT.fullmatch(value) is not None
+    )
+
+
+def recorded_prompt_provenance(
+    run_dir: Path, record: dict[str, Any]
+) -> tuple[str, str]:
+    prompt = record.get("prompt")
+    if not isinstance(prompt, str) or not prompt or "\\" in prompt:
+        raise ArchiveRefusal("forge: archive refused — invalid recorded prompt")
+    relative = Path(prompt)
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ArchiveRefusal("forge: archive refused — invalid recorded prompt")
+    source = run_dir
+    for part in relative.parts:
+        source = source / part
+        if source.is_symlink():
+            raise ArchiveRefusal("forge: archive refused — invalid recorded prompt")
+    try:
+        resolved_run_dir = run_dir.resolve(strict=True)
+        resolved = source.resolve(strict=True)
+        resolved.relative_to(resolved_run_dir)
+        metadata = resolved.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ArchiveRefusal("forge: archive refused — invalid recorded prompt")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(resolved, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                raise ArchiveRefusal("forge: archive refused — invalid recorded prompt")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                digest = hashlib.sha256(handle.read()).hexdigest()
+        finally:
+            os.close(descriptor)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ArchiveRefusal("forge: archive refused — invalid recorded prompt") from exc
+    return prompt, digest
+
+
+def execution_learning_provenance(
+    run_dir: Path, record: dict[str, Any]
+) -> dict[str, object] | None:
+    if not (
+        learning_segment(record.get("agent"))
+        and learning_segment(record.get("execution"))
+        and learning_text(record.get("role"))
+        and learning_text(record.get("task"))
+        and learning_text(record.get("prompt"))
+    ):
+        return None
+    try:
+        prompt, digest = recorded_prompt_provenance(run_dir, record)
+    except ArchiveRefusal:
+        # Learning provenance is advisory. A missing or unsafe recorded prompt
+        # removes this execution's citation authority; it must not invalidate an
+        # otherwise canonical close/archive transaction.
+        return None
+    return {
+        **{key: record.get(key) for key in ("agent", "execution", "role", "task")},
+        "prompt": prompt,
+        "prompt_sha256": digest,
+    }
+
+
+def learning_provenance(
+    records: list[dict[str, Any]], run_dir: Path
+) -> dict[str, object]:
+    """Expose only the journal identities a read-only learning pass may cite."""
+
+    decisions = [
+        {key: record[key] for key in ("id", "task")}
+        for record in records
+        if record.get("type") == "decision"
+        and learning_segment(record.get("id"))
+        and learning_text(record.get("task"))
+    ]
+    executions = []
+    for record in records:
+        if record.get("type") != "execution":
+            continue
+        authority = execution_learning_provenance(run_dir, record)
+        if authority is not None:
+            executions.append(authority)
+    verifications = [
+        {
+            key: record.get(key)
+            for key in ("id", "task", "result", "criterion", "observation")
+        }
+        for record in records
+        if record.get("type") == "verification"
+        and record.get("result") in {"failed", "inconclusive"}
+        and learning_segment(record.get("id"))
+        and learning_text(record.get("task"))
+        and all(
+            record.get(key) is None or isinstance(record.get(key), str)
+            for key in ("criterion", "observation")
+        )
+    ]
+    return {
+        "decisions": decisions,
+        "executions": executions,
+        "failed_or_inconclusive_verifications": verifications,
+    }
 
 
 def canonical_payload(value: object) -> dict[str, object] | None:
@@ -427,6 +549,17 @@ def render_archive(
                 "",
             ]
         )
+
+    lines.extend(
+        [
+            "## Learning provenance",
+            "",
+            "<!-- BEGIN FORGE LEARNING PROVENANCE v1 -->",
+            *canonical_json(learning_provenance(records, run_dir)),
+            "<!-- END FORGE LEARNING PROVENANCE v1 -->",
+            "",
+        ]
+    )
 
     lines.extend(["## Verbatim basis documents", ""])
     documents = basis_documents(repo, run_dir, decisions)

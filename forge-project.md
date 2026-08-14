@@ -62,6 +62,7 @@ Separation of duties requires the reviewer to be distinct from the author.
 - Worktree reintegration: `${CLAUDE_PLUGIN_ROOT}/skills/worktree-merge/SKILL.md`
 - Final reporting: `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md`
 - Periodic drift sensing: `${CLAUDE_PLUGIN_ROOT}/skills/drift/SKILL.md`
+- Advisory journal-derived learning: `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md`
 
 ## Project Overview
 
@@ -81,9 +82,9 @@ test gate. Installed repository surfaces are rendered from `system/`, `skills/`,
 |---|---|
 | `python` | `*.py` |
 | `bash` | `*.sh` |
-| `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**` |
+| `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**`, `.forge/evals/candidates/**` |
 | `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `.claude-plugin/**`, `hooks/**`, `system/**` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**` |
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**` |
 <!-- FORGE:REGION file-categories END -->
 
 ## Stack Validations
@@ -169,7 +170,7 @@ No mutation tool available for bash — assertion-quality fallback only.
 <!-- FORGE:REGION risk-tiers BEGIN -->
 | tier | path patterns |
 |---|---|
-| fast | docs/**, .forge/history/**, @formatting-only |
+| fast | docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only |
 
 | formatting-only category |
 |---|

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / "system" / "template" / "forge-project.md").read_text(
     encoding="utf-8"
 )
+ROOT_PROJECT = (ROOT / "forge-project.md").read_text(encoding="utf-8")
 COMMIT_SKILL = (ROOT / "skills" / "commit" / "SKILL.md").read_text(
     encoding="utf-8"
 )
@@ -103,14 +104,32 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         self.assertIn("fail closed", region_body("invariants"))
         self.assertIn("No mutation-testing policy is configured.", region_body("mutation-testing"))
         self.assertIn(
-            "| fast | docs/**, .forge/history/**, @formatting-only |",
+            "| fast | docs/**, .forge/history/**, .forge/evals/candidates/**, "
+            "@formatting-only |",
             region_body("risk-tiers"),
         )
         self.assertIn(
-            "| `docs` | `*.md`, `docs/**`, `.forge/history/**` |",
+            "| `docs` | `*.md`, `docs/**`, `.forge/history/**`, "
+            "`.forge/evals/candidates/**` |",
             region_body("file-categories"),
         )
         self.assertIn("| docs |", region_body("risk-tiers"))
+
+        for label, project in (("root", ROOT_PROJECT), ("template", TEMPLATE)):
+            with self.subTest(project=label):
+                self.assertRegex(
+                    project,
+                    r"(?m)^\| `docs` \|[^\n]*`\.forge/evals/candidates/\*\*` \|$",
+                )
+                self.assertRegex(
+                    project,
+                    r"(?m)^\| `control` \|[^\n]*`\.forge/evals/tasks/\*\*`[^\n]*\|$",
+                )
+                self.assertRegex(
+                    project,
+                    r"(?m)^\| fast \|[^\n]*\.forge/evals/candidates/\*\*[^\n]*\|$",
+                )
+                self.assertNotIn("`.forge/evals/**`", project)
 
         drift = re.sub(r"<!--.*?-->", "", region_body("drift-config"), flags=re.DOTALL)
         self.assertEqual(
@@ -249,6 +268,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         )
         for skill in (
             "init",
+            "learn",
             "workflow",
             "orchestrate",
             "commit",
@@ -271,7 +291,7 @@ class CommitSkillTests(unittest.TestCase):
             "forge-project.md",
             ".forge-manifest",
             ".codex/**",
-            ".forge/evals/**",
+            ".forge/evals/tasks/**",
             "AGENTS.md",
             "CLAUDE.md",
             ".claude/settings*.json",
@@ -283,6 +303,32 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("distinct agent from the author", COMMIT_SKILL)
         self.assertIn("Project configuration may extend this list", COMMIT_SKILL)
         self.assertIn("must never remove or narrow", COMMIT_SKILL)
+        self.assertIn("`.forge/evals/candidates/**` is the sole\n   eval-path exception", COMMIT_SKILL)
+        self.assertIn("advisory/docs-class and never as `control`", COMMIT_SKILL)
+        self.assertIn("`.forge/evals/tasks/**`, or creating or changing its baseline", COMMIT_SKILL)
+        self.assertNotIn("`.forge/evals/**`", COMMIT_SKILL)
+
+    def test_standard_review_delegates_to_committed_prompt_construction(self) -> None:
+        step_four = COMMIT_SKILL.split("## Step 4 —", 1)[1].split("## Step 5 —", 1)[0]
+        controls = (
+            "[`orchestrate`](../orchestrate/SKILL.md#forge-isolation-and-prompt-construction)",
+            "mandatory FR-037 plugin role template",
+            "committed `agent-project-context`",
+            "committed `.forge/history/gotchas.md` prefix",
+            "no task-assignment review payload beyond",
+        )
+        for control in controls:
+            self.assertEqual(step_four.count(control), 1)
+
+        positions = [step_four.index(control) for control in controls[1:]]
+        self.assertEqual(positions, sorted(positions))
+
+        for control in controls:
+            with self.subTest(disabled=control):
+                mutated = step_four.replace(control, "DISABLED_CONTROL", 1)
+                with self.assertRaises(AssertionError):
+                    for required in controls:
+                        self.assertEqual(mutated.count(required), 1)
 
     def test_step_two_uses_committed_policy_for_every_quality_surface(self) -> None:
         step_two = COMMIT_SKILL.split("## Step 2 — Validate", 1)[1].split(

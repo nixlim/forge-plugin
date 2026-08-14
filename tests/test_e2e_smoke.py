@@ -41,6 +41,71 @@ def project_context(document: str) -> str:
     return match.group(1).strip()
 
 
+def committed_blob(worktree: Path, relative_path: str, *, required: bool) -> bytes | None:
+    object_name = f"HEAD:{relative_path}"
+    present = subprocess.run(
+        ["git", "cat-file", "-e", object_name],
+        cwd=worktree,
+        check=False,
+        capture_output=True,
+    )
+    if present.returncode != 0:
+        tree_entry = subprocess.run(
+            ["git", "ls-tree", "--name-only", "HEAD", "--", relative_path],
+            cwd=worktree,
+            check=False,
+            capture_output=True,
+        )
+        if tree_entry.returncode != 0 or tree_entry.stdout.strip():
+            raise AssertionError(
+                f"committed prompt input presence could not be resolved: {object_name}: "
+                f"{present.stderr.decode('utf-8', errors='replace')}"
+            )
+        if required:
+            raise AssertionError(f"required committed prompt input is absent: {object_name}")
+        return None
+    shown = subprocess.run(
+        ["git", "show", object_name],
+        cwd=worktree,
+        check=False,
+        capture_output=True,
+    )
+    if shown.returncode != 0:
+        raise AssertionError(
+            f"committed prompt input could not be read: {object_name}: "
+            f"{shown.stderr.decode('utf-8', errors='replace')}"
+        )
+    return shown.stdout
+
+
+def join_prompt_components(components: list[bytes]) -> bytes:
+    prompt = bytearray()
+    for component in components:
+        if prompt and not prompt.endswith(b"\n\n"):
+            prompt.extend(b"\n" if prompt.endswith(b"\n") else b"\n\n")
+        prompt.extend(component)
+    if not prompt.endswith(b"\n"):
+        prompt.extend(b"\n")
+    return bytes(prompt)
+
+
+def assemble_codex_prompt(
+    *, execution_worktree: Path, template_name: str, task_assignment: str
+) -> bytes:
+    template = (ROOT / "system" / "codex" / "prompts" / template_name).read_bytes()
+    project = committed_blob(execution_worktree, "forge-project.md", required=True)
+    assert project is not None
+    context = project_context(project.decode("utf-8")).encode("utf-8")
+    components = [template, b"## Agent project context\n\n" + context]
+    gotchas = committed_blob(
+        execution_worktree, ".forge/history/gotchas.md", required=False
+    )
+    if gotchas is not None:
+        components.append(b"## Committed forge gotchas\n\n" + gotchas)
+    components.append(task_assignment.encode("utf-8"))
+    return join_prompt_components(components)
+
+
 class ReleaseE2ESmokeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="forge-e2e-")
@@ -159,9 +224,9 @@ class ReleaseE2ESmokeTests(unittest.TestCase):
             "file-categories": """| Category | File patterns |
 |---|---|
 | `python` | `*.py` |
-| `docs` | `*.md`, `docs/**`, `.forge/history/**` |
+| `docs` | `*.md`, `docs/**`, `.forge/history/**`, `.forge/evals/candidates/**` |
 | `config` | `.gitignore`, `*.toml`, `*.json` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**` |""",
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**` |""",
             "stack-validations": """Python syntax:
 
 ```bash
@@ -190,7 +255,7 @@ Use only Python standard-library checks.""",
             "invariants": "",
             "risk-tiers": """| tier | path patterns |
 |---|---|
-| fast | docs/**, .forge/history/**, @formatting-only |
+| fast | docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only |
 
 | formatting-only category |
 |---|
@@ -344,16 +409,16 @@ event-retention: 400d""",
         events_path = execution_dir / "events.jsonl"
         handoff_path = execution_dir / "handoff.md"
         template_name = "implementer.md" if role == "implementation" else "review-cheap.md"
-        template = (self.repo / ".codex" / "prompts" / template_name).read_text(encoding="utf-8")
-        context = project_context(
-            (self.repo / "forge-project.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            self.git_at(execution_cwd, "rev-parse", "HEAD"),
+            target_sha,
         )
-        prompt = (
-            f"{template.rstrip()}\n\n"
-            f"## Agent project context\n\n{context}\n\n"
-            f"{task_assignment.rstrip()}\n"
+        prompt = assemble_codex_prompt(
+            execution_worktree=execution_cwd,
+            template_name=template_name,
+            task_assignment=task_assignment,
         )
-        prompt_path.write_text(prompt, encoding="utf-8")
+        prompt_path.write_bytes(prompt)
         events_path.touch()
 
         def relative(path: Path) -> str:
@@ -758,7 +823,7 @@ event-retention: 400d""",
                 "criterion": "gate-3: review-final verdict",
                 "method": "inspection",
                 "check": f"review-final over git diff {reviewed_range}",
-                "observation": "PASS; 0 CRITICAL/MAJOR findings; iteration 1 of 8.",
+                "observation": "PASS; 0 CRITICAL/MAJOR findings; severities CRITICAL=0,MAJOR=0,MINOR=0; reviewer review-final; iteration 1 of 8.",
             },
         )
         for record in gate_records:
@@ -851,6 +916,104 @@ event-retention: 400d""",
         self.assertNotIn("profile", plain)
         self.assertTrue(plain["ok"], plain)
         return run_dir
+
+    def test_prompt_assembly_uses_only_the_execution_worktree_committed_head(self) -> None:
+        self.initialize_repo(90)
+        self.install()
+        self.complete_init()
+        task_assignment = "# Implementation assignment\n\nExercise committed prompt assembly."
+        without_gotchas_head = self.snapshot_repo("initialized without gotchas")
+        self.assertEqual(self.git("rev-parse", "HEAD"), without_gotchas_head)
+        without_gotchas = assemble_codex_prompt(
+            execution_worktree=self.repo,
+            template_name="implementer.md",
+            task_assignment=task_assignment,
+        )
+        self.assertNotIn(b"## Committed forge gotchas", without_gotchas)
+
+        region_pattern = re.compile(
+            r"(<!-- FORGE:REGION agent-project-context BEGIN -->).*?"
+            r"(<!-- FORGE:REGION agent-project-context END -->)",
+            flags=re.DOTALL,
+        )
+
+        def replace_context(worktree: Path, body: str) -> None:
+            path = worktree / "forge-project.md"
+            document = path.read_text(encoding="utf-8")
+            replaced, count = region_pattern.subn(
+                lambda match: f"{match.group(1)}\n{body}\n{match.group(2)}",
+                document,
+            )
+            self.assertEqual(count, 1)
+            path.write_text(replaced, encoding="utf-8")
+
+        committed_context = "COMMITTED_EXECUTION_CONTEXT_MARKER"
+        committed_gotchas = b"COMMITTED_EXECUTION_GOTCHA\nsecond committed line\n"
+        replace_context(self.repo, committed_context)
+        gotchas_path = self.repo / ".forge" / "history" / "gotchas.md"
+        gotchas_path.parent.mkdir(parents=True, exist_ok=True)
+        gotchas_path.write_bytes(committed_gotchas)
+        execution_head = self.snapshot_repo("seed committed prompt inputs")
+
+        execution_worktree = self.temp_root / "prompt-execution-worktree"
+        self.git("worktree", "add", "--detach", str(execution_worktree), execution_head)
+
+        other_context = "OTHER_CHECKOUT_COMMITTED_CONTEXT"
+        other_gotcha = "OTHER_CHECKOUT_COMMITTED_GOTCHA\n"
+        replace_context(self.repo, other_context)
+        gotchas_path.write_text(other_gotcha, encoding="utf-8")
+        self.snapshot_repo("advance another checkout prompt inputs")
+
+        dirty_context = "DIRTY_EXECUTION_CONTEXT"
+        dirty_gotcha = "DIRTY_EXECUTION_GOTCHA\n"
+        replace_context(execution_worktree, dirty_context)
+        execution_gotchas = execution_worktree / ".forge" / "history" / "gotchas.md"
+        execution_gotchas.write_text(dirty_gotcha, encoding="utf-8")
+
+        prompt = assemble_codex_prompt(
+            execution_worktree=execution_worktree,
+            template_name="implementer.md",
+            task_assignment=task_assignment,
+        )
+        template = (ROOT / "system/codex/prompts/implementer.md").read_bytes()
+
+        def assert_committed_only(candidate: bytes) -> None:
+            self.assertTrue(candidate.startswith(template))
+            self.assertIn(committed_context.encode("utf-8"), candidate)
+            self.assertIn(committed_gotchas, candidate)
+            for excluded in (dirty_context, dirty_gotcha, other_context, other_gotcha):
+                self.assertNotIn(excluded.encode("utf-8"), candidate)
+            positions = [
+                0,
+                candidate.index(b"## Agent project context"),
+                candidate.index(b"## Committed forge gotchas"),
+                candidate.index(task_assignment.encode("utf-8")),
+            ]
+            self.assertEqual(positions, sorted(positions))
+
+        # Disable committed-only sourcing in memory: both realistic mutants must trip the sensor.
+        working_tree_mutant = join_prompt_components(
+            [
+                template,
+                b"## Agent project context\n\n"
+                + project_context(
+                    (execution_worktree / "forge-project.md").read_text(encoding="utf-8")
+                ).encode("utf-8"),
+                b"## Committed forge gotchas\n\n" + execution_gotchas.read_bytes(),
+                task_assignment.encode("utf-8"),
+            ]
+        )
+        wrong_checkout_mutant = assemble_codex_prompt(
+            execution_worktree=self.repo,
+            template_name="implementer.md",
+            task_assignment=task_assignment,
+        )
+        for mutant in (working_tree_mutant, wrong_checkout_mutant):
+            with self.assertRaises(AssertionError):
+                assert_committed_only(mutant)
+
+        # Restore the real committed-only control and prove the same sensor passes.
+        assert_committed_only(prompt)
 
     def test_release_flow_passes_twice_consecutively(self) -> None:
         first = self.run_flow(1)

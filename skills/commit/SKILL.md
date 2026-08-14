@@ -51,10 +51,14 @@ This preflight initialization is not a gate step.
 3. Classify every target against the `file-categories` region. A path may touch multiple categories;
    retain every match.
 4. Apply this built-in `control` category independently of the project region:
-   `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`,
+   `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**` including baselines,
+   `AGENTS.md`, `CLAUDE.md`,
    `.claude/settings*.json`, and CI workflow definitions at `.github/workflows/**` or the project's
    equivalent CI paths recorded in `file-categories`. Project configuration may extend this list;
-   it must never remove or narrow a built-in entry.
+   it must never remove or narrow a built-in entry. `.forge/evals/candidates/**` is the sole
+   eval-path exception: treat it as advisory/docs-class and never as `control`, even when an older
+   or broader project `control` pattern would match it. Moving or copying a candidate into
+   `.forge/evals/tasks/**`, or creating or changing its baseline there, is control-class promotion.
 
 Record the task's declared/decomposed tier as `declared_tier`; it is advisory and may influence
 implementer routing only. If the task/journal supplies no tier, leave it absent; the committed
@@ -242,8 +246,9 @@ path list, every matched tier/trigger/category row, every formatting-category de
 dependency-floor decision, `declared_tier`, `derived_tier`, promote-only `effective_tier`, and the
 full `policy_sha`. Treat an unknown tier as failure. `effective_tier` is the higher of declared and
 derived (`hard > standard > fast`): no gate-time demotion is possible. The classifier applies the
-non-narrowable hard floor formed by the built-in and project-extended control category plus every
-`trigger-paths` match; a malformed nonempty trigger row makes the whole candidate hard. A path
+non-narrowable hard floor formed by the built-in and project-extended control category, after the
+sole `.forge/evals/candidates/**` carve-out above, plus every `trigger-paths` match;
+a malformed nonempty trigger row makes the whole candidate hard. A path
 matching no tier row defaults to standard. The committed dependency-manifest block and unknown
 manifest membership impose at least standard, and the formatting-only exclusion/predicate in
 FR-156 cannot be relaxed by project rows. Never reconstruct, narrow, or override any classifier
@@ -255,7 +260,11 @@ Route the review as follows:
   Step 5; fast never skips classification, validation, invariants, assertion-quality, changelog,
   secret scan, halt, lock, staged-diff re-verification, guard recomputation, or the marker.
 - `standard`: launch a fresh, read-only Codex `review-cheap` execution with the complete iteration
-  protocol below. When an explicitly identified run is open, record it before launch.
+  protocol below. Use the canonical committed-only prompt construction and preparation in
+  [`orchestrate`](../orchestrate/SKILL.md#forge-isolation-and-prompt-construction), with the same
+  repository worktree used to compute the staged diff, recorded for the execution, and passed to
+  `-C`.
+  When an explicitly identified run is open, record it before launch.
 - `hard`: launch the `review-final` Claude agent. Every control or trigger-path match is hard, and
   control-class hard candidates retain explicit candidate-bound human approval.
 
@@ -306,9 +315,10 @@ Complete the Review Completeness Check.
 Provide PASS or BLOCK verdict with severity-ranked findings.
 ```
 
-Provide no review payload beyond that instruction, its three spliced region bodies, and the exact
-`git diff --cached` output. Do not substitute a summary, unstaged diff, commit range, handoff, or
-author's claimed results.
+Beyond the mandatory FR-037 plugin role template, committed `agent-project-context`, and optional
+committed `.forge/history/gotchas.md` prefix, provide no task-assignment review payload beyond that
+instruction, its three spliced region bodies, and the exact `git diff --cached` output. Do not
+substitute a summary, unstaged diff, commit range, handoff, or author's claimed results.
 
 After the verdict, recompute the staged-diff hash:
 
@@ -333,8 +343,12 @@ residual risk, escalate to the user, and never commit.
 When an explicitly identified run is open, append a journal gate verification for every Step 4
 review. Its criterion must be exactly `gate-3: review-final verdict`; its `check` must name
 the exact 64-hex value held in `reviewed_diff_sha256`, not the variable name; a BLOCK uses
-`result: "failed"` and records the verdict and finding count in `observation`. Thread that same
-SHA-256 unchanged into the gate-pass marker and any control-class approval prompt.
+`result: "failed"`. Normalize and count every finding by `CRITICAL`, `MAJOR`, and `MINOR`, and
+record whether this invocation used `review-cheap` or `review-final`. Record the observation as
+exactly `<PASS|BLOCK>; <critical-plus-major-count> CRITICAL/MAJOR findings; severities
+CRITICAL=<count>,MAJOR=<count>,MINOR=<count>; reviewer <review-cheap|review-final>; iteration
+<number> of 8.` Thread that same SHA-256 unchanged into the gate-pass marker and any control-class
+approval prompt.
 
 After PASS and a matching post-review hash, capture `reviewed_at` immediately as the actual verdict
 time:

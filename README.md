@@ -28,7 +28,7 @@ The repository is its own plugin marketplace. From any Claude Code session:
 
 (For a local checkout, pass the absolute path to the repo instead of the GitHub
 slug.) Restart the session afterwards so the skills and hooks load. You should see
-seven skills:
+eight skills:
 
 | Skill | Purpose |
 |---|---|
@@ -39,6 +39,7 @@ seven skills:
 | `/forge:commit` | The 5-step fail-closed commit gate chain |
 | `/forge:worktree-merge` | The 4-gate merge chain with locked rebase reintegration |
 | `/forge:drift` | Mechanical sensing followed by an operator-invoked periodic semantic drift review |
+| `/forge:learn` | Advisory journal-derived learning that proposes eval candidates and traceable gotchas |
 
 Installing the plugin also registers a **PreToolUse commit guard**, an advisory
 **PostToolUse invariant guard**, a **Stop union** that independently runs telemetry
@@ -80,6 +81,12 @@ Completed runs are commitment-audited before their durable archive is written un
 `.forge/history/runs/<run-id>.md`. The archive preserves the run intent, journal,
 verification and binding-review evidence, including an explicit `Citation Corrections`
 section whenever append-only citation repair was used.
+
+After the archive commit and final report, the workflow may run `/forge:learn` as a
+best-effort advisory pass; drift may do the same only after its durable report and block
+handling. Learning proposes candidate fixtures under `.forge/evals/candidates/` and appends
+traceable one-line gotchas. It never promotes or applies a fixture, changes a control, commits its
+output, or blocks a completed close or report.
 
 Golden control regressions live in `.forge/evals/tasks/`. Journal-derived fixtures
 preserve the exact recorded agent prompt and name both their source run and execution;
