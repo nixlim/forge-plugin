@@ -164,6 +164,22 @@ STRICT=1 scripts/forge/run-evals.sh
 An empty suite exits non-zero. A gate that no fixture exercises is not satisfied
 by having no fixtures.
 
+## Learning loop
+
+After the archive commit and final report — and, on the drift side, after the
+durable drift report — `/forge:learn` runs as a best-effort advisory pass over
+three committed inputs: the journal-derived pattern output, the archive corpus
+under `.forge/history/runs/`, and the current gotchas file. It clusters recurring
+failure shapes and names the control that would have caught each one earlier.
+
+It proposes and nothing more. Candidate fixtures land in
+`.forge/evals/candidates/` carrying the exact recorded prompt and its source run
+and execution; observations append to `.forge/history/gotchas.md`, which then
+feeds forward into later agent prompts.
+It never promotes or applies a fixture, changes a control, commits, or blocks a
+run from closing — a system that rewrote its own controls from its own failure
+history would be gaming its own gates.
+
 ## Scheduled mechanical drift sensing
 
 Point scheduled CI at the mechanical checker, with `CLAUDE_PLUGIN_ROOT` set to

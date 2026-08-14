@@ -173,19 +173,25 @@ def _citation_correction_lines(record: dict[str, object]) -> tuple[str, ...] | N
         raise CoordinationRefusal(
             "forge: journal append refused — invalid citation correction"
         )
-    lines = tuple(suffix[1:].splitlines())
-    if not lines or any(
-        not line
-        or (
+    # FR-191: the directive block ends at the first line that is not a directive;
+    # that line and everything after it is free prose and is ignored. A strict
+    # whole-block grammar would make one badly-shaped appended entry permanently
+    # fatal over an append-only record, which is the fail-always condition the
+    # FR-173 audit rejects. This parse matches audit-commitments.py exactly, so a
+    # correction accepted at append time is the same one the audit applies.
+    directives: list[str] = []
+    for line in suffix[1:].splitlines():
+        if (
             CITATION_DECISION_CORRECTION.fullmatch(line) is None
             and CITATION_VERIFICATION_CORRECTION.fullmatch(line) is None
-        )
-        for line in lines
-    ):
+        ):
+            break
+        directives.append(line)
+    if not directives:
         raise CoordinationRefusal(
             "forge: journal append refused — invalid citation correction"
         )
-    return lines
+    return tuple(directives)
 
 
 def _validate_citation_correction(record: dict[str, object]) -> None:

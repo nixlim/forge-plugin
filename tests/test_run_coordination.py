@@ -365,9 +365,11 @@ class RunCoordinationTests(unittest.TestCase):
             {
                 "type": "decision",
                 "id": "correction-malformed",
+                # FR-191/FR-173: a directive followed by prose is accepted (the
+                # block ends at the first non-directive line). What is refused is
+                # a correction that supplies no directive at all.
                 "resolution": (
                     "citation-correction:\n"
-                    "decision-source basis[0]: ignored/decision.txt\n"
                     "explanatory prose is not a directive"
                 ),
             },
