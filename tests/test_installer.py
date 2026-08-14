@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
@@ -209,7 +210,9 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertTrue((self.repo / ".forge/evals/tasks").is_dir())
         self.assertTrue((self.repo / ".forge/history/runs").is_dir())
         self.assertTrue((self.repo / ".forge/history/drift").is_dir())
+        self.assertTrue((self.repo / ".forge/history/migrations").is_dir())
         self.assertTrue((self.repo / ".forge/tmp").is_dir())
+        self.assertTrue((self.repo / ".forge/tmp/authorized").is_dir())
         self.assertTrue((self.repo / ".forge/tmp/drift").is_dir())
         self.assertTrue((self.repo / ".forge/tmp/decisions").is_dir())
         self.assertEqual(
@@ -825,7 +828,16 @@ class InstallerPayloadContractTests(unittest.TestCase):
         telemetry = next(command for command in commands if "aggregate-telemetry.sh" in command)
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh", telemetry)
         self.assertIn(".forge/tmp/decisions", telemetry)
-        self.assertIn(".forge/tmp/telemetry-latest.csv", telemetry)
+        self.assertIn('json.load(sys.stdin).get("session_id")', telemetry)
+        self.assertIn("--append-csv", telemetry)
+        self.assertIn(".forge/tmp/telemetry.csv", telemetry)
+        self.assertIn("--session", telemetry)
+        self.assertIn('--session "$session_id"', telemetry)
+        self.assertNotIn("--csv", telemetry)
+        self.assertNotIn("telemetry-latest.csv", telemetry)
+        self.assertIn("# forge: modified from upstream", telemetry)
+        self.assertIn(": 'forge-managed';", telemetry)
+        self.assertRegex(telemetry, r"\|\|\s*true\s*$")
 
         seeds = ROOT / "system/seeds"
         expected = {
@@ -867,6 +879,7 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "all fourteen regions filled",
             ".forge/history/runs/",
             ".forge/history/drift/",
+            ".forge/tmp/authorized/",
             ".forge/tmp/drift/",
             ".forge/tmp/decisions/",
             "scripts/forge/configure-dcg.sh",
@@ -911,6 +924,59 @@ class InstallerPayloadContractTests(unittest.TestCase):
         self.assertLess(approval_recheck, completion_flip)
         self.assertIn("byte-for-byte with the reviewed snapshot", skill)
         self.assertIn("invalidates both `review-final` PASS and", skill)
+
+    def test_codex_stop_hook_appends_rows_for_distinct_stdin_sessions(self) -> None:
+        hooks = json.loads(
+            (ROOT / "system/codex/hooks.json").read_text(encoding="utf-8")
+        )
+        commands = [entry["command"] for entry in hooks["hooks"]["Stop"][0]["hooks"]]
+        telemetry = next(command for command in commands if "aggregate-telemetry.sh" in command)
+
+        with tempfile.TemporaryDirectory(prefix="forge-codex-stop-hook-") as temp_dir:
+            repo = Path(temp_dir)
+            subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            (repo / ".forge-manifest").write_text(
+                "forge_version: 1\n", encoding="utf-8"
+            )
+            decisions = repo / ".forge/tmp/decisions"
+            decisions.mkdir(parents=True)
+            event = {
+                "at": "2026-08-12T10:00:00Z",
+                "candidate": "a" * 64,
+                "event": "assertion_advisory",
+                "policy_sha": "b" * 40,
+                "reason": "inconclusive",
+                "surface": "/forge:commit",
+            }
+            (decisions / "events.jsonl").write_text(
+                json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+
+            sessions = ("codex-session-a", "codex-session-b")
+            for session_id in sessions:
+                result = subprocess.run(
+                    ["bash", "-c", telemetry],
+                    cwd=repo,
+                    env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(ROOT)},
+                    input=json.dumps({"session_id": session_id}),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            with (repo / ".forge/tmp/telemetry.csv").open(newline="") as stream:
+                rows = list(csv.reader(stream))
+            self.assertEqual(rows[0][0], "session")
+            self.assertEqual(sum(row[0] == "session" for row in rows), 1)
+            self.assertEqual(tuple(row[0] for row in rows[1:]), sessions)
 
     def test_init_approval_surface_controls_are_observed(self) -> None:
         skill = (ROOT / "skills/init/SKILL.md").read_text(encoding="utf-8")

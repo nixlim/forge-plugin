@@ -10,7 +10,7 @@
           },
           {
             "type": "command",
-            "command": "# forge: modified from upstream — re-rooted telemetry to the plugin script and target repository state.\n: 'forge-managed'; bash \"${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh\" .forge/tmp/decisions --csv .forge/tmp/telemetry-latest.csv >/dev/null 2>&1 || true",
+            "command": "# forge: modified from upstream — re-rooted telemetry to the plugin script and target repository state.\n: 'forge-managed'; session_id=\"$(python3 -c 'import json,sys; value=json.load(sys.stdin).get(\"session_id\"); sys.exit(2) if not isinstance(value,str) or not value else print(value)' 2>/dev/null)\" && bash \"${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh\" .forge/tmp/decisions --append-csv .forge/tmp/telemetry.csv --session \"$session_id\" >/dev/null 2>&1 || true",
             "timeout": 60
           }
         ]

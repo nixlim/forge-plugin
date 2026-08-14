@@ -611,6 +611,7 @@ ensure_directory "${TARGET_ROOT}/.forge/history/runs" ".forge/history/runs/"
 ensure_directory "${TARGET_ROOT}/.forge/history/drift" ".forge/history/drift/"
 ensure_directory "${TARGET_ROOT}/.forge/history/migrations" ".forge/history/migrations/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp" ".forge/tmp/"
+ensure_directory "${TARGET_ROOT}/.forge/tmp/authorized" ".forge/tmp/authorized/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp/drift" ".forge/tmp/drift/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp/decisions" ".forge/tmp/decisions/"
 verify_history_ignore_invariant

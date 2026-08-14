@@ -164,8 +164,8 @@ Require exit 0 and inspect its written-versus-skipped summary. Verify that it re
 `AGENTS.md`, ensured the exact line `@forge-project.md` in `CLAUDE.md`, installed `.codex/`,
 reconciled one guarded Forge gitignore block by required content without duplicate effective entries,
 and created `.forge/evals/tasks/`, `.forge/history/runs/`, `.forge/history/drift/`,
-`.forge/history/migrations/`, `.forge/tmp/`, `.forge/tmp/drift/`, and
-`.forge/tmp/decisions/`. The installer must also prove the target repository's effective ignore
+`.forge/history/migrations/`, `.forge/tmp/`, `.forge/tmp/authorized/`, `.forge/tmp/drift/`,
+and `.forge/tmp/decisions/`. The installer must also prove the target repository's effective ignore
 rules ignore `.forge/tmp/` but do not ignore `.forge/history/`; either failure stops installation.
 Content outside the AGENTS markers must be unchanged.
 
