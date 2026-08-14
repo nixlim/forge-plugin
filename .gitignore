@@ -5,3 +5,9 @@
 !/CLAUDE.md
 .upstream/
 __pycache__/
+
+# local scratch: worktrees (per the plugin's own gitignore-block) and dev-tool state
+.worktrees/
+.devlog/
+.dcg/
+.idea/
