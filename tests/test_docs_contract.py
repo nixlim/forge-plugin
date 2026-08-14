@@ -127,7 +127,7 @@ class DocumentationContractTests(unittest.TestCase):
         ):
             self.assertIn(step, workflow)
 
-    def test_workflow_refuses_drift_block_before_successor_logic(self) -> None:
+    def test_workflow_refuses_drift_block_before_registry_admission(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
         refusal = (
             "forge: new run refused — CRITICAL drift block present at "
@@ -136,7 +136,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertEqual(workflow.count(refusal), 1)
         self.assertLess(
             workflow.index(".forge/tmp/drift-block"),
-            workflow.index("every `.codex-orchestrator/runs/*/journal.jsonl`"),
+            workflow.index("Open the run only through"),
         )
         self.assertIn("applies to every new run, including a user-designated successor", workflow)
         self.assertIn("only an operator may manually delete it", workflow)
@@ -150,7 +150,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("schema_version: 1", drift)
         self.assertIn("only semantic\ninput is that stdout document", drift)
         self.assertIn("Never read, derive, repair, or supplement", drift)
-        self.assertIn("`.forge/tmp/telemetry-latest.csv`", drift)
+        self.assertIn("`.forge/tmp/telemetry.csv`", drift)
         self.assertIn("forge: drift mechanical check failed", drift)
         self.assertLess(
             drift.index("forge: drift mechanical check failed"),
@@ -250,7 +250,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("Do not create the run unless both exclude checks succeed", workflow)
         self.assertLess(
             workflow.index("git check-ignore -q"),
-            workflow.index("create `.codex-orchestrator/runs/<run-id>/journal.jsonl`"),
+            workflow.index("use `run-open` to atomically create ownership plus `run_started`"),
         )
         records = jsonl_records(contract)
         run_started = next(record for record in records if record["type"] == "run_started")
@@ -348,7 +348,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("read-only sandbox", reviewer)
         self.assertIn("exact target SHA", orchestrate)
 
-    # forge: modified from upstream — enforce the single-active-run exception contract
+    # forge: modified from upstream — enforce D13 disjoint registry and retirement contract
     def test_journal_uniqueness_and_successor_run_guidance_match_runtime(self) -> None:
         contract = " ".join(
             (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8").split()
@@ -365,10 +365,14 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("retain the journal", contract)
         self.assertIn("Never rewrite journal history", workflow)
         self.assertIn("retain the run and start a successor", workflow)
-        self.assertIn("every `.codex-orchestrator/runs/*/journal.jsonl`", workflow)
-        self.assertIn("If any journal lacks a `run_closed` entry, refuse", workflow)
-        self.assertIn("user explicitly designates the new run as a successor run", workflow)
-        self.assertIn("new `run_started.goal`", workflow)
+        self.assertIn("Disjoint open runs may proceed concurrently", workflow)
+        self.assertIn("run registry unavailable", workflow)
+        self.assertIn("scope overlap between <new-run-id> and open run <open-run-id>", workflow)
+        self.assertIn("use `run-retire", workflow)
+        self.assertIn("--successor-of <predecessor>", workflow)
+        self.assertIn("journal-append", workflow)
+        disabled = workflow.replace("Disjoint open runs may proceed concurrently", "", 1)
+        self.assertNotIn("Disjoint open runs may proceed concurrently", disabled)
 
     # forge: modified from upstream — cover Level B gate recording and gated report refusal
     def test_gate_recording_and_gated_close_are_documented(self) -> None:

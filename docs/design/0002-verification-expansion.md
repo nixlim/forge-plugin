@@ -232,10 +232,16 @@ profile into an operable loop with a mechanical half and a semantic half.
   region staleness (unfilled sentinels, commands referencing deleted paths);
   window-bounded telemetry aggregation (skip rate, fast-path rate and
   policy/eligibility denials, eligible gate-chain commit population, review
-  iteration counts, block rate, halt/guard denials). Every emitting surface holds
-  the shared `.forge/tmp/events.lock` for its single append, while the checker holds
-  that same lock across the prune read and atomic replace, following the existing
-  commit-lock bounded-wait, owner-only-release, fail-closed ownership convention.
+  iteration counts, block rate, halt/guard denials). Every emitting surface registers
+  an in-flight writer before checking the prune lock. If the lock is present, the
+  emitter unregisters, revalidates stale ownership under the lock-state mutex, and
+  retries at a sub-second interval for at most 5 seconds; expiry skips only the append
+  and records `event-append-lock-timeout` through the advisory failure audit without
+  changing the primary result or exit status. Once no prune lock is present, the
+  emitter uses one checked POSIX `O_APPEND` write without acquiring
+  `.forge/tmp/events.lock`. The checker alone holds that lock across writer drain,
+  prune read, and atomic replace, following the existing owner-only-release and
+  fail-closed ownership convention.
   The prune cutoff is `min(generated_at − retention_bound, window_start)`: it
   removes only entries with `at` earlier than the cutoff, so it never removes an
   entry with `at >= window_start`. A prune housekeeping failure is recorded in
@@ -504,8 +510,12 @@ These are verified, not assumed:
   blocked against the main-checkout lock and timed out naming it.
 - **Kill-switch is repo-wide.** `AGENT_HALT` resolves to the main checkout root
   from any worktree.
-- **Event appends are serialized.** `.forge/tmp/events.lock` with a bounded 5 s
-  wait (task-05) protects `decisions/events.jsonl`.
+- **Event appends are atomic on supported local POSIX filesystems.** Emitters register
+  in-flight writers, wait up to 5 seconds with sub-second retries while a live prune
+  owns `.forge/tmp/events.lock`, and make one checked `O_APPEND` write after the lock
+  clears. A timeout skips the append and records `event-append-lock-timeout` through
+  the advisory failure audit. Emitters never acquire the lock; it is reserved for
+  prune read-and-replace.
 
 ### The primary defect: repo-scoped marker, session-scoped work
 

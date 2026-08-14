@@ -304,23 +304,57 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("at most 8 review", COMMIT_SKILL)
         self.assertIn("requires explicit user approval", COMMIT_SKILL)
         self.assertIn("skip: user-directed", COMMIT_SKILL)
-        self.assertIn(".forge/tmp/commit-authorized", COMMIT_SKILL)
+        self.assertIn(
+            'commit_marker="$forge_main_root/.forge/tmp/authorized/$reviewed_diff_sha256"',
+            COMMIT_SKILL,
+        )
         self.assertIn("reviewed_diff_sha256", COMMIT_SKILL)
         self.assertGreaterEqual(COMMIT_SKILL.count("set -o pipefail"), 3)
         self.assertIn("could not hash staged diff — review blocked", COMMIT_SKILL)
         self.assertIn("could not hash staged diff — review skip blocked", COMMIT_SKILL)
         self.assertIn("re-run the affected Step 2 validations", COMMIT_SKILL)
         self.assertIn("restart Step 4", COMMIT_SKILL)
-        invalidation = "rm -f .forge/tmp/commit-authorized"
+        invalidation = "reviewed_diff_sha256=''\ncommit_marker=''"
         self.assertLess(COMMIT_SKILL.index(invalidation), COMMIT_SKILL.index("## Step 1 —"))
         control_wait = "then wait for explicit approval naming the reviewed candidate"
         pass_write = (
             "printf '%s\\n%s\\n' \"$reviewed_diff_sha256\" \"$reviewed_at\" "
-            "> .forge/tmp/commit-authorized"
+            '> "$commit_marker"'
         )
         self.assertLess(COMMIT_SKILL.index(invalidation), COMMIT_SKILL.index(control_wait))
         self.assertLess(COMMIT_SKILL.index(control_wait), COMMIT_SKILL.index(pass_write))
         self.assertIn("leaves no authorization marker behind", COMMIT_SKILL)
+
+    def test_assertion_and_reviewer_measurement_events_are_exact_and_advisory(self) -> None:
+        sensor = COMMIT_SKILL.split(
+            "After preserving the sensor's primary result", 1
+        )[1].split("For a control-class commit", 1)[0]
+        for event in (
+            "`assertion_blocking`",
+            "`assertion_advisory`",
+            "`assertion_waived`",
+        ):
+            with self.subTest(event=event):
+                self.assertIn(event, sensor)
+        self.assertIn("exact `reviewed_diff_sha256`", sensor)
+        self.assertIn("surface `/forge:commit`", sensor)
+        self.assertIn("clean sensor result", sensor)
+        self.assertIn("emits no assertion event", sensor)
+        self.assertIn("only after\nthe sensor result is preserved", sensor)
+        self.assertIn("never changes Step 2's result or exit status", sensor)
+
+        reviewer = COMMIT_SKILL.split(
+            "After preserving each reviewer's complete primary verdict", 1
+        )[1].split("Give the reviewer", 1)[0]
+        self.assertIn("`review_cheap_finding`", reviewer)
+        self.assertIn("`review_final_finding`", reviewer)
+        self.assertIn("exact\n`$reviewed_diff_sha256`", reviewer)
+        self.assertIn("surface `/forge:commit`", reviewer)
+        for severity in ("`CRITICAL`", "`MAJOR`", "`MINOR`"):
+            self.assertIn(severity, reviewer)
+        self.assertIn("no findings emits no finding event", reviewer)
+        self.assertIn("after the verdict and findings are\npreserved", reviewer)
+        self.assertIn("never changes the verdict, iteration, or exit\nstatus", reviewer)
 
     def test_gate_time_tiering_is_exact_promote_only_and_non_narrowable(self) -> None:
         invocation = (
@@ -378,7 +412,7 @@ class CommitSkillTests(unittest.TestCase):
                 self.assertIn(retained, routing)
         marker_write = (
             "printf '%s\\n%s\\n%s\\n%s\\n' \"$reviewed_diff_sha256\" \"$reviewed_at\" \\\n"
-            "  'tier: fast' \"policy: $policy_sha\" > .forge/tmp/commit-authorized"
+            "  'tier: fast' \"policy: $policy_sha\" > \"$commit_marker\""
         )
         self.assertIn(marker_write, COMMIT_SKILL)
         self.assertIn("if len(lines) not in (2, 3, 4):", COMMIT_SKILL)
@@ -405,7 +439,7 @@ class CommitSkillTests(unittest.TestCase):
         skip_approval = "Wait for explicit user approval naming that candidate SHA-256"
         skip_write = (
             "printf '%s\\n%s\\n%s\\n' \"$reviewed_diff_sha256\" \"$reviewed_at\" "
-            "'skip: user-directed' > .forge/tmp/commit-authorized"
+            "'skip: user-directed' > \"$commit_marker\""
         )
         self.assertLess(COMMIT_SKILL.index(skip_approval), COMMIT_SKILL.index(skip_write))
 
@@ -435,6 +469,8 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn('if ! current_hash="$(git diff --cached | shasum -a 256', COMMIT_SKILL)
         self.assertIn("forge: could not hash staged diff — commit blocked", COMMIT_SKILL)
         self.assertIn("failed to consume commit authorization marker", COMMIT_SKILL)
+        self.assertIn('rm -f "$commit_marker" || {', COMMIT_SKILL)
+        self.assertNotIn(".forge/tmp/commit-authorized", COMMIT_SKILL)
         self.assertIn("lock-release failure takes precedence", COMMIT_SKILL)
         release_call = "\nrelease_commit_gate\nrelease_status=$?\n"
         clear_traps = "\ntrap - EXIT HUP INT TERM\n"
@@ -459,8 +495,13 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("event `review_block`", COMMIT_SKILL)
         self.assertIn("`user_skip` event", COMMIT_SKILL)
         self.assertIn("First deliver acceptance of the skip as the primary outcome", COMMIT_SKILL)
-        self.assertIn("2-second polling and hard 5-second bound", COMMIT_SKILL)
-        self.assertIn("event-append-lock-timeout", COMMIT_SKILL)
+        self.assertIn("registers an in-flight writer but acquires no lock", COMMIT_SKILL)
+        self.assertIn("os.O_WRONLY | os.O_APPEND | os.O_CREAT", COMMIT_SKILL)
+        self.assertIn("makes exactly one `os.write()`", COMMIT_SKILL)
+        self.assertIn("treats a short write as a failure", COMMIT_SKILL)
+        self.assertIn("gates only drift-check's prune read-and-replace", COMMIT_SKILL)
+        self.assertIn("does not extend to NFS/SMB network filesystems", COMMIT_SKILL)
+        self.assertIn("Windows\nis out of scope", COMMIT_SKILL)
         self.assertIn("deduplicates both events by `(event, candidate)`", COMMIT_SKILL)
 
     def test_forbidden_legacy_and_blanket_staging_forms_are_absent(self) -> None:

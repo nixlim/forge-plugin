@@ -41,8 +41,17 @@ main_root="$(resolve_main_root)" || {
     exit 1
 }
 
+internal_event_state_critical=0
 lock_path=".forge/tmp/commit-lock"
-if [[ "$#" -eq 1 ]]; then
+if [[ "${1:-}" == "--event-state-critical" ]]; then
+    internal_event_state_critical=1
+    if [[ "$#" -eq 2 ]]; then
+        lock_path="$2"
+    else
+        echo "forge: invalid internal event-lock release invocation" >&2
+        exit 1
+    fi
+elif [[ "$#" -eq 1 ]]; then
     lock_path="$1"
 elif [[ "$#" -ne 0 ]]; then
     echo "forge: release-commit-lock.sh accepts at most one repository-relative lock path" >&2
@@ -63,6 +72,44 @@ lock_file="$main_root/$lock_path"
 event_lock=0
 if [[ "$lock_path" == ".forge/tmp/events.lock" ]]; then
     event_lock=1
+fi
+
+if [[ "$internal_event_state_critical" -eq 1 ]] && [[ "$event_lock" -ne 1 ]]; then
+    echo "forge: internal event-lock release is restricted to .forge/tmp/events.lock" >&2
+    exit 1
+fi
+
+if [[ "$event_lock" -eq 1 ]] && [[ "$internal_event_state_critical" -eq 0 ]]; then
+    state_lock_file="$lock_file.state.lock"
+    lock_dir="$(dirname "$lock_file")"
+    mkdir -p "$lock_dir"
+    if [[ -d "$state_lock_file" ]] || ! : >>"$state_lock_file"; then
+        echo "forge: cannot initialize event-lock state file: $state_lock_file" >&2
+        exit 1
+    fi
+
+    script_path="${BASH_SOURCE[0]}"
+    if [[ "$script_path" != /* ]]; then
+        script_path="$(pwd)/$script_path"
+    fi
+    script_path="$(cd "$(dirname "$script_path")" 2>/dev/null && pwd -P)/$(basename "$script_path")" || {
+        echo "forge: cannot resolve release-commit-lock.sh for state locking" >&2
+        exit 1
+    }
+
+    # Ownership validation and unlink must share the same kernel state mutex as
+    # stale recovery and acquisition. Otherwise an old releaser can inspect one
+    # record and unlink a replacement created between its read and rm (ABA).
+    if command -v flock >/dev/null 2>&1; then
+        exec flock "$state_lock_file" bash "$script_path" \
+            --event-state-critical "$lock_path"
+    elif command -v lockf >/dev/null 2>&1; then
+        exec lockf -k "$state_lock_file" bash "$script_path" \
+            --event-state-critical "$lock_path"
+    else
+        echo "forge: no portable event-lock state mechanism is available (need flock or lockf)" >&2
+        exit 1
+    fi
 fi
 
 if [[ ! -f "$lock_file" ]]; then

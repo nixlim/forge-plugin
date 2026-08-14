@@ -20,9 +20,9 @@ From the target repository root, run:
 Capture stdout byte-for-byte and capture the exit status without suppressing it. The only semantic
 input is that stdout document: validate it as the FR-161 drift summary schema v1, including
 `schema_version: 1`, before reviewing anything. Never read, derive, repair, or supplement the
-semantic input from `.forge/tmp/telemetry-latest.csv`; even an intervening Stop hook overwrite of
-that CSV cannot influence this review. The same-date `.forge/tmp/drift/<date>.json` is a transient
-byte-identical copy for operators, not a second input.
+semantic input from `.forge/tmp/telemetry.csv`; even an intervening Stop hook append of
+session-identified rows to that CSV cannot influence this review. The same-date
+`.forge/tmp/drift/<date>.json` is a transient byte-identical copy for operators, not a second input.
 
 - Exit 0 is a mechanically clean summary and proceeds to semantic review.
 - Exit 1 is a schema-valid drift-present summary and also proceeds to semantic review.

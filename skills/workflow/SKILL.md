@@ -30,12 +30,35 @@ creates `.forge/tmp/drift-block`, only an operator may manually delete it after 
 durable report. Forge agents and cleanup never delete, bypass, or replace it. This file is a
 run-open refusal, not an `AGENT_HALT` sentinel; agents never create or clear `AGENT_HALT` for drift.
 
-<!-- forge: modified from upstream — enforce the single-active-run successor rule -->
-Before opening a run, inspect every `.codex-orchestrator/runs/*/journal.jsonl` in the target
-repository. If any journal lacks a `run_closed` entry, refuse to open the new run and name each
-open run. Proceed only when the user explicitly designates the new run as a successor run; record
-that designation and the predecessor run ID in the new `run_started.goal`. Never infer successor
-status merely because an earlier run exists.
+<!-- forge: modified from upstream — atomically admit disjoint owned runs through the D13 registry -->
+Before `run_started`, declare a nonempty intended repository file scope made only of positive,
+repository-relative Git pathspecs. Exclude transient Forge and run state (`.forge/**`,
+`.codex-orchestrator/**`, and `.worktrees/**`). Export one stable long-lived session identity with
+`export FORGE_SESSION_PID=$$`; every run coordination and journal append in this shell must retain
+that same value.
+
+Open the run only through `${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py run-open`, passing
+`--repo "$REPO"`, `--run-id <run-id>`, one `--scope <pathspec>` for every declared pathspec, and a
+`--record-json` file containing the proposed `run_started` object. The command atomically creates
+the owner sidecar with `run_started`, reconciles `.forge/tmp/run-registry.json`, and admits this run
+when its scope is disjoint from every open run. It prints one exact
+`forge: new run refused — scope overlap between <new-run-id> and open run <open-run-id>` line for
+each conflict in bytewise run-ID order. Missing, malformed, ambiguous, or unregistered open-run
+state refuses exactly `forge: new run refused — run registry unavailable`. Never bypass either
+refusal by manually creating a run directory or appending a journal line.
+
+Disjoint open runs may proceed concurrently. Scope remains fixed for the run. Before adding a task,
+ensure every `task.files` pathspec is contained by its admitted run scope; widen it first, under the
+same registry lock, with `run-readmit --repo "$REPO" --run-id <run-id> --scope <pathspec> ...`.
+Append every later record only with `journal-append --repo "$REPO" --run-id <run-id>
+--record-json <file>`, which proves the current PID/host owner before every write. A different live
+owner, or a missing/malformed owner after `run_started`, is a hard refusal and leaves the journal
+byte-identical.
+
+If immutable journal damage requires a successor, never rewrite journal history: retain the run,
+stop all mutation, and use `run-retire --repo "$REPO" --run-id <predecessor>` first. Then start the
+user-designated successor with `run-open ... --successor-of <predecessor>`. Scope reuse is legal
+only after that locked, non-mutating retirement and never over a foreign live predecessor owner.
 
 From the target Git worktree, exclude run data locally before creating it:
 
@@ -89,9 +112,9 @@ rather than claiming those changes.
 ## Full Workflow
 
 1. Inspect the repository and user context to understand the goal and relevant constraints.
-2. Perform Run Initialization, create `.codex-orchestrator/runs/<run-id>/journal.jsonl`, and append
-   `run_started` with the concise original goal, absolute repository path, captured Git baseline,
-   plugin ref, and available Claude and Codex versions.
+2. Perform Run Initialization and use `run-open` to atomically create ownership plus `run_started`
+   with the concise original goal, absolute repository path, captured Git baseline, plugin ref,
+   available Claude and Codex versions, and the declared admitted scope.
 3. Claude turns the goal into a concrete plan with expected deliverables, acceptance criteria,
    risks, and verification paths.
 4. Ask Codex to review Claude's plan when a second opinion materially reduces risk; record that
@@ -102,7 +125,8 @@ rather than claiming those changes.
    references both plan paths in `decision.basis`, and finalizes the plan.
 <!-- forge: modified from upstream — overlapping ownership always serializes (FR-130) -->
 5. Split the finalized plan into active `task` entries with goals, acceptance criteria, and
-   allowed/owned `files`. Serialize every overlap in files, contracts, or shared resources;
+   admitted-scope-contained `files`; append them through `journal-append`. Serialize every overlap
+   in files, contracts, or shared resources;
    isolated worktrees support concurrent tasks only when their ownership is disjoint.
 <!-- forge: modified from upstream — fail closed at the run-lifecycle launch boundary (FR-033/092) -->
 6. For each task, use the orchestrate skill to assign a fresh Codex implementer, capture its
@@ -117,8 +141,14 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"
    If it reports a halt, launch no new work, perform no reintegration, report the sentinel, and
    wait. Agents never create, delete, or bypass halt sentinels without explicit user direction.
    Repeat focused fix or review cycles as needed.
-7. Record only consequential resolutions or user dependencies as `decision`. Append a terminal
-   `task` entry only after its acceptance criteria have been evaluated.
+7. Record only consequential resolutions or user dependencies as `decision`. Use
+   `journal-append` for every record; append a terminal `task` only after its acceptance criteria
+   have been evaluated.
+   When correcting a journal citation, preserve the original entry and append an owned `decision`
+   whose `resolution` begins exactly `citation-correction:`. Put one directive per following line:
+   `<decision-id> basis[<n>]: <corrected-path>` or
+   `<verification-id> observation: <cited> -> <corrected-path>`. The latest correction for the
+   same citation applies; never rewrite the cited entry.
 8. When every task is terminal, re-read the complete journal and inspect the final repository state
    and diff.
 
@@ -134,7 +164,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" validate --gates \
 10. Resolve omissions that can be corrected by appending, and inspect every non-passing
     verification. Never rewrite journal history. If a duplicate identity or another structural
     conflict cannot be corrected by appending, retain the run and start a successor as defined by
-    the orchestration contract. Otherwise append one final `run_closed` entry with
+    the orchestration contract and locked retirement above. Otherwise use `run-close --repo
+    "$REPO" --run-id <run-id> --record-json <file>` to append one final `run_closed` entry with
     `judgment: passed|blocked`, unresolved risks, and follow-ups; its `validation` field embeds the
     pre-close payload verbatim. An absent `profile: "gates"` in that payload means the gated close
     was skipped.

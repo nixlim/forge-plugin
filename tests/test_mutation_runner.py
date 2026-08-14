@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,6 +119,8 @@ class MutationRunnerTests(unittest.TestCase):
         ]
         if journal is not None:
             arguments.extend(("--journal", str(journal), "--task", task))
+        invocation_environment = os.environ.copy() if environment is None else environment.copy()
+        invocation_environment.setdefault("FORGE_SESSION_PID", str(os.getpid()))
         return subprocess.run(
             arguments,
             cwd=self.repo,
@@ -124,7 +128,7 @@ class MutationRunnerTests(unittest.TestCase):
             text=True,
             check=False,
             timeout=timeout,
-            env=environment,
+            env=invocation_environment,
         )
 
     def invoke_outside_repo(self) -> subprocess.CompletedProcess[str]:
@@ -169,8 +173,75 @@ class MutationRunnerTests(unittest.TestCase):
             capture_output=True,
             check=False,
             timeout=8,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8:strict"},
+            env={
+                **os.environ,
+                "FORGE_SESSION_PID": str(os.getpid()),
+                "PYTHONIOENCODING": "utf-8:strict",
+            },
         )
+
+    def open_journal(
+        self,
+        *,
+        run_id: str = "mutation-run",
+        records: tuple[dict[str, object], ...] = (),
+    ) -> Path:
+        """Create the smallest valid D13-owned open run for runner append tests."""
+
+        run_dir = self.repo / ".codex-orchestrator/runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        started_at = (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        (run_dir / "owner").write_text(
+            f"pid: {os.getpid()}\nhost: {socket.gethostname()}\nstarted_at: {started_at}\n",
+            encoding="utf-8",
+        )
+        opening = {
+            "type": "run_started",
+            "run_id": run_id,
+            "scope": ["README.md", "package.json", "pyproject.toml", "src/**", "tests/**"],
+        }
+        journal = run_dir / "journal.jsonl"
+        journal.write_text(
+            "".join(
+                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+                for record in (opening, *records)
+            ),
+            encoding="utf-8",
+        )
+        registry = self.repo / ".forge/tmp/run-registry.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(
+            json.dumps(
+                {
+                    "open_runs": [
+                        {
+                            "run_id": run_id,
+                            "scope": [
+                                "README.md",
+                                "package.json",
+                                "pyproject.toml",
+                                "src/**",
+                                "tests/**",
+                            ],
+                        }
+                    ],
+                    "schema_version": 1,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return journal
+
+    def appended_record(self, journal: Path) -> dict[str, object]:
+        return json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])
 
     def evidence(self, result: subprocess.CompletedProcess[str]) -> list[dict[str, object]]:
         return [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
@@ -239,7 +310,7 @@ class MutationRunnerTests(unittest.TestCase):
             initial_files={"tests/test_deleted.py": "def test_value():\n    assert True\n"},
             candidate_files={"tests/test_deleted.py": None},
         )
-        journal = self.repo / "journal.jsonl"
+        journal = self.open_journal()
 
         result = self.invoke(base, head, journal=journal)
 
@@ -255,7 +326,7 @@ class MutationRunnerTests(unittest.TestCase):
             evidence[0]["observation"],
             "tool=mutmut run; scope=python; outcome=no-live-scope; " "scoped_files=[]; timeout=7s",
         )
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["criterion"], "mutation: python")
         self.assertEqual(verification["result"], "skipped")
         self.assertEqual(verification["check"], changed_form)
@@ -459,7 +530,7 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertFalse((self.repo / "full-suite-must-not-run").exists())
 
     def test_applicable_declared_absence_is_journaled_as_ordinary_verification(self) -> None:
-        journal = self.repo / "journal.jsonl"
+        journal = self.open_journal()
         base, head = self.establish_candidate(
             "No mutation tool available for go — assertion-quality fallback only.",
             category_rows=("| `go` | `*.go`, `go.mod` |",),
@@ -472,7 +543,7 @@ class MutationRunnerTests(unittest.TestCase):
         evidence = self.evidence(result)
         self.assertEqual(evidence[0]["criterion"], "mutation: go")
         self.assertEqual(evidence[0]["result"], "skipped")
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["type"], "verification")
         self.assertEqual(verification["criterion"], "mutation: go")
         self.assertEqual(verification["result"], "skipped")
@@ -485,7 +556,7 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertIn("timeout=not-applicable", verification["observation"])
 
     def test_declared_absence_with_missing_category_still_emits_and_journals_notice(self) -> None:
-        journal = self.repo / "journal.jsonl"
+        journal = self.open_journal()
         base, head = self.establish_candidate(
             "No mutation tool available for go — assertion-quality fallback only.",
             candidate_files={"README.md": "candidate\n"},
@@ -508,7 +579,7 @@ class MutationRunnerTests(unittest.TestCase):
             "tool=none; scope=go; outcome=declared-absence; "
             "scoped_files=[]; timeout=not-applicable",
         )
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["criterion"], evidence[0]["criterion"])
         self.assertEqual(verification["result"], evidence[0]["result"])
         self.assertEqual(verification["check"], evidence[0]["check"])
@@ -703,10 +774,8 @@ class MutationRunnerTests(unittest.TestCase):
             mutation_table(f"| python | mutmut run | {changed_form} | 12 |"),
             candidate_files={"src/new.py": "value = 1\n"},
         )
-        journal = self.repo / "journal.jsonl"
-        journal.write_text(
-            json.dumps({"type": "task", "id": "task-04", "status": "complete"}) + "\n",
-            encoding="utf-8",
+        journal = self.open_journal(
+            records=({"type": "task", "id": "task-04", "status": "complete"},),
         )
 
         result = self.invoke(base, head, journal=journal)
@@ -743,13 +812,17 @@ class MutationRunnerTests(unittest.TestCase):
                 "src/new.js": "const value = 1;\n",
             },
         )
-        journal = self.repo / "unwritable-journal"
+        journal = self.open_journal()
+        journal.unlink()
         journal.mkdir()
 
         result = self.invoke(base, head, journal=journal)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            result.stderr,
+            "forge: new run refused — run registry unavailable\n" * 2,
+        )
         self.assertNotIn("Traceback", result.stdout)
         self.assertEqual(
             self.evidence(result),
@@ -778,6 +851,50 @@ class MutationRunnerTests(unittest.TestCase):
         )
         self.assertTrue(journal.is_dir())
 
+    def test_foreign_live_journal_owner_hard_refuses_runner_append(self) -> None:
+        base, head = self.establish_candidate(
+            mutation_table("| python | mutmut run | true | 5 |"),
+            candidate_files={"src/new.py": "value = 1\n"},
+        )
+        journal = self.open_journal(run_id="foreign-owner-run")
+        owner = journal.parent / "owner"
+        owner.write_text(
+            "pid: 42\nhost: remote-host\nstarted_at: 2026-08-13T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        before = journal.read_bytes()
+
+        result = self.invoke(base, head, journal=journal)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            result.stderr,
+            "forge: journal append refused — run foreign-owner-run has live owner "
+            "42@remote-host\n",
+        )
+        self.assertEqual(journal.read_bytes(), before)
+        self.assertEqual(len(self.evidence(result)), 1)
+
+    def test_missing_journal_owner_hard_refuses_runner_append(self) -> None:
+        base, head = self.establish_candidate(
+            mutation_table("| python | mutmut run | true | 5 |"),
+            candidate_files={"src/new.py": "value = 1\n"},
+        )
+        journal = self.open_journal(run_id="missing-owner-run")
+        (journal.parent / "owner").unlink()
+        before = journal.read_bytes()
+
+        result = self.invoke(base, head, journal=journal)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            result.stderr,
+            "forge: journal append refused — owner record missing or malformed for "
+            "run missing-owner-run\n",
+        )
+        self.assertEqual(journal.read_bytes(), before)
+        self.assertEqual(len(self.evidence(result)), 1)
+
     def test_launch_failure_is_inconclusive_and_runner_remains_advisory(self) -> None:
         base, head = self.establish_candidate(
             mutation_table("| python | mutmut run | true | 5 |"),
@@ -789,7 +906,7 @@ class MutationRunnerTests(unittest.TestCase):
             source = shutil.which(executable)
             self.assertIsNotNone(source)
             os.symlink(source, fake_bin / executable)
-        journal = self.repo / "journal.jsonl"
+        journal = self.open_journal()
 
         result = self.invoke(
             base,
@@ -811,7 +928,7 @@ class MutationRunnerTests(unittest.TestCase):
             'timeout=5s; scoped_files=["src/new.py"]; '
             "output=[Errno 2] No such file or directory: 'bash'",
         )
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["result"], "inconclusive")
         self.assertEqual(verification["observation"], evidence[0]["observation"])
 
@@ -825,7 +942,7 @@ class MutationRunnerTests(unittest.TestCase):
             mutation_table(f"| python | mutmut run | {changed_form} | 01 |"),
             candidate_files={"src/new.py": "value = 1\n"},
         )
-        journal = self.repo / "journal.jsonl"
+        journal = self.open_journal()
 
         started = time.monotonic()
         result = self.invoke(
@@ -845,7 +962,7 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertEqual(evidence[0]["result"], "inconclusive")
         self.assertIn("outcome=timed-out", evidence[0]["observation"])
         self.assertIn("timeout=1s", evidence[0]["observation"])
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["criterion"], "mutation: python")
         self.assertFalse(verification["criterion"].startswith("gate-"))
         self.assertEqual(verification["check"], changed_form)
@@ -1024,8 +1141,7 @@ class MutationRunnerTests(unittest.TestCase):
             ),
             candidate_files={"src/new.py": "value = 1\n"},
         )
-        journal = self.repo / "journal.jsonl"
-        journal.touch()
+        journal = self.open_journal()
 
         result = self.invoke(base, head, journal=journal)
 
@@ -1037,7 +1153,7 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertEqual(evidence[0]["diagnostic"], "forge: executable policy row malformed")
         self.assertFalse((self.repo / "must-not-run").exists())
         self.assertFalse((self.repo / "must-not-run-either").exists())
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["type"], "verification")
         self.assertEqual(verification["criterion"], "mutation: policy")
         self.assertEqual(verification["result"], "skipped")
@@ -1137,7 +1253,7 @@ class MutationRunnerTests(unittest.TestCase):
             mutation_table(f"| python | mutmut run | {changed_form} | 5 |"),
             candidate_files={"src/new.py": "value = 1\n"},
         )
-        journal = self.repo / "journal.jsonl"
+        journal = self.open_journal()
 
         result = self.invoke(base, head, journal=journal)
 
@@ -1151,7 +1267,7 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertEqual(len(observation.rsplit("output=", 1)[1].encode("utf-8")), 65_536)
         self.assertGreater(len(observation), 65_536)
         marker = "... [truncated for journal; full observation retained in mutation evidence]"
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["criterion"], "mutation: python")
         self.assertEqual(verification["result"], "inconclusive")
         self.assertEqual(len(verification["observation"]), 2_000)
@@ -1186,7 +1302,7 @@ class MutationRunnerTests(unittest.TestCase):
         )
         self.git("commit", "-q", "-m", "candidate with non-utf8 path")
         head = self.git("rev-parse", "HEAD").stdout.strip()
-        journal = self.repo / "journal.jsonl"
+        journal = self.open_journal()
 
         result = self.invoke_bytes(base, head, journal=journal)
 
@@ -1200,7 +1316,7 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertEqual(len(evidence), 1)
         self.assertEqual(evidence[0]["result"], "passed")
         self.assertIn(r"tests/test_invalid_\udcff.py", evidence[0]["observation"])
-        verification = json.loads(journal.read_text(encoding="utf-8"))
+        verification = self.appended_record(journal)
         self.assertEqual(verification["observation"], evidence[0]["observation"])
 
         mutant_root = self.repo / "disabled-control-plugin"

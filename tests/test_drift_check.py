@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DRIFT_CHECK = ROOT / "scripts/forge/drift-check.sh"
 DRIFT_STALENESS = ROOT / "scripts/forge/drift-staleness.sh"
 MUTATION_HELPER = ROOT / "scripts/forge/run-scoped-mutation.py"
+EMIT_EVENT = ROOT / "scripts/forge/emit-decision-event.py"
 NOW = "2026-08-11T12:00:00Z"
 CONFIG_WARNING = (
     "forge: malformed drift-config — using defaults "
@@ -70,6 +72,7 @@ class DriftFixture:
         self.repo.mkdir(parents=True)
         (self.plugin / "scripts/forge").mkdir(parents=True)
         shutil.copy2(MUTATION_HELPER, self.plugin / "scripts/forge/run-scoped-mutation.py")
+        shutil.copy2(EMIT_EVENT, self.plugin / "scripts/forge/emit-decision-event.py")
         self._script(
             "run-evals.sh",
             """#!/bin/sh
@@ -81,13 +84,24 @@ exit "${FORGE_TEST_EVAL_EXIT:-0}"
         self._script(
             "acquire-commit-lock.sh",
             """#!/bin/sh
-exit "${FORGE_TEST_ACQUIRE_EXIT:-0}"
+status="${FORGE_TEST_ACQUIRE_EXIT:-0}"
+[ "$status" = 0 ] || exit "$status"
+[ "$#" -eq 1 ] || exit 64
+lock_file="$PWD/$1"
+mkdir -p "$(dirname "$lock_file")" || exit 1
+(set -C; : > "$lock_file") 2>/dev/null || exit 1
 """,
         )
         self._script(
             "release-commit-lock.sh",
             """#!/bin/sh
-exit "${FORGE_TEST_RELEASE_EXIT:-0}"
+status="${FORGE_TEST_RELEASE_EXIT:-0}"
+[ "$status" = 0 ] || exit "$status"
+[ "$#" -eq 1 ] || exit 64
+lock_file="$PWD/$1"
+[ -f "$lock_file" ] || exit 1
+[ -z "${FORGE_TEST_RELEASE_READY:-}" ] || : > "$FORGE_TEST_RELEASE_READY" || exit 1
+rm -f -- "$lock_file"
 """,
         )
         self.git("init", "-q")
@@ -542,7 +556,7 @@ class DriftCheckTests(unittest.TestCase):
         result = fixture.invoke()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         summary = self.assert_canonical(fixture, result)
-        self.assertNotIn(b"telemetry-latest.csv", result.stdout)
+        self.assertNotIn(b"telemetry.csv", result.stdout)
         self.assertEqual(
             summary["telemetry"],
             {
@@ -588,6 +602,46 @@ class DriftCheckTests(unittest.TestCase):
             ["2026-07-01T00:00:00Z", "2026-07-01T01:00:00Z"],
         )
 
+    def test_short_write_prefix_does_not_hide_later_intact_event(self) -> None:
+        fixture = self.fixture()
+        short_write = fixture.event("2026-07-01T00:00:00Z", "halt_event")
+        intact = fixture.event("2026-07-02T00:00:00Z", "guard_deny", "b" * 64)
+        event_path = fixture.repo / ".forge/tmp/decisions/events.jsonl"
+        event_path.parent.mkdir(parents=True, exist_ok=True)
+        short_payload = json.dumps(
+            short_write, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        intact_payload = (
+            json.dumps(intact, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        # Model an os.write() that wrote the complete JSON object but omitted
+        # its final newline, followed by a later successful intact append.
+        event_path.write_bytes(short_payload + intact_payload)
+
+        result = fixture.invoke()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIn(
+            "forge: malformed decision event prefix ignored",
+            result.stderr.decode(),
+        )
+        summary = self.assert_canonical(fixture, result)
+        self.assertEqual(summary["telemetry"]["halt_events"], 0)
+        self.assertEqual(summary["telemetry"]["guard_denies"], 1)
+        self.assertEqual(
+            summary["telemetry"]["event_prune"],
+            {
+                "entries_removed": 1,
+                "failure": "",
+                "new_oldest_at": "2026-07-02T00:00:00Z",
+            },
+        )
+        self.assertEqual(event_path.read_bytes(), intact_payload)
+        self.assertEqual(
+            [json.loads(line) for line in event_path.read_text().splitlines()],
+            [intact],
+        )
+
     def test_event_at_window_end_is_excluded_from_telemetry(self) -> None:
         fixture = self.fixture()
         event_path = fixture.write_events([
@@ -616,7 +670,7 @@ class DriftCheckTests(unittest.TestCase):
         baseline_bytes = baseline_fragment[:-2]
 
         fixture.write(
-            ".forge/tmp/telemetry-latest.csv",
+            ".forge/tmp/telemetry.csv",
             (
                 "unit,feature,model,elapsed_s,critical_path_s,tokens,cost_usd,"
                 "review_iterations,rework_s,eligible_commits,fast_allowed,"
@@ -651,6 +705,168 @@ class DriftCheckTests(unittest.TestCase):
             {"entries_removed": 0, "failure": "event-prune-lock", "new_oldest_at": ""},
         )
         self.assertEqual(event_path.read_bytes(), original)
+
+    def test_prune_waits_for_registered_emitter_and_retains_its_append(self) -> None:
+        fixture = self.fixture()
+        old = fixture.event("2024-01-01T00:00:00Z", "halt_event")
+        retained = fixture.event("2026-07-02T00:00:00Z", "gate_commit", "a" * 40)
+        event_path = fixture.write_events([old, retained])
+        ready = fixture.root / "emitter-registered"
+        release = fixture.root / "release-emitter"
+        prune_released = fixture.root / "prune-lock-released"
+        emitted_candidate = "b" * 64
+        emitter = subprocess.Popen(
+            [
+                "python3",
+                str(fixture.plugin / "scripts/forge/emit-decision-event.py"),
+                "--at",
+                "2026-08-10T00:00:00Z",
+                "--candidate",
+                emitted_candidate,
+                "--event",
+                "guard_deny",
+                "--policy-sha",
+                fixture.git("rev-parse", "HEAD"),
+                "--reason",
+                "concurrent-prune",
+                "--surface",
+                "forge:commit",
+            ],
+            cwd=fixture.repo,
+            env={
+                **os.environ,
+                "FORGE_TEST_EVENT_REGISTERED_READY": str(ready),
+                "FORGE_TEST_EVENT_REGISTERED_RELEASE": str(release),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.addCleanup(lambda: emitter.poll() is None and emitter.kill())
+
+        deadline = time.monotonic() + 5
+        while not ready.exists() and emitter.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.005)
+        if not ready.exists():
+            _stdout, stderr = emitter.communicate(timeout=1)
+            self.fail(stderr.decode() or "emitter did not reach registration barrier")
+
+        drift = subprocess.Popen(
+            ["bash", str(DRIFT_CHECK)],
+            cwd=fixture.repo,
+            env={
+                **os.environ,
+                "CLAUDE_PLUGIN_ROOT": str(fixture.plugin),
+                "FORGE_DRIFT_NOW": NOW,
+                "FORGE_EVAL_LOG": str(fixture.eval_log),
+                "FORGE_DRIFT_RETENTION_DAYS_UNSAFE": "1",
+                "FORGE_TEST_RELEASE_READY": str(prune_released),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.addCleanup(lambda: drift.poll() is None and drift.kill())
+        lock_path = fixture.repo / ".forge/tmp/events.lock"
+        deadline = time.monotonic() + 5
+        while not lock_path.exists() and drift.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.005)
+        if not lock_path.exists():
+            _stdout, stderr = drift.communicate(timeout=1)
+            self.fail(stderr.decode() or "drift check did not acquire the events lock")
+        time.sleep(0.1)
+        self.assertIsNone(drift.poll(), "pruner did not wait for registered event writer")
+        self.assertTrue(lock_path.exists(), "pruner released its lock before writer drained")
+        self.assertFalse(prune_released.exists(), "pruner reached release before writer drained")
+
+        release.touch()
+        emitter_stdout, emitter_stderr = emitter.communicate(timeout=5)
+        drift_stdout, drift_stderr = drift.communicate(timeout=5)
+        self.assertEqual(emitter.returncode, 0, emitter_stderr.decode())
+        self.assertEqual(emitter_stdout, b"")
+        self.assertEqual(drift.returncode, 0, drift_stderr.decode())
+        self.assertTrue(prune_released.exists())
+        summary = json.loads(drift_stdout)
+        self.assertEqual(
+            summary["telemetry"]["event_prune"],
+            {
+                "entries_removed": 1,
+                "failure": "",
+                "new_oldest_at": "2026-07-02T00:00:00Z",
+            },
+        )
+        records = [json.loads(line) for line in event_path.read_text().splitlines()]
+        self.assertNotIn(old, records)
+        self.assertEqual(
+            [record["candidate"] for record in records],
+            [retained["candidate"], emitted_candidate],
+        )
+        self.assertEqual(records.count(retained), 1)
+        self.assertEqual(
+            [record for record in records if record["candidate"] == emitted_candidate],
+            [
+                {
+                    "at": "2026-08-10T00:00:00Z",
+                    "candidate": emitted_candidate,
+                    "event": "guard_deny",
+                    "policy_sha": fixture.git("rev-parse", "HEAD"),
+                    "reason": "concurrent-prune",
+                    "surface": "forge:commit",
+                }
+            ],
+        )
+
+    def test_uncertain_event_writer_preserves_events_and_is_nonfatal(self) -> None:
+        fixture = self.fixture()
+        old = fixture.event("2024-01-01T00:00:00Z", "halt_event")
+        retained = fixture.event("2026-07-02T00:00:00Z", "gate_commit", "a" * 40)
+        event_path = fixture.write_events([old, retained])
+        original = event_path.read_bytes()
+        uncertain = fixture.repo / ".forge/tmp/event-writers/not-a-writer-token"
+        uncertain.parent.mkdir(parents=True)
+        uncertain.touch()
+
+        result = fixture.invoke(extra_env={"FORGE_DRIFT_RETENTION_DAYS_UNSAFE": "1"})
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        summary = self.assert_canonical(fixture, result)
+        self.assertEqual(summary["status"], {"state": "ok"})
+        self.assertEqual(
+            summary["telemetry"]["event_prune"],
+            {
+                "entries_removed": 0,
+                "failure": "event-prune-writer-drain",
+                "new_oldest_at": "",
+            },
+        )
+        self.assertEqual(event_path.read_bytes(), original)
+        self.assertFalse((fixture.repo / ".forge/tmp/events.lock").exists())
+
+    def test_measurement_event_is_retained_and_occurrence_counted(self) -> None:
+        fixture = self.fixture()
+        measurement = fixture.event(
+            "2026-07-02T00:00:00Z", "assertion_advisory", "c" * 64
+        )
+        fixture.write_events([measurement, measurement])
+
+        result = fixture.invoke()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        summary = self.assert_canonical(fixture, result)
+        self.assertEqual(summary["status"], {"state": "ok"})
+        self.assertEqual(
+            summary["telemetry"]["event_prune"],
+            {
+                "entries_removed": 0,
+                "failure": "",
+                "new_oldest_at": "2026-07-02T00:00:00Z",
+            },
+        )
+        records = [
+            json.loads(line)
+            for line in (
+                fixture.repo / ".forge/tmp/decisions/events.jsonl"
+            ).read_text().splitlines()
+        ]
+        self.assertEqual(records, [measurement, measurement])
 
     def test_invalid_prune_override_is_nonfatal_and_preserves_full_telemetry(self) -> None:
         for label, invalid_override in (("empty", ""), ("text", "abc")):
