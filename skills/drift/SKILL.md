@@ -99,3 +99,14 @@ of drift.
 
 Report the mechanical outcome, semantic verdict and severity counts, durable committed report path,
 and whether the pre-existing or newly written operator-cleared block is present.
+
+## 5. Post-Report Best-Effort Learning
+
+Only after the durable drift report commit is verified, Section 4 has finished all applicable
+CRITICAL-block handling, and the primary drift outcome has been reported, make one best-effort
+invocation of `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md` (`/forge:learn`). Pass the already
+validated mechanical summary's available `journal_patterns` object as learning Input 1; the learn
+skill independently materializes its two committed inputs. This advisory pass never changes the
+durable drift report, block decision, process result, or reported verdict. Its failure or refusal
+does not block drift completion, and its candidate or gotcha changes remain unstaged and
+uncommitted for a separate ordinary commit.

@@ -283,6 +283,7 @@ def assert_dogfood_initialized_regions(
             test_case.assertEqual(policy.count(heading), 1)
     for skill in (
         "init",
+        "learn",
         "workflow",
         "orchestrate",
         "commit",

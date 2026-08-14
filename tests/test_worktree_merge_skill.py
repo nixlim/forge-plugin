@@ -90,7 +90,7 @@ class WorktreeMergeSkillTests(unittest.TestCase):
             "`forge-project.md`",
             "`.forge-manifest`",
             "`.codex/**`",
-            "`.forge/evals/**`",
+            "`.forge/evals/tasks/**`",
             "`AGENTS.md`",
             "`CLAUDE.md`",
             "`.claude/settings*.json`",
@@ -98,6 +98,10 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertIn(path, SKILL)
+        self.assertIn("`.forge/evals/candidates/**` is the sole eval-path exception", SKILL)
+        self.assertIn("classify it as advisory/docs-class", SKILL)
+        self.assertIn("`.forge/evals/tasks/**`, or creating or changing its baseline", SKILL)
+        self.assertNotIn("`.forge/evals/**`", SKILL)
         self.assertIn("wait for explicit user approval naming that same SHA", SKILL)
         self.assertIn("Never approve a control-class merge autonomously", SKILL)
         self.assertIn("Use `CANDIDATE_HEAD` as the Gate 4\ncandidate identity", SKILL)

@@ -191,7 +191,9 @@ class CommitGuardTests(unittest.TestCase):
     def policy_text(
         self,
         *,
-        fast_patterns: str = "docs/**, .forge/history/**, @formatting-only",
+        fast_patterns: str = (
+            "docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only"
+        ),
         triggers: str = "No trigger paths configured.",
     ) -> str:
         dependencies = "\n".join(DEPENDENCY_PATHS)
@@ -199,9 +201,9 @@ class CommitGuardTests(unittest.TestCase):
 <!-- FORGE:REGION file-categories BEGIN -->
 | Category | File patterns |
 |---|---|
-| `docs` | `*.md`, `docs/**` |
+| `docs` | `*.md`, `docs/**`, `.forge/evals/candidates/**` |
 | `python` | `*.py`, `pyproject.toml` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**` |
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**` |
 <!-- FORGE:REGION file-categories END -->
 <!-- FORGE:REGION risk-tiers BEGIN -->
 | tier | path patterns |
@@ -225,7 +227,9 @@ class CommitGuardTests(unittest.TestCase):
     def commit_policy(
         self,
         *,
-        fast_patterns: str = "docs/**, .forge/history/**, @formatting-only",
+        fast_patterns: str = (
+            "docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only"
+        ),
         triggers: str = "No trigger paths configured.",
         cwd: Path | None = None,
     ) -> str:
@@ -534,8 +538,9 @@ class CommitGuardTests(unittest.TestCase):
                 updated = self.policy_text(**changes)
                 if region == "file-categories":
                     updated = updated.replace(
-                        "| `docs` | `*.md`, `docs/**` |",
-                        "| `docs` | `*.md`, `docs/**`, `guides/**` |",
+                        "| `docs` | `*.md`, `docs/**`, `.forge/evals/candidates/**` |",
+                        "| `docs` | `*.md`, `docs/**`, `.forge/evals/candidates/**`, "
+                        "`guides/**` |",
                     )
                 (repo / "forge-project.md").write_text(updated, encoding="utf-8")
                 self.git("add", "forge-project.md", cwd=repo)

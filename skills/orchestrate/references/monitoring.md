@@ -19,10 +19,14 @@ codex-impl-01/execution-01/
 ```
 
 Prepare it in this order: create the execution directory; assemble and write `prompt.md`; create an
-empty `events.jsonl`; append `execution`; launch. Assemble the prompt from the applicable template
-under `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/`, the `agent-project-context` region of
-`forge-project.md`, and the concrete task assignment. Save the assembled prompt verbatim before
-the journal entry.
+empty `events.jsonl`; append `execution`; launch. Follow the canonical
+[prompt-construction contract](../SKILL.md#forge-isolation-and-prompt-construction): in exact order,
+use the applicable plugin role template, the `agent-project-context` region from
+`git -C <worktree> show HEAD:forge-project.md`, the exact bytes from
+`git -C <worktree> show HEAD:.forge/history/gotchas.md` when that object is present, and the concrete
+task assignment. Both committed inputs come from the same absolute `<worktree>` recorded below and
+passed to `-C`; never use either working-tree file or a rendered agent definition. Save the
+assembled prompt verbatim before the journal entry.
 
 The entry records the absolute `worktree`, full `head`, attached `branch` when present, role, and
 the actual model and effort passed at launch. Resolve the recorded Git values from the same path
@@ -90,8 +94,9 @@ native session.
 
 The sole sanctioned resume is a targeted confirmation round for the same reviewer. Use the next
 execution directory for that reviewer and its recorded `session_id`. Prepare and journal it in the
-same order, then launch it detached. The resume command has no `-C`; the working directory comes
-from the resumed session:
+same order, assembling committed context and optional gotchas from the preceding execution's
+recorded worktree and its current `HEAD`, then launch it detached. The resume command has no `-C`;
+the working directory comes from the resumed session:
 
 ```bash
 set -m

@@ -44,13 +44,13 @@ def policy(
 | hard | security/** |"""
     tiers = tiers or """| tier | path patterns |
 |---|---|
-| fast | docs/**, .forge/history/**, @formatting-only |
+| fast | docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only |
 | standard | src/** |
 | hard | security/** |"""
     return f"""<!-- FORGE:REGION file-categories BEGIN -->
 | category | file patterns |
 |---|---|
-        {chr(10).join(f'| {category} | {patterns} |' for category, patterns in (category_rows or (("python", "*.py, src/**, pyproject.toml"), ("docs", "*.md, docs/**"), ("yaml", "*.yml, *.yaml, pnpm-lock.yaml"), ("bash", "*.sh"), ("control", "forge-project.md, .forge-manifest, .github/workflows/**"))))}
+        {chr(10).join(f'| {category} | {patterns} |' for category, patterns in (category_rows or (("python", "*.py, src/**, pyproject.toml"), ("docs", "*.md, docs/**, .forge/evals/candidates/**"), ("yaml", "*.yml, *.yaml, pnpm-lock.yaml"), ("bash", "*.sh"), ("control", "forge-project.md, .forge-manifest, .forge/evals/tasks/**, .github/workflows/**"))))}
 <!-- FORGE:REGION file-categories END -->
 <!-- FORGE:REGION risk-tiers BEGIN -->
 {tiers}
@@ -114,12 +114,13 @@ class RiskTierTests(unittest.TestCase):
     def classify(
         self,
         *,
+        classifier: Path = CLASSIFIER,
         declared: str | None = None,
         require: str | None = None,
         sha: str | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, object] | None]:
         command = [
-            "python3", str(CLASSIFIER), "--repo", str(self.repo), "--policy-sha",
+            "python3", str(classifier), "--repo", str(self.repo), "--policy-sha",
             sha or self.git("rev-parse", "HEAD"), "--staged",
         ]
         if declared:
@@ -321,6 +322,68 @@ class RiskTierTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(evidence["derived_tier"], "fast")
         self.assertEqual(evidence["paths"][0]["categories"], ["docs"])
+
+    def test_eval_tasks_are_control_but_candidates_are_advisory_fast(self) -> None:
+        policy_sha = self.commit_policy(
+            category_rows=(
+                (
+                    "docs",
+                    "*.md, docs/**, .forge/history/**, .forge/evals/candidates/**",
+                ),
+                ("control", "forge-project.md, .forge/evals/**"),
+            ),
+            fast_patterns=(
+                "docs/**, .forge/history/**, .forge/evals/candidates/**, "
+                "@formatting-only"
+            ),
+        )
+        self.stage(".forge/evals/tasks/task-fixture.md", b"task\n")
+        self.stage(".forge/evals/tasks/task-fixture.result", b"PASS\n")
+
+        result, evidence = self.classify(sha=policy_sha)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(evidence["derived_tier"], "hard")
+        for item in evidence["paths"]:
+            self.assertEqual(item["path_tier"], "hard")
+            self.assertTrue(item["control_floor"])
+            self.assertIn("control", item["categories"])
+
+        self.git("reset", "--hard", "-q", policy_sha)
+        candidate_path = ".forge/evals/candidates/proposed-fixture.md"
+        self.stage(candidate_path, b"candidate\n")
+
+        def assert_advisory(candidate_evidence: dict[str, object]) -> None:
+            self.assertEqual(candidate_evidence["derived_tier"], "fast")
+            self.assertEqual(candidate_evidence["effective_tier"], "fast")
+            self.assertEqual(len(candidate_evidence["paths"]), 1)
+            item = candidate_evidence["paths"][0]
+            self.assertEqual(item["path"], candidate_path)
+            self.assertEqual(item["categories"], ["docs"])
+            self.assertEqual(item["path_tier"], "fast")
+            self.assertFalse(item["control_floor"])
+
+        result, evidence = self.classify(sha=policy_sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert_advisory(evidence)
+
+        source = CLASSIFIER.read_text(encoding="utf-8")
+        control = "        eval_candidate = path in pattern_matches[EVAL_CANDIDATES]\n"
+        self.assertEqual(source.count(control), 1)
+        mutant = self.repo / "risk-tier-disabled-candidate-carveout.py"
+        mutant.write_text(
+            source.replace(control, "        eval_candidate = False\n"),
+            encoding="utf-8",
+        )
+
+        mutant_result, mutant_evidence = self.classify(
+            classifier=mutant,
+            sha=policy_sha,
+        )
+
+        self.assertEqual(mutant_result.returncode, 0, mutant_result.stderr)
+        with self.assertRaises(AssertionError):
+            assert_advisory(mutant_evidence)
 
     def test_unknown_stack_promotes_the_entire_docs_only_diff(self) -> None:
         policy_sha = self.commit_policy(

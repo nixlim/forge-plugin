@@ -83,6 +83,7 @@
 - FR-194: added a real concurrent-repository harness for simultaneous complete commit and shared-destination merge chains, including marker, journal-owner, telemetry, deadlock, and fail-closed contention controls.
 - FR-163: added the Forge-only CRITICAL drift-block run-open refusal, distinct from the upstream run-journal and halt-sentinel protocols.
 - FR-166: added collision-free committed drift reports and prior-quarter committed-report baselines; upstream has no drift history lifecycle.
+- FR-200..FR-205: added Forge-only deterministic journal-pattern extraction and the advisory `/forge:learn` loop, including candidate-fixture proposals, earned gotcha citations, committed-gotcha prompt feed-forward, and strict post-close authority confinement; upstream has no journal-derived learning surface.
 - README harness scope: neutrally describes other-harness support as out of scope instead of naming the unshipped upstream harness.
 - Launch documentation contract tests: replaced upstream implementation-resume and writable-review assertions with the forge reviewer-only resume, read-only sandbox, routed model/effort, detached-launch, PID-sidecar, literal-redirect, and ambiguity-protocol contract.
 - Review constitution 1.1: added execution-backed verification and read-only, in-memory control-disable checks to `review-coding`; repository mutation tooling remains D6's merge-time sensor.

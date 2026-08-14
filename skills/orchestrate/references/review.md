@@ -31,9 +31,14 @@ For the first independent review:
 - Provide the goal, acceptance criteria, constraints, and exact commit SHA.
 - Do not provide the implementer handoff, claimed test results, earlier review verdicts, or Claude's
   tentative conclusion.
-- Build the prompt from
-  `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`, the
-  `agent-project-context` region of `forge-project.md`, and the isolated review assignment.
+- Build the prompt through the canonical
+  [prompt-construction contract](../SKILL.md#forge-isolation-and-prompt-construction), in exact
+  order: `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`; the `agent-project-context`
+  region from `git -C <worktree> show HEAD:forge-project.md`; the exact bytes from
+  `git -C <worktree> show HEAD:.forge/history/gotchas.md` when present in that `HEAD`; and the
+  isolated review assignment. `<worktree>` is the same review worktree recorded for the execution
+  and passed to `-C`; never source either committed input from working-tree state or a rendered
+  agent definition.
 - In order, create the execution directory, save the exact prompt, create an empty `events.jsonl`,
   append the execution, and only then launch. Capture the event stream and exact handoff.
 

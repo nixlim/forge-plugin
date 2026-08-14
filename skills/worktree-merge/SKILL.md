@@ -78,13 +78,17 @@ includes:
 - `forge-project.md`
 - `.forge-manifest`
 - `.codex/**`
-- `.forge/evals/**`
+- `.forge/evals/tasks/**`, including baselines
 - `AGENTS.md`
 - `CLAUDE.md`
 - `.claude/settings*.json`
 - `.github/workflows/**`, or equivalent CI configuration paths recorded in `file-categories`
 
 Project configuration may extend `control`; it must never remove or narrow a built-in entry.
+`.forge/evals/candidates/**` is the sole eval-path exception: classify it as advisory/docs-class,
+not `control`, even when an older or broader project `control` pattern matches it. Moving or copying
+a candidate into `.forge/evals/tasks/**`, or creating or changing its baseline there, is a
+control-class promotion.
 Fail closed if a changed path cannot be classified. Keep `CANDIDATE_HEAD` unchanged through Gates
 1 through 4. If HEAD or the diff changes, restart at the clean-worktree precondition.
 
@@ -112,7 +116,8 @@ The compact JSON evidence must retain the exact path list, matched tier/trigger/
 formatting-category decisions, dependency-floor decision, declared, derived, and promote-only
 effective tiers, and full policy SHA. The effective tier is the higher of declared and derived and
 can never be demoted at gate time. Apply the same non-narrowable floors as commit: built-in plus
-project-extended control and all `trigger-paths` matches are hard; malformed nonempty trigger rows
+project-extended control, after the sole `.forge/evals/candidates/**` carve-out above, and all
+`trigger-paths` matches are hard; malformed nonempty trigger rows
 make the range hard; unmatched paths default standard; the committed dependency-manifest block and
 unknown manifest membership are at least standard; and no policy row can weaken FR-156's
 formatting-only exclusions. Do not reconstruct these predicates or read any working-tree policy.
@@ -326,7 +331,10 @@ the resolved full-SHA `${REVIEWED_BASE}...${CANDIDATE_HEAD}` range that generate
 diff. A post-rebase Gate 3 instead names the actual full-SHA
 `${INTEGRATED_BASE}...${INTEGRATED_HEAD}` range it reviewed. Resolve the applicable variables before
 writing each record; do not record variable names, short SHAs, symbolic refs, or an inferred
-"latest" run.
+"latest" run. Normalize and count every finding by `CRITICAL`, `MAJOR`, and `MINOR`; the reviewer
+is `review-final`. Record the observation as exactly `<PASS|BLOCK>; <critical-plus-major-count>
+CRITICAL/MAJOR findings; severities CRITICAL=<count>,MAJOR=<count>,MINOR=<count>; reviewer
+<review-cheap|review-final>; iteration <number> of 8.`
 
 ## Gate 4 — Summary and authority
 

@@ -329,7 +329,8 @@ a *distilled, committed* record becomes mandatory at close.
   promote-only hard floors; when it remains fast, durable intent costs one
   mechanical-gate commit rather than a review loop.
 - `.forge/history/` is committed (never gitignored) and joins the `docs` file
-  category. `.forge/tmp/` remains transient; `.forge/evals/` remains control.
+  category. `.forge/tmp/` remains transient; `.forge/evals/tasks/` remains control,
+  while `.forge/evals/candidates/` is advisory/docs-class until promotion.
 - This makes the repository pass the research doc's SDD test — "what happens to the
   spec after merge?" — with: *it is committed, versioned, and greppable next to the
   code it explains.* Onboarding (human or agent) reads `.forge/history/runs/`

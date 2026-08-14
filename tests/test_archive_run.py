@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -9,12 +10,88 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+from tests.test_e2e_smoke import assemble_codex_prompt
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVER = ROOT / "scripts" / "forge" / "archive-run.py"
+LOCKED_LEARN_WRITER = ROOT / "scripts" / "forge" / "learn-proposals-locked.py"
 CONTAMINATION = "forge: archive refused — close tree contains unrelated changes\n"
+FRESH_ARCHIVE_REVIEWER = r'''from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+if len(sys.argv) != 4:
+    raise SystemExit("expected exactly three evidence paths")
+if os.environ.get("FORGE_REVIEW_PROFILE") != "review-periodic":
+    raise SystemExit("expected review-periodic profile")
+if os.environ.get("FORGE_REVIEW_ACCESS") != "read-only":
+    raise SystemExit("expected read-only access")
+patterns_path, archives_path, gotchas_path = map(Path, sys.argv[1:])
+patterns = json.loads(patterns_path.read_text(encoding="utf-8"))
+if set(patterns) != {
+    "available", "decision_outcomes", "diagnostics", "failure", "findings", "routing", "tasks"
+} or patterns["available"] is not True or patterns["failure"] != "":
+    raise SystemExit("journal patterns unavailable")
+if set(patterns["findings"]) != {"by_reviewer_role", "by_severity"}:
+    raise SystemExit("invalid journal patterns")
+archives = json.loads(archives_path.read_text(encoding="utf-8"))
+gotchas = json.loads(gotchas_path.read_text(encoding="utf-8"))
+if len(archives) != 1 or set(archives[0]) != {"content", "head", "path"}:
+    raise SystemExit("invalid committed archive input")
+archive = archives[0]
+if set(gotchas) != {"content", "head", "path", "present"}:
+    raise SystemExit("invalid committed gotchas input")
+if gotchas["head"] != archive["head"] or gotchas["path"] != ".forge/history/gotchas.md":
+    raise SystemExit("committed input identity mismatch")
+if gotchas["present"] is not True or not isinstance(gotchas["content"], str) or not gotchas["content"]:
+    raise SystemExit("invalid committed gotchas availability")
+begin = "<!-- BEGIN FORGE LEARNING PROVENANCE v1 -->\n```json\n"
+end = "\n```\n<!-- END FORGE LEARNING PROVENANCE v1 -->"
+if archive["content"].count(begin) != 1 or archive["content"].count(end) != 1:
+    raise SystemExit("archive provenance unavailable")
+encoded = archive["content"].split(begin, 1)[1].split(end, 1)[0]
+provenance = json.loads(encoded)
+execution = provenance["executions"][0]
+task = execution["task"]
+decision = next(item for item in provenance["decisions"] if item["task"] == task)
+verification = next(
+    item
+    for item in provenance["failed_or_inconclusive_verifications"]
+    if item["task"] == task and item["result"] in {"failed", "inconclusive"}
+)
+run_id = Path(archive["path"]).stem
+proposal = {
+    "candidates": [{
+        "agent": execution["agent"],
+        "category": "review",
+        "execution": execution["execution"],
+        "expected": "The review control blocks the archived boundary failure.",
+        "expected_verdict": "BLOCK",
+        "id": "archive-review-boundary",
+        "run_id": run_id,
+        "scenario": "Archived boundary failure",
+    }],
+    "gotchas": [{
+        "agent": execution["agent"],
+        "entries": [
+            {"id": decision["id"], "type": "decision"},
+            {"id": verification["id"], "type": "verification"},
+        ],
+        "execution": execution["execution"],
+        "line": "Archived boundary failure needed an earlier review control",
+        "run_id": run_id,
+    }],
+    "input_head": archive["head"],
+    "schema_version": 1,
+}
+sys.stdout.write(json.dumps(proposal, sort_keys=True, separators=(",", ":")) + "\n")
+'''
 
 
 class ArchiveRunTests(unittest.TestCase):
@@ -232,6 +309,98 @@ class ArchiveRunTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def add_learning_evidence(self) -> bytes:
+        prompt = b"Review the archived boundary failure exactly.\nDo not guess.\n"
+        execution_dir = self.run_dir / "agents" / "review-cheap-archive" / "execution-01"
+        execution_dir.mkdir(parents=True)
+        (execution_dir / "prompt.md").write_bytes(prompt)
+        (execution_dir / "handoff.md").write_text(
+            "The boundary failure was reproduced.\n", encoding="utf-8"
+        )
+        execution = {
+            "type": "execution",
+            "agent": "review-cheap-archive",
+            "execution": "execution-01",
+            "task": "task-07",
+            "role": "review",
+            "prompt": "agents/review-cheap-archive/execution-01/prompt.md",
+            "handoff": "agents/review-cheap-archive/execution-01/handoff.md",
+        }
+        execution_result = {
+            "type": "execution_result",
+            "agent": "review-cheap-archive",
+            "execution": "execution-01",
+            "task": "task-07",
+            "status": "complete",
+            "handoff": "agents/review-cheap-archive/execution-01/handoff.md",
+        }
+        decision_index = next(
+            index
+            for index, record in enumerate(self.records)
+            if record.get("type") == "decision"
+        )
+        self.records[decision_index:decision_index] = [execution, execution_result]
+        first_gate = next(
+            index
+            for index, record in enumerate(self.records)
+            if record.get("id") == "verification-gate-1"
+        )
+        self.records.insert(
+            first_gate,
+            {
+                "type": "verification",
+                "id": "verification-learning-01",
+                "task": "task-07",
+                "criterion": "acceptance: archive boundary failure",
+                "check": "reproduce archived boundary failure",
+                "result": "failed",
+                "observation": "The boundary failure escaped the earlier review control.",
+            },
+        )
+        self.write_journal()
+        return prompt
+
+    def synchronize_validation_payloads(self) -> None:
+        command = [
+            sys.executable,
+            os.fspath(ROOT / "scripts" / "codex_orch_tools.py"),
+            "validate",
+            os.fspath(self.run_dir),
+            "--gates",
+        ]
+        first = subprocess.run(command, check=False, capture_output=True, text=True)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        payload = json.loads(first.stdout)
+        self.records[-1]["validation"] = payload
+        self.write_journal()
+        second = subprocess.run(command, check=False, capture_output=True, text=True)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.post_payload = json.loads(second.stdout)
+        self.assertEqual(self.post_payload, payload)
+        self.post_close.write_text(
+            json.dumps(self.post_payload, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    def learning_provenance_from_input(
+        self, archive_input: list[dict[str, str]]
+    ) -> dict[str, object]:
+        self.assertEqual(len(archive_input), 1)
+        element = archive_input[0]
+        self.assertEqual(set(element), {"content", "head", "path"})
+        self.assertEqual(element["path"], self.archive_relative.as_posix())
+        begin = "<!-- BEGIN FORGE LEARNING PROVENANCE v1 -->\n```json\n"
+        end = "\n```\n<!-- END FORGE LEARNING PROVENANCE v1 -->"
+        self.assertEqual(element["content"].count(begin), 1)
+        self.assertEqual(element["content"].count(end), 1)
+        encoded = element["content"].split(begin, 1)[1].split(end, 1)[0]
+        provenance = json.loads(encoded)
+        self.assertEqual(
+            set(provenance),
+            {"decisions", "executions", "failed_or_inconclusive_verifications"},
+        )
+        return provenance
+
     def invoke(
         self,
         *,
@@ -336,6 +505,354 @@ class ArchiveRunTests(unittest.TestCase):
         last = b'<!-- END VERBATIM DOCUMENT: [ADR](plan%20choice.yaml "binding choice") -->'
         self.assertEqual(archive.split(first, 1)[1].split(last, 1)[0], (self.run_dir / "plan choice.yaml").read_bytes())
 
+    def test_committed_learning_provenance_reaches_real_locked_writer(self) -> None:
+        prior_gotchas = b"# Forge Gotchas\n\n- Prior committed observation.\n"
+        (self.repo / "forge-project.md").write_text(
+            "# Project\n\n"
+            "<!-- FORGE:REGION agent-project-context BEGIN -->\n"
+            "Durable archive context for later agents.\n"
+            "<!-- FORGE:REGION agent-project-context END -->\n",
+            encoding="utf-8",
+        )
+        gotchas_path = self.repo / ".forge/history/gotchas.md"
+        gotchas_path.parent.mkdir(parents=True)
+        gotchas_path.write_bytes(prior_gotchas)
+        self.git("add", "forge-project.md", ".forge/history/gotchas.md")
+        self.git("commit", "--quiet", "-m", "add project context")
+        prompt = self.add_learning_evidence()
+        self.synchronize_validation_payloads()
+
+        reviewer = self.root / "fresh-review-periodic.py"
+        reviewer.write_text(FRESH_ARCHIVE_REVIEWER, encoding="utf-8")
+
+        def review(
+            archive_input: list[dict[str, str]], *, expect_success: bool
+        ) -> subprocess.CompletedProcess[bytes]:
+            patterns_path = self.root / "input-1-journal-patterns.json"
+            archives_path = self.root / "input-2-committed-archives.json"
+            gotchas_path = self.root / "input-3-committed-gotchas.json"
+            for path in (patterns_path, archives_path, gotchas_path):
+                if path.exists():
+                    path.chmod(0o644)
+            patterns_path.write_text(
+                json.dumps(
+                    {
+                        "available": True,
+                        "decision_outcomes": {},
+                        "diagnostics": [],
+                        "failure": "",
+                        "findings": {"by_reviewer_role": {}, "by_severity": {}},
+                        "routing": [],
+                        "tasks": [],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            archives_path.write_text(
+                json.dumps(archive_input, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            gotchas_path.write_text(
+                json.dumps(
+                    {
+                        "content": self.git(
+                            "show",
+                            f'{archive_input[0]["head"]}:.forge/history/gotchas.md',
+                        ).stdout,
+                        "head": archive_input[0]["head"],
+                        "path": ".forge/history/gotchas.md",
+                        "present": True,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            for path in (patterns_path, archives_path, gotchas_path):
+                path.chmod(0o444)
+            before = self.git("status", "--porcelain=v1", "--untracked-files=all").stdout
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    os.fspath(reviewer),
+                    os.fspath(patterns_path),
+                    os.fspath(archives_path),
+                    os.fspath(gotchas_path),
+                ],
+                cwd=self.root,
+                check=False,
+                capture_output=True,
+                env={
+                    **os.environ,
+                    "FORGE_REVIEW_ACCESS": "read-only",
+                    "FORGE_REVIEW_PROFILE": "review-periodic",
+                },
+            )
+            after = self.git("status", "--porcelain=v1", "--untracked-files=all").stdout
+            self.assertEqual(after, before, "read-only reviewer mutated the repository")
+            if expect_success:
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+            else:
+                self.assertNotEqual(result.returncode, 0)
+            return result
+
+        mutant = self.mutant_archiver(
+            "learning-provenance-disabled",
+            "*canonical_json(learning_provenance(records, run_dir)),",
+            '*canonical_json({"decisions": [], "executions": [], "failed_or_inconclusive_verifications": []}),',
+        )
+        disabled = self.invoke(archiver=mutant)
+        self.assertEqual(disabled.returncode, 0, disabled.stderr.decode())
+        disabled_input = [
+            {
+                "content": self.archive_path.read_text(encoding="utf-8"),
+                "head": self.git("rev-parse", "HEAD").stdout.strip(),
+                "path": self.archive_relative.as_posix(),
+            }
+        ]
+        review(disabled_input, expect_success=False)
+
+        self.git("reset", "--quiet")
+        self.archive_path.unlink()
+        restored = self.invoke()
+        self.assertEqual(restored.returncode, 0, restored.stderr.decode())
+        self.git("commit", "--quiet", "-m", "archive learning provenance")
+        input_head = self.git("rev-parse", "HEAD").stdout.strip()
+        committed_content = self.git(
+            "show", f"{input_head}:{self.archive_relative.as_posix()}"
+        ).stdout
+        archive_input = [
+            {
+                "content": committed_content,
+                "head": input_head,
+                "path": self.archive_relative.as_posix(),
+            }
+        ]
+        provenance = self.learning_provenance_from_input(archive_input)
+        self.assertEqual(
+            provenance["executions"],
+            [
+                {
+                    "agent": "review-cheap-archive",
+                    "execution": "execution-01",
+                    "prompt": "agents/review-cheap-archive/execution-01/prompt.md",
+                    "prompt_sha256": hashlib.sha256(prompt).hexdigest(),
+                    "role": "review",
+                    "task": "task-07",
+                }
+            ],
+        )
+        self.assertEqual(
+            provenance["failed_or_inconclusive_verifications"],
+            [
+                {
+                    "criterion": "acceptance: archive boundary failure",
+                    "id": "verification-learning-01",
+                    "observation": "The boundary failure escaped the earlier review control.",
+                    "result": "failed",
+                    "task": "task-07",
+                }
+            ],
+        )
+        reviewed = review(archive_input, expect_success=True)
+        proposal = json.loads(reviewed.stdout)
+        self.assertEqual(proposal["input_head"], input_head)
+        self.assertEqual(proposal["candidates"][0]["agent"], "review-cheap-archive")
+        self.assertEqual(proposal["candidates"][0]["execution"], "execution-01")
+        self.assertEqual(proposal["candidates"][0]["run_id"], self.run_dir.name)
+        self.assertEqual(
+            proposal["gotchas"][0]["entries"],
+            [
+                {"id": "decision-07", "type": "decision"},
+                {"id": "verification-learning-01", "type": "verification"},
+            ],
+        )
+
+        citation = f"[archive: {input_head}:{self.archive_relative.as_posix()}]"
+        candidate_archive = (
+            f"- archive: `{input_head}:{self.archive_relative.as_posix()}`"
+        )
+        proposal_path = self.root / "review-output.json"
+        proposal_path.write_bytes(reviewed.stdout)
+        installed_run = (
+            self.repo / ".codex-orchestrator" / "runs" / self.run_dir.name
+        )
+        installed_run.parent.mkdir(parents=True)
+        shutil.copytree(self.run_dir, installed_run)
+        before_writer_status = set(
+            self.git("status", "--porcelain=v1", "--untracked-files=all").stdout.splitlines()
+        )
+
+        written = subprocess.run(
+            [
+                sys.executable,
+                os.fspath(LOCKED_LEARN_WRITER),
+                "--repo",
+                os.fspath(self.repo),
+                "--proposal",
+                os.fspath(proposal_path),
+            ],
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(written.returncode, 0, written.stderr.decode())
+        candidate = self.repo / ".forge/evals/candidates/archive-review-boundary.md"
+        candidate_bytes = candidate.read_bytes()
+        self.assertIn(prompt, candidate_bytes)
+        self.assertIn(candidate_archive.encode(), candidate_bytes)
+        gotchas_bytes = gotchas_path.read_bytes()
+        self.assertTrue(gotchas_bytes.startswith(prior_gotchas))
+        gotchas = gotchas_bytes.decode("utf-8")
+        self.assertIn(citation, gotchas)
+        self.assertIn("decision:decision-07", gotchas)
+        self.assertIn("verification:verification-learning-01", gotchas)
+        after_writer_status = set(
+            self.git("status", "--porcelain=v1", "--untracked-files=all").stdout.splitlines()
+        )
+        self.assertTrue(before_writer_status <= after_writer_status)
+        self.assertEqual(
+            after_writer_status - before_writer_status,
+            {
+                " M .forge/history/gotchas.md",
+                "?? .forge/evals/candidates/archive-review-boundary.md",
+            },
+        )
+
+        self.git("add", ".forge/history/gotchas.md")
+        self.git("commit", "--quiet", "-m", "commit learned gotcha")
+        next_input = self.git("show", "HEAD:.forge/history/gotchas.md").stdout
+        self.assertIn(citation, next_input)
+        self.assertIn("verification:verification-learning-01", next_input)
+        assignment = "## Assignment\n\nReview the next archived boundary."
+        later_prompt = assemble_codex_prompt(
+            execution_worktree=self.repo,
+            template_name="review-cheap.md",
+            task_assignment=assignment,
+        )
+        template = (ROOT / "system/codex/prompts/review-cheap.md").read_bytes()
+        context_at = later_prompt.index(b"Durable archive context for later agents.")
+        gotcha_at = later_prompt.index(citation.encode("utf-8"))
+        assignment_at = later_prompt.index(assignment.encode("utf-8"))
+        self.assertTrue(later_prompt.startswith(template))
+        self.assertLess(context_at, gotcha_at)
+        self.assertLess(gotcha_at, assignment_at)
+        self.assertEqual(
+            self.git(
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                ".forge/evals/candidates",
+            ).stdout,
+            "?? .forge/evals/candidates/archive-review-boundary.md\n",
+        )
+
+    def test_hardlinked_recorded_prompt_is_not_citable_and_kills_disabled_filter(self) -> None:
+        prompt = self.add_learning_evidence()
+        self.synchronize_validation_payloads()
+
+        def provenance(text: str) -> dict[str, object]:
+            return self.learning_provenance_from_input(
+                [
+                    {
+                        "content": text,
+                        "head": self.git("rev-parse", "HEAD").stdout.strip(),
+                        "path": self.archive_relative.as_posix(),
+                    }
+                ]
+            )
+
+        def without_learning_provenance(text: str) -> str:
+            begin = "<!-- BEGIN FORGE LEARNING PROVENANCE v1 -->"
+            end = "<!-- END FORGE LEARNING PROVENANCE v1 -->"
+            start = text.index(begin)
+            finish = text.index(end, start) + len(end)
+            return text[:start] + text[finish:]
+
+        baseline = self.invoke()
+        self.assertEqual(baseline.returncode, 0, baseline.stderr.decode())
+        baseline_text = self.archive_path.read_text(encoding="utf-8")
+        baseline_provenance = provenance(baseline_text)
+        self.assertEqual(len(baseline_provenance["executions"]), 1)
+        self.git("reset", "--quiet")
+        self.archive_path.unlink()
+
+        recorded = (
+            self.run_dir
+            / "agents"
+            / "review-cheap-archive"
+            / "execution-01"
+            / "prompt.md"
+        )
+        outside = self.root / "outside-prompt.md"
+        outside.write_bytes(prompt)
+        recorded.unlink()
+        os.link(outside, recorded)
+
+        def archive_oracle(result: subprocess.CompletedProcess[bytes]) -> tuple[str, dict[str, object]]:
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(result.stdout, os.fsencode(self.archive_relative.as_posix() + "\n"))
+            self.assertEqual(result.stderr, b"")
+            self.assertEqual(
+                self.git("diff", "--cached", "--name-only").stdout,
+                self.archive_relative.as_posix() + "\n",
+            )
+            text = self.archive_path.read_text(encoding="utf-8")
+            authority = provenance(text)
+            self.assertEqual(authority["executions"], [])
+            self.assertEqual(authority["decisions"], baseline_provenance["decisions"])
+            self.assertEqual(
+                authority["failed_or_inconclusive_verifications"],
+                baseline_provenance["failed_or_inconclusive_verifications"],
+            )
+            self.assertEqual(
+                without_learning_provenance(text),
+                without_learning_provenance(baseline_text),
+            )
+            return text, authority
+
+        controlled = self.invoke()
+        controlled_text, _ = archive_oracle(controlled)
+
+        self.git("reset", "--quiet")
+        self.archive_path.unlink()
+
+        needle = (
+            "    except ArchiveRefusal:\n"
+            "        # Learning provenance is advisory. A missing or unsafe recorded prompt\n"
+            "        # removes this execution's citation authority; it must not invalidate an\n"
+            "        # otherwise canonical close/archive transaction.\n"
+            "        return None\n"
+        )
+        replacement = (
+            "    except ArchiveRefusal:\n"
+            "        prompt = str(record[\"prompt\"])\n"
+            "        digest = hashlib.sha256((run_dir / prompt).read_bytes()).hexdigest()\n"
+        )
+        mutant = self.mutant_archiver(
+            "recorded-prompt-omit-disabled", needle, replacement
+        )
+        disabled = self.invoke(archiver=mutant)
+
+        self.assertEqual(disabled.returncode, 0, disabled.stderr.decode())
+        with self.assertRaises(AssertionError):
+            archive_oracle(disabled)
+        disabled_text = self.archive_path.read_text(encoding="utf-8")
+        disabled_provenance = provenance(disabled_text)
+        self.assertEqual(len(disabled_provenance["executions"]), 1)
+        self.assertEqual(
+            disabled_provenance["executions"][0]["prompt_sha256"],
+            hashlib.sha256(prompt).hexdigest(),
+        )
+        self.assertEqual(
+            without_learning_provenance(disabled_text),
+            without_learning_provenance(controlled_text),
+        )
+
     def test_copies_every_document_when_one_basis_names_multiple_files(self) -> None:
         decision = next(record for record in self.records if record.get("type") == "decision")
         decision["basis"] = ["claude-plan.md and codex-contract.txt"]
@@ -389,6 +906,18 @@ class ArchiveRunTests(unittest.TestCase):
             "decision decision-citation-correction applied to decision decision-07 basis[0]: "
             "missing/original.md -> claude-plan.md",
             text,
+        )
+        provenance = self.learning_provenance_from_input(
+            [
+                {
+                    "content": text,
+                    "head": self.git("rev-parse", "HEAD").stdout.strip(),
+                    "path": self.archive_relative.as_posix(),
+                }
+            ]
+        )
+        self.assertEqual(
+            provenance["decisions"], [{"id": "decision-07", "task": "task-07"}]
         )
 
         self.git("reset", "--quiet")
@@ -494,6 +1023,16 @@ class ArchiveRunTests(unittest.TestCase):
         self.assertEqual(archive.count("## Historical Routing Findings\n"), 1)
         for finding in expected:
             self.assertIn(f"- {finding}\n", archive)
+        provenance = self.learning_provenance_from_input(
+            [
+                {
+                    "content": archive,
+                    "head": self.git("rev-parse", "HEAD").stdout.strip(),
+                    "path": self.archive_relative.as_posix(),
+                }
+            ]
+        )
+        self.assertEqual(provenance["executions"], [])
 
         self.git("reset", "--quiet")
         self.archive_path.unlink()

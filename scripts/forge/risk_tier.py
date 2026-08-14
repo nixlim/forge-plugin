@@ -26,12 +26,13 @@ BUILTIN_CONTROL = (
     "forge-project.md",
     ".forge-manifest",
     ".codex/**",
-    ".forge/evals/**",
+    ".forge/evals/tasks/**",
     "AGENTS.md",
     "CLAUDE.md",
     ".claude/settings*.json",
     ".github/workflows/**",
 )
+EVAL_CANDIDATES = ".forge/evals/candidates/**"
 FIXED_DEPENDENCIES = (
     "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "requirements*.txt", "pyproject.toml", "poetry.lock", "uv.lock",
@@ -467,6 +468,7 @@ def classify(
         if pattern != "@formatting-only"
     }
     all_patterns.update(BUILTIN_CONTROL)
+    all_patterns.add(EVAL_CANDIDATES)
     all_patterns.update(policy.trigger_patterns)
     all_patterns.update(policy.dependency_patterns)
     all_patterns.update(
@@ -479,7 +481,10 @@ def classify(
 
     for entry in entries:
         path = entry.path
+        eval_candidate = path in pattern_matches[EVAL_CANDIDATES]
         categories = matched_categories(policy, path, pattern_matches)
+        if eval_candidate:
+            categories = [category for category in categories if category != "control"]
         formatted, formatting_reason = formatting_only(
             repo, entry, categories, policy.formatting_categories,
             staged=staged, range_spec=range_spec,
@@ -493,8 +498,10 @@ def classify(
                     path_value = max(path_value if matches else TIERS["fast"], TIERS[tier])
                     matches.append({"tier": tier, "pattern": pattern})
 
-        control = any(path in pattern_matches[pattern] for pattern in BUILTIN_CONTROL)
-        control = control or "control" in categories
+        control = not eval_candidate and (
+            any(path in pattern_matches[pattern] for pattern in BUILTIN_CONTROL)
+            or "control" in categories
+        )
         trigger_matches = [
             pattern for pattern in policy.trigger_patterns if path in pattern_matches[pattern]
         ]

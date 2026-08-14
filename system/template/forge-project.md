@@ -62,6 +62,7 @@ Separation of duties requires the reviewer to be distinct from the author.
 - Worktree reintegration: `${CLAUDE_PLUGIN_ROOT}/skills/worktree-merge/SKILL.md`
 - Final reporting: `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md`
 - Periodic drift sensing: `${CLAUDE_PLUGIN_ROOT}/skills/drift/SKILL.md`
+- Advisory journal-derived learning: `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md`
 
 ## Project Overview
 
@@ -81,9 +82,9 @@ project-equivalent CI paths; project rows may extend but never narrow the built-
 | Category | File patterns |
 |---|---|
 | `bash` | `*.sh` |
-| `docs` | `*.md`, `docs/**`, `.forge/history/**` |
+| `docs` | `*.md`, `docs/**`, `.forge/history/**`, `.forge/evals/candidates/**` |
 | `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, and recorded equivalent CI paths |
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, and recorded equivalent CI paths |
 <!-- FORGE:REGION file-categories END -->
 
 ## Stack Validations
@@ -179,11 +180,12 @@ fills this region.
 
 <!-- FORGE:REGION risk-tiers BEGIN -->
 <!-- forge-init: validate these conservative initial rules against the mined file categories; fast
-may remain available only for documentation, Forge history, and eligible formatting-only changes. -->
+may remain available only for documentation, Forge history, advisory eval candidates, and eligible
+formatting-only changes. -->
 
 | tier | path patterns |
 |---|---|
-| fast | docs/**, .forge/history/**, @formatting-only |
+| fast | docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only |
 
 | formatting-only category |
 |---|
