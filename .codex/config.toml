@@ -1,0 +1,16 @@
+# forge: modified from upstream — reduced the Codex layer to the two FR-038 agents and applied the specified routing limits.
+# forge-managed
+approval_policy = "on-failure"
+sandbox_mode = "workspace-write"
+
+[agents]
+max_threads = 6
+max_depth = 1
+
+[agents."implementer"]
+description = "Implementation specialist — writes production code and tests in an isolated worktree"
+config_file = "./agents/implementer.toml"
+
+[agents."review-cheap"]
+description = "Independent first-pass reviewer — read-only and non-authoritative"
+config_file = "./agents/review-cheap.toml"

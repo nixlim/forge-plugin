@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "# forge: modified from upstream — retained notification while using a stable forge-managed signature.\n: 'forge-managed'; osascript -e 'display notification \"Task completed\" with title \"Codex — Forge\"' >/dev/null 2>&1 || true",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "# forge: modified from upstream — re-rooted telemetry to the plugin script and target repository state.\n: 'forge-managed'; session_id=\"$(python3 -c 'import json,sys; value=json.load(sys.stdin).get(\"session_id\"); sys.exit(2) if not isinstance(value,str) or not value else print(value)' 2>/dev/null)\" && bash \"${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh\" .forge/tmp/decisions --append-csv .forge/tmp/telemetry.csv --session \"$session_id\" >/dev/null 2>&1 || true",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
