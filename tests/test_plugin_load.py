@@ -103,7 +103,7 @@ class PluginLoadContractTests(unittest.TestCase):
                                 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh "
                                 ".forge/tmp/decisions --append-csv "
                                 ".forge/tmp/telemetry.csv --session "
-                                '"${CLAUDE_SESSION_ID}"'
+                                '"${CLAUDE_SESSION_ID:-nosession}"'
                             ),
                         },
                         {
@@ -147,6 +147,19 @@ class PluginLoadContractTests(unittest.TestCase):
             script = ROOT / "scripts/forge" / script_name
             self.assertTrue(script.is_file(), script_name)
             self.assertTrue(stat.S_IMODE(script.stat().st_mode) & stat.S_IXUSR)
+
+    def test_stop_telemetry_hook_defaults_the_session_id(self) -> None:
+        # The Stop hook can fire before the harness exports CLAUDE_SESSION_ID, and this
+        # command is not suffixed with `|| true`, so an unset variable surfaces as a hook
+        # error. The caller substitutes a placeholder; aggregate-telemetry.sh keeps
+        # rejecting an empty --session (tests/test_evals.py) rather than inventing one.
+        hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+        telemetry = next(
+            entry["command"]
+            for entry in hooks["hooks"]["Stop"][0]["hooks"]
+            if "aggregate-telemetry.sh" in entry["command"]
+        )
+        self.assertIn('--session "${CLAUDE_SESSION_ID:-nosession}"', telemetry)
 
     def test_plugin_stop_and_session_hooks_are_inert_without_forge_manifest(self) -> None:
         loaded = json.loads(

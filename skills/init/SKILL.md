@@ -363,7 +363,7 @@ same HEAD. In that checkout, capture policy with `git show HEAD:forge-project.md
 Gate 1 body and applicable `stack-validations` cells, and invoke each complete logical cell from the
 checkout root as one unchanged argument to `bash -c`, followed by the literal `forge` as `$0` and
 each parameter as a separate argv element. Use a separate process group, a 65,536-byte combined
-stdout/stderr cap, and a fixed 300-second timeout for every command; nonzero exit, launch failure,
+stdout/stderr cap, and a fixed 1200-second timeout for every command; nonzero exit, launch failure,
 output-limit breach, or timeout stops init. A failure on untouched committed code is miscalibration:
 report capped evidence and return to mining and user confirmation. If Phase 0 found no committed
 policy, record calibration as deferred until the first bootstrap commit in Phase 6. Never modify

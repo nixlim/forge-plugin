@@ -1,8 +1,8 @@
 # Forge Plugin Project Instructions
 
-Install date: `2026-08-13`
+Install date: `2026-08-15`
 
-This repository is governed by the `forge` plugin and dogfoods its committed executable policy.
+This repository is governed by the `forge` plugin.
 
 ## DVRR Spine
 
@@ -84,7 +84,7 @@ test gate. Installed repository surfaces are rendered from `system/`, `skills/`,
 | `bash` | `*.sh` |
 | `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**`, `.forge/evals/candidates/**` |
 | `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `.claude-plugin/**`, `hooks/**`, `system/**` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**` |
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**`, `tests/fixtures/**` |
 <!-- FORGE:REGION file-categories END -->
 
 ## Stack Validations

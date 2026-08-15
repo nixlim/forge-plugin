@@ -15,7 +15,7 @@ For every non-mutation executable policy cell, run from the repository root as
 `bash -c <complete-cell> forge`: the complete unchanged cell is one argv element, literal `forge`
 is `$0`, and every parameter is a separate later argv element. Never concatenate, interpolate,
 wrap, or `eval` cells or parameters. Isolate each process group, cap combined output at 65,536
-bytes, and enforce the fixed 300-second fail-closed timeout. This discipline applies to Gate 1,
+bytes, and enforce the fixed 1200-second fail-closed timeout. This discipline applies to Gate 1,
 stack validations, and invariants; scoped mutation uses its committed per-row timeout below.
 
 <!-- forge: modified from upstream — gate regions live only in forge-project.md (FR-073). -->
@@ -247,7 +247,7 @@ Run every `merge` row from the validated table. From the repository root, invoke
 command cell unchanged as exactly one argument to `bash -c`, followed by literal `forge` as `$0`.
 Pass each parameter as one subsequent argv element consumed through `"$@"`; never concatenate,
 interpolate, source-wrap, or `eval` a cell. Use an isolated process group, cap combined stdout and
-stderr at 65,536 bytes, and enforce a fixed 300-second timeout that kills the complete process
+stderr at 65,536 bytes, and enforce a fixed 1200-second timeout that kills the complete process
 group. A nonzero result, launch failure, or output-limit breach fails Gate 2 with exact first line
 `forge: invariant failed (merge): <invariant>`. A timeout fails with exact first line
 `forge: invariant timed out (merge): <invariant>`. Only capped diagnostics may follow.

@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "forge" / "install.sh"
 DCG_CONFIGURATOR = ROOT / "scripts" / "forge" / "configure-dcg.sh"
 TEMPLATE = ROOT / "system" / "template" / "forge-project.md"
+UPSTREAM_RULES_FIXTURE = ROOT / "tests" / "fixtures" / "upstream-forge.rules"
+VENDORED_UPSTREAM_RULES = ROOT / ".upstream/forge/system/template/.codex/rules/forge.rules"
 BEGIN = "<!-- FORGE:BEGIN -->"
 END = "<!-- FORGE:END -->"
 
@@ -806,8 +808,38 @@ class InstallerPayloadContractTests(unittest.TestCase):
         self.assertIn("You must NEVER push", implementer)
         self.assertIn("never touch any branch other than your own", implementer)
 
+    def test_upstream_rules_baseline_is_committable(self) -> None:
+        # Regression guard: this contract used to read `.upstream/`, which is gitignored, so
+        # it raised FileNotFoundError in every clean checkout instead of asserting anything.
+        # The baseline must live on a path Git will carry into a fresh clone.
+        self.assertTrue(UPSTREAM_RULES_FIXTURE.is_file())
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", "--", str(UPSTREAM_RULES_FIXTURE)],
+            cwd=ROOT,
+            capture_output=True,
+        )
+        self.assertEqual(
+            ignored.returncode,
+            1,
+            f"{UPSTREAM_RULES_FIXTURE} is gitignored and cannot reach a clean checkout",
+        )
+
+    @unittest.skipUnless(
+        VENDORED_UPSTREAM_RULES.is_file(),
+        "vendored .upstream/ checkout not present",
+    )
+    def test_upstream_rules_fixture_matches_vendored_upstream(self) -> None:
+        # The fixture carries only the prefix_rule blocks, so compare those rather than
+        # whole bytes; upstream prose is intentionally not vendored.
+        pattern = r"prefix_rule\(\n.*?\n\)"
+        self.assertEqual(
+            re.findall(pattern, UPSTREAM_RULES_FIXTURE.read_text(), re.DOTALL),
+            re.findall(pattern, VENDORED_UPSTREAM_RULES.read_text(), re.DOTALL),
+            "tests/fixtures/upstream-forge.rules is stale against .upstream/",
+        )
+
     def test_rules_keep_upstream_denies_verbatim_and_add_blanket_push_deny(self) -> None:
-        upstream = (ROOT / ".upstream/forge/system/template/.codex/rules/forge.rules").read_text()
+        upstream = UPSTREAM_RULES_FIXTURE.read_text()
         installed = (ROOT / "system/codex/rules/forge.rules").read_text()
         upstream_rules = re.findall(r"prefix_rule\(\n.*?\n\)", upstream, re.DOTALL)
         self.assertEqual(len(upstream_rules), 4)

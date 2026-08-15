@@ -25,7 +25,7 @@ the affected region name and exit 1. The only missing-HEAD exception is `/forge:
 plugin-owned first-policy bootstrap flow; it must execute no candidate policy command or prompt.
 For every non-mutation executable policy cell, use the FR-149 runner discipline described in Step
 2: repository-root working directory, `bash -c <complete-cell> forge`, separate later argv
-parameters, an isolated process group, a 65,536-byte combined-output cap, and a fixed 300-second
+parameters, an isolated process group, a 65,536-byte combined-output cap, and a fixed 1200-second
 fail-closed timeout. This applies to stack validations and gate commands as well as invariants.
 
 Only consult an orchestration journal when an open run has been explicitly identified by a run ID
@@ -78,7 +78,7 @@ its configured always-run blast-radius suite. Invoke its complete command unchan
 repository root as exactly one argument to `bash -c`, followed by literal `forge` as `$0` and every
 derived repository-relative test path or scope as a separate subsequent argv element consumed via
 `"$@"`. Never concatenate or interpolate target paths into the command. Use an isolated process
-group, a 65,536-byte combined stdout/stderr cap, and the fixed 300-second timeout. A nonzero exit,
+group, a 65,536-byte combined stdout/stderr cap, and the fixed 1200-second timeout. A nonzero exit,
 launch failure, output-limit breach, timeout, missing command, or malformed command blocks Step 2.
 
 Run every executable command in the committed `stack-validations` region for every category
@@ -102,7 +102,7 @@ command cell unchanged as exactly one argument to `bash -c`, followed by the lit
 parameters, pass each repository-relative path or scope as one subsequent argv element for the
 cell to consume through `"$@"`; never splice a path, diff, invariant name, or region text into the
 command string. Give every check its own process group, cap combined stdout and stderr at 65,536
-bytes, and enforce a 300-second timeout that kills the complete process group.
+bytes, and enforce a 1200-second timeout that kills the complete process group.
 
 A nonzero exit, launch failure, or output-limit breach blocks with this exact first line, followed
 only by capped diagnostics:

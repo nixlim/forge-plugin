@@ -1,0 +1,39 @@
+# Upstream forge deny rules, vendored as a test baseline.
+#
+# Source: forge/system/template/.codex/rules/forge.rules (see UPSTREAM).
+# Only the prefix_rule blocks are carried here: they are the contract
+# tests/test_installer.py asserts our shipped rules keep verbatim. Surrounding
+# upstream prose is deliberately omitted so this baseline stays inside the
+# shipped-file naming rules enforced by tests/test_migration.py.
+
+prefix_rule(
+    pattern = ["git", "push", ["--force", "--force-with-lease"]],
+    decision = "forbidden",
+    justification = "forge kill-switch: force pushes are deny-listed (shared-history rewrite; linear-history invariant).",
+    match = ["git push --force origin HEAD"],
+    not_match = ["git push origin HEAD"],
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    justification = "forge kill-switch: destructive working-tree reset is deny-listed.",
+    match = ["git reset --hard HEAD~1"],
+    not_match = ["git reset HEAD~1"],
+)
+
+prefix_rule(
+    pattern = ["git", "clean", "-fd"],
+    decision = "forbidden",
+    justification = "forge kill-switch: bulk deletion of untracked files is deny-listed.",
+    match = ["git clean -fd"],
+    not_match = ["git clean -n"],
+)
+
+prefix_rule(
+    pattern = ["rm", "-rf", [".", "..", "~", "/", "/*"]],
+    decision = "forbidden",
+    justification = "forge kill-switch: recursive deletion of repo root, home, or filesystem root is deny-listed.",
+    match = ["rm -rf ."],
+    not_match = ["rm -rf .tmp/decisions"],
+)

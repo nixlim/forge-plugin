@@ -292,5 +292,94 @@ class GovernanceDoctrineContentTests(unittest.TestCase):
                     self.assertNotIn(forbidden, path.read_text(encoding="utf-8").casefold())
 
 
+class Fr149NonMutationTimeoutTests(unittest.TestCase):
+    """FR-149's non-mutation gate/drift timeout must agree everywhere it is stated.
+
+    It is documented as prose in three skills and the spec but executed as a constant in
+    drift-check.sh, so nothing but a test keeps those five statements from drifting apart.
+    The lock and mutation timeouts are separate controls and must not move with it.
+    """
+
+    NON_MUTATION_SECONDS = 1200
+
+    def setUp(self) -> None:
+        self.commit = compact((ROOT / "skills/commit/SKILL.md").read_text(encoding="utf-8"))
+        self.init = compact((ROOT / "skills/init/SKILL.md").read_text(encoding="utf-8"))
+        self.merge = compact(
+            (ROOT / "skills/worktree-merge/SKILL.md").read_text(encoding="utf-8")
+        )
+        self.spec = compact(
+            (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+        )
+        self.drift = (ROOT / "scripts/forge/drift-check.sh").read_text(encoding="utf-8")
+
+    def assertContains(self, document: str, phrase: str, label: str) -> None:
+        # Plain assertIn would echo an entire skill or the spec into the failure report.
+        self.assertTrue(phrase in document, f"{label}: missing {phrase!r}")
+
+    def test_executable_constant_matches_the_documented_timeout(self) -> None:
+        self.assertContains(
+            self.drift,
+            f"NON_MUTATION_TIMEOUT = {self.NON_MUTATION_SECONDS}",
+            "drift-check.sh",
+        )
+
+    def test_spec_states_the_non_mutation_timeout(self) -> None:
+        self.assertContains(
+            self.spec,
+            "Non-mutation gate/drift checks have a fixed "
+            f"{self.NON_MUTATION_SECONDS}-second per-command timeout",
+            "FR-149",
+        )
+
+    def test_gate_skills_state_the_non_mutation_timeout(self) -> None:
+        seconds = self.NON_MUTATION_SECONDS
+        expected = (
+            (
+                "commit runner discipline",
+                self.commit,
+                f"combined-output cap, and a fixed {seconds}-second fail-closed timeout",
+            ),
+            ("commit gate 1", self.commit, f"and the fixed {seconds}-second timeout"),
+            (
+                "commit invariants",
+                self.commit,
+                f"enforce a {seconds}-second timeout that kills the complete process group",
+            ),
+            (
+                "init calibration",
+                self.init,
+                f"a fixed {seconds}-second timeout for every command",
+            ),
+            (
+                "merge runner discipline",
+                self.merge,
+                f"enforce the fixed {seconds}-second fail-closed timeout",
+            ),
+            (
+                "merge invariants",
+                self.merge,
+                f"enforce a fixed {seconds}-second timeout that kills the complete process",
+            ),
+        )
+        for label, document, phrase in expected:
+            with self.subTest(surface=label):
+                self.assertContains(document, phrase, label)
+
+    def test_lock_timeouts_are_unchanged_by_the_gate_timeout(self) -> None:
+        lock = (ROOT / "scripts/forge/acquire-commit-lock.sh").read_text(encoding="utf-8")
+        self.assertContains(
+            lock, 'max_wait_seconds="${FORGE_COMMIT_LOCK_TIMEOUT:-300}"', "commit lock"
+        )
+        self.assertContains(self.merge, "flock --timeout 300", "rebase lock")
+        self.assertContains(
+            self.commit, "2-second polling, and the 300-second", "commit lock prose"
+        )
+
+    def test_mutation_timeout_default_is_unchanged_by_the_gate_timeout(self) -> None:
+        mutation = (ROOT / "scripts/forge/run-scoped-mutation.py").read_text(encoding="utf-8")
+        self.assertContains(mutation, "DEFAULT_TIMEOUT_SECONDS = 600", "FR-140 default")
+
+
 if __name__ == "__main__":
     unittest.main()

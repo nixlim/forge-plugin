@@ -342,7 +342,7 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("check-test-quality.py", step_two)
         self.assertIn('literal `forge` as `$0`', step_two)
         self.assertIn("65,536-byte", step_two)
-        self.assertIn("300-second timeout", step_two)
+        self.assertIn("1200-second timeout", step_two)
 
     def test_review_loop_and_candidate_marker_contract(self) -> None:
         self.assertIn("git diff --cached", COMMIT_SKILL)
