@@ -151,7 +151,7 @@ class ReviewFinalContentTests(unittest.TestCase):
     def test_frontmatter_has_exact_model_effort_and_tools(self) -> None:
         values, tools = frontmatter(REVIEW_FINAL)
 
-        self.assertEqual(values["model"], "opus")
+        self.assertEqual(values["model"], "fable")
         self.assertEqual(values["effort"], "high")
         self.assertEqual(tools, ["Read", "Bash", "Glob", "Grep", "LS"])
 

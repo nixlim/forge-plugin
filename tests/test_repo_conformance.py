@@ -771,7 +771,7 @@ class RepoConformanceTests(unittest.TestCase):
             ),
             (
                 "journal line 4: agent 'claude-review-final' recorded model/effort "
-                "('fable', 'medium'); expected model/effort ('opus', 'high') "
+                "('fable', 'medium'); expected model/effort ('fable', 'high') "
                 f"from {head}:{FINAL_REVIEWER_PATH}"
             ),
         ]
@@ -1036,7 +1036,7 @@ class RepoConformanceTests(unittest.TestCase):
                     "event_source": "claude",
                     "role": "review",
                     "head": head,
-                    "model": "opus",
+                    "model": "fable",
                     "effort": "high",
                 }
             )
@@ -1049,7 +1049,7 @@ class RepoConformanceTests(unittest.TestCase):
         journal = run_dir / "journal.jsonl"
         journal.write_text(
             journal.read_text(encoding="utf-8").replace(
-                '"model": "opus"', '"model": "fable"'
+                '"model": "fable"', '"model": "opus"'
             ),
             encoding="utf-8",
         )
@@ -1058,8 +1058,8 @@ class RepoConformanceTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(findings), 1)
         self.assertIn("agent 'claude-review-final'", findings[0])
-        self.assertIn("recorded model/effort ('fable', 'high')", findings[0])
-        self.assertIn("expected model/effort ('opus', 'high')", findings[0])
+        self.assertIn("recorded model/effort ('opus', 'high')", findings[0])
+        self.assertIn("expected model/effort ('fable', 'high')", findings[0])
         self.assertIn(f"{head}:{FINAL_REVIEWER_PATH}", findings[0])
 
     def test_historical_audit_fails_closed_for_unclassified_provider(self) -> None:

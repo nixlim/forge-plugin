@@ -1011,7 +1011,7 @@ class ArchiveRunTests(unittest.TestCase):
             (
                 f"journal line {journal_lines['claude-review-historical']}: agent "
                 "'claude-review-historical' recorded model/effort "
-                "('fable', 'medium'); expected model/effort ('opus', 'high') "
+                "('fable', 'medium'); expected model/effort ('fable', 'high') "
                 f"from {authority_head}:agents/review-final.md"
             ),
         )
