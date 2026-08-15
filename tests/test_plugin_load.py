@@ -103,7 +103,7 @@ class PluginLoadContractTests(unittest.TestCase):
                                 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh "
                                 ".forge/tmp/decisions --append-csv "
                                 ".forge/tmp/telemetry.csv --session "
-                                '"${CLAUDE_SESSION_ID:-nosession}"'
+                                '"${CLAUDE_SESSION_ID:-nosession}" || true'
                             ),
                         },
                         {
@@ -149,10 +149,9 @@ class PluginLoadContractTests(unittest.TestCase):
             self.assertTrue(stat.S_IMODE(script.stat().st_mode) & stat.S_IXUSR)
 
     def test_stop_telemetry_hook_defaults_the_session_id(self) -> None:
-        # The Stop hook can fire before the harness exports CLAUDE_SESSION_ID, and this
-        # command is not suffixed with `|| true`, so an unset variable surfaces as a hook
-        # error. The caller substitutes a placeholder; aggregate-telemetry.sh keeps
-        # rejecting an empty --session (tests/test_evals.py) rather than inventing one.
+        # The Stop hook can fire before the harness exports CLAUDE_SESSION_ID. The
+        # caller substitutes a placeholder; aggregate-telemetry.sh keeps rejecting an
+        # empty --session (tests/test_evals.py) rather than inventing one.
         hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
         telemetry = next(
             entry["command"]
@@ -160,6 +159,25 @@ class PluginLoadContractTests(unittest.TestCase):
             if "aggregate-telemetry.sh" in entry["command"]
         )
         self.assertIn('--session "${CLAUDE_SESSION_ID:-nosession}"', telemetry)
+
+    def test_stop_telemetry_hook_can_never_block_a_session_stop(self) -> None:
+        # A Stop hook that exits 2 does not merely error — Claude Code treats exit 2
+        # as "block the turn from ending", and a persistent failure traps the session
+        # in a stop loop until the harness force-overrides it. Telemetry aggregation
+        # is observational, so its hook invocation must swallow every failure, exactly
+        # as the codex variant in system/codex/hooks.json already does. The script's
+        # own strict CLI contract (usage errors exit 2 for direct callers) is pinned
+        # separately in tests/test_evals.py and is unaffected.
+        hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+        telemetry = next(
+            entry["command"]
+            for entry in hooks["hooks"]["Stop"][0]["hooks"]
+            if "aggregate-telemetry.sh" in entry["command"]
+        )
+        self.assertTrue(
+            telemetry.rstrip().endswith("|| true"),
+            "Stop telemetry hook must end with '|| true' so it can never block",
+        )
 
     def test_plugin_stop_and_session_hooks_are_inert_without_forge_manifest(self) -> None:
         loaded = json.loads(

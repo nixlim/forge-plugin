@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh .forge/tmp/decisions --append-csv .forge/tmp/telemetry.csv --session \"${CLAUDE_SESSION_ID:-nosession}\""
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/forge/aggregate-telemetry.sh .forge/tmp/decisions --append-csv .forge/tmp/telemetry.csv --session \"${CLAUDE_SESSION_ID:-nosession}\" || true"
           },
           {
             "type": "command",
