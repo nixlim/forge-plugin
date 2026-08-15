@@ -183,6 +183,40 @@ class RunEvalsTests(ShellScriptTestCase):
         )
         self.assertTrue(result.stdout.rstrip().endswith("FIXTURES MALFORMED"))
 
+    def test_gitignored_scratch_in_the_tasks_directory_is_not_a_fixture(self) -> None:
+        # Tooling drops stubs (CLAUDE.md, editor state) into any directory it touches.
+        # Such a file is gitignored, so it can never reach a clean checkout and is not
+        # part of the committed fixture suite; treating it as a malformed fixture
+        # breaks the gate for a file no reviewer will ever see.
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        (self.repo / ".gitignore").write_text("**/CLAUDE.md\n", encoding="utf-8")
+        (self.tasks / "CLAUDE.md").write_text(
+            "<claude-mem-context>\n\n</claude-mem-context>", encoding="utf-8"
+        )
+        self.write_fixture("real-fixture", result="PASS")
+
+        result = self.run_script(RUN_EVALS, env_overrides={"STRICT": "1"})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("MALFORMED", result.stdout)
+        self.assertIn("tasks=1", result.stdout)
+
+    def test_tracked_malformed_fixture_still_fails_when_scratch_is_skipped(self) -> None:
+        # The skip must not become a hole: a real fixture is tracked, so it is still
+        # checked even in a repository that ignores scratch files.
+        subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
+        (self.repo / ".gitignore").write_text("**/CLAUDE.md\n", encoding="utf-8")
+        (self.tasks / "CLAUDE.md").write_text("stub", encoding="utf-8")
+        (self.tasks / "missing-key.md").write_text(
+            "---\nid: missing-key\ncategory: review\nagent: review-cheap\n---\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_script(RUN_EVALS)
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("MALFORMED missing-key", result.stdout)
+
     def test_review_agent_cannot_expect_flag(self) -> None:
         self.write_fixture(
             "bad-review-vocabulary",

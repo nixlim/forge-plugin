@@ -880,13 +880,22 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "eval-tasks/review-passes-clean-change.template.md",
             "validation-snippets/stacks.md",
         }
-        actual = {
-            path.relative_to(seeds).as_posix()
-            for path in seeds.rglob("*")
-            if path.is_file() and path.name != "CLAUDE.md"
-        }
+        # Enumerate what Git would ship, not what is on disk: local tooling scratch
+        # (CLAUDE.md stubs, .devlog state) is gitignored and never reaches a clone.
+        listed = subprocess.run(
+            [
+                "git", "ls-files", "-z", "--cached", "--others",
+                "--exclude-standard", "--", "system/seeds",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        shipped_paths = sorted(entry for entry in listed.split("\0") if entry)
+        actual = {entry.removeprefix("system/seeds/") for entry in shipped_paths}
         self.assertEqual(actual, expected)
-        shipped = "\n".join(path.read_text() for path in seeds.rglob("*") if path.is_file())
+        shipped = "\n".join((ROOT / entry).read_text() for entry in shipped_paths)
         legacy_name = "open" + "code"
         self.assertNotIn(legacy_name, shipped.lower())
 

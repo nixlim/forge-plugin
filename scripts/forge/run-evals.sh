@@ -38,6 +38,13 @@ malformed=0
 
 shopt -s nullglob
 for fixture in "$TASK_DIR"/*.md; do
+    # Local scratch (tooling stubs such as CLAUDE.md, editor state) is gitignored and
+    # can never reach a clean checkout, so it is not part of the fixture suite. Real
+    # fixtures are tracked, so a malformed one still fails this gate. Outside a Git
+    # repository check-ignore exits nonzero and every file is treated as a fixture.
+    if git check-ignore -q -- "$fixture" 2>/dev/null; then
+        continue
+    fi
     total=$((total + 1))
     base="$(basename "$fixture" .md)"
     id="$(frontmatter "$fixture" id)"
