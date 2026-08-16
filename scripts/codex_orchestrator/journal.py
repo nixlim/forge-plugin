@@ -500,10 +500,31 @@ def _scan_run(run_dir: Path) -> RunState:
     records = _read_raw_records(run_dir / "journal.jsonl")
     starts = [record for record in records if record.get("type") == "run_started"]
     closures = [record for record in records if record.get("type") == "run_closed"]
-    if len(starts) != 1 or records[0] is not starts[0] or starts[0].get("run_id") != run_id:
+    if len(starts) != 1 or records[0] is not starts[0]:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    if len(closures) > 1 or (closures and records[-1] is not closures[0]):
+    # Pre-D13 journals record their identity under `id`; D13 journals use `run_id`.
+    # FR-014 scopes admission to journals that lack `run_closed`, so a closed legacy
+    # journal must not make the registry unavailable — but identity must still match
+    # the directory, and D13 journals keep the strict key.
+    legacy = "run_id" not in starts[0]
+    identity = starts[0].get("id") if legacy else starts[0].get("run_id")
+    if identity != run_id:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if len(closures) > 1:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if closures and records[-1] is not closures[0]:
+        # The old FR-120 correction rule appended a re-verification plus a
+        # citation-correction decision after close (run-20260811's real tail is
+        # run_closed -> verification -> decision). Tolerate exactly those record
+        # types, for legacy journals only — D13 journals never append after close.
+        close_position = next(
+            position for position, record in enumerate(records) if record is closures[0]
+        )
+        trailing = records[close_position + 1 :]
+        if not legacy or any(
+            record.get("type") not in {"decision", "verification"} for record in trailing
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     scope = _scope_from_record(starts[0].get("scope"))
     successor_of = starts[0].get("successor_of")
     if successor_of is not None and not _valid_run_id(successor_of):

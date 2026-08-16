@@ -117,6 +117,156 @@ class RunCoordinationTests(unittest.TestCase):
         self.assertEqual(self.journal_path("run-A").read_bytes(), before)
         self.assertFalse(self.journal_path("run-C").exists())
 
+    def plant_legacy_journal(self, run_id: str, *, closed: bool) -> Path:
+        """Write a pre-D13 journal: identity keyed `id` (not `run_id`), no scope.
+
+        The real repository carries two such journals from the pre-coordination
+        orchestrator; one ends with a post-close citation-correction decision,
+        which the old FR-120 correction rule explicitly allowed.
+        """
+        run_dir = self.repo / ".codex-orchestrator/runs" / run_id
+        run_dir.mkdir(parents=True)
+        records: list[dict[str, object]] = [
+            {"type": "run_started", "id": run_id, "goal": "legacy"},
+            {"type": "verification", "id": "verify-01", "task": "task-01", "result": "passed"},
+        ]
+        if closed:
+            records.append({"type": "run_closed", "id": run_id, "judgment": "passed"})
+            # Mirror the real run-20260811 tail: the old FR-120 correction rule
+            # appended a re-verification AND a citation-correction decision.
+            records.append(
+                {"type": "verification", "id": "verify-90", "task": "task-01", "result": "passed"}
+            )
+            records.append(
+                {
+                    "type": "decision",
+                    "id": "decision-90",
+                    "resolution": "citation-correction: verify-01 observation: a -> b",
+                }
+            )
+        journal_file = run_dir / "journal.jsonl"
+        journal_file.write_text(
+            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+        )
+        return journal_file
+
+    def test_closed_legacy_journal_does_not_poison_admission(self) -> None:
+        """FR-014: journals that carry run_closed are excluded from admission, so a
+        closed pre-D13 journal (legacy `id` key, trailing correction decision) must
+        not make the registry unavailable for every future run."""
+        legacy = self.plant_legacy_journal("run-legacy-closed", closed=True)
+        before = legacy.read_bytes()
+
+        result = self.open("run-a", "src/a/**")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        registry = json.loads(self.registry_bytes())
+        self.assertEqual(
+            [item["run_id"] for item in registry["open_runs"]], ["run-a"]
+        )
+        self.assertEqual(legacy.read_bytes(), before)
+
+    def test_post_close_tolerance_is_denied_to_d13_journals(self) -> None:
+        """The trailing-record tolerance is for pre-D13 journals only: a run_id-keyed
+        journal with any record after run_closed is corrupt and must refuse."""
+        run_dir = self.repo / ".codex-orchestrator/runs/run-d13-trailing"
+        run_dir.mkdir(parents=True)
+        records = [
+            {"type": "run_started", "run_id": "run-d13-trailing", "scope": ["src/x/**"]},
+            {"type": "run_closed", "run_id": "run-d13-trailing", "judgment": "passed"},
+            {"type": "decision", "id": "decision-01", "resolution": "late append"},
+        ]
+        (run_dir / "journal.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+        )
+
+        refused = self.open("run-a", "src/a/**")
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+
+    def test_post_close_tolerance_rejects_untolerated_record_types(self) -> None:
+        """Legacy tolerance covers only the correction shapes the old FR-120 rule
+        produced (verification, decision); anything else after run_closed refuses."""
+        legacy = self.plant_legacy_journal("run-legacy-tail", closed=True)
+        records = legacy.read_text(encoding="utf-8").splitlines()
+        records.append(json.dumps({"type": "task", "id": "task-99"}))
+        legacy.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+        refused = self.open("run-a", "src/a/**")
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+
+    @unittest.skipUnless(
+        (ROOT / ".codex-orchestrator/runs/run-20260811-verification-expansion").is_dir(),
+        "real legacy run journals not present in this checkout",
+    )
+    def test_real_legacy_journals_admit_a_new_run(self) -> None:
+        """End-to-end against the real pre-D13 journals: copy them into the fixture
+        repo and prove run-open admits a new run. This is the exact defect that
+        blocked the first real run-open (COR-05: the decisions-only tolerance was
+        written against an assumed tail; the real tail is run_closed ->
+        verification -> decision)."""
+        source = ROOT / ".codex-orchestrator/runs"
+        target = self.repo / ".codex-orchestrator/runs"
+        target.mkdir(parents=True)
+        for run_dir in source.iterdir():
+            if (run_dir / "journal.jsonl").is_file():
+                (target / run_dir.name).mkdir()
+                shutil.copy2(
+                    run_dir / "journal.jsonl", target / run_dir.name / "journal.jsonl"
+                )
+
+        result = self.open("run-a", "src/a/**")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_legacy_identity_must_match_directory(self) -> None:
+        """The identity leg of the closed-journal tolerance: a legacy journal whose
+        `id` disagrees with its directory name is corrupt state and must refuse —
+        the tolerance never waives identity."""
+        legacy = self.plant_legacy_journal("run-legacy-mismatch", closed=True)
+        records = legacy.read_text(encoding="utf-8").splitlines()
+        first = json.loads(records[0])
+        first["id"] = "run-some-other-name"
+        records[0] = json.dumps(first)
+        legacy.write_text("\n".join(records) + "\n", encoding="utf-8")
+
+        refused = self.open("run-a", "src/a/**")
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+
+    def test_empty_run_id_key_is_not_rescued_by_legacy_id(self) -> None:
+        """A journal that HAS a run_id key (even empty) is a D13 journal: the legacy
+        `id` fallback must not rescue it, and the empty identity must refuse."""
+        run_dir = self.repo / ".codex-orchestrator/runs/run-empty-runid"
+        run_dir.mkdir(parents=True)
+        records = [
+            {"type": "run_started", "run_id": "", "id": "run-empty-runid"},
+            {"type": "run_closed", "run_id": "", "judgment": "passed"},
+        ]
+        (run_dir / "journal.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+        )
+
+        refused = self.open("run-a", "src/a/**")
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+
+    def test_open_legacy_journal_still_fails_closed(self) -> None:
+        """FR-014: an open journal with missing scope is repository-wide; legacy
+        tolerance must not weaken that refusal."""
+        self.plant_legacy_journal("run-legacy-open", closed=False)
+
+        refused = self.open("run-a", "src/a/**")
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+        self.assertFalse(self.journal_path("run-a").exists())
+
     def test_glob_pairs_fail_conservatively_and_dot_run_is_refused(self) -> None:
         """FR-014/FR-192 and DM-011: fail closed for ambiguous globs and run state."""
         self.assertTrue(journal.pathspecs_overlap("[ab]x", "a[xy]"))
