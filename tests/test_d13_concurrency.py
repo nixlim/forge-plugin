@@ -1232,7 +1232,7 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         shutil.copy2(ORCH_TOOLS, mutant_root / "codex_orch_tools.py")
         mutant_journal = mutant_root / "codex_orchestrator" / "journal.py"
         source = mutant_journal.read_text(encoding="utf-8")
-        needle = "    _ensure_owner(run_dir, run_id, current)\n"
+        needle = "    _ensure_owner(run_dir, run_id, current, adopt_missing=adopt_missing)\n"
         self.assertEqual(source.count(needle), 1)
         mutant_journal.write_text(source.replace(needle, "    # ownership disabled by mutant\n"), encoding="utf-8")
         foreign["orch_tools"] = str(mutant_root / "codex_orch_tools.py")

@@ -262,15 +262,265 @@ class RunCoordinationTests(unittest.TestCase):
         self.assertEqual(refused.returncode, 1)
         self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
 
+    def plant_pre_coordination_run(self, run_id: str) -> Path:
+        # A run opened before D13 coordination existed: run_id-keyed start
+        # record with no scope key, no owner sidecar, no run_closed, and no
+        # registry entry (the registry itself postdates the run).
+        run_dir = self.repo / ".codex-orchestrator/runs" / run_id
+        run_dir.mkdir(parents=True)
+        records = [
+            {"type": "run_started", "run_id": run_id, "goal": "legacy open"},
+            {"type": "task", "id": "task-01", "status": "done"},
+        ]
+        (run_dir / "journal.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        return run_dir
+
+    def test_pre_coordination_open_run_blocks_admission_by_overlap_not_poison(self) -> None:
+        # FR-014: unknown open-run scope is repository-wide. That must surface
+        # as an overlap refusal naming the run — not as registry poisoning
+        # that hides which run is in the way.
+        self.plant_pre_coordination_run("authoring-system")
+        result = self.open("run-a", "src/a/**")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            result.stderr,
+            "forge: new run refused — scope overlap between run-a and open run authoring-system\n",
+        )
+
+    def test_pre_coordination_open_run_is_adoptable_then_closable(self) -> None:
+        # The fix palimpsest-bjb needs end-to-end: append a record to the
+        # legacy open run (adopting ownership), close it, then admit new work.
+        run_dir = self.plant_pre_coordination_run("authoring-system")
+        append_record = self.record(
+            "declaration",
+            {
+                "type": "decision",
+                "id": "journal-dialect-compat",
+                "resolution": "legacy-dialect-compat: pre-D13 journal",
+            },
+        )
+        appended = self.command(
+            "journal-append",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "authoring-system",
+            "--record-json",
+            append_record,
+        )
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+        owner = (run_dir / "owner").read_text()
+        self.assertIn(f"pid: {os.getpid()}\n", owner)
+        # The repository-wide sentinel scope is in-memory admission state
+        # only: no registry bytes exist until a real scope is admitted.
+        self.assertFalse((self.repo / ".forge/tmp/run-registry.json").exists())
+        closed = self.command(
+            "run-close",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "authoring-system",
+            "--record-json",
+            self.record(
+                "closure",
+                {"type": "run_closed", "run_id": "authoring-system", "judgment": "passed"},
+            ),
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertNotIn(b'"**"', self.registry_bytes())
+        admitted = self.open("run-a", "src/a/**")
+        self.assertEqual(admitted.returncode, 0, admitted.stderr)
+
+    def test_scopeless_open_run_with_owner_keeps_ownership_rules(self) -> None:
+        # Adoption itself writes an owner sidecar next to a scope-less
+        # run_started, so that pairing is legitimate history, not corruption.
+        # The sidecar changes nothing about admission (still repository-wide,
+        # blocking by overlap), and the normal ownership rules keep governing
+        # appends: an owner this session cannot verify is foreign.
+        run_dir = self.plant_pre_coordination_run("authoring-system")
+        (run_dir / "owner").write_text(
+            f"pid: 1\nhost: {socket.gethostname()}\nstarted_at: 2026-08-09T10:00:00Z\n"
+        )
+
+        result = self.open("run-a", "src/a/**")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            result.stderr,
+            "forge: new run refused — scope overlap between run-a and open run authoring-system\n",
+        )
+
+        declaration = self.record(
+            "declaration",
+            {
+                "type": "decision",
+                "id": "journal-dialect-compat",
+                "resolution": "legacy-dialect-compat: pre-D13 journal",
+            },
+        )
+        appended = self.command(
+            "journal-append",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "authoring-system",
+            "--record-json",
+            str(declaration),
+        )
+        self.assertEqual(appended.returncode, 1, appended.stderr)
+        self.assertIn("has live owner 1@", appended.stderr)
+
+    def test_closing_one_pre_coordination_run_never_persists_the_sentinel(self) -> None:
+        # Pre-D13 had no mutual exclusion, so two open pre-coordination runs
+        # are legitimate history. Closing one writes the registry while the
+        # survivor's sentinel scope is still in the admission map; the write
+        # filter is the only thing keeping "**" out of the persisted bytes,
+        # and a poisoned registry would refuse every later command.
+        self.plant_pre_coordination_run("authoring-system")
+        self.plant_pre_coordination_run("scenario-support")
+        declaration = self.record(
+            "declaration",
+            {
+                "type": "decision",
+                "id": "journal-dialect-compat",
+                "resolution": "legacy-dialect-compat: pre-D13 journal",
+            },
+        )
+        appended = self.command(
+            "journal-append",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "authoring-system",
+            "--record-json",
+            str(declaration),
+        )
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+        closed = self.command(
+            "run-close",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "authoring-system",
+            "--record-json",
+            str(
+                self.record(
+                    "closure",
+                    {
+                        "type": "run_closed",
+                        "run_id": "authoring-system",
+                        "judgment": "passed",
+                    },
+                )
+            ),
+        )
+        self.assertEqual(closed.returncode, 0, closed.stderr)
+        self.assertNotIn(b'"**"', self.registry_bytes())
+        # The registry stays loadable and the survivor still guards admission.
+        refused = self.open("run-a", "src/a/**")
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertEqual(
+            refused.stderr,
+            "forge: new run refused — scope overlap between run-a and open run scenario-support\n",
+        )
+
+    def test_d13_open_run_missing_from_registry_refuses_all_admission(self) -> None:
+        # The registry is the admission authority for D13 runs: an open D13
+        # journal it cannot vouch for fails every command closed, and the
+        # pre-coordination tolerance must never admit it from journal scope.
+        opened = self.open("run-a", "src/a/**")
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        rogue = self.repo / ".codex-orchestrator/runs/run-rogue"
+        rogue.mkdir(parents=True)
+        (rogue / "journal.jsonl").write_text(
+            json.dumps(
+                {"type": "run_started", "run_id": "run-rogue", "scope": ["src/b/**"]}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (rogue / "owner").write_text(
+            f"pid: {os.getpid()}\nhost: {socket.gethostname()}\n"
+            "started_at: 2026-08-16T10:00:00Z\n"
+        )
+
+        refused = self.open("run-c", "src/c/**")
+
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+
+    def test_pre_coordination_run_cannot_be_retired_into_a_poison_state(self) -> None:
+        # A retired scope-less run is unrepresentable (not closed, no scope),
+        # so retiring one would poison every future scan with no tooling
+        # recovery. The state machine is adopt -> close; retire must refuse
+        # with a diagnostic naming that path, and the refusal must leave the
+        # coordination layer fully operable.
+        self.plant_pre_coordination_run("authoring-system")
+
+        retired = self.command(
+            "run-retire", "--repo", str(self.repo), "--run-id", "authoring-system"
+        )
+        self.assertEqual(retired.returncode, 1, retired.stderr)
+        self.assertEqual(
+            retired.stderr,
+            "forge: run retire refused — pre-coordination run authoring-system"
+            " has no admitted scope to reuse; adopt and close it instead\n",
+        )
+
+        # Disable-detection: were the refusal removed, retirement would succeed
+        # and this append would fail REGISTRY_UNAVAILABLE on the poisoned scan.
+        appended = self.command(
+            "journal-append",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "authoring-system",
+            "--record-json",
+            str(
+                self.record(
+                    "declaration",
+                    {
+                        "type": "decision",
+                        "id": "journal-dialect-compat",
+                        "resolution": "legacy-dialect-compat: pre-D13 journal",
+                    },
+                )
+            ),
+        )
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+
+    def test_present_but_invalid_scope_key_is_not_pre_coordination(self) -> None:
+        # The classification requires the scope KEY to be absent: a D13
+        # journal whose scope is present but invalid is corruption and keeps
+        # the hard refusal — it must not be downgraded to adoptability.
+        run_dir = self.repo / ".codex-orchestrator/runs/run-null-scope"
+        run_dir.mkdir(parents=True)
+        (run_dir / "journal.jsonl").write_text(
+            json.dumps(
+                {"type": "run_started", "run_id": "run-null-scope", "scope": None}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        refused = self.open("run-a", "src/a/**")
+
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+
     def test_open_legacy_journal_still_fails_closed(self) -> None:
-        """FR-014: an open journal with missing scope is repository-wide; legacy
-        tolerance must not weaken that refusal."""
+        """FR-014: an open journal with no scope is repository-wide — every new
+        admission is refused by overlap naming the run, never fail-open."""
         self.plant_legacy_journal("run-legacy-open", closed=False)
 
         refused = self.open("run-a", "src/a/**")
 
         self.assertEqual(refused.returncode, 1)
-        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+        self.assertEqual(
+            refused.stderr,
+            "forge: new run refused — scope overlap between run-a and open run run-legacy-open\n",
+        )
         self.assertFalse(self.journal_path("run-a").exists())
 
     def test_glob_pairs_fail_conservatively_and_dot_run_is_refused(self) -> None:

@@ -106,6 +106,7 @@ class RunState:
     disposition: str
     scope: tuple[str, ...]
     successor_of: str | None = None
+    pre_coordination: bool = False
 
 
 def _byte_key(value: str) -> bytes:
@@ -399,6 +400,13 @@ def _scope_from_record(value: object) -> tuple[str, ...] | None:
     return canonical if list(canonical) == value else None
 
 
+# In-memory sentinel for a pre-coordination run's repository-wide scope.
+# canonical_scope refuses "**" for admitted runs, so the sentinel can never
+# collide with a real scope — and it is not a validatable pathspec, so it
+# must never reach the persisted registry.
+PRE_COORDINATION_SCOPE = ("**",)
+
+
 def _segment_may_overlap(left: str, right: str) -> bool:
     left_magic = any(character in left for character in MAGIC_CHARS)
     right_magic = any(character in right for character in MAGIC_CHARS)
@@ -565,6 +573,18 @@ def _scan_run(run_dir: Path) -> RunState:
         and records[-1].get("resolution") == RETIREMENT_RESOLUTION
     )
     disposition = "closed" if closures else "retired" if retired else "open"
+    # A run opened before D13 coordination existed has no scope key in its
+    # run_started (D13's atomic open always records one). Its scope is
+    # unknown, so FR-014 treats it as repository-wide: it blocks every new
+    # admission by overlap — never by poisoning the registry — and stays
+    # appendable so it can be adopted and closed. The first adopting append
+    # writes the owner sidecar, so its presence cannot disqualify the run;
+    # normal ownership rules govern every append either way.
+    pre_coordination = (
+        disposition == "open" and scope is None and "scope" not in starts[0]
+    )
+    if pre_coordination:
+        scope = PRE_COORDINATION_SCOPE
     if disposition != "closed" and scope is None:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     return RunState(
@@ -573,6 +593,7 @@ def _scan_run(run_dir: Path) -> RunState:
         disposition=disposition,
         scope=scope or (),
         successor_of=successor_of if isinstance(successor_of, str) else None,
+        pre_coordination=pre_coordination,
     )
 
 
@@ -617,9 +638,14 @@ def _registry_payload(open_runs: dict[str, tuple[str, ...]]) -> bytes:
 def _load_registry(state_root: Path, states: dict[str, RunState]) -> dict[str, tuple[str, ...]]:
     registry_path = state_root / ".forge/tmp/run-registry.json"
     if not registry_path.exists():
-        if any(state.disposition == "open" for state in states.values()):
+        open_states = [state for state in states.values() if state.disposition == "open"]
+        if any(not state.pre_coordination for state in open_states):
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        return {}
+        # Pre-coordination runs predate the registry itself, so a missing
+        # registry is expected history, not corruption. Their repository-wide
+        # scopes exist only in memory — the sentinel is not a validatable
+        # pathspec, so nothing is persisted until a real scope is admitted.
+        return {state.run_id: state.scope for state in open_states}
     try:
         raw = registry_path.read_bytes()
         value = json.loads(raw.decode("utf-8"))
@@ -649,17 +675,29 @@ def _load_registry(state_root: Path, states: dict[str, RunState]) -> dict[str, t
             if state.scope != scope:
                 raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
             reconciled[run_id] = scope
+    admitted = dict(reconciled)
     for run_id, state in states.items():
         if state.disposition == "open" and run_id not in loaded:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            if not state.pre_coordination:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            # A pre-coordination run joins admission in memory only; its
+            # sentinel scope never reaches the persisted registry.
+            admitted[run_id] = state.scope
     if reconciled != loaded:
         _atomic_replace(registry_path, _registry_payload(reconciled))
-    return reconciled
+    return admitted
 
 
 def _write_registry(state_root: Path, open_runs: dict[str, tuple[str, ...]]) -> None:
+    # Pre-coordination sentinel scopes are in-memory admission state, never
+    # registry bytes: the persisted file holds only validatable pathspecs.
+    persistable = {
+        run_id: scope
+        for run_id, scope in open_runs.items()
+        if scope != PRE_COORDINATION_SCOPE
+    }
     _atomic_replace(
-        state_root / ".forge/tmp/run-registry.json", _registry_payload(open_runs)
+        state_root / ".forge/tmp/run-registry.json", _registry_payload(persistable)
     )
 
 
@@ -669,8 +707,16 @@ def _owner_refusal(run_id: str, owner: Owner) -> JournalAppendRefusal:
     )
 
 
-def _ensure_owner(run_dir: Path, run_id: str, current: Owner) -> bool:
+def _ensure_owner(
+    run_dir: Path, run_id: str, current: Owner, *, adopt_missing: bool = False
+) -> bool:
     owner_path = run_dir / "owner"
+    if adopt_missing and not owner_path.exists():
+        # A pre-coordination run has no owner sidecar; the first session to
+        # touch it under the registry lock adopts it, after which the normal
+        # ownership rules apply unchanged.
+        _atomic_replace(owner_path, _owner_bytes(current))
+        return True
     owner = _parse_owner(owner_path)
     if owner is None:
         raise JournalAppendRefusal(
@@ -694,9 +740,10 @@ def _append_with_locked_stream(
     record: dict[str, object],
     *,
     allow_lifecycle: bool = False,
+    adopt_missing: bool = False,
 ) -> int:
     current = _session_owner()
-    _ensure_owner(run_dir, run_id, current)
+    _ensure_owner(run_dir, run_id, current, adopt_missing=adopt_missing)
     if not isinstance(record, dict) or record.get("type") not in JOURNAL_ENTRY_TYPES:
         raise CoordinationRefusal("forge: journal append refused — invalid journal record")
     if not allow_lifecycle and record.get("type") in {"run_started", "run_closed"}:
@@ -775,7 +822,9 @@ def append_owned_record(journal: Path, record: dict[str, object]) -> None:
         ):
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         with _locked_journal(state.run_dir) as stream:
-            _append_with_locked_stream(stream, state.run_dir, run_id, record)
+            _append_with_locked_stream(
+                stream, state.run_dir, run_id, record, adopt_missing=state.pre_coordination
+            )
 
 
 def open_run(
@@ -875,7 +924,9 @@ def append_run_record(repo: Path, run_id: str, record: dict[str, object]) -> Non
                 raise CoordinationRefusal(
                     f"forge: journal append refused — task files exceed admitted scope for run {run_id}"
                 )
-            _append_with_locked_stream(stream, state.run_dir, run_id, record)
+            _append_with_locked_stream(
+                stream, state.run_dir, run_id, record, adopt_missing=state.pre_coordination
+            )
 
 
 def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
@@ -916,7 +967,9 @@ def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
             "recorded_at": _utc_now(),
         }
         with _locked_journal(state.run_dir) as stream:
-            _ensure_owner(state.run_dir, run_id, _session_owner())
+            _ensure_owner(
+                state.run_dir, run_id, _session_owner(), adopt_missing=state.pre_coordination
+            )
             if not _all_task_files_contained(
                 _read_raw_records(state.run_dir / "journal.jsonl"), scope
             ):
@@ -945,7 +998,12 @@ def close_run(repo: Path, run_id: str, record: dict[str, object]) -> None:
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         with _locked_journal(state.run_dir) as stream:
             offset = _append_with_locked_stream(
-                stream, state.run_dir, run_id, record, allow_lifecycle=True
+                stream,
+                state.run_dir,
+                run_id,
+                record,
+                allow_lifecycle=True,
+                adopt_missing=state.pre_coordination,
             )
             try:
                 updated = dict(open_runs)
@@ -966,6 +1024,15 @@ def retire_run(repo: Path, run_id: str) -> None:
         state = states.get(run_id)
         if state is None or state.disposition != "open" or run_id not in open_runs:
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        if state.pre_coordination:
+            # Retirement exists so a successor can reuse an admitted scope; a
+            # pre-coordination run has none, and its retired state (scope-less,
+            # not closed) would poison every future scan. The state machine for
+            # such runs is adopt -> close (or readmit to a real scope first).
+            raise CoordinationRefusal(
+                "forge: run retire refused — pre-coordination run "
+                f"{run_id} has no admitted scope to reuse; adopt and close it instead"
+            )
         record = {
             "type": "decision",
             "id": "forge-run-retired",
