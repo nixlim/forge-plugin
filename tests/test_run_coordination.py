@@ -277,6 +277,26 @@ class RunCoordinationTests(unittest.TestCase):
         self.assertEqual(refused.returncode, 1)
         self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
 
+    def test_stray_regular_file_in_runs_root_is_not_run_state(self) -> None:
+        """A non-dot regular file in runs/ cannot be a run and must not poison admission.
+
+        Session tooling (the claude-mem hook) drops a CLAUDE.md stub into every
+        directory it touches, including .codex-orchestrator/runs/. A regular
+        file holds no journal and no scope, and atomic-open crash temps are
+        dot-prefixed (covered by the fail-closed test below), so refusing the
+        whole registry over a stub breaks every run-open intermittently.
+        """
+        runs_root = self.repo / ".codex-orchestrator/runs"
+        runs_root.mkdir(parents=True)
+        stub = runs_root / "CLAUDE.md"
+        stub.write_text("<claude-mem-context>\n\n</claude-mem-context>\n", encoding="utf-8")
+
+        opened = self.open("run-a", "src/a/**")
+
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        self.assertIn(b'"run_id":"run-a"', self.registry_bytes())
+        self.assertTrue(stub.is_file(), "stub must be left untouched")
+
     def test_crashed_dot_opening_fails_closed_and_disabled_control_is_detected(self) -> None:
         """FR-014/FR-192 and DM-011: detect removal of crashed-state protection."""
         self.assertEqual(self.open("run-A", "src/a/**").returncode, 0)

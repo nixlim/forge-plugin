@@ -566,9 +566,11 @@ def _scan_runs(state_root: Path) -> dict[str, RunState]:
     # scope is therefore ambiguous open-run state and must never be skipped.
     if any(entry.name.startswith(".") for entry in entries):
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    if any(not entry.is_dir() for entry in entries):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    directories = entries
+    # A non-dot regular file cannot be a run in any disposition: runs live in
+    # directories, and atomic-open crash temps are dot-prefixed (refused
+    # above). Session tooling drops scratch files (CLAUDE.md stubs) into this
+    # root; they hold no journal and no scope, so they are not registry state.
+    directories = [entry for entry in entries if entry.is_dir()]
     states: dict[str, RunState] = {}
     for run_dir in sorted(directories, key=lambda path: _byte_key(path.name)):
         state = _scan_run(run_dir)
