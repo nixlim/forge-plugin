@@ -212,6 +212,12 @@ class RunCoordinationTests(unittest.TestCase):
         target = self.repo / ".codex-orchestrator/runs"
         target.mkdir(parents=True)
         for run_dir in source.iterdir():
+            # A LIVE open run (owner sidecar present — e.g. the run coordinating
+            # this very change) is out of scope here: copying it without the live
+            # registry correctly fails closed as an unregistered open-run scope
+            # (FR-014). This test targets the closed pre-D13 journals only.
+            if (run_dir / "owner").is_file():
+                continue
             if (run_dir / "journal.jsonl").is_file():
                 (target / run_dir.name).mkdir()
                 shutil.copy2(

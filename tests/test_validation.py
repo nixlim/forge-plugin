@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import copy
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from scripts.codex_orchestrator import journal
 from scripts.codex_orchestrator.journal import validate_run
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "codex_orch_tools.py"
+# forge: modified from upstream — pin declared pre-cutover journal compatibility
+PALIMPSEST_RUN = (
+    ROOT.parent
+    / "palimpsest"
+    / ".codex-orchestrator"
+    / "runs"
+    / "authoring-system"
+)
+PALIMPSEST_REVIEWED_PREFIX_LINES = 826
 
 
 def write_journal(run_dir: Path, records: list[dict[str, object]]) -> None:
@@ -62,6 +74,105 @@ class ValidationTests(unittest.TestCase):
         ]
         write_journal(run_dir, records)
         return run_dir, records
+
+    # forge: modified from upstream — construct and disable each compatibility leg in isolation
+    def legacy_declaration(
+        self, justification: str = "operator-approved migration"
+    ) -> dict[str, object]:
+        return {
+            "type": "decision",
+            "id": "journal-dialect-compat",
+            "resolution": f"legacy-dialect-compat: {justification}",
+        }
+
+    def make_legacy_run(
+        self, root: Path, *, declaration: dict[str, object] | None = None
+    ) -> tuple[Path, list[dict[str, object]]]:
+        run_dir, _ = self.make_run(root)
+        records: list[dict[str, object]] = [
+            {"type": "run_started"},
+            {"type": "task", "id": "task-01", "status": "complete"},
+            {"type": "task", "id": "task-02", "status": "complete"},
+            {"type": "observation", "detail": "legacy narrative"},
+            {
+                "type": "execution",
+                "task": "task-01",
+                "agent": "legacy-missing",
+                "execution": "execution-01",
+                "prompt": "(inline)",
+                "events": "",
+            },
+            {
+                "type": "execution",
+                "task": "task-01",
+                "agent": "codex-impl-01",
+                "execution": "execution-01",
+                "prompt": "codex-impl-01/execution-01/prompt.md",
+                "events": "codex-impl-01/execution-01/events.jsonl",
+                "handoff": "codex-impl-01/execution-01/handoff.md",
+            },
+            {
+                "type": "execution_result",
+                "task": "task-02",
+                "agent": "codex-impl-01",
+                "execution": "execution-01",
+                "status": "handoff-ready",
+            },
+            {
+                "type": "verification",
+                "id": "legacy-failed-cleared",
+                "criterion": "gate-1: exact legacy recheck",
+                "result": "failed",
+            },
+            {
+                "type": "verification",
+                "id": "legacy-pass",
+                "criterion": "gate-1: exact legacy recheck",
+                "result": "pass",
+                "evidence": "evidence/tests.txt",
+            },
+            {
+                "type": "verification",
+                "id": "legacy-failed-unrechecked",
+                "criterion": "gate-2: unrechecked legacy failure",
+                "result": "failed",
+            },
+            {"type": "verification", "id": "legacy-duplicate", "result": "passed"},
+            {"type": "verification", "id": "legacy-duplicate", "result": "passed"},
+        ]
+        if declaration is not None:
+            records.append(declaration)
+        write_journal(run_dir, records)
+        return run_dir, records
+
+    def run_validation_cli(self, run_dir: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "validate", "--gates", str(run_dir)],
+            check=False,
+            text=True,
+            capture_output=True,
+            cwd=ROOT,
+        )
+        return result, json.loads(result.stdout)
+
+    def assert_legacy_leg_is_load_bearing(self, leg: str, expected_issue: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, _ = self.make_legacy_run(
+                Path(tmp), declaration=self.legacy_declaration()
+            )
+            compatible = validate_run(run_dir, gates=True)
+            enabled = journal.LEGACY_COMPATIBILITY_LEGS
+            with mock.patch.object(
+                journal, "LEGACY_COMPATIBILITY_LEGS", enabled - {leg}
+            ):
+                payload = validate_run(run_dir, gates=True)
+
+        self.assertTrue(compatible["ok"], (leg, compatible["issues"]))
+        self.assertFalse(payload["ok"])
+        self.assertTrue(
+            any(expected_issue in issue for issue in payload["issues"]),
+            (leg, payload["issues"]),
+        )
 
     def test_sparse_open_run_is_ready_to_close_and_cli_exits_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -369,6 +480,713 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertTrue(any("evidence[0]" in issue for issue in payload["issues"]))
         self.assertTrue(any("evidence[1]" in issue for issue in payload["issues"]))
+
+    # forge: modified from upstream — enforce all ten warned compatibility contracts
+    def test_legacy_compatibility_normalizes_all_ten_legs_and_preserves_strict_parity(
+        self,
+    ) -> None:
+        expected_strict_issues = [
+            "line 4: unknown journal entry type: 'observation'",
+            "line 5: referenced prompt file does not exist: (inline)",
+            "line 5: events must name a file",
+            "line 7: execution_result status is not terminal: handoff-ready",
+            "line 9: verification result is not recognized: pass",
+            "line 9: evidence must be a list of file paths",
+            "line 12: duplicate verification id legacy-duplicate",
+            "execution legacy-missing/execution-01 has no terminal execution_result",
+            "line 7: execution_result task 'task-02' does not match execution task 'task-01'",
+            "failed gate verification 'legacy-failed-cleared' has no subsequent passing recheck",
+            "failed gate verification 'legacy-failed-unrechecked' has no subsequent passing recheck",
+        ]
+        warning_fragments = (
+            "legacy compatibility declaration active",
+            "observation entry",
+            "verification result 'pass'",
+            "string evidence",
+            "execution_result status 'handoff-ready'",
+            "execution_result task 'task-02'",
+            "missing prompt file",
+            "duplicate verification id legacy-duplicate",
+            "no terminal execution_result",
+            "empty events reference",
+            "failed gate verification 'legacy-failed-unrechecked'",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            strict_run, _ = self.make_legacy_run(root / "strict")
+            strict_payload = validate_run(strict_run, gates=True)
+            compat_run, _ = self.make_legacy_run(
+                root / "compat", declaration=self.legacy_declaration()
+            )
+            gated_payload = validate_run(compat_run, gates=True)
+            plain_payload = validate_run(compat_run)
+
+        self.assertEqual(strict_payload["issues"], expected_strict_issues)
+        self.assertEqual(strict_payload["warnings"], [])
+        self.assertFalse(strict_payload["ok"])
+        self.assertEqual(strict_payload["profile"], "gates")
+        self.assertEqual(
+            [item["id"] for item in strict_payload["non_passing_verifications"]],
+            ["legacy-failed-cleared", "legacy-failed-unrechecked"],
+        )
+        self.assertTrue(gated_payload["ok"], gated_payload["issues"])
+        self.assertEqual(gated_payload["issues"], [])
+        self.assertEqual(len(gated_payload["warnings"]), len(warning_fragments))
+        self.assertEqual(
+            gated_payload["warnings"][0],
+            "line 13: legacy compatibility declaration active: "
+            "operator-approved migration",
+        )
+        self.assertTrue(all(warning.startswith("line ") for warning in gated_payload["warnings"]))
+        for fragment in warning_fragments:
+            self.assertTrue(
+                any(fragment in warning for warning in gated_payload["warnings"]),
+                (fragment, gated_payload["warnings"]),
+            )
+        self.assertEqual(
+            [item["id"] for item in gated_payload["non_passing_verifications"]],
+            ["legacy-failed-cleared", "legacy-failed-unrechecked"],
+        )
+        self.assertTrue(plain_payload["ok"], plain_payload["issues"])
+        self.assertNotIn("profile", plain_payload)
+        self.assertEqual(len(plain_payload["warnings"]), len(warning_fragments) - 1)
+
+    def test_legacy_compatibility_supports_historical_pass_shapes_and_status_mappings(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pass_run, pass_records = self.make_run(root / "pass-shape")
+            pass_records[4].pop("result")
+            pass_records[4]["status"] = "pass"
+            pass_records.append(self.legacy_declaration())
+            write_journal(pass_run, pass_records)
+            status_pass_payload = validate_run(pass_run)
+
+            pass_records[4]["result"] = "malformed"
+            write_journal(pass_run, pass_records)
+            malformed_result_payload = validate_run(pass_run)
+
+            mapping_run, mapping_records = self.make_run(root / "status-mappings")
+            mapping_records = copy.deepcopy(mapping_records)
+            for index, status in enumerate(("handoff-ready", "pass", "block"), start=1):
+                agent = f"legacy-status-{index}"
+                execution = {
+                    **copy.deepcopy(mapping_records[2]),
+                    "agent": agent,
+                    "execution": f"execution-{index:02d}",
+                }
+                result = {
+                    "type": "execution_result",
+                    "task": "task-01",
+                    "agent": agent,
+                    "execution": f"execution-{index:02d}",
+                    "status": status,
+                }
+                mapping_records.extend((execution, result))
+            mapping_records.append(self.legacy_declaration())
+            write_journal(mapping_run, mapping_records)
+            mapping_payload = validate_run(mapping_run)
+
+        self.assertTrue(status_pass_payload["ok"], status_pass_payload["issues"])
+        self.assertTrue(
+            any("status 'pass' with no result" in warning for warning in status_pass_payload["warnings"])
+        )
+        self.assertFalse(malformed_result_payload["ok"])
+        self.assertTrue(
+            any("verification result is not recognized" in issue for issue in malformed_result_payload["issues"])
+        )
+        self.assertTrue(mapping_payload["ok"], mapping_payload["issues"])
+        for source, target in (
+            ("handoff-ready", "complete"),
+            ("pass", "complete"),
+            ("block", "blocked"),
+        ):
+            self.assertTrue(
+                any(
+                    f"status '{source}'" in warning and f"status '{target}'" in warning
+                    for warning in mapping_payload["warnings"]
+                ),
+                (source, target, mapping_payload["warnings"]),
+            )
+
+    def test_legacy_compatibility_cutover_keeps_every_leg_strict(self) -> None:
+        valid_paths = {
+            "prompt": "codex-impl-01/execution-01/prompt.md",
+            "events": "codex-impl-01/execution-01/events.jsonl",
+            "handoff": "codex-impl-01/execution-01/handoff.md",
+        }
+
+        def execution(agent: str, **overrides: object) -> dict[str, object]:
+            record: dict[str, object] = {
+                "type": "execution",
+                "task": "task-01",
+                "agent": agent,
+                "execution": "execution-01",
+                **valid_paths,
+            }
+            record.update(overrides)
+            return record
+
+        def result(agent: str, **overrides: object) -> dict[str, object]:
+            record: dict[str, object] = {
+                "type": "execution_result",
+                "task": "task-01",
+                "agent": agent,
+                "execution": "execution-01",
+                "status": "complete",
+            }
+            record.update(overrides)
+            return record
+
+        cases: dict[
+            str,
+            tuple[list[dict[str, object]], list[dict[str, object]], str, str],
+        ] = {
+            "observation": (
+                [],
+                [{"type": "observation"}],
+                "unknown journal entry type",
+                "observation entry",
+            ),
+            "verification pass": (
+                [],
+                [{"type": "verification", "id": "cutover-pass", "result": "pass"}],
+                "verification result is not recognized",
+                "verification result 'pass'",
+            ),
+            "string evidence": (
+                [],
+                [
+                    {
+                        "type": "verification",
+                        "id": "cutover-evidence",
+                        "result": "passed",
+                        "evidence": "evidence/tests.txt",
+                    }
+                ],
+                "evidence must be a list",
+                "string evidence",
+            ),
+            "execution status": (
+                [execution("cutover-status")],
+                [result("cutover-status", status="pass")],
+                "status is not terminal",
+                "execution_result status 'pass'",
+            ),
+            "task mismatch": (
+                [
+                    {"type": "task", "id": "task-02", "status": "complete"},
+                    execution("cutover-mismatch"),
+                ],
+                [result("cutover-mismatch", task="task-02")],
+                "does not match execution task",
+                "execution_result task 'task-02'",
+            ),
+            "missing execution file": (
+                [],
+                [
+                    execution("cutover-file", prompt="(inline)"),
+                    result("cutover-file"),
+                ],
+                "referenced prompt file does not exist",
+                "missing prompt file",
+            ),
+            "missing events file": (
+                [],
+                [
+                    execution("cutover-events-file", events="missing-events.jsonl"),
+                    result("cutover-events-file"),
+                ],
+                "referenced events file does not exist",
+                "missing events file",
+            ),
+            "duplicate verification": (
+                [],
+                [{"type": "verification", "id": "check-01", "result": "passed"}],
+                "duplicate verification id check-01",
+                "duplicate verification id check-01",
+            ),
+            "missing execution result": (
+                [],
+                [execution("cutover-missing-result")],
+                "no terminal execution_result",
+                "no terminal execution_result",
+            ),
+            "empty events": (
+                [],
+                [
+                    execution("cutover-events", events=""),
+                    result("cutover-events", status="failed"),
+                ],
+                "events must name a file",
+                "empty events reference",
+            ),
+            "failed gate recheck": (
+                [],
+                [
+                    {
+                        "type": "verification",
+                        "id": "cutover-failed-gate",
+                        "criterion": "gate-1: post-declaration failure",
+                        "result": "failed",
+                    }
+                ],
+                "failed gate verification 'cutover-failed-gate'",
+                "failed gate verification 'cutover-failed-gate'",
+            ),
+        }
+
+        for name, (
+            pre_declaration,
+            post_declaration,
+            expected_issue,
+            forbidden_warning,
+        ) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                run_dir, records = self.make_run(Path(tmp))
+                write_journal(
+                    run_dir,
+                    [
+                        *records,
+                        *copy.deepcopy(pre_declaration),
+                        self.legacy_declaration(),
+                        *copy.deepcopy(post_declaration),
+                    ],
+                )
+                payload = validate_run(run_dir, gates=True)
+
+                self.assertFalse(payload["ok"])
+                self.assertTrue(
+                    any(expected_issue in issue for issue in payload["issues"]),
+                    (name, payload["issues"]),
+                )
+                self.assertEqual(
+                    sum(
+                        "legacy compatibility declaration active" in warning
+                        for warning in payload["warnings"]
+                    ),
+                    1,
+                )
+                self.assertEqual(len(payload["warnings"]), 1)
+                self.assertFalse(
+                    any(forbidden_warning in warning for warning in payload["warnings"]),
+                    (name, payload["warnings"]),
+                )
+
+    def test_legacy_compatibility_keeps_structural_floors_hard(self) -> None:
+        close = {"type": "run_closed", "judgment": "passed"}
+        cases = {
+            "multiple close": ([close, close], "at most one run_closed"),
+            "close not last": (
+                [close, {"type": "decision", "id": "after-close"}],
+                "run_closed must be the final journal entry",
+            ),
+            "malformed citation correction": (
+                [
+                    {
+                        "type": "decision",
+                        "id": "bad-citation",
+                        "resolution": "citation-correction: malformed",
+                    }
+                ],
+                "invalid citation correction",
+            ),
+            "bad judgment": (
+                [{"type": "run_closed", "judgment": "maybe"}],
+                "run_closed judgment must be passed or blocked",
+            ),
+        }
+
+        for name, (trailing, expected_issue) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                run_dir, records = self.make_run(Path(tmp))
+                write_journal(run_dir, [*records, self.legacy_declaration(), *trailing])
+                payload = validate_run(run_dir)
+
+                self.assertFalse(payload["ok"])
+                self.assertTrue(
+                    any(expected_issue in issue for issue in payload["issues"]),
+                    (name, payload["issues"]),
+                )
+                self.assertEqual(
+                    sum(
+                        "legacy compatibility declaration active" in warning
+                        for warning in payload["warnings"]
+                    ),
+                    1,
+                )
+
+    def test_legacy_compatibility_requires_the_exact_declaration_grammar(self) -> None:
+        candidates = {
+            "wrong id": {
+                "type": "decision",
+                "id": "journal-dialect-compat-wrong",
+                "resolution": "legacy-dialect-compat: approved",
+            },
+            "wrong resolution prefix": {
+                "type": "decision",
+                "id": "journal-dialect-compat",
+                "resolution": "legacy-compat: approved",
+            },
+            "empty justification": self.legacy_declaration(""),
+            "whitespace justification": self.legacy_declaration("   "),
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            strict_run, _ = self.make_legacy_run(root / "strict")
+            strict_payload = validate_run(strict_run, gates=True)
+            for name, candidate in candidates.items():
+                with self.subTest(name=name):
+                    run_dir, _ = self.make_legacy_run(
+                        root / name.replace(" ", "-"), declaration=candidate
+                    )
+                    payload = validate_run(run_dir, gates=True)
+                    self.assertEqual(payload["issues"], strict_payload["issues"])
+                    self.assertFalse(
+                        any("legacy compatibility" in warning for warning in payload["warnings"])
+                    )
+
+    def test_legacy_compatibility_does_not_admit_unlisted_shapes(self) -> None:
+        cases = {
+            "empty string evidence": (4, "evidence", "", "evidence must be a list"),
+            "wrong events type": (2, "events", 42, "events must name a file"),
+            "empty prompt": (2, "prompt", "", "prompt must name a file"),
+            "unknown execution status": (3, "status", "ready", "status is not terminal"),
+        }
+        for name, (record_index, field, value, expected_issue) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                run_dir, records = self.make_run(Path(tmp))
+                records[record_index][field] = value
+                records.append(self.legacy_declaration())
+                write_journal(run_dir, records)
+                payload = validate_run(run_dir)
+                self.assertFalse(payload["ok"])
+                self.assertTrue(
+                    any(expected_issue in issue for issue in payload["issues"]),
+                    (name, payload["issues"]),
+                )
+                self.assertEqual(
+                    sum(
+                        "legacy compatibility declaration active" in warning
+                        for warning in payload["warnings"]
+                    ),
+                    1,
+                )
+                self.assertEqual(len(payload["warnings"]), 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, records = self.make_run(Path(tmp))
+            records[4]["evidence"] = "evidence/missing.txt"
+            records.append(self.legacy_declaration())
+            write_journal(run_dir, records)
+            missing_evidence = validate_run(run_dir)
+        self.assertFalse(missing_evidence["ok"])
+        self.assertEqual(
+            sum(
+                "legacy compatibility declaration active" in warning
+                for warning in missing_evidence["warnings"]
+            ),
+            1,
+        )
+        self.assertEqual(len(missing_evidence["warnings"]), 2)
+        self.assertTrue(
+            any("referenced evidence[0] file does not exist" in issue for issue in missing_evidence["issues"])
+        )
+
+    def test_legacy_task_mismatch_never_conceals_an_unknown_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, records = self.make_run(Path(tmp))
+            records[3]["task"] = "task-missing"
+            records.append(self.legacy_declaration())
+            write_journal(run_dir, records)
+            payload = validate_run(run_dir)
+
+        self.assertFalse(payload["ok"])
+        self.assertTrue(
+            any(
+                "execution_result references unknown task task-missing" in issue
+                for issue in payload["issues"]
+            )
+        )
+        self.assertTrue(
+            any("does not match execution task" in issue for issue in payload["issues"])
+        )
+        self.assertFalse(
+            any(
+                "interpreted execution_result task" in warning
+                for warning in payload["warnings"]
+            )
+        )
+
+    def test_legacy_declaration_does_not_weaken_raw_lifecycle_or_task_terminality(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lifecycle_run, lifecycle_records = self.make_run(root / "lifecycle")
+            write_journal(
+                lifecycle_run,
+                [
+                    {"type": "observation", "detail": "before start"},
+                    *lifecycle_records,
+                    self.legacy_declaration(),
+                ],
+            )
+            lifecycle_payload = validate_run(lifecycle_run)
+
+            task_run, task_records = self.make_run(root / "task")
+            task_records[1]["status"] = "active"
+            task_records.append(self.legacy_declaration())
+            write_journal(task_run, task_records)
+            task_payload = validate_run(task_run)
+
+        self.assertFalse(lifecycle_payload["ok"])
+        self.assertIn(
+            "run_started must be the first journal entry", lifecycle_payload["issues"]
+        )
+        self.assertTrue(
+            any(
+                "observation entry" in warning
+                for warning in lifecycle_payload["warnings"]
+            )
+        )
+        self.assertFalse(task_payload["ok"])
+        self.assertIn(
+            "task task-01 is not terminal; latest status is 'active'",
+            task_payload["issues"],
+        )
+
+    def test_legacy_observation_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing("observation", "unknown journal entry type")
+
+    def test_legacy_verification_pass_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing(
+            "verification-pass", "verification result is not recognized"
+        )
+
+    def test_legacy_string_evidence_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing("string-evidence", "evidence must be a list")
+
+    def test_legacy_execution_result_status_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing(
+            "execution-result-status", "status is not terminal"
+        )
+
+    def test_legacy_execution_task_mismatch_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing(
+            "execution-task-mismatch", "does not match execution task"
+        )
+
+    def test_legacy_missing_execution_file_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing(
+            "missing-execution-file", "referenced prompt file does not exist"
+        )
+
+    def test_legacy_missing_execution_file_leg_also_covers_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, records = self.make_run(Path(tmp))
+            records[2]["events"] = "missing-events.jsonl"
+            records.append(self.legacy_declaration())
+            write_journal(run_dir, records)
+            compatible = validate_run(run_dir)
+            enabled = journal.LEGACY_COMPATIBILITY_LEGS
+            with mock.patch.object(
+                journal,
+                "LEGACY_COMPATIBILITY_LEGS",
+                enabled - {"missing-execution-file"},
+            ):
+                disabled = validate_run(run_dir)
+
+        self.assertTrue(compatible["ok"], compatible["issues"])
+        self.assertTrue(
+            any("missing events file" in warning for warning in compatible["warnings"])
+        )
+        self.assertFalse(disabled["ok"])
+        self.assertTrue(
+            any(
+                "referenced events file does not exist" in issue
+                for issue in disabled["issues"]
+            )
+        )
+
+    def test_legacy_missing_execution_file_leg_keeps_existing_non_files_hard(
+        self,
+    ) -> None:
+        for field in ("prompt", "events"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                run_dir, records = self.make_run(Path(tmp))
+                existing_directory = run_dir / f"existing-{field}-directory"
+                existing_directory.mkdir()
+                records[2][field] = existing_directory.name
+                records.append(self.legacy_declaration())
+                write_journal(run_dir, records)
+                payload = validate_run(run_dir)
+
+                self.assertFalse(payload["ok"])
+                self.assertTrue(
+                    any(
+                        f"referenced {field} file does not exist" in issue
+                        for issue in payload["issues"]
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        f"missing {field} file" in warning
+                        for warning in payload["warnings"]
+                    )
+                )
+
+    def test_legacy_duplicate_verification_id_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing(
+            "duplicate-verification-id", "duplicate verification id"
+        )
+
+    def test_legacy_missing_execution_result_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing(
+            "missing-execution-result", "no terminal execution_result"
+        )
+
+    def test_legacy_empty_events_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing("empty-events", "events must name a file")
+
+    def test_legacy_failed_gate_recheck_leg_is_load_bearing(self) -> None:
+        self.assert_legacy_leg_is_load_bearing(
+            "failed-gate-recheck", "failed gate verification 'legacy-failed-unrechecked'"
+        )
+
+    @unittest.skipUnless(
+        (PALIMPSEST_RUN / "journal.jsonl").is_file(),
+        "real palimpsest authoring-system journal is unavailable",
+    )
+    def test_real_palimpsest_reviewed_prefix_accounts_for_all_legacy_issues(self) -> None:
+        expected_issue_counts = {
+            "observation": 59,
+            "verification-pass": 20,
+            "string-evidence": 17,
+            "execution-result-status": 10,
+            "execution-task-mismatch": 31,
+            "missing-execution-file": 8,
+            "duplicate-verification-id": 3,
+            "missing-execution-result": 5,
+            "empty-events": 2,
+            "failed-gate-recheck": 9,
+        }
+        expected_warning_counts = {
+            **expected_issue_counts,
+            "failed-gate-recheck": 7,
+        }
+        issue_fragments = {
+            "observation": ("unknown journal entry type: 'observation'",),
+            "verification-pass": ("verification result is not recognized",),
+            "string-evidence": ("evidence must be a list",),
+            "execution-result-status": ("status is not terminal",),
+            "execution-task-mismatch": ("does not match execution task",),
+            "missing-execution-file": (
+                "referenced prompt file does not exist",
+                "referenced events file does not exist",
+            ),
+            "duplicate-verification-id": ("duplicate verification id",),
+            "missing-execution-result": ("has no terminal execution_result",),
+            "empty-events": ("events must name a file",),
+            "failed-gate-recheck": ("failed gate verification",),
+        }
+        warning_fragments = {
+            "observation": ("observation entry",),
+            "verification-pass": ("verification result",),
+            "string-evidence": ("string evidence",),
+            "execution-result-status": ("execution_result status",),
+            "execution-task-mismatch": ("execution_result task",),
+            "missing-execution-file": ("missing prompt file", "missing events file"),
+            "duplicate-verification-id": ("duplicate verification id",),
+            "missing-execution-result": ("no terminal execution_result",),
+            "empty-events": ("empty events reference",),
+            "failed-gate-recheck": ("failed gate verification",),
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = (
+                Path(tmp)
+                / "repo"
+                / ".codex-orchestrator"
+                / "runs"
+                / "authoring-system"
+            )
+            run_dir.mkdir(parents=True)
+            for source in PALIMPSEST_RUN.iterdir():
+                if source.name == "journal.jsonl":
+                    continue
+                (run_dir / source.name).symlink_to(
+                    source, target_is_directory=source.is_dir()
+                )
+            copied_journal = run_dir / "journal.jsonl"
+            shutil.copy2(PALIMPSEST_RUN / "journal.jsonl", copied_journal)
+            reviewed_lines = copied_journal.read_bytes().splitlines(keepends=True)
+            self.assertGreaterEqual(len(reviewed_lines), PALIMPSEST_REVIEWED_PREFIX_LINES)
+            reviewed_tail = json.loads(
+                reviewed_lines[PALIMPSEST_REVIEWED_PREFIX_LINES - 1]
+            )
+            self.assertEqual(reviewed_tail.get("type"), "decision")
+            self.assertEqual(reviewed_tail.get("id"), "decision-41")
+            copied_journal.write_bytes(
+                b"".join(reviewed_lines[:PALIMPSEST_REVIEWED_PREFIX_LINES])
+            )
+
+            strict_result, strict_payload = self.run_validation_cli(run_dir)
+            with copied_journal.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(self.legacy_declaration()) + "\n")
+            compat_result, compat_payload = self.run_validation_cli(run_dir)
+
+        self.assertEqual(strict_result.returncode, 1, strict_result.stderr)
+        self.assertFalse(strict_payload["ok"])
+        self.assertEqual(len(strict_payload["issues"]), 164)
+        actual_issue_counts = {
+            leg: sum(
+                any(fragment in issue for fragment in fragments)
+                for issue in strict_payload["issues"]
+            )
+            for leg, fragments in issue_fragments.items()
+        }
+        self.assertEqual(actual_issue_counts, expected_issue_counts)
+        self.assertEqual(sum(actual_issue_counts.values()), len(strict_payload["issues"]))
+        self.assertEqual(
+            strict_payload["warnings"],
+            [
+                "execution claude-review-final-04/execution-17 handoff is missing or empty"
+            ],
+        )
+
+        self.assertEqual(compat_result.returncode, 0, compat_result.stderr)
+        self.assertTrue(compat_payload["ok"], compat_payload["issues"])
+        self.assertEqual(compat_payload["issues"], [])
+        self.assertEqual(compat_payload["profile"], "gates")
+        actual_warning_counts = {
+            leg: sum(
+                any(fragment in warning for fragment in fragments)
+                for warning in compat_payload["warnings"]
+            )
+            for leg, fragments in warning_fragments.items()
+        }
+        self.assertEqual(actual_warning_counts, expected_warning_counts)
+        self.assertEqual(
+            len(compat_payload["warnings"]),
+            len(strict_payload["warnings"]) + 1 + sum(expected_warning_counts.values()),
+        )
+        for warning in strict_payload["warnings"]:
+            self.assertIn(warning, compat_payload["warnings"])
+        self.assertEqual(
+            compat_payload["non_passing_verifications"],
+            strict_payload["non_passing_verifications"],
+        )
+        self.assertEqual(
+            sum(
+                "legacy compatibility declaration active" in warning
+                for warning in compat_payload["warnings"]
+            ),
+            1,
+        )
 
     def test_sparse_decisions_and_optional_metadata_are_not_schema_checked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

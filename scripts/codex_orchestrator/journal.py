@@ -40,6 +40,29 @@ VERIFICATION_RESULTS = {"passed", "failed", "inconclusive", "skipped"}
 GATE_VERIFICATION_PREFIXES = ("gate-1: ", "gate-2: ", "gate-3: ")
 GATE_3_CRITERION = "gate-3: review-final verdict"
 
+# forge: modified from upstream — support declared pre-cutover journal dialect compatibility
+LEGACY_COMPATIBILITY_DECLARATION_ID = "journal-dialect-compat"
+LEGACY_COMPATIBILITY_RESOLUTION_PREFIX = "legacy-dialect-compat: "
+LEGACY_COMPATIBILITY_LEGS = frozenset(
+    {
+        "observation",
+        "verification-pass",
+        "string-evidence",
+        "execution-result-status",
+        "execution-task-mismatch",
+        "missing-execution-file",
+        "duplicate-verification-id",
+        "missing-execution-result",
+        "empty-events",
+        "failed-gate-recheck",
+    }
+)
+LEGACY_EXECUTION_STATUS_MAP = {
+    "handoff-ready": "complete",
+    "pass": "complete",
+    "block": "blocked",
+}
+
 
 # forge: modified from upstream — enforce D13 journal ownership and run-scope admission
 REGISTRY_UNAVAILABLE = "forge: new run refused — run registry unavailable"
@@ -1030,21 +1053,103 @@ def declared_file_exists(run_dir: Path, value: object, *, nonempty: bool = False
         return False
 
 
+# forge: modified from upstream — apply only explicitly declared pre-cutover compatibility legs
+def _legacy_compatibility_declaration(
+    records: list[dict[str, object]],
+) -> dict[str, object] | None:
+    for record in records:
+        resolution = record.get("resolution")
+        if (
+            record.get("type") == "decision"
+            and record.get("id") == LEGACY_COMPATIBILITY_DECLARATION_ID
+            and isinstance(resolution, str)
+            and resolution.startswith(LEGACY_COMPATIBILITY_RESOLUTION_PREFIX)
+            and "\n" not in resolution
+            and "\r" not in resolution
+            and resolution[len(LEGACY_COMPATIBILITY_RESOLUTION_PREFIX) :].strip()
+        ):
+            return record
+    return None
+
+
+def _legacy_allows(
+    leg: str, declaration_line: int | None, *records: dict[str, object]
+) -> bool:
+    return (
+        leg in LEGACY_COMPATIBILITY_LEGS
+        and declaration_line is not None
+        and bool(records)
+        and all(
+            isinstance(record.get("_line"), int)
+            and int(record["_line"]) < declaration_line
+            for record in records
+        )
+    )
+
+
+def _legacy_warning(record: dict[str, object], detail: str) -> str:
+    return f"{record_line(record)}: legacy compatibility {detail}"
+
+
+def _declared_path_is_missing(run_dir: Path, value: str) -> bool:
+    try:
+        return not resolve_run_path(run_dir, value).exists()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def check_declared_file(
-    run_dir: Path, record: dict[str, object], field: str, issues: list[str]
+    run_dir: Path,
+    record: dict[str, object],
+    field: str,
+    issues: list[str],
+    warnings: list[str],
+    declaration_line: int | None,
 ) -> None:
     if field not in record:
         return
     value = record.get(field)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str):
         issues.append(f"{record_line(record)}: {field} must name a file")
         return
+    if not value:
+        if field == "events" and _legacy_allows(
+            "empty-events", declaration_line, record
+        ):
+            warnings.append(
+                _legacy_warning(
+                    record,
+                    "tolerated empty events reference; interpreted as an unavailable "
+                    "legacy event stream",
+                )
+            )
+        else:
+            issues.append(f"{record_line(record)}: {field} must name a file")
+        return
     if not declared_file_exists(run_dir, value):
-        issues.append(f"{record_line(record)}: referenced {field} file does not exist: {value}")
+        if _legacy_allows(
+            "missing-execution-file", declaration_line, record
+        ) and _declared_path_is_missing(run_dir, value):
+            warnings.append(
+                _legacy_warning(
+                    record,
+                    f"tolerated missing {field} file {value!r}; interpreted as "
+                    "unavailable legacy execution metadata",
+                )
+            )
+        else:
+            issues.append(
+                f"{record_line(record)}: referenced {field} file does not exist: {value}"
+            )
 
 
 # forge: modified from upstream — add opt-in checks over the existing journal schema
-def check_gate_profile(records: list[dict[str, object]], issues: list[str]) -> None:
+def check_gate_profile(
+    records: list[dict[str, object]],
+    issues: list[str],
+    warnings: list[str],
+    declaration_line: int | None,
+) -> None:
     verifications = [record for record in records if record.get("type") == "verification"]
     passed_close = any(
         record.get("type") == "run_closed" and record.get("judgment") == "passed"
@@ -1120,10 +1225,21 @@ def check_gate_profile(records: list[dict[str, object]], issues: list[str]) -> N
             for later in verifications[index + 1 :]
         )
         if not has_passing_recheck:
-            issues.append(
+            message = (
                 f"failed gate verification '{verification.get('id')}' "
                 "has no subsequent passing recheck"
             )
+            if _legacy_allows(
+                "failed-gate-recheck", declaration_line, verification
+            ):
+                warnings.append(
+                    _legacy_warning(
+                        verification,
+                        f"tolerated {message}; retained as a non-passing verification",
+                    )
+                )
+            else:
+                issues.append(message)
 
 
 # forge: modified from upstream — accept the opt-in Level B gate profile
@@ -1145,20 +1261,113 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
         return payload
     records, issues = read_journal(run_dir / "journal.jsonl")
 
-    known_records: list[dict[str, object]] = []
-    for index, record in enumerate(records):
-        kind = record.get("type")
-        if not isinstance(kind, str) or kind not in JOURNAL_ENTRY_TYPES:
-            issues.append(f"{record_line(record)}: unknown journal entry type: {kind!r}")
-        else:
-            known_records.append(record)
-            try:
-                _validate_citation_targets(record, records[:index])
-            except CoordinationRefusal as exc:
-                issues.append(f"{record_line(record)}: {exc}")
+    declaration = _legacy_compatibility_declaration(records)
+    declaration_line_value = declaration.get("_line") if declaration is not None else None
+    declaration_line = (
+        int(declaration_line_value) if isinstance(declaration_line_value, int) else None
+    )
+    if declaration is not None:
+        resolution = str(declaration["resolution"])
+        justification = resolution[len(LEGACY_COMPATIBILITY_RESOLUTION_PREFIX) :]
+        warnings.append(
+            _legacy_warning(
+                declaration,
+                f"declaration active: {justification}",
+            )
+        )
 
-    starts = [record for record in known_records if record.get("type") == "run_started"]
-    closures = [record for record in known_records if record.get("type") == "run_closed"]
+    raw_known_records: list[dict[str, object]] = []
+    known_records: list[dict[str, object]] = []
+    for index, raw_record in enumerate(records):
+        kind = raw_record.get("type")
+        if not isinstance(kind, str) or kind not in JOURNAL_ENTRY_TYPES:
+            if kind == "observation" and _legacy_allows(
+                "observation", declaration_line, raw_record
+            ):
+                warnings.append(
+                    _legacy_warning(
+                        raw_record,
+                        "tolerated observation entry; excluded from semantic validation",
+                    )
+                )
+            else:
+                issues.append(
+                    f"{record_line(raw_record)}: unknown journal entry type: {kind!r}"
+                )
+        else:
+            raw_known_records.append(raw_record)
+            try:
+                _validate_citation_targets(raw_record, records[:index])
+            except CoordinationRefusal as exc:
+                issues.append(f"{record_line(raw_record)}: {exc}")
+
+            record = dict(raw_record)
+            if kind == "execution_result":
+                status = record.get("status")
+                mapped_status = (
+                    LEGACY_EXECUTION_STATUS_MAP.get(status)
+                    if isinstance(status, str)
+                    else None
+                )
+                if mapped_status is not None and _legacy_allows(
+                    "execution-result-status", declaration_line, raw_record
+                ):
+                    record["status"] = mapped_status
+                    warnings.append(
+                        _legacy_warning(
+                            raw_record,
+                            f"interpreted execution_result status {status!r} as status "
+                            f"{mapped_status!r}",
+                        )
+                    )
+            elif kind == "verification":
+                result = record.get("result")
+                if result == "pass" and _legacy_allows(
+                    "verification-pass", declaration_line, raw_record
+                ):
+                    record["result"] = "passed"
+                    warnings.append(
+                        _legacy_warning(
+                            raw_record,
+                            "interpreted verification result 'pass' as 'passed'",
+                        )
+                    )
+                elif (
+                    "result" not in record
+                    and record.get("status") == "pass"
+                    and _legacy_allows(
+                        "verification-pass", declaration_line, raw_record
+                    )
+                ):
+                    record["result"] = "passed"
+                    warnings.append(
+                        _legacy_warning(
+                            raw_record,
+                            "interpreted verification result from status 'pass' with no "
+                            "result as 'passed'",
+                        )
+                    )
+                evidence = record.get("evidence")
+                if (
+                    isinstance(evidence, str)
+                    and bool(evidence)
+                    and _legacy_allows("string-evidence", declaration_line, raw_record)
+                ):
+                    record["evidence"] = [evidence]
+                    warnings.append(
+                        _legacy_warning(
+                            raw_record,
+                            f"interpreted string evidence {evidence!r} as a singleton list",
+                        )
+                    )
+            known_records.append(record)
+
+    starts = [
+        record for record in raw_known_records if record.get("type") == "run_started"
+    ]
+    closures = [
+        record for record in raw_known_records if record.get("type") == "run_closed"
+    ]
     if len(starts) != 1:
         issues.append(f"journal must contain exactly one run_started entry; found {len(starts)}")
     elif records and records[0] is not starts[0]:
@@ -1176,6 +1385,22 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
     executions: dict[tuple[str, str], dict[str, object]] = {}
     execution_results: dict[tuple[str, str], dict[str, object]] = {}
     seen_ids: dict[str, set[str]] = {"verification": set(), "decision": set()}
+    verification_occurrences: dict[str, list[dict[str, object]]] = {}
+    for record in known_records:
+        if record.get("type") != "verification":
+            continue
+        record_id = record.get("id")
+        if isinstance(record_id, str) and record_id:
+            verification_occurrences.setdefault(record_id, []).append(record)
+    compatible_duplicate_verifications = {
+        record_id
+        for record_id, occurrences in verification_occurrences.items()
+        if len(occurrences) > 1
+        and _legacy_allows(
+            "duplicate-verification-id", declaration_line, *occurrences
+        )
+    }
+    warned_duplicate_verifications: set[str] = set()
 
     for record in known_records:
         kind = record.get("type")
@@ -1183,7 +1408,27 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
             record_id = record.get("id")
             if isinstance(record_id, str) and record_id:
                 if record_id in seen_ids[kind]:
-                    issues.append(f"{record_line(record)}: duplicate {kind} id {record_id}")
+                    if (
+                        kind == "verification"
+                        and record_id in compatible_duplicate_verifications
+                    ):
+                        if record_id not in warned_duplicate_verifications:
+                            occurrence_lines = ", ".join(
+                                str(occurrence["_line"])
+                                for occurrence in verification_occurrences[record_id]
+                            )
+                            warnings.append(
+                                _legacy_warning(
+                                    record,
+                                    f"tolerated duplicate verification id {record_id}; "
+                                    f"occurrences at lines {occurrence_lines}",
+                                )
+                            )
+                            warned_duplicate_verifications.add(record_id)
+                    else:
+                        issues.append(
+                            f"{record_line(record)}: duplicate {kind} id {record_id}"
+                        )
                 seen_ids[kind].add(record_id)
         if kind == "task":
             task_id = record.get("id")
@@ -1201,8 +1446,12 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
                 )
             else:
                 executions[key] = record
-            check_declared_file(run_dir, record, "prompt", issues)
-            check_declared_file(run_dir, record, "events", issues)
+            check_declared_file(
+                run_dir, record, "prompt", issues, warnings, declaration_line
+            )
+            check_declared_file(
+                run_dir, record, "events", issues, warnings, declaration_line
+            )
         elif kind == "execution_result":
             status = record.get("status")
             if not isinstance(status, str) or status not in TERMINAL_EXECUTION_STATUSES:
@@ -1257,6 +1506,31 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
                             f"file does not exist: {value}"
                         )
 
+    for key, execution in executions.items():
+        result = execution_results.get(key)
+        if result is None:
+            continue
+        task_id = execution.get("task")
+        result_task = result.get("task")
+        if (
+            isinstance(task_id, str)
+            and isinstance(result_task, str)
+            and result_task != task_id
+            and task_id in tasks
+            and result_task in tasks
+            and _legacy_allows(
+                "execution-task-mismatch", declaration_line, execution, result
+            )
+        ):
+            result["task"] = task_id
+            warnings.append(
+                _legacy_warning(
+                    result,
+                    f"interpreted execution_result task {result_task!r} as execution "
+                    f"task {task_id!r}",
+                )
+            )
+
     for task_id, task in tasks.items():
         status = task.get("status")
         if not isinstance(status, str) or status not in TERMINAL_TASK_STATUSES:
@@ -1274,7 +1548,19 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
     for key, execution in executions.items():
         result = execution_results.get(key)
         if result is None:
-            issues.append(f"execution {display_execution(key)} has no terminal execution_result")
+            message = f"execution {display_execution(key)} has no terminal execution_result"
+            if _legacy_allows(
+                "missing-execution-result", declaration_line, execution
+            ):
+                warnings.append(
+                    _legacy_warning(
+                        execution,
+                        f"tolerated {message}; interpreted as an unterminated historical "
+                        "execution",
+                    )
+                )
+            else:
+                issues.append(message)
             continue
         task_id = execution.get("task")
         result_task = result.get("task")
@@ -1307,7 +1593,7 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
 
     # forge: modified from upstream — layer gate issues after all baseline checks
     if gates:
-        check_gate_profile(known_records, issues)
+        check_gate_profile(known_records, issues, warnings, declaration_line)
 
     payload = {
         "ok": not issues,
