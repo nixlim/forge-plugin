@@ -775,6 +775,152 @@ class ValidationTests(unittest.TestCase):
                     (name, payload["warnings"]),
                 )
 
+    def gate_passing_verifications(self) -> list[dict[str, object]]:
+        return [
+            {
+                "type": "verification",
+                "id": "gate1-pass",
+                "criterion": "gate-1: full suite",
+                "result": "passed",
+            },
+            {
+                "type": "verification",
+                "id": "gate2-pass",
+                "criterion": "gate-2: stack validations",
+                "result": "passed",
+            },
+            {
+                "type": "verification",
+                "id": "gate3-pass",
+                "criterion": journal.GATE_3_CRITERION,
+                "result": "passed",
+            },
+        ]
+
+    def assert_all_gates_vetoed(self, payload: dict[str, object]) -> None:
+        self.assertFalse(payload["ok"])
+        for gate_name in ("gate-1", "gate-2", journal.GATE_3_CRITERION):
+            self.assertIn(
+                "run closed as passed without a passing "
+                f"'{gate_name}' verification after the last mutating execution",
+                payload["issues"],
+            )
+
+    def test_legacy_unterminated_mutations_do_not_veto_gates_after_declaration(
+        self,
+    ) -> None:
+        # The palimpsest authoring-system close shape: pre-declaration mutating
+        # executions either never received a terminal execution_result or were
+        # terminated by a legacy status, while the passing gate verifications
+        # sit after the last real terminal result. The missing-execution-result
+        # and execution-result-status legs already tolerate both records in the
+        # baseline checks, so the gate profile's unterminated-mutation veto and
+        # its last-result line must honor the same tolerance.
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, _ = self.make_run(Path(tmp))
+            handoff = run_dir / "codex-impl-44" / "execution-01" / "handoff.md"
+            handoff.parent.mkdir(parents=True)
+            handoff.write_text("delivered\n", encoding="utf-8")
+            write_journal(
+                run_dir,
+                [
+                    {"type": "run_started"},
+                    {"type": "task", "id": "task-01", "status": "complete"},
+                    {
+                        "type": "execution",
+                        "task": "task-01",
+                        "agent": "codex-impl-09",
+                        "execution": "execution-01",
+                        "prompt": "(inline)",
+                        "events": "",
+                    },
+                    {
+                        "type": "execution",
+                        "task": "task-01",
+                        "agent": "codex-impl-44",
+                        "execution": "execution-01",
+                        "prompt": "(inline)",
+                        "events": "",
+                    },
+                    {
+                        "type": "execution_result",
+                        "task": "task-01",
+                        "agent": "codex-impl-44",
+                        "execution": "execution-01",
+                        "status": "handoff-ready",
+                        "handoff": "codex-impl-44/execution-01/handoff.md",
+                    },
+                    *self.gate_passing_verifications(),
+                    self.legacy_declaration(),
+                    {"type": "run_closed", "judgment": "passed"},
+                ],
+            )
+            result, payload = self.run_validation_cli(run_dir)
+            self.assertEqual(result.returncode, 0, payload["issues"])
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["issues"], [])
+
+    def test_legacy_status_mapped_result_still_anchors_gate_ordering(self) -> None:
+        # A pre-declaration execution_result with a legacy terminal status must
+        # count as the last mutating result for gate ordering: gates recorded
+        # BEFORE it cannot satisfy the close requirement, or the tolerance
+        # would quietly weaken the gates-after-mutation rule.
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, _ = self.make_run(Path(tmp))
+            write_journal(
+                run_dir,
+                [
+                    {"type": "run_started"},
+                    {"type": "task", "id": "task-01", "status": "complete"},
+                    {
+                        "type": "execution",
+                        "task": "task-01",
+                        "agent": "codex-impl-44",
+                        "execution": "execution-01",
+                        "prompt": "(inline)",
+                        "events": "",
+                    },
+                    *self.gate_passing_verifications(),
+                    {
+                        "type": "execution_result",
+                        "task": "task-01",
+                        "agent": "codex-impl-44",
+                        "execution": "execution-01",
+                        "status": "handoff-ready",
+                    },
+                    self.legacy_declaration(),
+                    {"type": "run_closed", "judgment": "passed"},
+                ],
+            )
+            _, payload = self.run_validation_cli(run_dir)
+            self.assert_all_gates_vetoed(payload)
+
+    def test_post_declaration_unterminated_mutation_still_vetoes_gates(self) -> None:
+        # Cutover: an unterminated mutating execution recorded at or after the
+        # declaration gets no tolerance, so it keeps vetoing every gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, _ = self.make_run(Path(tmp))
+            write_journal(
+                run_dir,
+                [
+                    {"type": "run_started"},
+                    {"type": "task", "id": "task-01", "status": "complete"},
+                    self.legacy_declaration(),
+                    {
+                        "type": "execution",
+                        "task": "task-01",
+                        "agent": "codex-impl-50",
+                        "execution": "execution-01",
+                        "prompt": "(inline)",
+                        "events": "",
+                    },
+                    *self.gate_passing_verifications(),
+                    {"type": "run_closed", "judgment": "passed"},
+                ],
+            )
+            _, payload = self.run_validation_cli(run_dir)
+            self.assert_all_gates_vetoed(payload)
+
     def test_legacy_compatibility_keeps_structural_floors_hard(self) -> None:
         close = {"type": "run_closed", "judgment": "passed"}
         cases = {

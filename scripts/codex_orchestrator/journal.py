@@ -1234,6 +1234,10 @@ def check_gate_profile(
             for record in mutating_executions
             if (key := execution_key(record)) is not None
         }
+        # These are the semantic records: the baseline checks have already
+        # normalized a tolerated pre-declaration legacy status to its terminal
+        # mapping, so a mapped result both counts as terminal and anchors the
+        # last-result line here without any further tolerance.
         terminal_results = [
             record
             for record in records
@@ -1242,8 +1246,16 @@ def check_gate_profile(
             and execution_key(record) in mutating_keys
         ]
         terminal_result_keys = {execution_key(record) for record in terminal_results}
+        # The baseline checks already tolerate a pre-declaration execution
+        # with no terminal result (missing-execution-result leg) and emit its
+        # warning there; the veto honors the same tolerance, or a legacy
+        # journal whose history left executions unterminated could never
+        # close with passing gates.
         has_unterminated_mutation = any(
             execution_key(record) not in terminal_result_keys
+            and not _legacy_allows(
+                "missing-execution-result", declaration_line, record
+            )
             for record in mutating_executions
         )
         terminal_result_lines = [
