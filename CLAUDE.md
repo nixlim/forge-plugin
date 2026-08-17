@@ -47,3 +47,10 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## Close Protocol Precedence
+
+The Beads close protocol above (including its mandatory push) is satisfied only through the Forge
+commit and merge gate chains: when the two conflict, the Forge chain governs, and staging,
+committing, and pushing happen only after every required Forge gate returns PASS. The Beads push
+mandate never authorizes bypassing, weakening, or skipping a Forge gate.

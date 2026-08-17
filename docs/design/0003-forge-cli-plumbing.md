@@ -1,10 +1,26 @@
 # forge-plugin — Forge CLI Plumbing (Design Sketch)
 
-**Status:** draft sketch, revision 4, 2026-08-16 (Igor + Claude). This document is a design
+**Status:** draft sketch, revision 5, 2026-08-16 (Igor + Claude). This document is a design
 proposal, not spec authority. It sketches a `forge` CLI that moves gate-chain sequencing,
 evidence capture, and authorization out of skill prose and into a persisted, testable state
 machine. Nothing in this document changes current behavior; adoption requires its own spec
 change through the control-class gate chain.
+
+**Revision 5** adds the out-of-band coordination decisions D33–D34. Provenance is internal,
+not an external review: a run-journal follow-up note (2026-08-16) observed that "this is the
+second time another session's activity has invalidated an in-flight gate chain in this shared
+tree — the registry protects run scopes from overlap, but the commit chain's staged-index
+state has no such protection," and the same day this repo's own docs commit chain was nearly
+contaminated by a stray pre-staged `docs/specs/**` path left by an earlier session, caught
+only by manual staged-set verification. D33 protects the chain from out-of-band *index*
+writers (dirty-index refusal at `start`, hook exclusion of foreign index writes,
+`GIT_INDEX_FILE` promoted to a named later phase). D34 makes out-of-band *HEAD movement* —
+another agent committing in the shared checkout — a diagnosed, cheaply recoverable event
+(`head_moved` detection, the `commit rebase` verb with a graded evidence-disposition rule
+mirroring FR-063, head-at-verification visibility at finalize) rather than a mystery
+hash-mismatch restart. Neither serializes chains behind a lock: FR-190 keeps the review loop
+outside the commit lock deliberately, and content addressing remains the coordination
+mechanism.
 
 **Revision 4** incorporates the dispositions of a fourth external review — of revision 3 —
 recorded verbatim in the research record (§11–§14, decisions D23–D32). The verdict there was
@@ -113,8 +129,11 @@ forge status
 
 forge commit start --paths <path>... [--declare-tier <tier>]
     Open a commit chain. Verifies: no other live commit chain exists for this
-    worktree (the git index is the mutex — see *Concurrency*); working tree
-    paths exist; policy is readable from committed HEAD. The
+    worktree (the git index is the mutex — see *Concurrency*); the index is
+    clean before the CLI stages — pre-existing staged content is refused with
+    the offending paths named and the remediation printed, because it belongs
+    to no live chain and would silently ride into the candidate (D33); working
+    tree paths exist; policy is readable from committed HEAD. The
     CLI performs `git add -- <paths>` itself, computes the candidate identity
     from the exact staged bytes, and runs classification automatically. Declared
     tier is recorded but can only be promoted by later evidence, never demoted
@@ -126,6 +145,20 @@ forge commit restage --paths <path>...
     bound to the old hash — including classification, which reruns. Any index
     change made outside the CLI is detected by re-hash at the next command and
     has the same effect, plus a journaled anomaly note.
+
+forge commit rebase
+    Recovery verb for out-of-band HEAD movement (D34) — another agent's commit
+    landing in the shared checkout while this chain is live. Re-pins
+    `repo_head`; checks policy continuity by digest (byte-identical committed
+    policy at the new HEAD keeps policy-derived records; changed policy bytes
+    end the chain — restart); restages the recorded path set and recomputes
+    the candidate. Evidence disposition is graded, mirroring FR-063: diff-scoped
+    records (secret scan, review verdict — candidate-bound per DM-006 doctrine)
+    survive iff the recomputed candidate hash is unchanged; tree-dependent
+    records (gate runs, stack validations — they executed against a tree that
+    no longer exists) are always dead and re-run. Converts "another agent
+    committed, start over" into "re-run the gates, keep the review" when the
+    out-of-band change is disjoint.
 
 forge commit abort [--reason <text>]
     Close the chain without committing. Journals the abort. Releases locks.
@@ -389,6 +422,8 @@ Transition table (illustrative here; the spec revision carries the normative ver
 | `committing` | crash recovery (next CLI invocation; `status` diagnoses the window) | `closed` or `authorized` | per *Finalize Protocol*; every other verb refuses |
 | any | `abort` | `aborted` | journaled |
 | any except `closed` | out-of-band index change detected | `classifying` | all evidence dead; anomaly journaled |
+| any except `closed`, `committing` | out-of-band HEAD movement detected | unchanged (flagged) | `head_moved` event journaled with old→new SHAs and an explicit "out-of-band commit, not chain corruption" diagnostic; every state-advancing verb refuses until `commit rebase` or `abort` (D34) |
+| flagged `head_moved` | `commit rebase` | `classifying` or `verifying` | policy continuity by digest (changed policy ends the chain); candidate recomputed; graded evidence disposition per the *Concurrency* rules |
 | any | inactivity expiry | dead in place | only `status`/`abort` may touch it |
 
 Required steps per tier. The row structure of this table is normative — it restates FR-050
@@ -424,11 +459,15 @@ Invalidation rules, stated once and enforced everywhere:
   edited is a negligence trap. Remediation is restage, or an operator-recorded index-drift
   skip (`forge commit skip --index-drift` — D25); overriding a negligence guard is the
   definitional operator-reserved act.
+- Out-of-band HEAD movement is detected at every command (`repo_head` comparison) and is
+  never surfaced as a bare hash mismatch: the diagnostic names the old and new SHAs and the
+  recovery verb. Evidence disposition after `commit rebase` is graded: diff-scoped records
+  survive an unchanged recomputed candidate; tree-dependent records always re-run (D34).
 - No skip covers review for control-class changes; no skip covers approval, ever.
 - Tier is promote-only end to end: declared, computed at start, recomputed at gate time and
   at fast finalize — the effective tier is the maximum ever observed.
 
-## Concurrency (D15)
+## Concurrency (D15, D33, D34)
 
 The git index is the mutex, not the path set. Git has one index per worktree; two live
 commit chains in the same worktree would share it — chain B's `git add` leaves chain A's
@@ -442,8 +481,50 @@ one it does.
 - **Cross-worktree concurrency is unchanged:** FR-190's content-addressed model — each
   chain hashes `git diff --cached` in its own Git context, and authorization is bound to
   the candidate hash, so chains in different worktrees cannot authorize each other's diffs.
-- **`GIT_INDEX_FILE` per chain** would honestly permit same-worktree multi-chain and is
-  recorded as a future option only; it adds a failure surface this design does not need.
+- **`GIT_INDEX_FILE` per chain** is promoted from "future option" to a named later phase
+  (D33, layer 3): a chain that stages into its own private index file owns its candidate
+  state *by construction* — no other session can touch it, no detection is needed, and the
+  one-chain-per-worktree restriction could eventually relax. The costs are real (staging,
+  hashing, drift checks, and the inner `git commit` must all consistently use the private
+  index, and the hook's staged-hash verification must read the same one), so it lands only
+  after dogfood evidence, never in the first slice.
+
+### Out-of-band index writers (D33)
+
+The rules above guard chain-vs-chain. The observed incident class is chain-vs-*non-chain*:
+index state written by something that is not a live chain — a dead session's staged residue,
+or a concurrent session's `git add`. The chain borrows shared mutable state it does not own;
+detection (re-hash at every command) converts corruption into a visible restart, which still
+burns the gate evidence. Three layers, in increasing strength:
+
+1. **Dirty-index refusal at `commit start`** (the dead-residue case, and the one that
+   actually occurred): refuse to stage over pre-existing staged content, naming the paths.
+2. **Hook-level index write exclusion** (the live-concurrency case): while a live chain
+   exists for a worktree, the PreToolUse hook denies index-mutating git verbs (`add`,
+   `restore --staged`, `reset`, `rm --cached`, `stash`) from any session that does not own
+   the chain — ownership is the session identity recorded in the chain file at `start`.
+   Same layer and threat model as every other hook control: stops accident and negligence,
+   not a hostile process; Codex implementer worktrees have their own indexes (FR-031) and
+   are untouched. Honest limit (principle 7): only sessions running under the hook are
+   bound — a human terminal still writes the shared index, and detection remains the
+   backstop for that.
+3. **`GIT_INDEX_FILE` per chain**, above — removes the sharing instead of guarding it.
+
+### Out-of-band HEAD movement (D34)
+
+The sibling failure mode: another agent *commits* in the shared checkout while a chain is
+live. HEAD movement is weather, not sabotage — DVRR's founding rule puts concurrent writers
+in worktrees, so a second committer in the main checkout is architecturally out-of-band, and
+the CLI's job is detect → diagnose → cheap recovery, not prevention it cannot deliver.
+What must not happen: serializing whole chains behind a repo lock. FR-190 keeps the review
+loop outside the commit lock deliberately; a chain spans twenty-plus minutes and blocking
+every other agent's commits for its duration trades a restart cost for a fleet-wide stall.
+Content addressing is the coordination mechanism — DM-006 markers pin the staged-diff hash,
+not HEAD, so current law already tolerates concurrent commits that leave the candidate bytes
+unchanged, and the CLI must not be stricter than that law. The design maximizes what is
+content-addressed (policy by digest, review by candidate hash) and makes the rest
+re-runnable with one verb (`commit rebase`, above) and an honest price tag: gates re-run,
+review survives an unchanged candidate.
 
 ## Chain-State Schema
 
@@ -558,6 +639,12 @@ Notes:
   The honest claim — and the actual win over today — is *"the CLI observed both runs."*
   A fingerprint mismatch between the two required gate-1 runs voids the pair: "twice
   consecutively" means twice in the same observed context (D31).
+- **HEAD visibility (D34):** every evidence record carries the HEAD observed when it was
+  written (already inside `env_fingerprint`; additionally recorded as a plain field), and
+  `commit_result` records head-at-commit. The authorization TTL is the only bound on how far
+  the base may drift between verification and commit — DM-006 parity forbids tightening
+  that — but the archive must show the drift so a later reader can see which base each gate
+  ran against.
 - **Crash safety:** commands write the event first, then the materialized state; on startup
   any command that finds a divergence replays events. Irresolvable divergence is an exit-2
   frozen-chain condition per the output contract. This rule is sufficient only for pure
@@ -613,7 +700,8 @@ Consequences, owned explicitly:
   sees. Every check FR-090 performs today at the last line of defense — halt, staged-bytes
   identity, authorization validation — therefore moves *into* the CLI's finalize paths. The
   hook's job shrinks to: deny raw git history-mutating verbs, deny the model-issued
-  operator verbs (approve, skip), allow the finalize argv, and keep the halt check.
+  operator verbs (approve, skip), deny foreign index writes while a live chain exists
+  (D33), allow the finalize argv, and keep the halt check.
 - **The CLI inherits the hook's status as last line of defense.** Its internal finalize
   checks carry the same severity as the hook parser does today: each is independently
   disableable in code with a focused test that fails when it is disabled, and its exact
@@ -873,6 +961,11 @@ after migration:
   (FR-152), including the invariant and assertion-sensor rows (FR-144/FR-147);
 - `forge push` discipline: halt, rebase lock, fast-forward only — and raw-push denial once
   phase 4 lands;
+- dirty-index refusal at `commit start` (pre-staged residue named, never absorbed); foreign
+  index-write denial while a chain is live (D33);
+- `head_moved` detection at every verb with the old→new diagnostic; `commit rebase` graded
+  disposition — an unchanged recomputed candidate keeps the review verdict, gates always
+  re-run, changed policy bytes end the chain (D34);
 - `forge verify` resumability: interrupted mid-sequence, a re-invocation continues from the
   first incomplete step without re-running completed evidence; a fully-passed verify is a
   no-op printing the next judgment verb (D23);
