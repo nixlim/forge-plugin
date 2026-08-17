@@ -259,6 +259,22 @@ Claude still decides the semantic judgment, while gated validation enforces the 
 conditions required for a clean accepted close. The final report never repairs or rewrites journal
 history.
 
+## Machine Moves Are Run Boundaries
+
+The run journal, owner sidecar, and run registry never travel through Git; only the committed
+archive under `.forge/history/runs/` does. Treat a machine or session-host move as a run boundary:
+close and archive every open run before moving, recording unfinished work as honest `follow_ups`
+in `run_closed`, and let the successor machine open a fresh run against the committed archive. On
+a fresh clone, never resume another machine's run — open a new one. On a synced filesystem, close
+the run on its origin machine first; appends from any other host refuse as foreign ownership, and
+only an explicit operator-authorized owner re-stamp may transfer a live run.
+
+When close corrections are themselves appends, order them so the journal stays closable: append
+every missing terminal `execution_result` first, then a fresh passing verification for each of
+gate-1, gate-2, and gate-3 (a later terminal result moves the gate-ordering anchor past every
+earlier gate verification), and only then `run_closed`. A run closed in the wrong order cannot be
+repaired by appending.
+
 ## Post-Report Best-Effort Learning
 
 Only after Step 13 has finished and the archive commit plus `report.md` outcome are final, make one
