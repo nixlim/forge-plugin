@@ -377,6 +377,108 @@ class AuditCommitmentsTests(unittest.TestCase):
             b"(decision decision-01 basis[0])\n",
         )
 
+    def legacy_declaration(self) -> dict[str, object]:
+        return {
+            "type": "decision",
+            "id": "journal-dialect-compat",
+            "resolution": "legacy-dialect-compat: pre-D13 journal",
+        }
+
+    def test_pre_declaration_absolute_citations_are_legacy_findings(self) -> None:
+        # The palimpsest authoring-system archive shape: a declared legacy
+        # journal cites absolute paths from before the declaration — one
+        # resolving inside the run directory, one existing but outside every
+        # audit root. Neither can be repaired by a citation-correction append
+        # (the run is closed), so the audit must degrade them to a visible
+        # Legacy Citations section instead of refusing the archive.
+        (self.run_dir / "plan.md").write_text("# plan\n", encoding="utf-8")
+        outside = self.base / "elsewhere"
+        outside.mkdir()
+        (outside / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+
+        def change(records: list[dict[str, object]]) -> None:
+            records[3]["basis"] = [
+                str(self.run_dir / "plan.md"),
+                str(outside / "SKILL.md"),
+            ]
+            records.insert(-1, self.legacy_declaration())
+
+        self.mutate(change)
+        result = self.invoke()
+        self.assertEqual(0, result.returncode, result.stderr)
+        stdout = result.stdout.decode("utf-8")
+        self.assertIn("## Legacy Citations\n", stdout)
+        self.assertIn(
+            f"- {self.run_dir / 'plan.md'} (decision decision-01 basis[0])", stdout
+        )
+        self.assertIn(
+            f"- {outside / 'SKILL.md'} (decision decision-01 basis[1])", stdout
+        )
+
+    def test_post_declaration_absolute_citation_still_fails(self) -> None:
+        # Cutover: a record at or after the declaration gets no citation
+        # tolerance even when the cited absolute path exists.
+        (self.run_dir / "plan.md").write_text("# plan\n", encoding="utf-8")
+
+        def change(records: list[dict[str, object]]) -> None:
+            records.insert(3, self.legacy_declaration())
+            records[4]["basis"] = [str(self.run_dir / "plan.md")]
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            5,
+            "forge: commitment audit failed — cited path does not exist "
+            f"within run or repository: {self.run_dir / 'plan.md'} "
+            "(decision decision-01 basis[0])\n".encode("utf-8"),
+        )
+
+    def test_undeclared_absolute_citation_still_fails(self) -> None:
+        # Strict parity: without a declaration an absolute citation refuses
+        # the archive exactly as before.
+        (self.run_dir / "plan.md").write_text("# plan\n", encoding="utf-8")
+
+        def change(records: list[dict[str, object]]) -> None:
+            records[3]["basis"] = [str(self.run_dir / "plan.md")]
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            5,
+            "forge: commitment audit failed — cited path does not exist "
+            f"within run or repository: {self.run_dir / 'plan.md'} "
+            "(decision decision-01 basis[0])\n".encode("utf-8"),
+        )
+
+    def test_corrected_missing_pre_declaration_citation_stays_hard(self) -> None:
+        # A citation-correction is a modern repair: even under a dialect
+        # declaration, a corrected citation whose corrected path is still
+        # missing must keep the exact refusal. This is the killing test for
+        # the tolerance's `correction is None` clause — with that clause
+        # disabled, this journal would archive while rendering the failed
+        # repair in both Citation Corrections and Legacy Citations.
+        plan = self.run_dir / "plan.md"
+        plan.write_text("# plan\n", encoding="utf-8")
+
+        def change(records: list[dict[str, object]]) -> None:
+            records[3]["basis"] = [str(plan)]
+            records.insert(
+                -1,
+                self.correction(
+                    "fix-01", "decision-01 basis[0]: findings/still-missing.md"
+                ),
+            )
+            records.insert(-1, self.legacy_declaration())
+
+        self.mutate(change)
+        expected = (
+            "forge: commitment audit failed — cited path does not exist "
+            "within run or repository: findings/still-missing.md "
+            f"(corrected from {plan} for decision decision-01 basis[0] "
+            "by decision fix-01)\n"
+        ).encode("utf-8")
+        self.assert_failure(self.invoke(), 5, expected)
+
     def test_backticked_path_shaped_observation_is_audited(self) -> None:
         def change(records: list[dict[str, object]]) -> None:
             records[4]["observation"] = "FAIL; see `evidence/missing.txt`."

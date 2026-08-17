@@ -22,6 +22,7 @@ from commitment_paths import path_tokens  # noqa: E402
 
 from scripts.codex_orchestrator.journal import (  # noqa: E402
     TERMINAL_TASK_STATUSES,
+    _legacy_compatibility_declaration,
     read_journal,
     record_line,
 )
@@ -53,6 +54,7 @@ class Citation:
     value: str
     source: str
     target: tuple[str, str, int | str]
+    line: int = 0
 
 
 @dataclass(frozen=True)
@@ -213,6 +215,7 @@ def citations(records: Iterable[dict[str, object]]) -> list[Citation]:
                             token,
                             f"{record_name(record)} basis[{index}]",
                             ("decision", str(record.get("id")), index),
+                            int(record.get("_line", 0)),
                         )
                     )
         elif record.get("type") == "verification":
@@ -224,6 +227,7 @@ def citations(records: Iterable[dict[str, object]]) -> list[Citation]:
                             token,
                             f"{record_name(record)} observation",
                             ("verification", str(record.get("id")), token),
+                            int(record.get("_line", 0)),
                         )
                     )
     return result
@@ -371,7 +375,7 @@ def audit_missing_paths(
     records: list[dict[str, object]],
     run_dir: Path,
     start: dict[str, object],
-) -> list[str]:
+) -> list[AuditedCitation]:
     roots = [run_dir]
     repo = start.get("repo")
     if not isinstance(repo, str) or not repo or not Path(repo).is_absolute():
@@ -386,7 +390,7 @@ def audit_missing_paths(
         roots.append(repo_root)
     branches = recorded_branches(records)
     return [
-        citation.missing_finding()
+        citation
         for citation in audited_citations
         if not any(confined_existing(root, citation.value) for root in roots)
         and not recorded_branch_contains(repo_root, branches, citation.value)
@@ -517,10 +521,36 @@ def audit(run_dir: Path) -> str:
         fail(4, f"task is non-terminal at close: {non_terminal[0]}")
     # CONTROL terminal-task END
 
-    # CONTROL cited-path BEGIN
     missing = audit_missing_paths(audited_citations, records, run_dir, start)
-    if missing:
-        fail(5, f"cited path does not exist within run or repository: {missing[0]}")
+    # A journal-dialect-compat declaration (the legacy posture whose grammar
+    # is owned by scripts/codex_orchestrator/journal.py's
+    # _legacy_compatibility_declaration) covers citations
+    # recorded before it: the run is closed, so the sanctioned
+    # citation-correction append can no longer repair them. They degrade to a
+    # visible Legacy Citations section instead of refusing the archive. A
+    # corrected citation is a modern repair and is never tolerated here;
+    # records at or after the declaration and undeclared journals keep the
+    # exact refusal. Only the refusal lives inside the control block, so the
+    # disable sensor removes the gate without breaking the rendering.
+    declaration = _legacy_compatibility_declaration(records)
+    declaration_line = int(declaration["_line"]) if declaration is not None else None
+    legacy_citations = [
+        citation
+        for citation in missing
+        if citation.correction is None
+        and declaration_line is not None
+        and 0 < citation.original.line < declaration_line
+    ]
+    hard_missing = [
+        citation for citation in missing if citation not in legacy_citations
+    ]
+    # CONTROL cited-path BEGIN
+    if hard_missing:
+        fail(
+            5,
+            "cited path does not exist within run or repository: "
+            f"{hard_missing[0].missing_finding()}",
+        )
     # CONTROL cited-path END
 
     risks = commitment_items(close, "risks")
@@ -535,6 +565,15 @@ def audit(run_dir: Path) -> str:
         if correction_findings
         else ""
     )
+    legacy_section = (
+        render_section(
+            "Legacy Citations",
+            [citation.missing_finding() for citation in legacy_citations],
+        )
+        + "\n"
+        if legacy_citations
+        else ""
+    )
     # CONTROL repo-conformance BEGIN
     conformance_section = audit_repo_conformance(start, run_dir)
     conformance_prefix = conformance_section + "\n" if conformance_section else ""
@@ -542,6 +581,7 @@ def audit(run_dir: Path) -> str:
     return (
         conformance_prefix
         + correction_section
+        + legacy_section
         + render_section("Residual Risks", risks)
         + "\n"
         + render_section("Follow-ups", follow_ups)
