@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -80,6 +81,22 @@ class RunCoordinationTests(unittest.TestCase):
 
     def journal_path(self, run_id: str) -> Path:
         return self.repo / ".codex-orchestrator/runs" / run_id / "journal.jsonl"
+
+    def coordination_bytes(self, run_id: str) -> tuple[bytes, bytes, bytes]:
+        run_dir = self.journal_path(run_id).parent
+        return (
+            self.journal_path(run_id).read_bytes(),
+            (run_dir / "owner").read_bytes(),
+            self.registry_bytes(),
+        )
+
+    def outside_citation(self, run_id: str, name: str) -> str:
+        outside = Path(self.temporary.name) / "outside" / name
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        outside.write_text("outside\n", encoding="utf-8")
+        return Path(
+            os.path.relpath(outside, self.journal_path(run_id).parent)
+        ).as_posix()
 
     def test_open_is_atomic_and_registry_is_canonical(self) -> None:
         """FR-191/FR-192 and DM-010/DM-011: atomically open a registered owned run."""
@@ -713,6 +730,483 @@ class RunCoordinationTests(unittest.TestCase):
         )
         self.assertNotEqual(crashed.returncode, 0)
         self.assertIn("OverflowError", crashed.stderr)
+
+    def test_out_of_root_citation_fields_refuse_without_coordination_writes(self) -> None:
+        """FR-017: every audit citation surface refuses with its exact field label."""
+        run_id = "run-citations"
+        self.assertEqual(self.open(run_id, "src/**").returncode, 0)
+        run_dir = self.journal_path(run_id).parent
+        (run_dir / "inside.txt").write_text("inside\n", encoding="utf-8")
+        outside = self.outside_citation(run_id, "all-fields.txt")
+        owner = run_dir / "owner"
+        owner.write_text(
+            f"pid: 2147483647\nhost: {socket.gethostname()}\n"
+            "started_at: 2026-08-13T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        before = self.coordination_bytes(run_id)
+        cases: tuple[tuple[str, dict[str, object]], ...] = (
+            ("execution.prompt", {"type": "execution", "prompt": outside}),
+            ("execution.events", {"type": "execution", "events": outside}),
+            ("execution.handoff", {"type": "execution", "handoff": outside}),
+            (
+                "execution_result.handoff",
+                {"type": "execution_result", "handoff": outside},
+            ),
+            (
+                "verification.evidence[1]",
+                {
+                    "type": "verification",
+                    "evidence": ["inside.txt", outside],
+                },
+            ),
+            (
+                "decision.basis[1]",
+                {
+                    "type": "decision",
+                    "basis": ["decision-previous", f"reviewed `{outside}`"],
+                },
+            ),
+            (
+                f"verification.observation token {outside}",
+                {
+                    "type": "verification",
+                    "observation": f"reviewed `{outside}`",
+                },
+            ),
+        )
+
+        for index, (field, record) in enumerate(cases):
+            with self.subTest(field=field):
+                refused = self.command(
+                    "journal-append",
+                    "--repo",
+                    str(self.repo),
+                    "--run-id",
+                    run_id,
+                    "--record-json",
+                    str(self.record(f"outside-{index}.json", record)),
+                )
+                self.assertEqual(refused.returncode, 1)
+                self.assertEqual(
+                    refused.stderr,
+                    "forge: journal append refused — record cites path outside run or "
+                    f"repository: {field}: {outside}\n",
+                )
+                self.assertEqual(self.coordination_bytes(run_id), before)
+
+    def test_citation_roots_accept_relative_paths_and_refuse_escapes(self) -> None:
+        """FR-017: use the audit's ordered, root-specific containment predicate."""
+        run_id = "run-roots"
+        self.assertEqual(self.open(run_id, "src/**").returncode, 0)
+        run_dir = self.journal_path(run_id).parent
+        run_file = run_dir / "run-proof.txt"
+        run_file.write_text("run\n", encoding="utf-8")
+        repo_file = self.repo / "repo-proof.jsonl"
+        repo_file.write_text("repo\n", encoding="utf-8")
+        accepted = self.command(
+            "journal-append",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            run_id,
+            "--record-json",
+            str(
+                self.record(
+                    "relative-roots.json",
+                    {
+                        "type": "execution",
+                        "prompt": run_file.name,
+                        "events": repo_file.name,
+                    },
+                )
+            ),
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        sibling = run_dir.parent / "outside-run.txt"
+        sibling.write_text("sibling\n", encoding="utf-8")
+        repo_target = self.repo / "shared-citations"
+        repo_target.mkdir()
+        (repo_target / "proof.txt").write_text("repo target\n", encoding="utf-8")
+        (run_dir / "repo-link").symlink_to(repo_target, target_is_directory=True)
+        external_target = Path(self.temporary.name) / "external-citations"
+        external_target.mkdir()
+        (external_target / "proof.txt").write_text("external target\n", encoding="utf-8")
+        (run_dir / "external-link").symlink_to(external_target, target_is_directory=True)
+        cases = (
+            (str(run_file.resolve()), "execution.prompt"),
+            ("../outside-run.txt", "execution.prompt"),
+            ("repo-link/proof.txt", "execution.prompt"),
+            ("external-link/proof.txt", "execution.prompt"),
+        )
+        for index, (citation, field) in enumerate(cases):
+            with self.subTest(citation=citation):
+                before = self.coordination_bytes(run_id)
+                refused = self.command(
+                    "journal-append",
+                    "--repo",
+                    str(self.repo),
+                    "--run-id",
+                    run_id,
+                    "--record-json",
+                    str(
+                        self.record(
+                            f"root-escape-{index}.json",
+                            {"type": "execution", "prompt": citation},
+                        )
+                    ),
+                )
+                self.assertEqual(refused.returncode, 1)
+                self.assertEqual(
+                    refused.stderr,
+                    "forge: journal append refused — record cites path outside run or "
+                    f"repository: {field}: {citation}\n",
+                )
+                self.assertEqual(self.coordination_bytes(run_id), before)
+
+    def test_non_path_basis_and_observation_are_accepted(self) -> None:
+        """FR-017: record IDs and prose are not promoted to path citations."""
+        run_id = "run-prose"
+        self.assertEqual(self.open(run_id, "src/**").returncode, 0)
+        records: tuple[dict[str, object], ...] = (
+            {
+                "type": "decision",
+                "id": "decision-prose",
+                "basis": ["decision-previous", "independent reviewer consensus"],
+            },
+            {
+                "type": "verification",
+                "id": "verification-prose",
+                "observation": "PASS; decision-previous corroborates task-02",
+            },
+        )
+        before = self.journal_path(run_id).read_bytes()
+        for index, record in enumerate(records):
+            appended = self.command(
+                "journal-append",
+                "--repo",
+                str(self.repo),
+                "--run-id",
+                run_id,
+                "--record-json",
+                str(self.record(f"prose-{index}.json", record)),
+            )
+            self.assertEqual(appended.returncode, 0, appended.stderr)
+        self.assertTrue(self.journal_path(run_id).read_bytes().startswith(before))
+        self.assertEqual(len(self.journal_path(run_id).read_text().splitlines()), 3)
+
+    def test_lifecycle_citation_refusals_precede_every_coordination_write(self) -> None:
+        """FR-017: run-open and run-close reject citations before lifecycle checks."""
+        self.assertEqual(self.open("run-existing", "src/existing/**").returncode, 0)
+        existing_before = self.coordination_bytes("run-existing")
+        outside_open = self.outside_citation("run-new", "open.txt")
+        opening = self.record(
+            "bad-opening.json", {"type": "execution", "prompt": outside_open}
+        )
+        refused_open = self.command(
+            "run-open",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-new",
+            "--scope",
+            "src/new/**",
+            "--record-json",
+            str(opening),
+        )
+        self.assertEqual(refused_open.returncode, 1)
+        self.assertEqual(
+            refused_open.stderr,
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: execution.prompt: {outside_open}\n",
+        )
+        self.assertFalse(self.journal_path("run-new").parent.exists())
+        self.assertEqual(self.coordination_bytes("run-existing"), existing_before)
+
+        run_id = "run-closing"
+        self.assertEqual(self.open(run_id, "src/closing/**").returncode, 0)
+        run_dir = self.journal_path(run_id).parent
+        (run_dir / "owner").write_text(
+            f"pid: 2147483647\nhost: {socket.gethostname()}\n"
+            "started_at: 2026-08-13T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        close_before = self.coordination_bytes(run_id)
+        outside_close = self.outside_citation(run_id, "close.txt")
+        closing = self.record(
+            "bad-closing.json",
+            {"type": "execution_result", "handoff": outside_close},
+        )
+        refused_close = self.command(
+            "run-close",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            run_id,
+            "--record-json",
+            str(closing),
+        )
+        self.assertEqual(refused_close.returncode, 1)
+        self.assertEqual(
+            refused_close.stderr,
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: execution_result.handoff: {outside_close}\n",
+        )
+        self.assertEqual(self.coordination_bytes(run_id), close_before)
+
+    def test_citation_root_enforcement_frozenset_is_load_bearing(self) -> None:
+        """FR-017: disabling the append-time leg in memory permits the bad append."""
+        run_id = "run-citation-mutant"
+        self.assertEqual(self.open(run_id, "src/**").returncode, 0)
+        run_dir = self.journal_path(run_id).parent
+        outside = self.outside_citation(run_id, "mutant.txt")
+        record: dict[str, object] = {
+            "type": "decision",
+            "id": "decision-mutant",
+            "basis": [f"reviewed `{outside}`"],
+        }
+        with self.assertRaisesRegex(
+            journal.CoordinationRefusal, "record cites path outside run or repository"
+        ):
+            journal._validate_append_citations(self.repo, run_dir, record)
+
+        before = self.journal_path(run_id).read_bytes()
+        enabled = journal.CITATION_ROOT_ENFORCEMENT_LEGS
+        with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": str(os.getpid())}):
+            with mock.patch.object(
+                journal,
+                "CITATION_ROOT_ENFORCEMENT_LEGS",
+                enabled - {"append-time"},
+            ):
+                journal.append_run_record(self.repo, run_id, record)
+        self.assertNotEqual(self.journal_path(run_id).read_bytes(), before)
+
+    def test_append_owned_record_enforces_citation_roots_before_owner_takeover(self) -> None:
+        """FR-017: the mutation-runner append path cannot bypass the root guard."""
+        run_id = "run-owned-append"
+        self.assertEqual(self.open(run_id, "src/**").returncode, 0)
+        run_dir = self.journal_path(run_id).parent
+        owner = run_dir / "owner"
+        owner.write_text(
+            f"pid: 2147483647\nhost: {socket.gethostname()}\n"
+            "started_at: 2026-08-13T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        outside = self.outside_citation(run_id, "owned-append.txt")
+        record = {
+            "type": "verification",
+            "id": "verification-owned-append",
+            "evidence": [outside],
+        }
+        before = self.coordination_bytes(run_id)
+
+        with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": str(os.getpid())}):
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                re.escape(
+                    "forge: journal append refused — record cites path outside run or "
+                    f"repository: verification.evidence[0]: {outside}"
+                ),
+            ):
+                journal.append_owned_record(self.journal_path(run_id), record)
+
+        self.assertEqual(self.coordination_bytes(run_id), before)
+
+    def test_append_owned_record_uses_the_recorded_linked_worktree_root(self) -> None:
+        """FR-017: common-root lookup cannot hide a linked-worktree symlink escape."""
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.repo),
+                "-c",
+                "user.name=Forge Tests",
+                "-c",
+                "user.email=forge-tests@example.invalid",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "base",
+            ],
+            check=True,
+        )
+        linked = Path(self.temporary.name) / "linked-worktree"
+        subprocess.run(
+            ["git", "-C", str(self.repo), "worktree", "add", "--detach", str(linked)],
+            check=True,
+            capture_output=True,
+        )
+        run_id = "run-linked-owned-append"
+        opening = self.record(
+            "linked-opening.json",
+            {"type": "run_started", "run_id": run_id, "repo": str(linked)},
+        )
+        opened = self.command(
+            "run-open",
+            "--repo",
+            str(linked),
+            "--run-id",
+            run_id,
+            "--scope",
+            "src/**",
+            "--record-json",
+            str(opening),
+        )
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+
+        external = Path(self.temporary.name) / "linked-external"
+        external.mkdir()
+        (external / "proof.txt").write_text("outside\n", encoding="utf-8")
+        (linked / "escape").symlink_to(external, target_is_directory=True)
+        citation = "escape/proof.txt"
+        record = {
+            "type": "verification",
+            "id": "verification-linked-owned-append",
+            "evidence": [citation],
+        }
+        before = self.coordination_bytes(run_id)
+
+        with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": str(os.getpid())}):
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                re.escape(
+                    "forge: journal append refused — record cites path outside run or "
+                    f"repository: verification.evidence[0]: {citation}"
+                ),
+            ):
+                journal.append_owned_record(self.journal_path(run_id), record)
+
+        self.assertEqual(self.coordination_bytes(run_id), before)
+
+    def test_public_append_cannot_substitute_a_linked_worktree_root(self) -> None:
+        """FR-017: a caller worktree cannot replace the run's recorded worktree."""
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.repo),
+                "-c",
+                "user.name=Forge Tests",
+                "-c",
+                "user.email=forge-tests@example.invalid",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "base",
+            ],
+            check=True,
+        )
+        worktree_a = Path(self.temporary.name) / "linked-a"
+        worktree_b = Path(self.temporary.name) / "linked-b"
+        for worktree in (worktree_a, worktree_b):
+            subprocess.run(
+                ["git", "-C", str(self.repo), "worktree", "add", "--detach", str(worktree)],
+                check=True,
+                capture_output=True,
+            )
+        run_id = "run-linked-public-append"
+        opening = self.record(
+            "public-linked-opening.json",
+            {"type": "run_started", "run_id": run_id, "repo": str(worktree_a)},
+        )
+        opened = self.command(
+            "run-open",
+            "--repo",
+            str(worktree_a),
+            "--run-id",
+            run_id,
+            "--scope",
+            "src/**",
+            "--record-json",
+            str(opening),
+        )
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+
+        external = Path(self.temporary.name) / "public-linked-external"
+        external.mkdir()
+        (external / "proof.txt").write_text("outside\n", encoding="utf-8")
+        (worktree_a / "escape").symlink_to(external, target_is_directory=True)
+        (worktree_b / "escape").mkdir()
+        (worktree_b / "escape/proof.txt").write_text("inside B\n", encoding="utf-8")
+        run_dir = self.journal_path(run_id).parent
+        (run_dir / "owner").write_text(
+            f"pid: 2147483647\nhost: {socket.gethostname()}\n"
+            "started_at: 2026-08-13T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        citation = "escape/proof.txt"
+        record = self.record(
+            "public-linked-append.json",
+            {
+                "type": "verification",
+                "id": "verification-linked-public-append",
+                "evidence": [citation],
+            },
+        )
+        before = self.coordination_bytes(run_id)
+
+        refused = self.command(
+            "journal-append",
+            "--repo",
+            str(worktree_b),
+            "--run-id",
+            run_id,
+            "--record-json",
+            str(record),
+        )
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(
+            refused.stderr,
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: verification.evidence[0]: {citation}\n",
+        )
+        self.assertEqual(self.coordination_bytes(run_id), before)
+
+    def test_modern_run_without_recorded_repo_has_no_common_root_fallback(self) -> None:
+        """FR-017: a scoped run missing repo may not inherit common-root citations."""
+        run_id = "run-modern-missing-repo"
+        self.assertEqual(self.open(run_id, "src/**").returncode, 0)
+        journal_path = self.journal_path(run_id)
+        opening = json.loads(journal_path.read_text(encoding="utf-8"))
+        self.assertIn("scope", opening)
+        opening.pop("repo", None)
+        journal_path.write_text(json.dumps(opening) + "\n", encoding="utf-8")
+
+        run_dir = journal_path.parent
+        external = Path(self.temporary.name) / "missing-repo-external"
+        external.mkdir()
+        (external / "proof.txt").write_text("outside\n", encoding="utf-8")
+        (run_dir / "escape").symlink_to(external, target_is_directory=True)
+        (self.repo / "escape").mkdir()
+        (self.repo / "escape/proof.txt").write_text("common root\n", encoding="utf-8")
+        (run_dir / "owner").write_text(
+            f"pid: 2147483647\nhost: {socket.gethostname()}\n"
+            "started_at: 2026-08-13T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        citation = "escape/proof.txt"
+        record = {
+            "type": "verification",
+            "id": "verification-modern-missing-repo",
+            "evidence": [citation],
+        }
+        before = self.coordination_bytes(run_id)
+
+        with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": str(os.getpid())}):
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                re.escape(
+                    "forge: journal append refused — record cites path outside run or "
+                    f"repository: verification.evidence[0]: {citation}"
+                ),
+            ):
+                journal.append_owned_record(journal_path, record)
+
+        self.assertEqual(self.coordination_bytes(run_id), before)
 
     def test_citation_corrections_require_strict_grammar_and_preserve_history(self) -> None:
         """FR-191: enforce citation-correction grammar while preserving history."""

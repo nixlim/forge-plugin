@@ -64,6 +64,14 @@ LEGACY_EXECUTION_STATUS_MAP = {
 }
 
 
+# forge: modified from upstream — refuse out-of-root citations before journal writes
+CITATION_ROOT_ENFORCEMENT_LEGS = frozenset({"append-time"})
+CITATION_ROOT_DIRECT_FIELDS = {
+    "execution": ("prompt", "events", "handoff"),
+    "execution_result": ("handoff",),
+}
+
+
 # forge: modified from upstream — enforce D13 journal ownership and run-scope admission
 REGISTRY_UNAVAILABLE = "forge: new run refused — run registry unavailable"
 REGISTRY_SCHEMA_VERSION = 1
@@ -268,6 +276,142 @@ def _validate_citation_targets(
             raise CoordinationRefusal(
                 "forge: journal append refused — citation correction target does not exist"
             )
+
+
+def _record_citations(record: dict[str, object]) -> Iterator[tuple[str, str]]:
+    """Yield the exact FR-017 citation inventory and operator-facing field names."""
+
+    kind = record.get("type")
+    for field in CITATION_ROOT_DIRECT_FIELDS.get(str(kind), ()):
+        value = record.get(field)
+        if isinstance(value, str) and value:
+            yield f"{kind}.{field}", value
+    if kind == "verification":
+        evidence = record.get("evidence")
+        if isinstance(evidence, list):
+            for index, value in enumerate(evidence):
+                if isinstance(value, str) and value:
+                    yield f"verification.evidence[{index}]", value
+        observation = record.get("observation")
+        if isinstance(observation, str):
+            for token in path_tokens(observation, context="observation"):
+                yield f"verification.observation token {token}", token
+    elif kind == "decision":
+        basis = record.get("basis")
+        if isinstance(basis, list):
+            for index, value in enumerate(basis):
+                if not isinstance(value, str):
+                    continue
+                for token in path_tokens(value, context="basis"):
+                    yield f"decision.basis[{index}]", token
+
+
+def _path_uses_symlink(root: Path, relative: Path) -> bool:
+    """Return whether an existing component below ``root`` is a symlink."""
+
+    candidate = root
+    for part in relative.parts:
+        if part in {"", "."}:
+            continue
+        candidate = candidate.parent if part == ".." else candidate / part
+        try:
+            if candidate.is_symlink():
+                return True
+        except OSError:
+            return False
+    return False
+
+
+def _citation_is_contained(repo_root: Path, run_dir: Path, citation: str) -> bool:
+    """Apply ordered resolve-then-contain semantics without requiring existence."""
+
+    try:
+        relative = Path(citation)
+        if relative.is_absolute():
+            return False
+        repository = repo_root.expanduser().resolve(strict=True)
+        run = run_dir.expanduser().resolve(strict=False)
+        roots = (run, repository) if run != repository else (run,)
+        fallback = False
+        anchored = False
+        for root in roots:
+            candidate = root / relative
+            resolved = candidate.resolve(strict=False)
+            try:
+                resolved.relative_to(root)
+                contained = True
+            except ValueError:
+                contained = False
+
+            # Append time proves containment only. Existence remains the later
+            # validator/audit concern: a missing in-root target is accepted.
+            # Existing targets or symlink components only select the same
+            # root-specific resolution that the audit will inspect later.
+            rooted = candidate.exists() or candidate.is_symlink()
+            symlinked = _path_uses_symlink(root, relative)
+            if rooted or symlinked:
+                anchored = True
+                if contained:
+                    return True
+            fallback = fallback or contained
+        return fallback if not anchored else False
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _validate_append_citations(
+    repo_root: Path | None,
+    run_dir: Path,
+    record: object,
+    *,
+    state_root: Path | None = None,
+) -> None:
+    """Refuse FR-017 citation escapes before any coordination artifact is written."""
+
+    if "append-time" not in CITATION_ROOT_ENFORCEMENT_LEGS or not isinstance(record, dict):
+        return
+    citations = tuple(_record_citations(record))
+    if not citations:
+        return
+    if repo_root is None:
+        if state_root is None:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        repo_root = _recorded_repository_root(run_dir, state_root)
+    for field, citation in citations:
+        if not _citation_is_contained(repo_root, run_dir, citation):
+            raise CoordinationRefusal(
+                "forge: journal append refused — record cites path outside run or "
+                f"repository: {field}: {citation}"
+            )
+
+
+def _recorded_repository_root(run_dir: Path, state_root: Path) -> Path:
+    """Resolve a run's repository without letting journal data widen its authority."""
+
+    records = _read_raw_records(run_dir / "journal.jsonl")
+    if not records or records[0].get("type") != "run_started":
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    opening = records[0]
+    recorded = opening.get("repo")
+    if recorded is None:
+        # Pre-coordination journals did not consistently record their worktree.
+        # Their common Git root is the only repository authority still provable.
+        if "scope" not in opening:
+            return state_root
+        # A coordinated journal without its recorded repository has no safe
+        # second citation root. Keep append-time enforcement available, but
+        # fail closed to the run directory instead of trusting the caller's
+        # worktree or widening authority to the shared Git common root.
+        return run_dir
+    if not isinstance(recorded, str) or not recorded or not Path(recorded).is_absolute():
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    try:
+        repository = Path(recorded).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if not repository.is_dir() or _resolve_state_root(repository) != state_root:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    return repository
 
 
 def _atomic_replace(path: Path, payload: bytes) -> None:
@@ -809,6 +953,7 @@ def append_owned_record(journal: Path, record: dict[str, object]) -> None:
     if not _valid_run_id(run_id):
         raise CoordinationRefusal("forge: journal append refused — invalid run identity")
     state_root = _resolve_state_root(run_dir)
+    _validate_append_citations(None, run_dir, record, state_root=state_root)
     with _registry_lock(state_root):
         states = _scan_runs(state_root)
         open_runs = _load_registry(state_root, states)
@@ -840,6 +985,8 @@ def open_run(
     scope = canonical_scope(scope_values)
     current = _session_owner()
     state_root = _resolve_state_root(repo)
+    target = state_root / ".codex-orchestrator/runs" / run_id
+    _validate_append_citations(repo, target, record)
     with _registry_lock(state_root):
         states = _scan_runs(state_root)
         open_runs = _load_registry(state_root, states)
@@ -883,7 +1030,6 @@ def open_run(
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         runs_root = state_root / ".codex-orchestrator/runs"
         runs_root.mkdir(parents=True, exist_ok=True)
-        target = runs_root / run_id
         temporary = Path(tempfile.mkdtemp(prefix=f".{run_id}.open.", dir=runs_root))
         installed = False
         try:
@@ -913,6 +1059,8 @@ def append_run_record(repo: Path, run_id: str, record: dict[str, object]) -> Non
     if not _valid_run_id(run_id):
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     state_root = _resolve_state_root(repo)
+    run_dir = state_root / ".codex-orchestrator/runs" / run_id
+    _validate_append_citations(None, run_dir, record, state_root=state_root)
     with _registry_lock(state_root):
         states = _scan_runs(state_root)
         open_runs = _load_registry(state_root, states)
@@ -987,9 +1135,13 @@ def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
 
 
 def close_run(repo: Path, run_id: str, record: dict[str, object]) -> None:
-    if not _valid_run_id(run_id) or not isinstance(record, dict) or record.get("type") != "run_closed":
+    if not _valid_run_id(run_id):
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     state_root = _resolve_state_root(repo)
+    run_dir = state_root / ".codex-orchestrator/runs" / run_id
+    _validate_append_citations(None, run_dir, record, state_root=state_root)
+    if not isinstance(record, dict) or record.get("type") != "run_closed":
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     with _registry_lock(state_root):
         states = _scan_runs(state_root)
         open_runs = _load_registry(state_root, states)
