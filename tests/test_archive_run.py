@@ -1038,9 +1038,9 @@ class ArchiveRunTests(unittest.TestCase):
         self.archive_path.unlink()
         mutant = self.mutant_archiver(
             "historical-routing-findings-disabled",
-            "    audit_fragment = run_audit(run_dir)\n",
+            "    audit_fragment = run_audit(run_dir, dispense_targets, dispense_reason)\n",
             (
-                "    audit_fragment = run_audit(run_dir)\n"
+                "    audit_fragment = run_audit(run_dir, dispense_targets, dispense_reason)\n"
                 "    if audit_fragment.startswith(\"## Historical Routing Findings\\n\"):\n"
                 "        audit_fragment = (\"## Residual Risks\" + "
                 "audit_fragment.split(\"## Residual Risks\", 1)[1])\n"
@@ -1437,7 +1437,7 @@ class ArchiveRunTests(unittest.TestCase):
         shutil.copytree(ROOT / "scripts", mutant_root / "scripts")
         mutant = mutant_root / "scripts" / "forge" / "archive-run.py"
         source = mutant.read_text(encoding="utf-8")
-        needle = "    audit_fragment = run_audit(run_dir)\n"
+        needle = "    audit_fragment = run_audit(run_dir, dispense_targets, dispense_reason)\n"
         self.assertEqual(source.count(needle), 1)
         mutant.write_text(
             source.replace(

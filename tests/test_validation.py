@@ -1353,5 +1353,140 @@ class ValidationTests(unittest.TestCase):
         self.assertTrue(payload["ok"], payload["issues"])
 
 
+class ClosedLegacyCompatTests(unittest.TestCase):
+    """FR-018(a): operator-directed closed-run keying of the FR-016 posture."""
+
+    # Borrow the fixture builders without inheriting (and re-running) the base suite.
+    make_run = ValidationTests.make_run
+    make_legacy_run = ValidationTests.make_legacy_run
+
+    RUN_CLOSED = {
+        "type": "run_closed",
+        "judgment": "blocked",
+        "summary": "legacy close",
+        "risks": [],
+        "follow_ups": [],
+    }
+
+    def make_closed_legacy_run(self, root: Path) -> Path:
+        run_dir, records = self.make_legacy_run(root)
+        write_journal(run_dir, [*records, dict(self.RUN_CLOSED)])
+        return run_dir
+
+    def test_flag_validates_closed_legacy_journal_with_activation_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = self.make_closed_legacy_run(Path(tmp))
+            strict = validate_run(run_dir, gates=True)
+            flagged = validate_run(
+                run_dir, gates=True, closed_legacy_compat="operator-directed archive"
+            )
+        self.assertFalse(strict["ok"])
+        self.assertTrue(flagged["ok"], flagged["issues"])
+        self.assertIn(
+            "legacy compatibility closed-run flag active: operator-directed archive",
+            " ".join(flagged["warnings"]),
+        )
+
+    def test_without_flag_validation_is_byte_identical_to_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = self.make_closed_legacy_run(Path(tmp))
+            strict = json.dumps(validate_run(run_dir, gates=True), sort_keys=True)
+            default = json.dumps(
+                validate_run(run_dir, gates=True, closed_legacy_compat=None),
+                sort_keys=True,
+            )
+        self.assertEqual(strict, default)
+
+    def test_flag_refuses_open_journal_with_exact_literal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, _ = self.make_legacy_run(Path(tmp))
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                validate_run(run_dir, gates=True, closed_legacy_compat="x")
+        self.assertEqual(
+            "forge: closed-legacy-compat refused — journal has no run_closed entry",
+            str(caught.exception),
+        )
+
+    def test_flag_justification_grammar_is_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = self.make_closed_legacy_run(Path(tmp))
+            for bad in ("", "   ", "two\nlines", "carriage\rreturn"):
+                with self.assertRaises(journal.CoordinationRefusal):
+                    validate_run(run_dir, gates=True, closed_legacy_compat=bad)
+
+    def test_run_closed_stays_fully_strict_under_the_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, records = self.make_legacy_run(Path(tmp))
+            bad_close = dict(self.RUN_CLOSED)
+            bad_close["judgment"] = "wrapped-up"
+            write_journal(run_dir, [*records, bad_close])
+            flagged = validate_run(
+                run_dir, gates=True, closed_legacy_compat="operator-directed"
+            )
+        self.assertFalse(flagged["ok"])
+        self.assertTrue(
+            any("judgment" in issue for issue in flagged["issues"]),
+            flagged["issues"],
+        )
+
+    def test_disabled_leg_makes_the_flag_grant_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = self.make_closed_legacy_run(Path(tmp))
+            enabled = validate_run(
+                run_dir, gates=True, closed_legacy_compat="operator-directed"
+            )
+            with mock.patch.object(
+                journal, "CLOSED_RUN_DISPENSATION_LEGS", frozenset()
+            ):
+                disabled = validate_run(
+                    run_dir, gates=True, closed_legacy_compat="operator-directed"
+                )
+        self.assertTrue(enabled["ok"], enabled["issues"])
+        self.assertFalse(disabled["ok"])
+
+    def test_cli_flag_round_trip_and_refusal_exit_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = self.make_closed_legacy_run(Path(tmp))
+            accepted = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "validate",
+                    "--gates",
+                    "--closed-legacy-compat",
+                    "operator-directed archive",
+                    str(run_dir),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                cwd=ROOT,
+            )
+            payload = json.loads(accepted.stdout)
+            open_run_dir, _ = self.make_legacy_run(Path(tmp) / "open")
+            refused = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "validate",
+                    "--gates",
+                    "--closed-legacy-compat",
+                    "x",
+                    str(open_run_dir),
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+                cwd=ROOT,
+            )
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertTrue(payload["ok"], payload["issues"])
+        self.assertEqual(2, refused.returncode)
+        self.assertEqual(
+            "forge: closed-legacy-compat refused — journal has no run_closed entry",
+            refused.stderr.strip(),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

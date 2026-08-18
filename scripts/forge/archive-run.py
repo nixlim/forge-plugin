@@ -435,6 +435,8 @@ def render_archive(
     closing_head: str,
     post_close: dict[str, Any],
     audit_fragment: str,
+    dispense_targets: Sequence[str] = (),
+    dispense_reason: str | None = None,
 ) -> str:
     started = only_record(records, "run_started")
     closed = only_record(records, "run_closed")
@@ -612,6 +614,20 @@ def render_archive(
                 + " |"
             )
     lines.extend(["", audit_fragment.rstrip("\n"), "", "## Provenance", ""])
+    # FR-018(b): a dispensed archive records the exact operator-directed flags so the
+    # committed record shows precisely what was excused and under which direction.
+    dispensation_lines: list[str] = []
+    if dispense_targets:
+        dispensation_lines = [
+            "### Operator-directed dispensation",
+            "",
+            *[
+                f"- `--dispense-citation {target}`"
+                for target in dispense_targets
+            ],
+            f"- `--dispense-reason {dispense_reason}`",
+            "",
+        ]
     lines.extend(
         [
             f"Run ID: {run_id}",
@@ -620,6 +636,7 @@ def render_archive(
             "",
             f"Closing HEAD: {closing_head}",
             "",
+            *dispensation_lines,
             "### Pre-close validation payload embedded in `run_closed`",
             "",
             *canonical_json(pre_close),
@@ -633,11 +650,22 @@ def render_archive(
     return "\n".join(lines)
 
 
-def run_audit(run_dir: Path) -> str:
+def run_audit(
+    run_dir: Path,
+    dispense_targets: Sequence[str] = (),
+    dispense_reason: str | None = None,
+) -> str:
     audit = Path(__file__).with_name("audit-commitments.py")
+    command = [sys.executable, str(audit), "--run-dir", str(run_dir)]
+    # FR-018(b): pass operator-directed dispensation through to the audit rerun so the
+    # rendered fragment carries the visible Dispensed Citations section.
+    for target in dispense_targets:
+        command.extend(["--dispense-citation", target])
+    if dispense_reason is not None:
+        command.extend(["--dispense-reason", dispense_reason])
     try:
         result = subprocess.run(
-            [sys.executable, str(audit), "--run-dir", str(run_dir)],
+            command,
             check=False,
             capture_output=True,
         )
@@ -754,6 +782,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--run-dir", required=True)
     result.add_argument("--closing-head", required=True)
     result.add_argument("--post-close-validation", required=True)
+    # FR-018(b): operator-directed dispensation, forwarded verbatim to the audit.
+    result.add_argument("--dispense-citation", action="append", default=[])
+    result.add_argument("--dispense-reason", default=None)
     return result
 
 
@@ -796,7 +827,9 @@ def archive(arguments: argparse.Namespace) -> str:
     if ignored.returncode != 1:
         raise ArchiveRefusal("forge: archive refused — could not verify archive ignore state")
 
-    audit_fragment = run_audit(run_dir)
+    dispense_targets = tuple(arguments.dispense_citation)
+    dispense_reason = arguments.dispense_reason
+    audit_fragment = run_audit(run_dir, dispense_targets, dispense_reason)
     fresh_pre_close = recompute_pre_close_validation(run_dir, records)
     if not is_passing_gated_payload(fresh_pre_close) or embedded_pre_close != fresh_pre_close:
         raise ArchiveRefusal(
@@ -814,6 +847,8 @@ def archive(arguments: argparse.Namespace) -> str:
         closing_head=closing_head,
         post_close=post_close,
         audit_fragment=audit_fragment,
+        dispense_targets=dispense_targets,
+        dispense_reason=dispense_reason,
     )
     write_and_stage(repo, relative, content)
     return relative

@@ -72,6 +72,13 @@ CITATION_ROOT_DIRECT_FIELDS = {
 }
 
 
+# forge: modified from upstream — FR-018 operator-directed closed-run dispensation
+CLOSED_RUN_DISPENSATION_LEGS = frozenset({"closed-legacy-compat"})
+CLOSED_LEGACY_COMPAT_REFUSAL = (
+    "forge: closed-legacy-compat refused — journal has no run_closed entry"
+)
+
+
 # forge: modified from upstream — enforce D13 journal ownership and run-scope admission
 REGISTRY_UNAVAILABLE = "forge: new run refused — run registry unavailable"
 REGISTRY_SCHEMA_VERSION = 1
@@ -1474,7 +1481,12 @@ def check_gate_profile(
 
 
 # forge: modified from upstream — accept the opt-in Level B gate profile
-def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
+def validate_run(
+    run_dir: Path,
+    *,
+    gates: bool = False,
+    closed_legacy_compat: str | None = None,
+) -> dict[str, object]:
     warnings: list[str] = []
     non_passing: list[dict[str, object]] = []
     try:
@@ -1506,6 +1518,43 @@ def validate_run(run_dir: Path, *, gates: bool = False) -> dict[str, object]:
                 f"declaration active: {justification}",
             )
         )
+
+    # forge: modified from upstream — FR-018(a) operator-directed closed-run keying.
+    # The flag re-keys the identical FR-016 posture for a journal that can no longer
+    # carry an in-journal declaration: the virtual declaration point sits immediately
+    # before run_closed, so every earlier record is pre-declaration and run_closed
+    # itself stays fully strict. The flag grants nothing while the dispensation leg
+    # is disabled in memory, and it refuses outright when the journal has no
+    # run_closed entry — for open runs the in-journal declaration remains the only
+    # path. The justification grammar (nonempty single line, CR/LF forbidden) is the
+    # caller's contract, revalidated here so no surface can widen it.
+    if closed_legacy_compat is not None:
+        if "closed-legacy-compat" in CLOSED_RUN_DISPENSATION_LEGS:
+            stripped = closed_legacy_compat.strip()
+            if (
+                not stripped
+                or "\r" in closed_legacy_compat
+                or "\n" in closed_legacy_compat
+            ):
+                raise CoordinationRefusal(
+                    "forge: closed-legacy-compat refused — justification must be a "
+                    "nonempty single line"
+                )
+            closures = [
+                record
+                for record in records
+                if record.get("type") == "run_closed"
+                and isinstance(record.get("_line"), int)
+            ]
+            if not closures:
+                raise CoordinationRefusal(CLOSED_LEGACY_COMPAT_REFUSAL)
+            virtual_line = int(closures[-1]["_line"])
+            if declaration_line is None or virtual_line > declaration_line:
+                declaration_line = virtual_line
+            warnings.append(
+                f"line {virtual_line}: legacy compatibility closed-run flag active: "
+                f"{stripped}"
+            )
 
     raw_known_records: list[dict[str, object]] = []
     known_records: list[dict[str, object]] = []

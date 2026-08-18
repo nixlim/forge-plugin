@@ -1246,5 +1246,250 @@ class AuditCommitmentsTests(unittest.TestCase):
         )
 
 
+class DispensationTests(unittest.TestCase):
+    """FR-018(b): operator-directed dispensation of missing citations."""
+
+    maxDiff = None
+
+    # Borrow the fixture plumbing without inheriting (and re-running) the base suite.
+    setUp = AuditCommitmentsTests.setUp
+    records = AuditCommitmentsTests.records
+    write_records = AuditCommitmentsTests.write_records
+    mutate = AuditCommitmentsTests.mutate
+
+    REASON = "operator-directed 2026-08-18: pre-FR-017 scratchpad citations"
+
+    def invoke_with(self, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [sys.executable, str(AUDIT), "--run-dir", str(self.run_dir), *arguments],
+            cwd=self.base,
+            check=False,
+            capture_output=True,
+        )
+
+    def add_missing_citations(self) -> None:
+        def transform(records: list[dict[str, object]]) -> None:
+            records.insert(
+                -1,
+                {
+                    "type": "decision",
+                    "id": "decision-disp",
+                    "task": "task-07",
+                    "finding": "f",
+                    "outcome": "consensus",
+                    "resolution": "r",
+                    "basis": ["/outside/audit-roots/handoff.md"],
+                    "risk": "low",
+                    "recorded_at": "2026-08-18T00:00:00Z",
+                },
+            )
+            records.insert(
+                -1,
+                {
+                    "type": "verification",
+                    "id": "verification-disp",
+                    "task": "task-07",
+                    "criterion": "c",
+                    "method": "inspection",
+                    "check": "chk",
+                    "result": "passed",
+                    "observation": "artifact at `/outside/audit-roots/notes.md` reviewed",
+                    "recorded_at": "2026-08-18T00:00:01Z",
+                },
+            )
+
+        self.mutate(transform)
+
+    def test_dispensation_degrades_exactly_the_named_citations(self) -> None:
+        self.add_missing_citations()
+        refused = self.invoke_with()
+        self.assertEqual(5, refused.returncode)
+        result = self.invoke_with(
+            "--dispense-citation",
+            "decision-disp basis[0]",
+            "--dispense-citation",
+            "verification-disp observation: /outside/audit-roots/notes.md",
+            "--dispense-reason",
+            self.REASON,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        output = result.stdout.decode("utf-8")
+        self.assertIn("## Dispensed Citations", output)
+        self.assertIn(
+            "/outside/audit-roots/handoff.md (decision decision-disp basis[0]) "
+            f"— reason: {self.REASON}",
+            output,
+        )
+        self.assertIn(
+            "/outside/audit-roots/notes.md (verification verification-disp "
+            f"observation) — reason: {self.REASON}",
+            output,
+        )
+        self.assertIn("## Residual Risks", output)
+
+    def test_non_dispensed_missing_citation_still_fails(self) -> None:
+        self.add_missing_citations()
+        result = self.invoke_with(
+            "--dispense-citation",
+            "decision-disp basis[0]",
+            "--dispense-reason",
+            self.REASON,
+        )
+        self.assertEqual(5, result.returncode)
+        self.assertIn(b"/outside/audit-roots/notes.md", result.stderr)
+
+    def test_target_validation_fails_closed(self) -> None:
+        self.add_missing_citations()
+        cases = (
+            ("decision-01 basis[1]", b"names a citation that resolves"),
+            ("decision-99 basis[0]", b"journal does not contain"),
+            ("decision-disp basis[oops]", b"malformed dispensation target"),
+        )
+        for target, needle in cases:
+            with self.subTest(target=target):
+                result = self.invoke_with(
+                    "--dispense-citation", target, "--dispense-reason", self.REASON
+                )
+                self.assertEqual(2, result.returncode)
+                self.assertIn(needle, result.stderr)
+
+    def test_duplicate_record_id_target_is_ambiguous(self) -> None:
+        self.add_missing_citations()
+
+        def transform(records: list[dict[str, object]]) -> None:
+            records.insert(
+                -1,
+                {
+                    "type": "verification",
+                    "id": "verification-disp",
+                    "task": "task-07",
+                    "criterion": "c2",
+                    "method": "inspection",
+                    "check": "chk2",
+                    "result": "passed",
+                    "observation": "second occurrence",
+                    "recorded_at": "2026-08-18T00:00:02Z",
+                },
+            )
+
+        self.mutate(transform)
+        result = self.invoke_with(
+            "--dispense-citation",
+            "verification-disp observation: /outside/audit-roots/notes.md",
+            "--dispense-reason",
+            self.REASON,
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn(b"ambiguous dispensation target (duplicate id)", result.stderr)
+
+    def test_reason_grammar_and_pairing_fail_closed(self) -> None:
+        self.add_missing_citations()
+        no_reason = self.invoke_with("--dispense-citation", "decision-disp basis[0]")
+        self.assertEqual(2, no_reason.returncode)
+        self.assertIn(b"requires --dispense-reason", no_reason.stderr)
+        orphan_reason = self.invoke_with("--dispense-reason", self.REASON)
+        self.assertEqual(2, orphan_reason.returncode)
+        self.assertIn(b"requires at least one --dispense-citation", orphan_reason.stderr)
+        multiline = subprocess.run(
+            [
+                sys.executable,
+                str(AUDIT),
+                "--run-dir",
+                str(self.run_dir),
+                "--dispense-citation",
+                "decision-disp basis[0]",
+                "--dispense-reason",
+                "two\nlines",
+            ],
+            cwd=self.base,
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(2, multiline.returncode)
+        self.assertIn(b"nonempty single line", multiline.stderr)
+
+    def test_disabled_dispensation_leg_restores_the_refusal(self) -> None:
+        self.add_missing_citations()
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location("audit_commitments_mod", AUDIT)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(module)
+        targets = (
+            "decision-disp basis[0]",
+            "verification-disp observation: /outside/audit-roots/notes.md",
+        )
+        enabled_output = module.audit(self.run_dir, targets, self.REASON)
+        self.assertIn("## Dispensed Citations", enabled_output)
+        with mock.patch.object(module, "DISPENSATION_LEGS", frozenset()):
+            with self.assertRaises(module.Failure) as caught:
+                module.audit(self.run_dir, targets, self.REASON)
+        self.assertEqual(5, caught.exception.exit_code)
+
+    def test_archive_forwards_flags_and_records_provenance(self) -> None:
+        self.add_missing_citations()
+        import importlib.util
+
+        archive_script = AUDIT.with_name("archive-run.py")
+        spec = importlib.util.spec_from_file_location("archive_run_mod", archive_script)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(module)
+        targets = (
+            "decision-disp basis[0]",
+            "verification-disp observation: /outside/audit-roots/notes.md",
+        )
+        fragment = module.run_audit(self.run_dir, targets, self.REASON)
+        self.assertIn("## Dispensed Citations", fragment)
+        from scripts.codex_orchestrator.journal import read_journal
+
+        for arguments in (
+            ("init",),
+            ("config", "user.name", "Audit Fixture"),
+            ("config", "user.email", "audit@example.invalid"),
+            ("add", "."),
+            ("commit", "-m", "fixture root"),
+        ):
+            subprocess.run(
+                ["git", *arguments], cwd=self.repo, check=True, capture_output=True
+            )
+        head = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        )
+        renamed = self.base / "archive-audit"
+        shutil.copytree(self.run_dir, renamed)
+        journal_path = renamed / "journal.jsonl"
+        journal_path.write_text(
+            journal_path.read_text(encoding="utf-8").replace("1" * 40, head),
+            encoding="utf-8",
+        )
+        records, issues = read_journal(journal_path)
+        self.assertEqual([], issues)
+        close = [r for r in records if r.get("type") == "run_closed"][0]
+        content = module.render_archive(
+            repo=self.repo,
+            run_dir=renamed,
+            records=records,
+            closing_head=head,
+            post_close=close["validation"],
+            audit_fragment=fragment,
+            dispense_targets=targets,
+            dispense_reason=self.REASON,
+        )
+        self.assertIn("### Operator-directed dispensation", content)
+        self.assertIn("- `--dispense-citation decision-disp basis[0]`", content)
+        self.assertIn(f"- `--dispense-reason {self.REASON}`", content)
+
+
 if __name__ == "__main__":
     unittest.main()

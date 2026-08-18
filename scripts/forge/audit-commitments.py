@@ -42,6 +42,14 @@ VERIFICATION_CORRECTION = re.compile(
     r"^(?P<id>\S+) observation: (?P<token>.+?) -> (?P<path>.+)$"
 )
 
+# FR-018(b): operator-directed dispensation of exactly-named missing citations in a
+# closed journal. The two target shapes mirror FR-191's correction grammar; the leg
+# below is the in-memory disable control — with it removed, dispensation flags parse
+# but grant nothing, so every missing citation keeps the fail(5) refusal.
+DISPENSATION_LEGS = frozenset({"dispense-citation"})
+DISPENSE_BASIS_TARGET = re.compile(r"^(?P<id>\S+) basis\[(?P<index>[0-9]+)\]$")
+DISPENSE_OBSERVATION_TARGET = re.compile(r"^(?P<id>\S+) observation: (?P<token>.+)$")
+
 
 @dataclass(frozen=True)
 class Failure(Exception):
@@ -91,13 +99,95 @@ def fail(exit_code: int, diagnostic: str) -> None:
     raise Failure(exit_code, diagnostic)
 
 
-def parse_argv(argv: list[str]) -> Path:
-    if len(argv) != 2 or argv[0] != "--run-dir" or not argv[1]:
-        fail(2, "usage: audit-commitments.py --run-dir <run-dir>")
+def parse_argv(argv: list[str]) -> tuple[Path, tuple[str, ...], str | None]:
+    run_dir_value: str | None = None
+    dispense_targets: list[str] = []
+    dispense_reason: str | None = None
+    index = 0
+    while index < len(argv):
+        flag = argv[index]
+        if index + 1 >= len(argv):
+            fail(2, f"missing value for {flag}")
+        value = argv[index + 1]
+        if flag == "--run-dir":
+            if run_dir_value is not None:
+                fail(2, "duplicate --run-dir")
+            run_dir_value = value
+        elif flag == "--dispense-citation":
+            dispense_targets.append(value)
+        elif flag == "--dispense-reason":
+            if dispense_reason is not None:
+                fail(2, "duplicate --dispense-reason")
+            dispense_reason = value
+        else:
+            fail(
+                2,
+                "usage: audit-commitments.py --run-dir <run-dir> "
+                "[--dispense-citation <target>]... [--dispense-reason <text>]",
+            )
+        index += 2
+    if not run_dir_value:
+        fail(
+            2,
+            "usage: audit-commitments.py --run-dir <run-dir> "
+            "[--dispense-citation <target>]... [--dispense-reason <text>]",
+        )
+    if dispense_targets and dispense_reason is None:
+        fail(2, "--dispense-citation requires --dispense-reason")
+    if dispense_reason is not None:
+        if not dispense_targets:
+            fail(2, "--dispense-reason requires at least one --dispense-citation")
+        if (
+            not dispense_reason.strip()
+            or "\r" in dispense_reason
+            or "\n" in dispense_reason
+        ):
+            fail(2, "dispensation reason must be a nonempty single line")
     try:
-        return Path(argv[1]).expanduser().resolve()
+        run_dir = Path(run_dir_value).expanduser().resolve()
     except (OSError, RuntimeError, ValueError) as exc:
         fail(2, f"invalid run directory: {exc}")
+    return run_dir, tuple(dispense_targets), dispense_reason
+
+
+def parse_dispensation_targets(
+    raw_targets: Iterable[str],
+    records: Iterable[dict[str, object]],
+) -> list[tuple[str, str, int | str]]:
+    """Parse FR-018(b) targets into audit citation keys, failing closed on ambiguity."""
+
+    decisions: dict[str, int] = {}
+    verifications: dict[str, int] = {}
+    for record in records:
+        identifier = record.get("id")
+        if not isinstance(identifier, str):
+            continue
+        if record.get("type") == "decision":
+            decisions[identifier] = decisions.get(identifier, 0) + 1
+        elif record.get("type") == "verification":
+            verifications[identifier] = verifications.get(identifier, 0) + 1
+
+    targets: list[tuple[str, str, int | str]] = []
+    for raw in raw_targets:
+        basis_match = DISPENSE_BASIS_TARGET.match(raw)
+        observation_match = (
+            DISPENSE_OBSERVATION_TARGET.match(raw) if basis_match is None else None
+        )
+        if basis_match is not None:
+            identifier = basis_match.group("id")
+            if decisions.get(identifier, 0) > 1:
+                fail(2, f"ambiguous dispensation target (duplicate id): {raw}")
+            targets.append(("decision", identifier, int(basis_match.group("index"))))
+        elif observation_match is not None:
+            identifier = observation_match.group("id")
+            if verifications.get(identifier, 0) > 1:
+                fail(2, f"ambiguous dispensation target (duplicate id): {raw}")
+            targets.append(
+                ("verification", identifier, observation_match.group("token"))
+            )
+        else:
+            fail(2, f"malformed dispensation target: {raw}")
+    return targets
 
 
 def record_name(record: dict[str, object]) -> str:
@@ -497,7 +587,11 @@ def audit_repo_conformance(
     return stdout
 
 
-def audit(run_dir: Path) -> str:
+def audit(
+    run_dir: Path,
+    dispense_targets: tuple[str, ...] = (),
+    dispense_reason: str | None = None,
+) -> str:
     records, start, close = closed_records(run_dir)
     source_citations = citations(records)
     audited_citations = [
@@ -544,6 +638,45 @@ def audit(run_dir: Path) -> str:
     hard_missing = [
         citation for citation in missing if citation not in legacy_citations
     ]
+
+    # FR-018(b): operator-directed dispensation degrades exactly the named missing
+    # citations to the visible section below. Targets are exact — one that names a
+    # resolvable citation, an already-tolerated legacy citation, or nothing in the
+    # journal fails closed instead of being ignored. With the dispensation leg
+    # disabled in memory, parsed targets grant nothing and every missing citation
+    # keeps the fail(5) refusal.
+    parsed_targets = parse_dispensation_targets(dispense_targets, records)
+    dispensed_citations: list[AuditedCitation] = []
+    for raw, target in zip(dispense_targets, parsed_targets):
+        matched = [
+            citation
+            for citation in hard_missing
+            if citation.original.target == target
+        ]
+        if not matched:
+            if any(
+                citation.original.target == target for citation in legacy_citations
+            ):
+                fail(
+                    2,
+                    "dispensation names a citation already tolerated as legacy: "
+                    f"{raw}",
+                )
+            if any(
+                citation.original.target == target
+                for citation in audited_citations
+            ):
+                fail(2, f"dispensation names a citation that resolves: {raw}")
+            fail(2, f"dispensation names a citation the journal does not contain: {raw}")
+        if "dispense-citation" in DISPENSATION_LEGS:
+            dispensed_citations.extend(
+                citation
+                for citation in matched
+                if citation not in dispensed_citations
+            )
+    hard_missing = [
+        citation for citation in hard_missing if citation not in dispensed_citations
+    ]
     # CONTROL cited-path BEGIN
     if hard_missing:
         fail(
@@ -574,6 +707,18 @@ def audit(run_dir: Path) -> str:
         if legacy_citations
         else ""
     )
+    dispensed_section = (
+        render_section(
+            "Dispensed Citations",
+            [
+                f"{citation.missing_finding()} — reason: {dispense_reason}"
+                for citation in dispensed_citations
+            ],
+        )
+        + "\n"
+        if dispensed_citations
+        else ""
+    )
     # CONTROL repo-conformance BEGIN
     conformance_section = audit_repo_conformance(start, run_dir)
     conformance_prefix = conformance_section + "\n" if conformance_section else ""
@@ -582,6 +727,7 @@ def audit(run_dir: Path) -> str:
         conformance_prefix
         + correction_section
         + legacy_section
+        + dispensed_section
         + render_section("Residual Risks", risks)
         + "\n"
         + render_section("Follow-ups", follow_ups)
@@ -590,7 +736,10 @@ def audit(run_dir: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        output = audit(parse_argv(sys.argv[1:] if argv is None else argv))
+        run_dir, dispense_targets, dispense_reason = parse_argv(
+            sys.argv[1:] if argv is None else argv
+        )
+        output = audit(run_dir, dispense_targets, dispense_reason)
     except Failure as exc:
         sys.stderr.write(f"{DIAGNOSTIC_PREFIX}{exc.diagnostic}\n")
         return exc.exit_code

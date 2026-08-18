@@ -14,7 +14,7 @@ from .events import (
     json_dumps,
     summarize_stream,
 )
-from .journal import validate_run
+from .journal import CoordinationRefusal, validate_run
 from .monitor import command_monitor
 
 
@@ -83,7 +83,18 @@ def command_state(args: argparse.Namespace) -> int:
 
 def command_validate(args: argparse.Namespace) -> int:
     # forge: modified from upstream — opt into Level B gate checks only when requested
-    payload = validate_run(Path(args.run_dir), gates=getattr(args, "gates", False))
+    # forge: modified from upstream — FR-018(a) operator-directed closed-run keying;
+    # the flag refuses (exit 2, exact literal on stderr) rather than validating when
+    # the journal has no run_closed entry or the justification grammar is violated.
+    try:
+        payload = validate_run(
+            Path(args.run_dir),
+            gates=getattr(args, "gates", False),
+            closed_legacy_compat=getattr(args, "closed_legacy_compat", None),
+        )
+    except CoordinationRefusal as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print(json.dumps(payload, sort_keys=True))
     return 0 if payload["ok"] else 1
 
@@ -137,6 +148,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--gates",
         action="store_true",
         help="Apply the Forge Level B gate validation profile.",
+    )
+    # forge: modified from upstream — FR-018(a) operator-directed closed-run keying
+    validate_parser.add_argument(
+        "--closed-legacy-compat",
+        metavar="JUSTIFICATION",
+        default=None,
+        help=(
+            "Operator-directed: re-key the FR-016 legacy posture for a CLOSED journal "
+            "(virtual declaration immediately before run_closed; run_closed stays "
+            "strict). Nonempty single-line justification; refuses on open journals."
+        ),
     )
     validate_parser.set_defaults(func=command_validate)
 
