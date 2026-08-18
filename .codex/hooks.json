@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "# forge: modified from upstream — retained notification while using a stable forge-managed signature.\n: 'forge-managed'; osascript -e 'display notification \"Task completed\" with title \"Codex — Forge\"' >/dev/null 2>&1 || true",
+            "command": "# forge: modified from upstream — retained notification while using a stable forge-managed signature.\n: 'forge-managed'; command -v osascript >/dev/null 2>&1 && osascript -e 'display notification \"Task completed\" with title \"Codex — Forge\"' >/dev/null 2>&1 || true",
             "timeout": 10
           },
           {
