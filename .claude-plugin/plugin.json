@@ -1,7 +1,7 @@
 {
   "name": "forge",
   "description": "Claude orchestrates Codex under forge governance: gate chains, adversarial review, risk tiers, drift sensing, durable archives, and concurrent-agent safety.",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "author": {
     "name": "nixlim"
   },
