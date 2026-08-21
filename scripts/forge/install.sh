@@ -589,13 +589,38 @@ ensure_directory() {
 }
 
 verify_history_ignore_invariant() {
-    if git check-ignore -q -- ".forge/history/"; then
-        echo "forge install: .forge/history/ must not be ignored" >&2
+    local history_path
+    for history_path in \
+        ".forge/history/" \
+        ".forge/history/runs/.forge-ignore-check.md" \
+        ".forge/history/drift/.forge-ignore-check.md" \
+        ".forge/history/migrations/.forge-ignore-check.md" \
+        ".forge/history/gotchas.md"; do
+        if git check-ignore -q --no-index -- "${history_path}"; then
+            echo "forge install: .forge/history/ must not be ignored" >&2
+            exit 2
+        fi
+    done
+
+    local candidate_path
+    for candidate_path in \
+        ".forge/evals/candidates/.forge-ignore-check" \
+        ".forge/evals/candidates/.forge-ignore-check.json" \
+        ".forge/evals/candidates/.forge-ignore-check.result" \
+        ".forge/evals/candidates/.forge-ignore-check.md"; do
+        if git check-ignore -q --no-index -- "${candidate_path}"; then
+            echo "forge install: .forge/evals/candidates/ must not be ignored" >&2
+            exit 2
+        fi
+    done
+
+    if ! git check-ignore -q --no-index -- ".forge/tmp"; then
+        echo "forge install: .forge/tmp/ must be ignored" >&2
         exit 2
     fi
 
-    if ! git check-ignore -q -- ".forge/tmp"; then
-        echo "forge install: .forge/tmp/ must be ignored" >&2
+    if ! git check-ignore -q --no-index -- ".forge/chains/.forge-ignore-check"; then
+        echo "forge install: .forge/chains/ must be ignored" >&2
         exit 2
     fi
 }

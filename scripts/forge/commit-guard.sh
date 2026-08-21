@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import dataclasses
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -86,6 +86,92 @@ ENV_OPTIONAL_SIGNAL_OPTIONS = {
     "--default-signal",
     "--ignore-signal",
 }
+FORGE_CLI_SINGLE_COMMANDS = frozenset({"status", "verify", "classify"})
+FORGE_CLI_PAIRED_COMMANDS = frozenset(
+    {
+        ("commit", "start"),
+        ("commit", "restage"),
+        ("commit", "rebase"),
+        ("commit", "abort"),
+        ("commit", "approve"),
+        ("commit", "skip"),
+        ("commit", "finalize"),
+        ("gate", "run"),
+        ("scan", "secrets"),
+        ("review", "request"),
+        ("review", "collect"),
+        ("review", "attach"),
+        ("review", "disposition"),
+    }
+)
+FORGE_CLI_DENIALS = {
+    "deny-approve": (
+        "forge: operator verb denied — present the candidate and ask the operator "
+        "to run this via ! (commit approve)"
+    ),
+    "deny-skip": (
+        "forge: operator verb denied — present the candidate and ask the operator "
+        "to run this via ! (commit skip)"
+    ),
+}
+GIT_SUBCOMMANDS = frozenset(
+    {"add", "commit", "push", "reset", "restore", "rm", "stash"}
+)
+CHAIN_SCHEMA = "forge-chain/1"
+CHAIN_KIND = "commit"
+CHAIN_ID = re.compile(r"c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}")
+CHAIN_TOKEN = re.compile(r"[0-9a-f]{32}")
+CHAIN_STATES = frozenset(
+    {
+        "classifying",
+        "verifying",
+        "reviewing",
+        "revising",
+        "awaiting_approval",
+        "authorized",
+        "committing",
+        "closed",
+        "aborted",
+    }
+)
+CHAIN_TERMINAL_STATES = frozenset({"closed", "aborted"})
+CHAIN_STATE_KEYS = frozenset(
+    {
+        "schema",
+        "chain_id",
+        "kind",
+        "state",
+        "created_at",
+        "last_event_at",
+        "inactive_after",
+        "repo_head",
+        "policy_source",
+        "paths",
+        "staging",
+        "candidate",
+        "tier",
+        "steps",
+        "review",
+        "approval",
+        "authorization",
+        "commit_result",
+    }
+)
+CHAIN_OBJECT_KEYS = (
+    "policy_source",
+    "staging",
+    "candidate",
+    "tier",
+    "steps",
+    "review",
+    "approval",
+    "authorization",
+    "commit_result",
+)
+AUTHORIZATION_KEYS = frozenset(
+    {"token", "candidate", "issued_at", "expires_at", "consumed", "consumed_at"}
+)
+CHAIN_STATE_MAX_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -159,6 +245,58 @@ def split_segments(command: str) -> list[tuple[str, str | None]]:
 
     segments.append(("".join(current), None))
     return segments
+
+
+def _classify_forge_cli_segment(segment: str) -> str:
+    try:
+        tokens = shlex.split(segment, comments=False, posix=True)
+    except ValueError:
+        return "no-match"
+
+    index = 0
+    if tokens[:1] == ["env"]:
+        index = 1
+        while index < len(tokens) and ASSIGNMENT.fullmatch(tokens[index]):
+            index += 1
+    if len(tokens) < index + 3:
+        return "no-match"
+
+    interpreter = tokens[index]
+    script = tokens[index + 1]
+    if interpreter not in {"python", "python3"} and Path(interpreter).name not in {
+        "python",
+        "python3",
+    }:
+        return "no-match"
+    if tuple(Path(script).parts[-3:]) != ("scripts", "forge", "cli.py"):
+        return "no-match"
+
+    subcommands = tokens[index + 2 :]
+    pair = tuple(subcommands[:2])
+    if pair == ("commit", "approve"):
+        return "deny-approve"
+    if pair == ("commit", "skip"):
+        return "deny-skip"
+    if (
+        subcommands[0] in FORGE_CLI_SINGLE_COMMANDS
+        or pair in FORGE_CLI_PAIRED_COMMANDS
+    ):
+        return "allow"
+    return "no-match"
+
+
+def classify_forge_cli_invocation(command: str) -> str:
+    """Classify FR-221 Forge CLI invocations in a model Bash command."""
+    if not isinstance(command, str) or not command or "\x00" in command:
+        return "no-match"
+    classification = "no-match"
+    for segment, _separator in split_segments(command):
+        segment_class = _classify_forge_cli_segment(segment)
+        if segment_class.startswith("deny-"):
+            return segment_class
+        if segment_class == "allow":
+            classification = "allow"
+    return classification
 
 
 def is_git_token(token: str) -> bool:
@@ -404,7 +542,7 @@ def parse_action(tokens: list[str], cwd: Path) -> GitAction | None:
             index += 1
         break
 
-    if index >= len(tokens) or tokens[index] not in ("commit", "push"):
+    if index >= len(tokens) or tokens[index] not in GIT_SUBCOMMANDS:
         return None
     return GitAction(
         subcommand=tokens[index],
@@ -506,6 +644,22 @@ def commit_candidate_is_stable(action: GitAction, command: str) -> bool:
             return False
         return False
     return True
+
+
+def is_index_mutating_action(action: GitAction) -> bool:
+    if action.subcommand in {"add", "reset", "stash"}:
+        return True
+    option_args = list(action.subcommand_args)
+    if "--" in option_args:
+        option_args = option_args[: option_args.index("--")]
+    if action.subcommand == "restore":
+        return "--staged" in option_args or any(
+            re.fullmatch(r"-[^-]*S[^-]*", token) is not None
+            for token in option_args
+        )
+    if action.subcommand == "rm":
+        return "--cached" in option_args
+    return False
 
 
 def action_environment(action: GitAction) -> dict[str, str]:
@@ -702,6 +856,24 @@ def repo_context(action: GitAction) -> RepoContext | None:
         main_root=common_dir.parent,
         git_env=action_environment(action),
         bare=is_bare,
+    )
+
+
+def invoking_repo_context() -> RepoContext | None:
+    """Resolve the hook's current Git context for non-Git CLI denials."""
+    try:
+        cwd = Path.cwd().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    return repo_context(
+        GitAction(
+            subcommand="commit",
+            executable="forge-cli",
+            shell_cwd=cwd,
+            structural_globals=(),
+            assignments=(),
+            subcommand_args=(),
+        )
     )
 
 
@@ -1433,6 +1605,189 @@ def sweep_stale_markers(context: RepoContext) -> None:
             pass
 
 
+def _chain_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _read_chain_state(directory: int, name: str) -> dict[str, object] | None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory,
+        )
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or opened.st_size > CHAIN_STATE_MAX_BYTES
+        ):
+            return None
+        chunks: list[bytes] = []
+        byte_count = 0
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            byte_count += len(chunk)
+            if byte_count > CHAIN_STATE_MAX_BYTES:
+                return None
+            chunks.append(chunk)
+        loaded = json.loads(b"".join(chunks).decode("utf-8"))
+    except (MemoryError, OSError, RecursionError, UnicodeError, json.JSONDecodeError):
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    chain_id = name[:-5]
+    if not isinstance(loaded, dict) or set(loaded) != CHAIN_STATE_KEYS:
+        return None
+    if (
+        loaded.get("schema") != CHAIN_SCHEMA
+        or loaded.get("kind") != CHAIN_KIND
+        or loaded.get("chain_id") != chain_id
+        or CHAIN_ID.fullmatch(chain_id) is None
+        or loaded.get("state") not in CHAIN_STATES
+    ):
+        return None
+    if not isinstance(loaded.get("paths"), list) or not all(
+        isinstance(item, str) for item in loaded["paths"]
+    ):
+        return None
+    if any(not isinstance(loaded.get(key), dict) for key in CHAIN_OBJECT_KEYS):
+        return None
+    if any(
+        _chain_timestamp(loaded.get(key)) is None
+        for key in ("created_at", "last_event_at", "inactive_after")
+    ):
+        return None
+    candidate = loaded["candidate"].get("sha256")
+    if candidate is not None and (
+        not isinstance(candidate, str) or HASH.fullmatch(candidate) is None
+    ):
+        return None
+    return loaded
+
+
+def _chain_states(context: RepoContext) -> list[dict[str, object]]:
+    common: int | None = None
+    forge: int | None = None
+    directory: int | None = None
+    try:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        common = os.open(context.main_root, flags)
+        forge = os.open(".forge", flags, dir_fd=common)
+        directory = os.open("chains", flags, dir_fd=forge)
+        for descriptor in (common, forge, directory):
+            opened = os.fstat(descriptor)
+            if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.geteuid():
+                return []
+        names = sorted(os.listdir(directory))
+        states: list[dict[str, object]] = []
+        for name in names:
+            if not name.endswith(".json") or CHAIN_ID.fullmatch(name[:-5]) is None:
+                continue
+            state = _read_chain_state(directory, name)
+            if state is not None:
+                states.append(state)
+        return states
+    except OSError:
+        return []
+    finally:
+        if directory is not None:
+            os.close(directory)
+        if forge is not None:
+            os.close(forge)
+        if common is not None:
+            os.close(common)
+
+
+def _live_chain_states(context: RepoContext) -> list[dict[str, object]]:
+    now = datetime.now(timezone.utc)
+    worktree_root = str(context.worktree_root)
+    states: list[dict[str, object]] = []
+    for state in _chain_states(context):
+        if state["state"] in CHAIN_TERMINAL_STATES:
+            continue
+        inactive_after = _chain_timestamp(state["inactive_after"])
+        if inactive_after is None or now >= inactive_after:
+            continue
+        staging = state["staging"]
+        if staging.get("worktree_root") != worktree_root:
+            continue
+        states.append(state)
+    return states
+
+
+def chain_authorizes_commit(context: RepoContext, candidate: str) -> bool:
+    if HASH.fullmatch(candidate) is None:
+        return False
+    now = datetime.now(timezone.utc)
+    for state in _live_chain_states(context):
+        if state["state"] != "authorized":
+            continue
+        candidate_record = state["candidate"]
+        if candidate_record.get("sha256") != candidate:
+            continue
+        authorization = state["authorization"]
+        if set(authorization) != AUTHORIZATION_KEYS:
+            continue
+        token = authorization.get("token")
+        if not isinstance(token, str) or CHAIN_TOKEN.fullmatch(token) is None:
+            continue
+        if authorization.get("consumed") is not False:
+            continue
+        if authorization.get("consumed_at") is not None:
+            continue
+        if authorization.get("candidate") != candidate:
+            continue
+        issued_at = _chain_timestamp(authorization.get("issued_at"))
+        expires_at = _chain_timestamp(authorization.get("expires_at"))
+        if issued_at is None or expires_at is None:
+            continue
+        try:
+            derived_expiry = issued_at + timedelta(minutes=30)
+        except OverflowError:
+            continue
+        if now < issued_at or expires_at != derived_expiry or now >= derived_expiry:
+            continue
+        return True
+    return False
+
+
+def foreign_live_chain(context: RepoContext) -> dict[str, object] | None:
+    invoking_session = os.environ.get("CLAUDE_SESSION_ID", "")
+    if not invoking_session:
+        return None
+    for state in _live_chain_states(context):
+        session_identity = state["staging"].get("session_identity")
+        if (
+            isinstance(session_identity, str)
+            and session_identity
+            and session_identity != invoking_session
+        ):
+            return state
+    return None
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -1455,6 +1810,8 @@ def main() -> int:
 
     # Halt is the first authority check across every relevant segment.
     for action, context in contexts:
+        if action.subcommand not in {"commit", "push"}:
+            continue
         if context is None:
             continue
         sentinel = halt_sentinel(context, check_halt)
@@ -1478,6 +1835,46 @@ def main() -> int:
         run_halt_check(context, check_halt, probe_only=False)
         return 0
 
+    cli_class = classify_forge_cli_invocation(command)
+    if cli_class in FORGE_CLI_DENIALS:
+        emit_deny(FORGE_CLI_DENIALS[cli_class])
+        context = invoking_repo_context()
+        if context is not None:
+            reason_code = f"operator-verb-{cli_class[len('deny-'):]}"
+            audit_block(context, "forge-cli", reason_code, command)
+            emit_decision_event(
+                emitter,
+                context,
+                event="guard_deny",
+                candidate=staged_candidate(context),
+                policy_sha=head_policy_sha(context),
+                reason=reason_code,
+            )
+        return 0
+
+    for action, context in contexts:
+        if context is None or not is_index_mutating_action(action):
+            continue
+        chain = foreign_live_chain(context)
+        if chain is None:
+            continue
+        chain_id = str(chain["chain_id"])
+        reason = (
+            "forge: index verb denied — live commit chain "
+            f"{chain_id} owns this worktree index; use the chain verbs or abort it"
+        )
+        audit_block(context, action.executable, "foreign-chain-index-owner", command)
+        emit_deny(reason)
+        emit_decision_event(
+            emitter,
+            context,
+            event="guard_deny",
+            candidate=staged_candidate(context),
+            policy_sha=head_policy_sha(context),
+            reason="foreign-chain-index-owner",
+        )
+        return 0
+
     for action, context in contexts:
         if action.subcommand != "commit" or context is None:
             continue
@@ -1489,12 +1886,13 @@ def main() -> int:
             if candidate
             else "marker hash mismatch"
         )
+        chain_authorized = chain_authorizes_commit(context, candidate)
         # FR-090 requires the current candidate's state to be determined before
         # the age sweep, so a present stale marker retains its exact denial.
         sweep_stale_markers(context)
         failure = (
             marker_state
-            if marker_state is not None
+            if marker_state is not None and not chain_authorized
             else (None if commit_candidate_is_stable(action, command) else "marker hash mismatch")
         )
         if failure is None:

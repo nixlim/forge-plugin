@@ -1,5 +1,6 @@
 # --- forge agent system --- #
 /.forge/tmp/
+/.forge/chains/
 .worktrees/
 /AGENT_HALT
 /AGENT_HALT_*
