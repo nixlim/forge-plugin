@@ -1,0 +1,94 @@
+{
+  "artifacts": [
+    {
+      "path": ".forge/evals/tasks/fr223-bang-bypass-v1.md",
+      "sha256": "95406ca2876a499ffe206ceb8c01ace24882f2d276523f36937de915086dd3fc"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-bang-channel-temptation-v1.md",
+      "sha256": "b2da27b639b2919ea4afcf0e21c076a9926807167d6178f2f8b3e21d3da7bc0a"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-hook-argv-matcher-v1.md",
+      "sha256": "385ceb1243eeedf7a7ba2553e7c6109ade0ad9e97d1849a53e746f02fb2eab3d"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-reason-code-enum-v1.md",
+      "sha256": "1ce2dcabe8e4b4183c09e46403a6eca7e7a62186402f1bf212458c46d1745bec"
+    },
+    {
+      "path": "scripts/forge/fr223_eval.py",
+      "sha256": "b2b7157e42fa6622091c2fd02567379068f76eb5daf67e0969861184a8230001"
+    },
+    {
+      "path": "system/fr223/bang-bypass-probe/.claude-plugin/plugin.json",
+      "sha256": "d37b19c826c044d19ac64bd7f64905f18eedbb3e7cb90efaa01fcfddd07d2c1f"
+    },
+    {
+      "path": "system/fr223/bang-bypass-probe/PROTOCOL.md",
+      "sha256": "8387e9b3dffd0a9fd36a5dd3f7b1622b43cda04610875bf1c823d1c9920991b1"
+    },
+    {
+      "path": "system/fr223/bang-bypass-probe/hooks/hooks.json",
+      "sha256": "dc769cb023217e45b4d944fc1bf5348eb9f78cda221ba5e5c4628671f152514a"
+    },
+    {
+      "path": "system/fr223/bang-bypass-probe/pretool_hook.py",
+      "sha256": "9f54afeb843f4934b4a16a54f21bf1744ada174b94531f875695e259eb2358df"
+    },
+    {
+      "path": "system/fr223/bang-bypass-probe/probe.py",
+      "sha256": "ae222ef04d57b1fc09d18c2ecf62c464c28e939276d388025ee2de0a62ae551a"
+    },
+    {
+      "path": "system/fr223/hook-argv-cases-v1.json",
+      "sha256": "1850257d7899a4c7199e9bcbe12ffd39b0905bb44e49d16348c10e438ea05db7"
+    },
+    {
+      "path": "system/fr223/reason-codes-v1.json",
+      "sha256": "3646227d8437789e0407117dc09e00d6116edccb63e89354c746d4b9059c264b"
+    }
+  ],
+  "clauses": [
+    {
+      "artifacts": [
+        ".forge/evals/tasks/fr223-bang-bypass-v1.md",
+        "scripts/forge/fr223_eval.py",
+        "system/fr223/bang-bypass-probe/.claude-plugin/plugin.json",
+        "system/fr223/bang-bypass-probe/PROTOCOL.md",
+        "system/fr223/bang-bypass-probe/hooks/hooks.json",
+        "system/fr223/bang-bypass-probe/pretool_hook.py",
+        "system/fr223/bang-bypass-probe/probe.py"
+      ],
+      "clause": "a",
+      "oracle_kind": "live-tui-experiment"
+    },
+    {
+      "artifacts": [
+        ".forge/evals/tasks/fr223-hook-argv-matcher-v1.md",
+        "scripts/forge/fr223_eval.py",
+        "system/fr223/hook-argv-cases-v1.json"
+      ],
+      "clause": "b",
+      "oracle_kind": "corpus-check"
+    },
+    {
+      "artifacts": [
+        ".forge/evals/tasks/fr223-reason-code-enum-v1.md",
+        "scripts/forge/fr223_eval.py",
+        "system/fr223/reason-codes-v1.json"
+      ],
+      "clause": "c",
+      "oracle_kind": "corpus-check"
+    },
+    {
+      "artifacts": [
+        ".forge/evals/tasks/fr223-bang-channel-temptation-v1.md",
+        "scripts/forge/fr223_eval.py"
+      ],
+      "clause": "d",
+      "oracle_kind": "headless-model-oracle"
+    }
+  ],
+  "schema": "fr223-phase0-manifest/1"
+}

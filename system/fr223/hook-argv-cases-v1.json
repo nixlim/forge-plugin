@@ -1,0 +1,677 @@
+{
+  "schema": "fr223-hook-argv/1",
+  "cases": [
+    {
+      "id": "allow-classify-env-multiple-assignments",
+      "command": "env FORGE_MODE=test TRACE=1 python3 scripts/forge/cli.py classify",
+      "expect": "allow",
+      "reason": "matched CLI invocation uses the non-operator classify verb"
+    },
+    {
+      "id": "allow-commit-abort-local-checkout-path",
+      "command": "python3 /work/forge-plugin/scripts/forge/cli.py commit abort",
+      "expect": "allow",
+      "reason": "matched local-checkout CLI path uses the non-operator commit abort verb"
+    },
+    {
+      "id": "allow-commit-finalize-dot-relative",
+      "command": "python3 ./scripts/forge/cli.py commit finalize",
+      "expect": "allow",
+      "reason": "matched CLI invocation uses the explicitly allowed commit finalize verb"
+    },
+    {
+      "id": "allow-commit-finalize-json-option",
+      "command": "python3 scripts/forge/cli.py commit finalize --json",
+      "expect": "allow",
+      "reason": "arguments after the allowed commit finalize subcommand do not change classification"
+    },
+    {
+      "id": "allow-commit-finalize-quoted-ampersand-argument",
+      "command": "python3 scripts/forge/cli.py commit finalize --message 'safe & commit approve'",
+      "expect": "allow",
+      "reason": "quoted ampersand text is one argument and the actual subcommand is commit finalize"
+    },
+    {
+      "id": "allow-commit-finalize-quoted-and-argument",
+      "command": "python3 scripts/forge/cli.py commit finalize --message \"safe && commit skip\"",
+      "expect": "allow",
+      "reason": "quoted double-ampersand text is one argument and the actual subcommand is commit finalize"
+    },
+    {
+      "id": "allow-commit-restage-env-assignment",
+      "command": "env FORGE_RUN=phase0 python3 scripts/forge/cli.py commit restage docs/specs/forge-plugin-spec.md",
+      "expect": "allow",
+      "reason": "matched env-prefixed CLI invocation uses the non-operator commit restage verb"
+    },
+    {
+      "id": "allow-commit-start-python",
+      "command": "python scripts/forge/cli.py commit start docs/README.md",
+      "expect": "allow",
+      "reason": "matched python interpreter invocation uses the non-operator commit start verb"
+    },
+    {
+      "id": "allow-gate-run-cache-path",
+      "command": "/usr/bin/python3 /home/alice/.cache/claude/plugins/forge/1.2.3/scripts/forge/cli.py gate run gate-1",
+      "expect": "allow",
+      "reason": "matched cache-resolved CLI path uses the non-operator gate run verb"
+    },
+    {
+      "id": "allow-multi-segment-finalize-after-semicolon",
+      "command": "printf ready; python3 scripts/forge/cli.py commit finalize",
+      "expect": "allow",
+      "reason": "the second unquoted segment is a matched commit finalize invocation"
+    },
+    {
+      "id": "allow-multi-segment-status-after-bare-ampersand",
+      "command": "printf ready & python3 scripts/forge/cli.py status",
+      "expect": "allow",
+      "reason": "the segment after the bare ampersand is a matched non-operator status invocation"
+    },
+    {
+      "id": "allow-review-attach-braced-plugin-root",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py\" review attach verdict.json",
+      "expect": "allow",
+      "reason": "matched braced plugin-root path uses the non-operator review attach verb"
+    },
+    {
+      "id": "allow-review-request-absolute-python3",
+      "command": "/opt/venv/bin/python3 /opt/forge/scripts/forge/cli.py review request",
+      "expect": "allow",
+      "reason": "matched path-qualified interpreter and absolute CLI path use review request"
+    },
+    {
+      "id": "allow-scan-secrets-marketplace-path",
+      "command": "python3 /home/alice/.claude/plugins/marketplaces/forge/scripts/forge/cli.py scan secrets",
+      "expect": "allow",
+      "reason": "matched marketplace-resolved CLI path uses the non-operator scan secrets verb"
+    },
+    {
+      "id": "allow-status-absolute-suffix-path",
+      "command": "python3 /srv/arbitrary/scripts/forge/cli.py status",
+      "expect": "allow",
+      "reason": "an absolute path with the required final components matches and status is allowed"
+    },
+    {
+      "id": "allow-status-plugin-root-quoted",
+      "command": "python3 \"$CLAUDE_PLUGIN_ROOT/scripts/forge/cli.py\" status",
+      "expect": "allow",
+      "reason": "matched quoted plugin-root path uses the non-operator status verb"
+    },
+    {
+      "id": "allow-status-quoted-newline-argument",
+      "command": "python3 scripts/forge/cli.py status --note \"first\ncommit approve\"",
+      "expect": "allow",
+      "reason": "a newline inside quotes remains argument data and the actual subcommand is status"
+    },
+    {
+      "id": "allow-status-space-containing-local-path",
+      "command": "python3 \"/tmp/local checkout/scripts/forge/cli.py\" status",
+      "expect": "allow",
+      "reason": "quoted local-checkout path with spaces retains the required final components"
+    },
+    {
+      "id": "deny-approve-absolute-python-absolute-script",
+      "command": "/usr/local/bin/python /opt/forge/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-absolute-python3-absolute-script",
+      "command": "/usr/bin/python3 /opt/forge/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-absolute-suffix-path",
+      "command": "python3 /tmp/copied-tree/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-after-bare-ampersand",
+      "command": "printf background & python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-after-double-ampersand",
+      "command": "true && python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-after-newline",
+      "command": "printf ready\npython3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-after-pipe",
+      "command": "printf candidate | python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-after-semicolon-no-spaces",
+      "command": "printf ready;python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-after-unquoted-or",
+      "command": "false || python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-before-semicolon",
+      "command": "python3 scripts/forge/cli.py commit approve --candidate abc123; printf unreachable",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-braced-plugin-root",
+      "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-cache-resolved-path",
+      "command": "python3 /home/alice/.cache/claude/plugins/forge/1.2.3/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-direct-python3-relative",
+      "command": "python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-dot-relative-script",
+      "command": "python3 ./scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-empty-assignment",
+      "command": "env EMPTY= python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-equals-in-value",
+      "command": "env TOKEN=left=right python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-multiple-assignments",
+      "command": "env FORGE_MODE=test TRACE=1 python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-no-assignment",
+      "command": "env python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-quoted-assignment-space",
+      "command": "env \"FORGE_NOTE=two words\" python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-quoted-separator-value",
+      "command": "env 'FORGE_NOTE=safe;still-one-value' python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-single-assignment",
+      "command": "env FORGE_MODE=test python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-env-underscore-digit-names",
+      "command": "env _FORGE=1 FORGE2=two python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-local-checkout-path",
+      "command": "python3 /work/forge-plugin/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-marketplace-resolved-path",
+      "command": "python3 /home/alice/.claude/plugins/marketplaces/forge/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-plugin-root-unbraced",
+      "command": "python3 $CLAUDE_PLUGIN_ROOT/scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-quoted-candidate-pipe",
+      "command": "python3 scripts/forge/cli.py commit approve --candidate 'abc|123'",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-quoted-interpreter-and-space-path",
+      "command": "\"/opt/venv/bin/python3\" \"/tmp/local checkout/scripts/forge/cli.py\" commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-quoted-subcommand-tokens",
+      "command": "python3 scripts/forge/cli.py 'commit' \"approve\" --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-single-quoted-braced-plugin-root",
+      "command": "python3 '${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py' commit approve --candidate abc123",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-skip-absolute-python-path",
+      "command": "/opt/venv/bin/python /opt/forge/scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-after-bare-ampersand",
+      "command": "printf background & python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-after-double-ampersand",
+      "command": "true && python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-after-newline",
+      "command": "printf ready\npython3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-after-pipe",
+      "command": "printf gate | python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-after-semicolon",
+      "command": "printf ready; python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-after-unquoted-or",
+      "command": "false || python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-braced-plugin-root-quoted",
+      "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py\" commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-cache-resolved-path",
+      "command": "python3 /home/alice/.cache/claude/plugins/forge/1.2.3/scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-direct-python3-relative",
+      "command": "python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-env-multiple-assignments",
+      "command": "env FORGE_MODE=test TRACE=1 python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-index-drift-form",
+      "command": "python3 scripts/forge/cli.py commit skip --index-drift --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-marketplace-resolved-path",
+      "command": "python3 /home/alice/.claude/plugins/marketplaces/forge/scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-python-interpreter-dot-relative",
+      "command": "python ./scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-quoted-reason-separators",
+      "command": "python3 scripts/forge/cli.py commit skip gate-2 --reason 'operator; reviewed && directed'",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-quoted-subcommand-tokens",
+      "command": "python3 scripts/forge/cli.py \"commit\" 'skip' gate-2 --reason operator-directed",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "no-match-absolute-env-prefix",
+      "command": "/usr/bin/env FORGE_MODE=test python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the grammar recognizes the env token, not a path-qualified env command"
+    },
+    {
+      "id": "no-match-bare-assignment-without-env",
+      "command": "FORGE_MODE=test python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "bare shell assignments are not the specified leading env prefix"
+    },
+    {
+      "id": "no-match-command-wrapper",
+      "command": "command python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "command is a wrapper token and not an allowed interpreter form"
+    },
+    {
+      "id": "no-match-decoy-cli-extension",
+      "command": "python3 scripts/forge/cli.py.bak commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the script final component is cli.py.bak rather than cli.py"
+    },
+    {
+      "id": "no-match-decoy-cli-name",
+      "command": "python3 scripts/forge/forge-cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "no-match",
+      "reason": "the script final component is forge-cli.py rather than cli.py"
+    },
+    {
+      "id": "no-match-decoy-extra-path-component",
+      "command": "python3 scripts/forge/cli.py/runner commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the required scripts/forge/cli.py components are not final"
+    },
+    {
+      "id": "no-match-decoy-forge-directory",
+      "command": "python3 scripts/forged/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the script path uses forged rather than the required forge component"
+    },
+    {
+      "id": "no-match-decoy-missing-scripts-component",
+      "command": "python3 forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the script path lacks the required scripts component"
+    },
+    {
+      "id": "no-match-decoy-script-case",
+      "command": "python3 scripts/forge/CLI.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the case-sensitive script final component is not cli.py"
+    },
+    {
+      "id": "no-match-env-invalid-assignment-name",
+      "command": "env 2FORGE=test python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the token after env is not a valid assignment and therefore occupies the command position"
+    },
+    {
+      "id": "no-match-env-nonassignment-token",
+      "command": "env FORGE_MODE python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the non-assignment token after env occupies the command position"
+    },
+    {
+      "id": "no-match-env-option-before-interpreter",
+      "command": "env -i python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the normative env prefix admits assignments only and does not admit env options"
+    },
+    {
+      "id": "no-match-interpreter-option-before-script",
+      "command": "python3 -u scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the required script argument does not immediately follow the interpreter token"
+    },
+    {
+      "id": "no-match-lookalike-approve-extra-token",
+      "command": "python3 scripts/forge/cli.py commit approve-now --candidate abc123",
+      "expect": "no-match",
+      "reason": "approve-now is a lookalike rather than the exact approve token"
+    },
+    {
+      "id": "no-match-lookalike-approve-prefix",
+      "command": "python3 scripts/forge/cli.py commit approved --candidate abc123",
+      "expect": "no-match",
+      "reason": "approved is a lookalike rather than the exact approve token"
+    },
+    {
+      "id": "no-match-lookalike-approve-single-token",
+      "command": "python3 scripts/forge/cli.py approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "approve without the leading commit token is not an operator subcommand"
+    },
+    {
+      "id": "no-match-lookalike-capitalized-verb",
+      "command": "python3 scripts/forge/cli.py Commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the case-sensitive first subcommand token is not commit"
+    },
+    {
+      "id": "no-match-lookalike-committed-verb",
+      "command": "python3 scripts/forge/cli.py committed approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "committed is a lookalike rather than the exact commit token"
+    },
+    {
+      "id": "no-match-lookalike-skip-extra-token",
+      "command": "python3 scripts/forge/cli.py commit skip-all gate-2",
+      "expect": "no-match",
+      "reason": "skip-all is a lookalike rather than the exact skip token"
+    },
+    {
+      "id": "no-match-lookalike-skip-single-token",
+      "command": "python3 scripts/forge/cli.py skip gate-2",
+      "expect": "no-match",
+      "reason": "skip without the leading commit token is not an operator subcommand"
+    },
+    {
+      "id": "no-match-path-qualified-python-lookalike",
+      "command": "/usr/bin/python3.12 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the interpreter path final component is python3.12 rather than python3 or python"
+    },
+    {
+      "id": "no-match-pathless-python-lookalike",
+      "command": "python3.12 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "python3.12 is not one of the exact interpreter tokens"
+    },
+    {
+      "id": "no-match-pypy-interpreter",
+      "command": "pypy3 scripts/forge/cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "pypy3 is not an allowed interpreter token"
+    },
+    {
+      "id": "no-match-quoted-entire-command-token",
+      "command": "\"python3 scripts/forge/cli.py commit approve\" --candidate abc123",
+      "expect": "no-match",
+      "reason": "the quoted text is one command token rather than an interpreter followed by a script"
+    },
+    {
+      "id": "no-match-quoted-fake-command-after-echo",
+      "command": "echo \"python3 scripts/forge/cli.py commit skip gate-2 & python3 scripts/forge/cli.py commit approve\"",
+      "expect": "no-match",
+      "reason": "both apparent invocations and the ampersand are quoted argument data to echo"
+    },
+    {
+      "id": "no-match-quoted-fake-command-after-printf",
+      "command": "printf '%s' 'python3 scripts/forge/cli.py commit approve; safe'",
+      "expect": "no-match",
+      "reason": "the apparent invocation is quoted argument data to printf"
+    },
+    {
+      "id": "no-match-quoted-separator-as-subcommand",
+      "command": "python3 scripts/forge/cli.py 'commit; approve' --candidate abc123",
+      "expect": "no-match",
+      "reason": "the quoted separator remains inside a lookalike first subcommand token"
+    },
+    {
+      "id": "no-match-script-basename-only",
+      "command": "python3 cli.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the script path lacks the required scripts/forge components"
+    },
+    {
+      "id": "no-match-shell-bash-wrapper",
+      "command": "bash -c 'python3 scripts/forge/cli.py commit approve --candidate abc123'",
+      "expect": "no-match",
+      "reason": "the CLI text is quoted data to an out-of-scope shell wrapper"
+    },
+    {
+      "id": "no-match-sudo-wrapper",
+      "command": "sudo python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "expect": "no-match",
+      "reason": "sudo is a wrapper token and not an allowed interpreter form"
+    },
+    {
+      "id": "no-match-unrelated-python-script",
+      "command": "python3 scripts/forge/other.py commit approve --candidate abc123",
+      "expect": "no-match",
+      "reason": "the script final component is other.py rather than cli.py"
+    },
+    {
+      "id": "segment-first-ampersand-deny-approve",
+      "command": "python3 scripts/forge/cli.py commit approve --candidate matrix-first-ampersand & printf tail",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-first-and-deny-skip",
+      "command": "python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-first-and && printf tail",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-first-newline-deny-approve",
+      "command": "python3 scripts/forge/cli.py commit approve --candidate matrix-first-newline\nprintf tail",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-first-or-deny-skip",
+      "command": "python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-first-or || printf tail",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-first-pipe-deny-approve",
+      "command": "python3 scripts/forge/cli.py commit approve --candidate matrix-first-pipe | printf tail",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-first-semicolon-deny-skip",
+      "command": "python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-first-semicolon; printf tail",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-last-ampersand-deny-approve",
+      "command": "printf head & python3 scripts/forge/cli.py commit approve --candidate matrix-last-ampersand",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-last-and-deny-skip",
+      "command": "printf head && python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-last-and",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-last-newline-deny-approve",
+      "command": "printf head\npython3 scripts/forge/cli.py commit approve --candidate matrix-last-newline",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-last-or-deny-skip",
+      "command": "printf head || python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-last-or",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-last-pipe-deny-approve",
+      "command": "printf head | python3 scripts/forge/cli.py commit approve --candidate matrix-last-pipe",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-last-semicolon-deny-skip",
+      "command": "printf head; python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-last-semicolon",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-middle-ampersand-deny-approve",
+      "command": "printf head & python3 scripts/forge/cli.py commit approve --candidate matrix-middle-ampersand & printf tail",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-middle-and-deny-skip",
+      "command": "printf head && python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-middle-and && printf tail",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-middle-newline-deny-approve",
+      "command": "printf head\npython3 scripts/forge/cli.py commit approve --candidate matrix-middle-newline\nprintf tail",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-middle-or-deny-skip",
+      "command": "printf head || python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-middle-or || printf tail",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "segment-middle-pipe-deny-approve",
+      "command": "printf head | python3 scripts/forge/cli.py commit approve --candidate matrix-middle-pipe | printf tail",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "segment-middle-semicolon-deny-skip",
+      "command": "printf head; python3 scripts/forge/cli.py commit skip gate-1 --reason matrix-middle-semicolon; printf tail",
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    }
+  ]
+}

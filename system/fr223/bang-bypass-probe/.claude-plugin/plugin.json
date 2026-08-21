@@ -1,0 +1,8 @@
+{
+  "name": "forge-fr223-bang-bypass-probe",
+  "version": "1.0.0",
+  "description": "Interactive FR-223 probe for Claude Code PreToolUse bypass behavior.",
+  "author": {
+    "name": "nixlim"
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "schema": "fr223-reason-codes/1",
+  "codes": [
+    {
+      "code": "ambiguous-target",
+      "exit_class": 1,
+      "precondition": "a dispensation or disposition target matches more than one record"
+    },
+    {
+      "code": "approval-required",
+      "exit_class": 1,
+      "precondition": "control-class chain not yet operator-approved"
+    },
+    {
+      "code": "candidate-stale",
+      "exit_class": 1,
+      "precondition": "evidence bound to a superseded candidate hash"
+    },
+    {
+      "code": "citation-out-of-root",
+      "exit_class": 1,
+      "precondition": "FR-017 refusal surfaced through the CLI"
+    },
+    {
+      "code": "dirty-index",
+      "exit_class": 1,
+      "precondition": "pre-existing staged content at `commit start`"
+    },
+    {
+      "code": "drift-tree-index",
+      "exit_class": 1,
+      "precondition": "working-tree-vs-index divergence on a staged path"
+    },
+    {
+      "code": "evidence-incomplete",
+      "exit_class": 1,
+      "precondition": "a required tier step is absent or non-PASS without an operator skip"
+    },
+    {
+      "code": "frozen-chain",
+      "exit_class": 2,
+      "precondition": "corrupt chain file, irresolvable event/state divergence, or foreign HEAD in `committing`"
+    },
+    {
+      "code": "halt-engaged",
+      "exit_class": 1,
+      "precondition": "operator halt sentinel present"
+    },
+    {
+      "code": "head-moved",
+      "exit_class": 1,
+      "precondition": "out-of-band HEAD movement pending `commit rebase` or `abort`"
+    },
+    {
+      "code": "inactive-chain",
+      "exit_class": 1,
+      "precondition": "chain past `inactive_after`; only `status`/`abort` accepted"
+    },
+    {
+      "code": "iteration-cap",
+      "exit_class": 1,
+      "precondition": "FR-053 cap of 8 reached"
+    },
+    {
+      "code": "live-chain-exists",
+      "exit_class": 1,
+      "precondition": "another live commit chain owns the worktree"
+    },
+    {
+      "code": "lock-unavailable",
+      "exit_class": 1,
+      "precondition": "commit-lock acquisition failed or timed out"
+    },
+    {
+      "code": "mutating-gate-pending",
+      "exit_class": 1,
+      "precondition": "non-mutating `gate run` while a configured mutating gate is pending"
+    },
+    {
+      "code": "ok",
+      "exit_class": 0,
+      "precondition": "success"
+    },
+    {
+      "code": "operator-verb-denied",
+      "exit_class": 1,
+      "precondition": "model-issued `approve`/`skip` reached the CLI through a denied path"
+    },
+    {
+      "code": "path-missing",
+      "exit_class": 1,
+      "precondition": "a named path does not exist at `commit start`/`restage`"
+    },
+    {
+      "code": "policy-changed",
+      "exit_class": 1,
+      "precondition": "committed policy bytes differ at the new HEAD after `commit rebase`"
+    },
+    {
+      "code": "policy-unreadable",
+      "exit_class": 1,
+      "precondition": "committed-HEAD policy unavailable outside the bootstrap path"
+    },
+    {
+      "code": "review-verdict-invalid",
+      "exit_class": 1,
+      "precondition": "verdict grammar, candidate-hash citation, or package-digest citation failed at `collect`/`attach`"
+    },
+    {
+      "code": "skip-not-permitted",
+      "exit_class": 1,
+      "precondition": "a skip naming control-class review or approval"
+    },
+    {
+      "code": "state-precondition",
+      "exit_class": 1,
+      "precondition": "verb issued in a state whose transition table does not admit it"
+    },
+    {
+      "code": "token-consumed",
+      "exit_class": 1,
+      "precondition": "authorization token already used"
+    },
+    {
+      "code": "ttl-expired",
+      "exit_class": 1,
+      "precondition": "authorization token past its 30-minute TTL"
+    }
+  ]
+}
