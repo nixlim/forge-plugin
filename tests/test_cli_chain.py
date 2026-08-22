@@ -988,13 +988,18 @@ class ForgeCLIChainTests(ForgeCLIFixture):
                 "gate-1",
                 "stack:python",
                 "stack:python",
-                "assertion-sensor",
                 "invariant:1",
             ],
         )
         resumed_state = self.state(chain_id)
         self.assertEqual(len(resumed_state["steps"]["gate-1"]), 2)
         self.assertEqual(len(resumed_state["steps"]["stack:python"]), 2)
+        # No staged test file: the sensor step completes as not applicable
+        # without executing the tool, whose empty-path invocation is exit 2.
+        sensor_record = resumed_state["steps"]["assertion-sensor"][-1]
+        self.assertEqual(sensor_record["result"], "passed")
+        self.assertTrue(sensor_record["not_applicable"])
+        self.assertEqual(sensor_record["test_paths"], [])
         self.assertEqual(resumed_state["steps"]["stack:python"][-1]["result"], "passed")
         self.assertEqual(resumed_state["steps"]["secret-scan"][-1]["result"], "passed")
 
@@ -1192,11 +1197,13 @@ class ForgeCLIChainTests(ForgeCLIFixture):
                 "gate-1",
                 "gate-1",
                 "stack:python",
-                "assertion-sensor",
                 "invariant:1",
                 "strict-evals",
             ],
         )
+        # scripts/tool.py stages no test file, so the recorded sensor step is
+        # the not-applicable completion rather than a tool execution.
+        self.assertTrue(state["steps"]["assertion-sensor"][-1]["not_applicable"])
 
         _result, requested = self.cli(
             "review", "request", "--chain-id", chain_id, expected=0
@@ -2074,8 +2081,10 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         )
 
     def test_fast_tier_stays_unapproved_when_assertion_sensor_fails(self) -> None:
-        self.change("docs/guide.md", "# Fast candidate\n")
-        chain_id = str(self.start("docs/guide.md")["chain_id"])
+        # A test-named docs file keeps the fast tier while making the sensor
+        # applicable, so its failure leg still proves the row is load-bearing.
+        self.change("docs/test_guide.md", "# Fast candidate\n")
+        chain_id = str(self.start("docs/test_guide.md")["chain_id"])
         _result, refusal = self.cli(
             "verify",
             "--chain-id",
@@ -2100,6 +2109,22 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         state = self.state(chain_id)
         self.assertEqual(state["state"], "authorized")
         self.assertEqual(state["steps"]["invariant:1"][-1]["result"], "passed")
+
+    def test_docs_only_chain_completes_sensor_without_executing_the_tool(self) -> None:
+        # Regression: with no touched test file the CLI used to invoke
+        # check-test-quality.py with an empty path set, whose contract is
+        # exit 2, failing docs-only chains closed on a false positive.
+        self.change("docs/guide.md", "# Docs only\n")
+        chain_id = str(self.start("docs/guide.md")["chain_id"])
+        _result, outcome = self.cli(
+            "gate", "run", "assertion-sensor", "--chain-id", chain_id, expected=0
+        )
+        self.assertEqual(outcome["reason_code"], "ok")
+        self.assertNotIn("assertion-sensor", self.gate_lines())
+        record = self.state(chain_id)["steps"]["assertion-sensor"][-1]
+        self.assertEqual(record["result"], "passed")
+        self.assertTrue(record["not_applicable"])
+        self.assertEqual(record["test_paths"], [])
 
     def test_fast_tier_cannot_authorize_through_a_mechanical_skip(self) -> None:
         self.change("docs/guide.md", "# Fast candidate\n")

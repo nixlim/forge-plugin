@@ -3911,6 +3911,42 @@ class Engine:
                     ),
                     chain=state,
                 )
+            if not _current_test_paths(self.ctx):
+                # The sensor contract runs only over touched test files; with
+                # none staged the step is complete without executing the tool,
+                # whose empty-path invocation is a sensor failure by contract.
+                output = (
+                    b"forge: no touched test files - assertion sensor not applicable\n"
+                )
+                synthetic = ProcessResult(
+                    argv=[
+                        sys.executable,
+                        str(self.ctx.helper("check-test-quality.py")),
+                        "--",
+                    ],
+                    returncode=0,
+                    duration_seconds=0.0,
+                    output=output,
+                    output_digest=hashlib.sha256(output).hexdigest(),
+                )
+                record = _record_process_step(
+                    self.ctx,
+                    state,
+                    gate_id,
+                    synthetic.argv,
+                    synthetic,
+                    details={
+                        "kind": "assertion-sensor",
+                        "test_paths": [],
+                        "not_applicable": True,
+                    },
+                )
+                return _success(
+                    state,
+                    f"gate {gate_id} passed",
+                    _forge_command(state, "verify"),
+                    evidence_refs=[record["transcript"]],
+                )
         if gate_id == "secret-scan":
             return self.scan_secrets(state=state, preflight=False)
         argv, remaining_cells, details = self._resolve_gate(state, gate_id)
