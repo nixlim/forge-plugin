@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import traceback
@@ -117,7 +118,19 @@ def _require_ok(completed: subprocess.CompletedProcess[bytes], label: str) -> No
 
 def _journal_open(config: dict[str, object], env: dict[str, str]) -> None:
     record = Path(str(config["record_dir"])) / f"{config['run_id']}-open.json"
-    _write_json(record, {"run_id": config["run_id"], "type": "run_started"})
+    _write_json(
+        record,
+        {
+            "type": "run_started",
+            "recorded_at": _utc_now(),
+            "run_id": config["run_id"],
+            "goal": f"Coordinate {config['run_id']}",
+            "repo": str(Path(str(config["worktree"])).resolve()),
+            "repo_head": config["base"],
+            "repo_status": [],
+            "plugin_ref": "forge-d13-test",
+        },
+    )
     completed = _orch(
         config,
         env,
@@ -145,11 +158,16 @@ def _journal_append(
     _write_json(
         record,
         {
+            "check": "python3 -m unittest tests.test_d13_concurrency",
             "criterion": criterion,
             "id": f"{config['run_id']}-{suffix}",
+            "method": "concurrency harness",
+            "observation": "The concurrent check passed",
             "result": "passed",
             "run_id": config["run_id"],
+            "task": "task-d13",
             "type": "verification",
+            "recorded_at": _utc_now(),
         },
     )
     completed = _orch(
@@ -168,7 +186,25 @@ def _journal_append(
 
 def _journal_close(config: dict[str, object], env: dict[str, str]) -> None:
     record = Path(str(config["record_dir"])) / f"{config['run_id']}-close.json"
-    _write_json(record, {"run_id": config["run_id"], "type": "run_closed"})
+    _write_json(
+        record,
+        {
+            "type": "run_closed",
+            "recorded_at": _utc_now(),
+            "run_id": config["run_id"],
+            "judgment": "passed",
+            "summary": "Concurrent worker completed",
+            "validation": {
+                "ok": True,
+                "issues": [],
+                "warnings": [],
+                "non_passing_verifications": [],
+                "profile": "gates",
+            },
+            "risks": [],
+            "follow_ups": [],
+        },
+    )
     completed = _orch(
         config,
         env,
@@ -343,7 +379,19 @@ def _aggregate(config: dict[str, object], env: dict[str, str]) -> None:
 
 def _overlap_probe(config: dict[str, object], env: dict[str, str]) -> dict[str, object]:
     record = Path(str(config["record_dir"])) / "run-overlap-open.json"
-    _write_json(record, {"run_id": "run-overlap", "type": "run_started"})
+    _write_json(
+        record,
+        {
+            "type": "run_started",
+            "recorded_at": _utc_now(),
+            "run_id": "run-overlap",
+            "goal": "Probe overlapping admission",
+            "repo": str(Path(str(config["worktree"])).resolve()),
+            "repo_head": config["base"],
+            "repo_status": [],
+            "plugin_ref": "forge-d13-test",
+        },
+    )
     completed = _orch(
         config,
         env,
@@ -374,11 +422,16 @@ def _foreign_owner_probe(
     _write_json(
         record,
         {
+            "check": "foreign owner probe",
             "criterion": "ownership: foreign writer must not append",
             "id": f"foreign-{worker_id}",
+            "method": "concurrency harness",
+            "observation": "A foreign writer attempted an append",
             "result": "passed",
             "run_id": target_run_id,
+            "task": "task-d13",
             "type": "verification",
+            "recorded_at": _utc_now(),
         },
     )
     journal = (
@@ -1217,7 +1270,15 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         foreign = dict(config)
         foreign["worker_id"] = "foreign-mutant"
         foreign_env = dict(env)
-        foreign_env["FORGE_SESSION_PID"] = str(os.getpid() + 100000)
+        foreign_session = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(foreign_session.wait)
+        self.addCleanup(foreign_session.terminate)
+        foreign_env["FORGE_SESSION_PID"] = str(foreign_session.pid)
         intact = _foreign_owner_probe(foreign, foreign_env, "run-owner-mutant")
         self.assertEqual(intact["returncode"], 1)
         self.assertFalse(intact["foreign_record_present"])
@@ -1232,9 +1293,15 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         shutil.copy2(ORCH_TOOLS, mutant_root / "codex_orch_tools.py")
         mutant_journal = mutant_root / "codex_orchestrator" / "journal.py"
         source = mutant_journal.read_text(encoding="utf-8")
-        needle = "    _ensure_owner(run_dir, run_id, current, adopt_missing=adopt_missing)\n"
+        needle = "    if owner.host == current.host and owner.pid == current.pid:\n"
         self.assertEqual(source.count(needle), 1)
-        mutant_journal.write_text(source.replace(needle, "    # ownership disabled by mutant\n"), encoding="utf-8")
+        mutant_journal.write_text(
+            source.replace(
+                needle,
+                "    if True:  # ownership control disabled by mutant\n",
+            ),
+            encoding="utf-8",
+        )
         foreign["orch_tools"] = str(mutant_root / "codex_orch_tools.py")
         mutant_env = dict(foreign_env)
         mutant_env["PYTHONPATH"] = str(mutant_root)
@@ -1285,11 +1352,16 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         _write_json(
             record,
             {
+                "check": "journal identity probe",
                 "criterion": "identity sensor",
                 "id": "wrong-identity",
+                "method": "concurrency harness",
+                "observation": "The wrong run identity was submitted",
                 "result": "passed",
                 "run_id": "another-run",
+                "task": "task-d13",
                 "type": "verification",
+                "recorded_at": _utc_now(),
             },
         )
         arguments = (
@@ -1298,7 +1370,7 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         )
         intact = _orch(config, env, *arguments)
         self.assertEqual(intact.returncode, 1)
-        self.assertIn("run identity mismatch", intact.stderr.decode())
+        self.assertIn("verification.run_id must match target run", intact.stderr.decode())
         self._assert_journal_identity(str(config["run_id"]))
 
         mutant_root = self.scratch / "identity-mutant"
@@ -1312,12 +1384,16 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         mutant_journal = mutant_root / "codex_orchestrator/journal.py"
         source = mutant_journal.read_text(encoding="utf-8")
         needle = (
-            '    if "run_id" in record and record.get("run_id") != run_id:\n'
-            '        raise CoordinationRefusal("forge: journal append refused — run identity mismatch")\n'
+            "        if candidate_run_id != run_id:\n"
+            '            _invalid_record_field(kind, "run_id", "must match target run")\n'
         )
         self.assertEqual(source.count(needle), 1)
         mutant_journal.write_text(
-            source.replace(needle, "    # run identity control disabled by mutant\n"),
+            source.replace(
+                needle,
+                "        if False:  # run identity control disabled by mutant\n"
+                '            _invalid_record_field(kind, "run_id", "must match target run")\n',
+            ),
             encoding="utf-8",
         )
         mutant_config = dict(config)

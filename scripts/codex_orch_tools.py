@@ -15,6 +15,7 @@ from pathlib import Path
 from codex_orchestrator.cli import main as upstream_main
 from codex_orchestrator.journal import (
     CoordinationRefusal,
+    INVALID_JOURNAL_RECORD,
     append_run_record,
     close_run,
     open_run,
@@ -33,13 +34,11 @@ COORDINATION_COMMANDS = {
 }
 
 
-def _record(path: str) -> dict[str, object]:
+def _record(path: str) -> object:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise argparse.ArgumentTypeError(f"invalid record JSON: {exc}") from exc
-    if not isinstance(value, dict):
-        raise argparse.ArgumentTypeError("record JSON must be an object")
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        raise CoordinationRefusal(INVALID_JOURNAL_RECORD) from exc
     return value
 
 
@@ -51,13 +50,13 @@ def _coordination_parser() -> argparse.ArgumentParser:
     opened.add_argument("--repo", required=True)
     opened.add_argument("--run-id", required=True)
     opened.add_argument("--scope", action="append", required=True)
-    opened.add_argument("--record-json", required=True, type=_record)
+    opened.add_argument("--record-json", required=True)
     opened.add_argument("--successor-of")
 
     appended = subparsers.add_parser("journal-append")
     appended.add_argument("--repo", required=True)
     appended.add_argument("--run-id", required=True)
-    appended.add_argument("--record-json", required=True, type=_record)
+    appended.add_argument("--record-json", required=True)
 
     admitted = subparsers.add_parser("run-readmit")
     admitted.add_argument("--repo", required=True)
@@ -67,7 +66,7 @@ def _coordination_parser() -> argparse.ArgumentParser:
     closed = subparsers.add_parser("run-close")
     closed.add_argument("--repo", required=True)
     closed.add_argument("--run-id", required=True)
-    closed.add_argument("--record-json", required=True, type=_record)
+    closed.add_argument("--record-json", required=True)
 
     retired = subparsers.add_parser("run-retire")
     retired.add_argument("--repo", required=True)
@@ -84,23 +83,23 @@ def _coordination_main(argv: list[str]) -> int:
                 repo,
                 args.run_id,
                 args.scope,
-                args.record_json,
+                _record(args.record_json),
                 successor_of=args.successor_of,
             )
             print(target)
         elif args.command == "journal-append":
-            append_run_record(repo, args.run_id, args.record_json)
+            append_run_record(repo, args.run_id, _record(args.record_json))
         elif args.command == "run-readmit":
             readmit_run(repo, args.run_id, args.scope)
         elif args.command == "run-close":
-            close_run(repo, args.run_id, args.record_json)
+            close_run(repo, args.run_id, _record(args.record_json))
         else:
             retire_run(repo, args.run_id)
     except CoordinationRefusal as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    except (OSError, UnicodeError, ValueError) as exc:
-        print(f"forge: run coordination failed — {exc}", file=sys.stderr)
+    except Exception:
+        print("forge: run coordination refused — internal error", file=sys.stderr)
         return 1
     return 0
 

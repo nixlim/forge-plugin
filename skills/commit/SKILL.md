@@ -369,6 +369,16 @@ captured PASS time is now older than 30 minutes, delete any marker and restart S
 anything other than explicit candidate-bound approval leaves the marker absent and stops the chain.
 Do not enter Step 5 autonomously.
 
+Immediately before writing either authorization-marker shape, validate the stable live
+`FORGE_SESSION_PID` inherited from the long-lived harness exactly as DM-010 requires. It must be a
+positive base-10 PID that names a live same-host owner in this PID namespace. On missing or
+malformed identity, print exactly
+`forge: FORGE_SESSION_PID must be exported as a positive base-10 integer`; when the syntactically
+valid PID is dead or its liveness cannot be verified, print exactly
+`forge: FORGE_SESSION_PID does not name a live same-host session owner`. Stop before marker
+mutation in either case. The harness exports this identity; this skill must never export or
+substitute shell `$$`, `$PPID`, or a transient tool-process PID for it.
+
 Only after any required control approval and the final matching hash, resolve the common
 main-checkout root from the invoking Git context and write only that candidate marker:
 
@@ -392,34 +402,73 @@ unexpected value is invalid. The fast annotation is a guard input, never proof: 
 independently validates policy ancestry and byte continuity and recomputes eligibility from the
 exact staged diff.
 
-## Step 5 — Halt, Lock, Re-verify, Commit, Release
+## Step 5 — Prepare, Commit, Cleanup
 
-Set `commit_message` to the exact descriptive message before running this sequence. Run the halt
-check first, acquire the commit lock second, re-hash inside the lock, commit only on an exact marker
-match, and release the lock after both successful and failed commit attempts:
+Step 5 is exactly three distinct Bash tool calls in the order below. Set each call's tool working
+directory directly to the target repository. Every fresh tool shell inherits the same stable live
+`FORGE_SESSION_PID` injected by the long-lived harness; never export or substitute shell `$$`,
+`$PPID`, or a transient tool-process PID as that identity. Values carried from Step 4 do not survive
+as shell variables: replace each angle-bracket metavariable below with the safely shell-quoted
+literal value already observed for this repository and candidate.
+
+### Tool call 1 — Prepare
+
+The prepare call validates the inherited identity before touching the lock or marker, runs the halt
+check, acquires the persistent PID-owned commit lock, validates the marker grammar and 30-minute
+TTL, and re-hashes the candidate inside the lock. For a four-line fast marker, also repeat FR-154's
+policy-continuity and fast-eligibility recomputation before preparation succeeds. Its cleanup is
+failure-only: arm it before the halt check and disarm it only after every preparation check passes,
+so success deliberately leaves the lock and candidate marker in place for the standalone commit
+call.
 
 ```bash
-# `commit_marker` is the absolute common-root candidate path established in Step 4.
-test -n "$commit_marker" || exit 1
-export FORGE_SESSION_PID=$$
-lock_maybe_acquired=0
+python3 - <<'PY'
+import os
+import re
+import sys
 
-release_commit_gate() {
+
+invalid = "forge: FORGE_SESSION_PID must be exported as a positive base-10 integer"
+not_live = "forge: FORGE_SESSION_PID does not name a live same-host session owner"
+raw_pid = os.environ.get("FORGE_SESSION_PID", "")
+if re.fullmatch(r"[1-9][0-9]*", raw_pid) is None:
+    print(invalid, file=sys.stderr)
+    raise SystemExit(1)
+try:
+    os.kill(int(raw_pid), 0)
+except (OverflowError, OSError):
+    print(not_live, file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+commit_marker=<safely-shell-quoted-absolute-candidate-marker-literal>
+test -n "$commit_marker" || exit 1
+lock_maybe_acquired=0
+prepare_cleanup_armed=1
+
+cleanup_prepare_failure() {
+    prepare_status="$1"
     release_status=0
     marker_status=0
-    if [ "$lock_maybe_acquired" -eq 1 ]; then
-        bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/release-commit-lock.sh" || release_status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$prepare_cleanup_armed" -eq 1 ]; then
+        if [ "$lock_maybe_acquired" -eq 1 ]; then
+            bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/release-commit-lock.sh" || release_status=$?
+        fi
+        rm -f "$commit_marker" || {
+            marker_status=$?
+            echo "forge: failed to consume commit authorization marker: $commit_marker" >&2
+        }
     fi
-    rm -f "$commit_marker" || {
-        marker_status=$?
-        echo "forge: failed to consume commit authorization marker: $commit_marker" >&2
-    }
     if [ "$release_status" -ne 0 ]; then
-        return "$release_status"
+        exit "$release_status"
     fi
-    return "$marker_status"
+    if [ "$marker_status" -ne 0 ]; then
+        exit "$marker_status"
+    fi
+    exit "$prepare_status"
 }
-trap 'release_commit_gate' EXIT
+trap 'cleanup_prepare_failure "$?"' EXIT
 trap 'exit 1' HUP INT TERM
 
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh" commit || exit 1
@@ -482,20 +531,168 @@ if [ "$current_hash" != "$authorized_hash" ]; then
     exit 1
 fi
 
-git commit -m "$commit_message"
-commit_status=$?
-if [ "$commit_status" -eq 0 ]; then
-    committed_sha="$(git rev-parse HEAD)" || commit_status=$?
+if [ "$(sed -n '3p' "$commit_marker")" = 'tier: fast' ]; then
+    fast_policy_sha="$(sed -n '4s/^policy: //p' "$commit_marker")"
+    if ! python3 - "$fast_policy_sha" <<'PY'
+import subprocess
+import sys
+
+
+def git(*arguments: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def region(policy: bytes, name: str) -> bytes | None:
+    begin = f"<!-- FORGE:REGION {name} BEGIN -->".encode()
+    end = f"<!-- FORGE:REGION {name} END -->".encode()
+    if policy.count(begin) != 1 or policy.count(end) != 1:
+        return None
+    start = policy.find(begin)
+    finish = policy.find(end, start + len(begin))
+    if finish < 0:
+        return None
+    return policy[start : finish + len(end)]
+
+
+revision = sys.argv[1]
+resolved = git("rev-parse", "--verify", f"{revision}^{{commit}}")
+ancestor = git("merge-base", "--is-ancestor", revision, "HEAD")
+current = git("show", "HEAD:forge-project.md")
+historical = git("show", f"{revision}:forge-project.md")
+if (
+    resolved.returncode != 0
+    or resolved.stdout.decode("ascii", "replace").strip() != revision
+    or ancestor.returncode != 0
+    or current.returncode != 0
+    or historical.returncode != 0
+):
+    raise SystemExit(1)
+for name in ("risk-tiers", "trigger-paths", "file-categories"):
+    current_region = region(current.stdout, name)
+    historical_region = region(historical.stdout, name)
+    if name == "trigger-paths" and current_region is None and historical_region is None:
+        continue
+    if current_region is None or historical_region is None or current_region != historical_region:
+        raise SystemExit(1)
+PY
+    then
+        echo "forge: commit not authorized — run /forge:commit (fast-path policy drift)" >&2
+        exit 1
+    fi
+    if ! python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \
+      --repo "$PWD" --policy-sha "$fast_policy_sha" --staged \
+      --declared-tier fast --require-effective fast >/dev/null 2>&1
+    then
+        echo "forge: commit not authorized — run /forge:commit (fast-path eligibility drift)" >&2
+        exit 1
+    fi
 fi
 
-release_commit_gate
-release_status=$?
+pre_commit_head="$(git rev-parse HEAD)" || exit 1
+printf 'forge: prepared commit base %s\n' "$pre_commit_head"
+prepare_cleanup_armed=0
 trap - EXIT HUP INT TERM
-if [ "$commit_status" -ne 0 ]; then
+```
+
+### Tool call 2 — Commit
+
+The command cell is exactly the following one executable segment after replacing the metavariable
+with the safely shell-quoted literal commit message. Do not add a preceding command, `cd`, variable
+assignment or expansion, command or process substitution, pathspec, or unsafe option. The
+PreToolUse commit guard requires this standalone shape; a marker does not authorize an unstable
+command shape.
+
+```bash
+git commit -m <safely shell-quoted literal>
+```
+
+Record the exact numeric tool status when it is known, or the literal `unknown` when transport or
+interruption obscures it. Also retain the full pre-commit HEAD printed by prepare as
+`forge: prepared commit base <sha>`. Regardless of hook allow or denial and regardless of
+Git success or failure, immediately run the cleanup call below. An interruption before or after the
+commit boundary retains the same unconditional-cleanup duty before any later attempt.
+
+### Tool call 3 — Cleanup
+
+Replace the metavariables with safely shell-quoted literals from the observed commit result and
+Steps 1–4. This call always attempts both no-argument lock release and consumption of only the
+explicit candidate marker, even if either action fails. A lock-release failure takes precedence
+when both cleanup actions fail. Before releasing the lock, it reconciles an unknown or nonzero tool
+status against the authoritative HEAD: a new direct child of the prepared HEAD whose exact diff
+hash equals the authorized candidate is a durable commit success. That durable truth overrides a
+transport interruption or nonzero tool status, enables the post-success events, and forbids retry.
+Any different HEAD movement or unprovable observation is ambiguous and must not be retried until
+the operator inspects it.
+
+```bash
+commit_marker=<safely-shell-quoted-absolute-candidate-marker-literal>
+pre_commit_head=<safely-shell-quoted-pre-commit-full-sha-literal>
+commit_status=<observed-numeric-status-or-safely-quoted-unknown-literal>
+effective_tier=<safely-shell-quoted-effective-tier-literal>
+policy_sha=<safely-shell-quoted-full-policy-sha-literal>
+release_status=0
+marker_status=0
+commit_succeeded=0
+commit_ambiguous=0
+
+authorized_hash="$(sed -n '1p' "$commit_marker" 2>/dev/null)" || authorized_hash=''
+observed_head="$(git rev-parse HEAD 2>/dev/null)" || observed_head=''
+observed_parent=''
+observed_hash=''
+if [ -n "$observed_head" ] && [ "$observed_head" != "$pre_commit_head" ]; then
+    observed_parent="$(git rev-parse "$observed_head^" 2>/dev/null)" || observed_parent=''
+    set -o pipefail
+    observed_hash="$(git diff "$pre_commit_head" "$observed_head" | shasum -a 256 | awk '{print $1}')" || observed_hash=''
+fi
+if [ "$observed_parent" = "$pre_commit_head" ] && [ -n "$authorized_hash" ] && \
+  [ "$observed_hash" = "$authorized_hash" ]; then
+    commit_succeeded=1
+fi
+
+case "$commit_status" in
+    0)
+        [ "$commit_succeeded" -eq 1 ] || commit_ambiguous=1
+        ;;
+    unknown)
+        if [ "$commit_succeeded" -ne 1 ] && [ "$observed_head" != "$pre_commit_head" ]; then
+            commit_ambiguous=1
+        fi
+        ;;
+    ''|*[!0-9]*)
+        commit_ambiguous=1
+        ;;
+    *)
+        if [ "$commit_succeeded" -ne 1 ] && [ "$observed_head" != "$pre_commit_head" ]; then
+            commit_ambiguous=1
+        fi
+        ;;
+esac
+
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/release-commit-lock.sh" || release_status=$?
+rm -f "$commit_marker" || {
+    marker_status=$?
+    echo "forge: failed to consume commit authorization marker: $commit_marker" >&2
+}
+
+if [ "$commit_ambiguous" -eq 1 ]; then
+    echo "forge: commit outcome ambiguous — inspect HEAD before retrying" >&2
+    exit 1
+fi
+if [ "$commit_succeeded" -ne 1 ]; then
+    if [ "$commit_status" = unknown ]; then
+        exit 1
+    fi
     exit "$commit_status"
 fi
 
 # The successful commit outcome above is already final. Event writes are advisory.
+committed_sha="$observed_head"
 event_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/emit-decision-event.py" \
   --at "$event_at" --candidate "$committed_sha" --event gate_commit \
@@ -508,21 +705,27 @@ fi
 if [ "$release_status" -ne 0 ]; then
     exit "$release_status"
 fi
+if [ "$marker_status" -ne 0 ]; then
+    exit "$marker_status"
+fi
 exit 0
 ```
 
-The cleanup trap is active before the halt check and remains active through explicit release, so a
-halt, lock-acquisition failure, later failure, or interruption invalidates the marker. It invokes
-the release script once acquisition might have started; that script removes only a matching
-`FORGE_SESSION_PID` lock and refuses a foreign owner. Failure to delete the authorization marker is
-itself a Step 5 failure; lock-release failure takes precedence when both cleanup operations fail.
+The prepare call's failure-only trap is active before the halt check and invokes the release script
+once acquisition might have started, so a halt, lock-acquisition failure, later prepare failure, or
+prepare interruption invalidates the marker. Successful preparation disarms that trap without
+releasing anything. The standalone commit call then leaves both resources for the unconditional
+cleanup call, whose release script removes only a lock matching the unchanged inherited
+`FORGE_SESSION_PID` and refuses a foreign owner. Failure to delete the authorization marker is
+itself a Step 5 failure.
 
 The acquire script owns `.forge/tmp/commit-lock`, whose record format is `<PID> <TIMESTAMP>` and
-whose owner is `FORGE_SESSION_PID`. It owns stale-PID takeover, 2-second polling, and the 300-second
-timeout. Never hold the lock across Step 4. The release path and marker deletion are mandatory
-whether commit succeeds, commit fails, hash verification detects restaging, or the shell receives
-an interruption. A hash mismatch means staging drifted: do not commit; restart Step 4. Never create,
-delete, or bypass an operator halt sentinel without explicit user direction.
+whose owner is the stable live harness-injected `FORGE_SESSION_PID` inherited unchanged by all
+three fresh shells. It owns stale-PID takeover, 2-second polling, and the 300-second timeout.
+Never hold the lock across Step 4. The release path and marker deletion are mandatory whether commit
+succeeds, commit fails, hash verification detects restaging, the hook denies the commit, or a tool
+call is interrupted. A hash mismatch means staging drifted: do not commit; restart Step 4. Never
+create, delete, or bypass an operator halt sentinel without explicit user direction.
 
 Step 5 accepts only an exact two-line standard/hard PASS marker, exact three-line user-skip marker,
 or exact four-line fast marker younger than 30 minutes. It fails closed on a missing, malformed, or
@@ -530,8 +733,10 @@ stale marker before committing. The PreToolUse commit guard independently enforc
 shape and recomputes fast eligibility at `git commit`; never bypass or reinterpret its decision.
 
 The two post-success calls occur only after the commit succeeds and mandatory marker cleanup has
-run; a release diagnostic may already have been reported without retracting that commit. `gate_commit` supplies the eligible-commit denominator; a fast commit additionally owns
-the sole `fast_allowed` event. After preserving that primary outcome, the advisory emitter
+run; a release diagnostic may already have been reported without retracting that commit. A
+successful commit followed by cleanup failure must be reported as commit success together with the
+cleanup failure and must never be retried. `gate_commit` supplies the eligible-commit denominator;
+a fast commit additionally owns the sole `fast_allowed` event. After preserving that primary outcome, the advisory emitter
 registers an in-flight writer but acquires no lock. It opens the canonical
 `.forge/tmp/decisions/events.jsonl` with `os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT,
 0o600)`, makes exactly one `os.write()`, and treats a short write as a failure. The
@@ -593,7 +798,9 @@ was refused, or the captured skip time is now older than 30 minutes, keep the ma
 or restart Step 4 as applicable.
 
 Only after that control approval when required, resolve the common main-checkout root as above,
-create `.forge/tmp/authorized/`, set `commit_marker` to the exact candidate path, and write the
+validate the same stable live harness-injected `FORGE_SESSION_PID` under DM-010 before marker
+mutation. Never export or substitute shell `$$`, `$PPID`, or another transient PID as that identity.
+Then create `.forge/tmp/authorized/`, set `commit_marker` to the exact candidate path, and write the
 user-directed marker:
 
 ```bash
@@ -608,7 +815,7 @@ exact mapped step string and append this audit line:
 
 ```bash
 mkdir -p .forge/tmp
-printf '%s skip: user-directed (pid %s, steps %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$$" "$skipped_steps" >> .forge/tmp/halt-audit.log
+printf '%s skip: user-directed (pid %s, steps %s)\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$FORGE_SESSION_PID" "$skipped_steps" >> .forge/tmp/halt-audit.log
 ```
 
 Do not infer a journal run for the skip record. Continue through Step 5, where the in-lock hash

@@ -380,8 +380,11 @@ LOCK_FILE="${GIT_COMMON_DIR}/agent-rebase.lock"
 LOCK_DIR="${GIT_COMMON_DIR}/agent-rebase.lockdir"
 ```
 
-Keep one lock-owning shell alive from acquisition through the push. On systems with `flock`, use
-the lock file and a 300-second timeout:
+Keep one lock-owning shell alive from acquisition through explicit release. This file-descriptor
+lock epoch is one composite invocation and must not be split across fresh tool shells. The shell
+inherits the stable live `FORGE_SESSION_PID` injected by the long-lived harness unchanged; never
+export or substitute `$$`, `$PPID`, or any transient tool-process PID as that identity. On systems
+with `flock`, use the lock file and a 300-second timeout:
 
 ```bash
 LOCK_KIND=flock

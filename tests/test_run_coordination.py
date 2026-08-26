@@ -21,6 +21,8 @@ from codex_orchestrator import journal  # noqa: E402
 
 
 class RunCoordinationTests(unittest.TestCase):
+    RECORDED_AT = "2026-08-26T12:00:00Z"
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="forge-run-registry-")
         self.addCleanup(self.temporary.cleanup)
@@ -29,9 +31,90 @@ class RunCoordinationTests(unittest.TestCase):
         self.env = os.environ.copy()
         self.env["FORGE_SESSION_PID"] = str(os.getpid())
 
+    def strict_record(self, value: dict[str, object]) -> dict[str, object]:
+        kind = value.get("type")
+        defaults: dict[str, dict[str, object]] = {
+            "run_started": {
+                "recorded_at": self.RECORDED_AT,
+                "goal": "Exercise run coordination",
+                "repo": str(self.repo.resolve()),
+                "repo_head": "0" * 40,
+                "repo_status": [],
+                "plugin_ref": "forge-test",
+            },
+            "task": {
+                "recorded_at": self.RECORDED_AT,
+                "id": "task-01",
+                "status": "active",
+                "goal": "Exercise the bounded task",
+                "acceptance": ["The focused behavior holds"],
+                "files": ["src/example.py"],
+            },
+            "execution": {
+                "recorded_at": self.RECORDED_AT,
+                "agent": "codex-impl-01",
+                "task": "task-01",
+                "provider": "openai",
+                "role": "implementation",
+                "mode": "headless",
+                "model": "gpt-test",
+                "effort": "high",
+                "execution": "execution-01",
+                "worktree": str(self.repo.resolve()),
+                "head": "0" * 40,
+                "prompt": "prompt.md",
+                "handoff": "handoff.md",
+                "event_source": "exec",
+                "events": "events.jsonl",
+            },
+            "execution_result": {
+                "recorded_at": self.RECORDED_AT,
+                "agent": "codex-impl-01",
+                "task": "task-01",
+                "summary": "Execution completed",
+                "execution": "execution-01",
+                "status": "complete",
+                "files_changed": [],
+                "caveats": [],
+                "handoff": "handoff.md",
+            },
+            "verification": {
+                "recorded_at": self.RECORDED_AT,
+                "id": "check-01",
+                "task": "task-01",
+                "criterion": "Focused behavior",
+                "method": "unittest",
+                "check": "python3 -m unittest",
+                "observation": "Focused behavior observed",
+                "result": "passed",
+            },
+            "decision": {
+                "recorded_at": self.RECORDED_AT,
+                "id": "decision-01",
+                "resolution": "Use the coordinated path",
+            },
+            "run_closed": {
+                "recorded_at": self.RECORDED_AT,
+                "judgment": "passed",
+                "summary": "Run completed",
+                "validation": {
+                    "ok": True,
+                    "issues": [],
+                    "warnings": [],
+                    "non_passing_verifications": [],
+                    "profile": "gates",
+                },
+                "risks": [],
+                "follow_ups": [],
+            },
+        }
+        completed = dict(defaults.get(str(kind), {}))
+        completed.update(value)
+        return completed
+
     def record(self, name: str, value: dict[str, object]) -> Path:
         target = Path(self.temporary.name) / name
-        target.write_text(json.dumps(value), encoding="utf-8")
+        target.write_text(json.dumps(self.strict_record(value)), encoding="utf-8")
         return target
 
     def command(self, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -100,7 +183,7 @@ class RunCoordinationTests(unittest.TestCase):
 
     def test_open_is_atomic_and_registry_is_canonical(self) -> None:
         """FR-191/FR-192 and DM-010/DM-011: atomically open a registered owned run."""
-        result = self.open("run-b", "src/b/**", "src/b/**")
+        result = self.open("run-b", "src/a/**", "src/b/**")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         run_dir = self.journal_path("run-b").parent
@@ -113,10 +196,10 @@ class RunCoordinationTests(unittest.TestCase):
         self.assertTrue(owner.endswith(b"\n"))
         self.assertEqual(
             self.registry_bytes(),
-            b'{"open_runs":[{"run_id":"run-b","scope":["src/b/**"]}],"schema_version":1}\n',
+            b'{"open_runs":[{"run_id":"run-b","scope":["src/a/**","src/b/**"]}],"schema_version":1}\n',
         )
         first = json.loads(self.journal_path("run-b").read_text().splitlines()[0])
-        self.assertEqual(first["scope"], ["src/b/**"])
+        self.assertEqual(first["scope"], ["src/a/**", "src/b/**"])
 
     def test_disjoint_admission_and_exact_overlap_refusal(self) -> None:
         """FR-014/FR-192 and DM-011: admit disjoint scopes and refuse exact overlap."""
@@ -548,7 +631,7 @@ class RunCoordinationTests(unittest.TestCase):
 
         refused = self.open(".hidden", "src/a/**")
         self.assertEqual(refused.returncode, 1)
-        self.assertEqual(refused.stderr, journal.REGISTRY_UNAVAILABLE + "\n")
+        self.assertEqual(refused.stderr, "forge: new run refused — invalid run id\n")
 
     def test_stray_regular_file_in_runs_root_is_not_run_state(self) -> None:
         """A non-dot regular file in runs/ cannot be a run and must not poison admission.
@@ -597,10 +680,12 @@ class RunCoordinationTests(unittest.TestCase):
 
         mutant, environment = self.mutant_tools(
             "dot-opening-mutant",
-            '    if any(entry.name.startswith(".") for entry in entries):\n'
-            "        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)\n",
-            "    entries = [entry for entry in entries "
-            "if not entry.name.startswith('.') ]  # control disabled by mutant\n",
+            '                if not _safe_run_entry_name(name) or name.startswith("."):\n'
+            "                    raise CoordinationRefusal(REGISTRY_UNAVAILABLE)\n",
+            '                if not _safe_run_entry_name(name):\n'
+            "                    raise CoordinationRefusal(REGISTRY_UNAVAILABLE)\n"
+            '                if name.startswith("."):\n'
+            "                    continue  # control disabled by mutant\n",
         )
         opening = self.record(
             "run-mutant-open.json", {"type": "run_started", "run_id": "run-mutant"}
@@ -649,6 +734,7 @@ class RunCoordinationTests(unittest.TestCase):
             run_id = "missing" if malformed is None else "malformed"
             self.assertEqual(self.open(run_id, f"src/{run_id}/**").returncode, 0)
             owner = self.journal_path(run_id).parent / "owner"
+            original_owner = owner.read_bytes()
             if malformed is None:
                 owner.unlink()
             else:
@@ -666,6 +752,7 @@ class RunCoordinationTests(unittest.TestCase):
                 f"forge: journal append refused — owner record missing or malformed for run {run_id}\n",
             )
             self.assertEqual(self.journal_path(run_id).read_bytes(), before)
+            owner.write_bytes(original_owner)
 
     def test_same_host_dead_pid_is_taken_over(self) -> None:
         """FR-191 and DM-010: allow takeover only for a proven-dead same-host owner."""
@@ -729,7 +816,10 @@ class RunCoordinationTests(unittest.TestCase):
             "--record-json", str(record),
         )
         self.assertNotEqual(crashed.returncode, 0)
-        self.assertIn("OverflowError", crashed.stderr)
+        self.assertEqual(
+            crashed.stderr, "forge: run coordination refused — internal error\n"
+        )
+        self.assertNotIn("OverflowError", crashed.stderr)
 
     def test_out_of_root_citation_fields_refuse_without_coordination_writes(self) -> None:
         """FR-017: every audit citation surface refuses with its exact field label."""
@@ -961,11 +1051,13 @@ class RunCoordinationTests(unittest.TestCase):
         self.assertEqual(self.open(run_id, "src/**").returncode, 0)
         run_dir = self.journal_path(run_id).parent
         outside = self.outside_citation(run_id, "mutant.txt")
-        record: dict[str, object] = {
-            "type": "decision",
-            "id": "decision-mutant",
-            "basis": [f"reviewed `{outside}`"],
-        }
+        record = self.strict_record(
+            {
+                "type": "decision",
+                "id": "decision-mutant",
+                "basis": [f"reviewed `{outside}`"],
+            }
+        )
         with self.assertRaisesRegex(
             journal.CoordinationRefusal, "record cites path outside run or repository"
         ):
@@ -1200,8 +1292,8 @@ class RunCoordinationTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 journal.CoordinationRefusal,
                 re.escape(
-                    "forge: journal append refused — record cites path outside run or "
-                    f"repository: verification.evidence[0]: {citation}"
+                    "forge: journal append refused — recorded repository unavailable "
+                    "for run run-modern-missing-repo"
                 ),
             ):
                 journal.append_owned_record(journal_path, record)
@@ -1350,7 +1442,11 @@ class RunCoordinationTests(unittest.TestCase):
         )
 
         self.assertEqual(refused.returncode, 1)
-        self.assertIn("task files exceed admitted scope", refused.stderr)
+        self.assertEqual(
+            refused.stderr,
+            "forge: journal append refused — task files exceed admitted scope for run "
+            "run-A\n",
+        )
         self.assertEqual(self.journal_path("run-A").read_bytes(), before)
         self.assertIn(b'"scope":["src/a/**"]', self.registry_bytes())
 
@@ -1367,7 +1463,10 @@ class RunCoordinationTests(unittest.TestCase):
         self.assertNotEqual(retired, before_retire)
 
         with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": str(os.getpid())}):
-            with self.assertRaisesRegex(journal.CoordinationRefusal, "run registry unavailable"):
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                re.escape("forge: journal append refused — run run-A is retired"),
+            ):
                 journal.append_owned_record(
                     journal_path, {"type": "verification", "id": "too-late"}
                 )
@@ -1380,21 +1479,31 @@ class RunCoordinationTests(unittest.TestCase):
                 self.repo,
                 "run-A",
                 ["src/a/**"],
-                {"type": "run_started", "run_id": "run-A"},
+                self.strict_record({"type": "run_started", "run_id": "run-A"}),
             )
             before = self.journal_path("run-A").read_bytes()
-            real_replace = journal._atomic_replace
+            registry_before = self.registry_bytes()
 
-            def fail_registry(path: Path, payload: bytes) -> None:
-                if path.name == "run-registry.json":
-                    raise OSError("mutant disabled registry replace")
-                real_replace(path, payload)
+            def fail_registry_publication(
+                state_root: Path,
+                locked: journal.RegistryLock,
+                prior: journal.RegistrySnapshot,
+                payload: bytes,
+            ) -> journal.RegistryPublication:
+                raise OSError("mutant disabled registry publication")
 
-            with mock.patch.object(journal, "_atomic_replace", side_effect=fail_registry):
-                with self.assertRaises(journal.CoordinationRefusal):
+            with mock.patch.object(
+                journal,
+                "_begin_registry_publication",
+                side_effect=fail_registry_publication,
+            ) as begin_publication:
+                with self.assertRaises(journal.CoordinationRefusal) as caught:
                     journal.readmit_run(self.repo, "run-A", ["src/a/**", "src/shared/**"])
 
+            self.assertEqual(str(caught.exception), journal.REGISTRY_UPDATE_FAILED)
+            begin_publication.assert_called_once()
             self.assertEqual(self.journal_path("run-A").read_bytes(), before)
+            self.assertEqual(self.registry_bytes(), registry_before)
 
     def test_admission_sensor_kills_disabled_overlap_control_copy(self) -> None:
         """FR-014/FR-192 and DM-011: prove overlap sensing kills a disabled control."""
@@ -1403,8 +1512,8 @@ class RunCoordinationTests(unittest.TestCase):
 
         mutant, environment = self.mutant_tools(
             "admission-overlap-mutant",
-            "            if scopes_overlap(scope, other_scope)\n",
-            "            if False  # overlap control disabled by mutant\n",
+            "        if other_id in excluded or not scopes_overlap(scope, reservation.scope):\n",
+            "        if True:  # overlap control disabled by mutant\n",
         )
         opening = self.record(
             "run-B-mutant-open.json", {"type": "run_started", "run_id": "run-B-mutant"}

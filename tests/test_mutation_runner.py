@@ -203,6 +203,7 @@ class MutationRunnerTests(unittest.TestCase):
         opening = {
             "type": "run_started",
             "run_id": run_id,
+            "repo": str(self.repo.resolve()),
             "scope": ["README.md", "package.json", "pyproject.toml", "src/**", "tests/**"],
         }
         journal = run_dir / "journal.jsonl"

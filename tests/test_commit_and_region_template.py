@@ -490,17 +490,49 @@ class CommitSkillTests(unittest.TestCase):
         self.assertLess(COMMIT_SKILL.index(skip_approval), COMMIT_SKILL.index(skip_write))
 
     def test_step5_script_sequence_and_journal_rules_are_explicit(self) -> None:
+        step5 = COMMIT_SKILL.split("## Step 5 — Prepare, Commit, Cleanup", 1)[1].split(
+            "## User-Directed Skips", 1
+        )[0]
+        prepare = step5.split("### Tool call 1 — Prepare", 1)[1].split(
+            "### Tool call 2 — Commit", 1
+        )[0]
+        commit = step5.split("### Tool call 2 — Commit", 1)[1].split(
+            "### Tool call 3 — Cleanup", 1
+        )[0]
+        cleanup = step5.split("### Tool call 3 — Cleanup", 1)[1]
         halt = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh" commit'
         acquire = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/acquire-commit-lock.sh" || exit 1'
         in_lock_hash = 'if ! current_hash="$(git diff --cached | shasum -a 256'
-        commit = 'git commit -m "$commit_message"'
-        release = "\nrelease_commit_gate\nrelease_status=$?\n"
-        positions = [
-            COMMIT_SKILL.index(value)
-            for value in (halt, acquire, in_lock_hash, commit, release)
-        ]
+        standalone = commit.split("```bash", 1)[1].split("```", 1)[0].strip()
+        positions = [prepare.index(value) for value in (halt, acquire, in_lock_hash)]
         self.assertEqual(positions, sorted(positions))
-        self.assertLess(COMMIT_SKILL.index("trap 'release_commit_gate' EXIT"), positions[0])
+        self.assertEqual(standalone, "git commit -m <safely shell-quoted literal>")
+        self.assertNotIn('git commit -m "$commit_message"', COMMIT_SKILL)
+        self.assertLess(prepare.index("trap 'cleanup_prepare_failure"), positions[0])
+        self.assertGreater(prepare.index("prepare_cleanup_armed=0"), positions[-1])
+        self.assertIn("disarm it only after every preparation check passes", prepare)
+        self.assertIn(
+            'for name in ("risk-tiers", "trigger-paths", "file-categories"):',
+            prepare,
+        )
+        self.assertIn("--declared-tier fast --require-effective fast", prepare)
+        self.assertIn("fast-path policy drift", prepare)
+        self.assertIn("fast-path eligibility drift", prepare)
+        self.assertIn("forge: prepared commit base %s", prepare)
+        self.assertIn(
+            'bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/release-commit-lock.sh" '
+            "|| release_status=$?",
+            cleanup,
+        )
+        self.assertIn('rm -f "$commit_marker" || {', cleanup)
+        self.assertIn("hook allow or denial", step5)
+        self.assertIn("Git success or failure", step5)
+        self.assertIn("must never be retried", step5)
+        self.assertIn('observed_head="$(git rev-parse HEAD', cleanup)
+        self.assertIn('observed_parent="$(git rev-parse "$observed_head^"', cleanup)
+        self.assertIn('observed_hash="$(git diff "$pre_commit_head" "$observed_head"', cleanup)
+        self.assertIn("commit_succeeded=1", cleanup)
+        self.assertIn("commit outcome ambiguous — inspect HEAD before retrying", cleanup)
         self.assertIn("Never hold the lock across Step 4", COMMIT_SKILL)
         self.assertIn("Never infer the latest run", COMMIT_SKILL)
         self.assertIn("beginning exactly `gate-1: ` for project-test", COMMIT_SKILL)
@@ -518,22 +550,30 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn('rm -f "$commit_marker" || {', COMMIT_SKILL)
         self.assertNotIn(".forge/tmp/commit-authorized", COMMIT_SKILL)
         self.assertIn("lock-release failure takes precedence", COMMIT_SKILL)
-        release_call = "\nrelease_commit_gate\nrelease_status=$?\n"
-        clear_traps = "\ntrap - EXIT HUP INT TERM\n"
-        self.assertLess(COMMIT_SKILL.index(release_call), COMMIT_SKILL.index(clear_traps))
+        self.assertLess(
+            cleanup.index("release-commit-lock.sh"),
+            cleanup.index('if [ "$release_status" -ne 0 ]'),
+        )
         for condition in ("missing", "malformed", "stale"):
             self.assertIn(condition, COMMIT_SKILL)
 
     def test_decision_events_follow_the_primary_outcome_and_remain_advisory(self) -> None:
-        commit = COMMIT_SKILL.index('git commit -m "$commit_message"')
-        release = COMMIT_SKILL.index("\nrelease_commit_gate\nrelease_status=$?\n")
-        gate_event = COMMIT_SKILL.index("--event gate_commit")
-        fast_event = COMMIT_SKILL.index("--event fast_allowed")
-        release_failure = COMMIT_SKILL.index(
+        step5 = COMMIT_SKILL.split("## Step 5 — Prepare, Commit, Cleanup", 1)[1].split(
+            "## User-Directed Skips", 1
+        )[0]
+        commit = step5.index("git commit -m <safely shell-quoted literal>")
+        cleanup_heading = step5.index("### Tool call 3 — Cleanup")
+        release = step5.index("release-commit-lock.sh", cleanup_heading)
+        marker_cleanup = step5.index('rm -f "$commit_marker"', cleanup_heading)
+        gate_event = step5.index("--event gate_commit")
+        fast_event = step5.index("--event fast_allowed")
+        release_failure = step5.index(
             'if [ "$release_status" -ne 0 ]; then\n    exit "$release_status"',
             fast_event,
         )
         self.assertLess(commit, release)
+        self.assertLess(release, marker_cleanup)
+        self.assertLess(marker_cleanup, gate_event)
         self.assertLess(release, gate_event)
         self.assertLess(gate_event, fast_event)
         self.assertLess(fast_event, release_failure)

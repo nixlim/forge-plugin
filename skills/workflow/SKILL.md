@@ -33,9 +33,11 @@ run-open refusal, not an `AGENT_HALT` sentinel; agents never create or clear `AG
 <!-- forge: modified from upstream — atomically admit disjoint owned runs through the D13 registry -->
 Before `run_started`, declare a nonempty intended repository file scope made only of positive,
 repository-relative Git pathspecs. Exclude transient Forge and run state (`.forge/**`,
-`.codex-orchestrator/**`, and `.worktrees/**`). Export one stable long-lived session identity with
-`export FORGE_SESSION_PID=$$`; every run coordination and journal append in this shell must retain
-that same value.
+`.codex-orchestrator/**`, and `.worktrees/**`). Use the stable live `FORGE_SESSION_PID` injected by
+the long-lived harness; it must identify one live same-host owner in this PID namespace, and every
+fresh tool shell must inherit it unchanged. Never export or substitute shell `$$`, `$PPID`, or any
+transient tool-process PID as the identity. Every run-coordination operation and journal append
+must retain that same value.
 
 Open the run only through `${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py run-open`, passing
 `--repo "$REPO"`, `--run-id <run-id>`, one `--scope <pathspec>` for every declared pathspec, and a

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -195,6 +196,113 @@ def assert_prompt_feed_forward_contract(documents: dict[str, str]) -> None:
             raise AssertionError(f"{name}: prompt component order")
 
 
+def assert_revision8_commit_skill_contract(documents: dict[str, str]) -> None:
+    commit = documents["commit"]
+    step5 = commit.split("## Step 5 — Prepare, Commit, Cleanup", maxsplit=1)[1].split(
+        "## User-Directed Skips", maxsplit=1
+    )[0]
+    headings = (
+        "### Tool call 1 — Prepare",
+        "### Tool call 2 — Commit",
+        "### Tool call 3 — Cleanup",
+    )
+    for heading in headings:
+        if step5.count(heading) != 1:
+            raise AssertionError(heading)
+    positions = [step5.index(heading) for heading in headings]
+    if positions != sorted(positions):
+        raise AssertionError("Step 5 tool-call order")
+
+    blocks = re.findall(r"```bash\n(.*?)\n```", step5, flags=re.DOTALL)
+    if len(blocks) != 3:
+        raise AssertionError("Step 5 must contain exactly three Bash cells")
+    if blocks[1].strip() != "git commit -m <safely shell-quoted literal>":
+        raise AssertionError("standalone commit cell")
+    for marker in (
+        "failure-only",
+        "disarm it only after every preparation check passes",
+        'check-halt.sh" commit',
+        'acquire-commit-lock.sh" || exit 1',
+        "if len(lines) not in (2, 3, 4):",
+        "total_seconds() > 1800",
+        "git diff --cached | shasum -a 256",
+        'for name in ("risk-tiers", "trigger-paths", "file-categories"):',
+        "--declared-tier fast --require-effective fast",
+        "forge: commit not authorized — run /forge:commit (fast-path policy drift)",
+        "forge: commit not authorized — run /forge:commit (fast-path eligibility drift)",
+        "forge: prepared commit base %s",
+    ):
+        if marker not in blocks[0] and marker not in step5[: positions[1]]:
+            raise AssertionError(marker)
+    for marker in (
+        'release-commit-lock.sh" || release_status=$?',
+        'rm -f "$commit_marker" || {',
+        'observed_head="$(git rev-parse HEAD',
+        'observed_parent="$(git rev-parse "$observed_head^"',
+        'observed_hash="$(git diff "$pre_commit_head" "$observed_head"',
+        "commit_succeeded=1",
+        "forge: commit outcome ambiguous — inspect HEAD before retrying",
+    ):
+        if marker not in blocks[2] and marker not in step5[positions[2] :]:
+            raise AssertionError(marker)
+    for marker in ("hook allow or denial", "Git success or failure", "must never be retried"):
+        if marker not in step5:
+            raise AssertionError(marker)
+
+    for name, document in documents.items():
+        normalized = " ".join(document.split())
+        for transient in ("$$", "$PPID"):
+            pattern = rf"export\s+FORGE_SESSION_PID\s*=\s*{re.escape(transient)}"
+            if re.search(pattern, document):
+                raise AssertionError(f"{name}: transient session identity export")
+        for marker in (
+            "stable live `FORGE_SESSION_PID`",
+            "long-lived harness",
+            "`$$`",
+            "`$PPID`",
+        ):
+            if marker not in normalized:
+                raise AssertionError(f"{name}: {marker}")
+
+    merge = documents["worktree-merge"]
+    for marker in (
+        "file-descriptor\nlock epoch is one composite invocation",
+        "must not be split across fresh tool shells",
+        "inherits the stable live `FORGE_SESSION_PID`",
+    ):
+        if marker not in merge:
+            raise AssertionError(marker)
+
+
+def assert_revision8_spec_harmonization(spec: str) -> None:
+    fr090 = spec.split("- **FR-090**", maxsplit=1)[1].split(
+        "- **FR-091**", maxsplit=1
+    )[0]
+    for marker in (
+        "the equals-attached forms `--fixup=<commit>` and `--squash=<commit>`",
+        "the space-separated forms `--fixup <commit>` and `--squash <commit>` remain admitted",
+    ):
+        if marker not in fr090:
+            raise AssertionError(marker)
+    if "`--fixup`, `--squash`" in fr090:
+        raise AssertionError("ambiguous fixup/squash bucket")
+
+    step5_inventory = spec.split(
+        "- Revision-8 legacy commit Step 5:", maxsplit=1
+    )[1].split("\n- `run-evals.sh`", maxsplit=1)[0]
+    for false_negative in ("`cd &&`", "variable-carried message"):
+        if false_negative in step5_inventory:
+            raise AssertionError(false_negative)
+    for true_negative in (
+        "former bundled command",
+        "preceding command",
+        "command/process substitution",
+        "unsafe-option negatives",
+    ):
+        if true_negative not in step5_inventory:
+            raise AssertionError(true_negative)
+
+
 class DocumentationContractTests(unittest.TestCase):
     def test_skills_are_not_duplicated_by_command_stubs(self) -> None:
         self.assertEqual(list((ROOT / "commands").glob("*.md")), [])
@@ -229,6 +337,70 @@ class DocumentationContractTests(unittest.TestCase):
             close_sequence,
         ):
             self.assertIn(step, workflow)
+
+    def test_revision8_commit_step5_and_identity_contract_survives_mutation(self) -> None:
+        documents = {
+            name: (ROOT / path).read_text(encoding="utf-8")
+            for name, path in (
+                ("commit", "skills/commit/SKILL.md"),
+                ("workflow", "skills/workflow/SKILL.md"),
+                ("worktree-merge", "skills/worktree-merge/SKILL.md"),
+            )
+        }
+        assert_revision8_commit_skill_contract(documents)
+
+        mutated = dict(documents)
+        mutated["commit"] = mutated["commit"].replace(
+            "git commit -m <safely shell-quoted literal>",
+            'git commit -m "$commit_message"',
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            assert_revision8_commit_skill_contract(mutated)
+
+        for control in (
+            "--declared-tier fast --require-effective fast",
+            "commit outcome ambiguous — inspect HEAD before retrying",
+        ):
+            with self.subTest(disabled=control):
+                mutated = dict(documents)
+                mutated["commit"] = mutated["commit"].replace(
+                    control, "DISABLED_CONTROL", 1
+                )
+                with self.assertRaises(AssertionError):
+                    assert_revision8_commit_skill_contract(mutated)
+
+        mutated = dict(documents)
+        mutated["workflow"] += "\nexport FORGE_SESSION_PID=" + "$$\n"
+        with self.assertRaises(AssertionError):
+            assert_revision8_commit_skill_contract(mutated)
+
+        mutated = dict(documents)
+        mutated["worktree-merge"] = mutated["worktree-merge"].replace(
+            "one composite invocation", "independent fresh invocations", 1
+        )
+        with self.assertRaises(AssertionError):
+            assert_revision8_commit_skill_contract(mutated)
+
+    def test_revision8_spec_guard_inventory_harmonization_survives_mutation(self) -> None:
+        spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+        assert_revision8_spec_harmonization(spec)
+
+        ambiguous_options = spec.replace(
+            "the equals-attached forms `--fixup=<commit>` and `--squash=<commit>`",
+            "`--fixup`, `--squash`",
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            assert_revision8_spec_harmonization(ambiguous_options)
+
+        false_negatives = spec.replace(
+            "former bundled command, preceding command",
+            "former bundled command, `cd &&`, variable-carried message, preceding command",
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            assert_revision8_spec_harmonization(false_negatives)
 
     def test_workflow_refuses_drift_block_before_registry_admission(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")

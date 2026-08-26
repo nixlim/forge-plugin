@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import datetime as dt
 import errno
 import fcntl
@@ -7,6 +8,7 @@ import json
 import os
 import re
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -81,6 +83,21 @@ CLOSED_LEGACY_COMPAT_REFUSAL = (
 
 # forge: modified from upstream — enforce D13 journal ownership and run-scope admission
 REGISTRY_UNAVAILABLE = "forge: new run refused — run registry unavailable"
+REGISTRY_LOCK_UNAVAILABLE = (
+    "forge: run coordination refused — run registry lock unavailable"
+)
+REGISTRY_UPDATE_FAILED = "forge: run coordination refused — run registry update failed"
+JOURNAL_ROLLBACK_FAILED = (
+    "forge: run coordination refused — journal rollback failed after run registry "
+    "update failure"
+)
+INVALID_JOURNAL_RECORD = "forge: journal append refused — invalid journal record"
+SESSION_PID_INVALID = (
+    "forge: FORGE_SESSION_PID must be exported as a positive base-10 integer"
+)
+SESSION_PID_NOT_LIVE = (
+    "forge: FORGE_SESSION_PID does not name a live same-host session owner"
+)
 REGISTRY_SCHEMA_VERSION = 1
 RETIREMENT_RESOLUTION = "run-retired: non-mutating"
 READMISSION_RESOLUTION = "scope-readmission: locked"
@@ -97,6 +114,15 @@ CITATION_DECISION_CORRECTION = re.compile(
 CITATION_VERIFICATION_CORRECTION = re.compile(
     r"^(?P<id>\S+) observation: (?P<cited>.+?) -> (?P<path>.+)$"
 )
+EXECUTION_ID_PATTERN = re.compile(r"execution-[0-9]{2}")
+GIT_OBJECT_ID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+READMISSION_ID_PATTERN = re.compile(r"forge-scope-readmission-[0-9a-f]{32}")
+
+# forge: modified from upstream — independently disableable revision-8 controls
+NEW_WRITE_VALIDATION_CONTROLS = frozenset({"schema"})
+ORPHAN_CLASSIFICATION_CONTROLS = frozenset({"classify"})
+SUCCESSOR_DAG_CONTROLS = frozenset({"transfer", "release"})
+_MISSING = object()
 
 
 class CoordinationRefusal(RuntimeError):
@@ -115,13 +141,147 @@ class Owner:
 
 
 @dataclass(frozen=True)
+class FileObservation:
+    device: int
+    inode: int
+    mode: int
+
+
+@dataclass(frozen=True)
+class ExactFile:
+    payload: bytes
+    observation: FileObservation
+
+
+@dataclass(frozen=True)
+class NamespaceMutationOutcome:
+    phase: str
+    failure: BaseException | None
+
+
+@dataclass(frozen=True)
 class RunState:
     run_id: str
     run_dir: Path
     disposition: str
     scope: tuple[str, ...]
+    opening_scope: tuple[str, ...]
     successor_of: str | None = None
     pre_coordination: bool = False
+    records: tuple[dict[str, object], ...] = ()
+    was_retired: bool = False
+    close_judgment: str | None = None
+    legacy: bool = False
+    directory_observation: FileObservation | None = None
+    journal_observation: FileObservation | None = None
+
+
+@dataclass(frozen=True)
+class OwnerClassification:
+    disposition: str
+    observed: bytes | None
+    owner: Owner | None = None
+    device: int | None = None
+    inode: int | None = None
+    mode: int | None = None
+
+
+@dataclass(frozen=True)
+class OwnerObservation:
+    observed: bytes
+    device: int
+    inode: int
+    mode: int
+
+
+@dataclass(frozen=True)
+class OwnerTakeover:
+    prior: OwnerClassification
+    candidate_observation: FileObservation | None
+    candidate_payload: bytes | None
+    backup_name: str | None
+
+
+@dataclass(frozen=True)
+class PlaceholderObservation:
+    path: Path
+    device: int
+    inode: int
+    mode: int
+
+
+@dataclass(frozen=True)
+class RegistrySnapshot:
+    exists: bool
+    raw: bytes | None
+    open_runs: dict[str, tuple[str, ...]]
+    observation: FileObservation | None = None
+
+
+@dataclass(frozen=True)
+class RegistryLock:
+    directory: Path
+    directory_descriptor: int
+    directory_observation: FileObservation
+    lock_descriptor: int
+    lock_observation: FileObservation
+
+
+@dataclass(frozen=True)
+class NewRunClaim:
+    run_id: str
+    runs_root_observation: FileObservation
+    directory_observation: FileObservation
+    files: tuple[tuple[str, FileObservation, bytes], ...]
+
+
+@dataclass(frozen=True)
+class RegistryPublication:
+    prior: RegistrySnapshot
+    candidate_observation: FileObservation
+    candidate_payload: bytes
+    backup_name: str | None
+
+
+class RegistryRestorationRefusal(CoordinationRefusal):
+    """Registry publication could not be restored; journal rollback is unsafe."""
+
+
+class OwnerRestorationRefusal(CoordinationRefusal):
+    """Owner takeover could not be restored without overwriting foreign state."""
+
+
+class NamespaceMutationAmbiguity(RuntimeError):
+    """An atomic namespace syscall left neither its exact pre nor post state."""
+
+
+@dataclass(frozen=True)
+class ScopeReservation:
+    run_id: str
+    disposition: str
+    scope: tuple[str, ...]
+    lineage: frozenset[str]
+
+
+@dataclass(frozen=True)
+class CoordinationView:
+    registry: RegistrySnapshot
+    states: dict[str, RunState]
+    open_runs: dict[str, tuple[str, ...]]
+    reservations: dict[str, ScopeReservation]
+    placeholders: dict[str, PlaceholderObservation]
+    owners: dict[str, OwnerObservation]
+    runs_root_observation: FileObservation | None
+
+
+@dataclass(frozen=True)
+class LockedJournal:
+    stream: object
+    run_descriptor: int
+    state: RunState
+
+    def fileno(self) -> int:
+        return self.stream.fileno()  # type: ignore[attr-defined,no-any-return]
 
 
 def _byte_key(value: str) -> bytes:
@@ -145,13 +305,20 @@ def _valid_utc(value: str) -> bool:
 def _session_owner() -> Owner:
     raw_pid = os.environ.get("FORGE_SESSION_PID", "")
     if not re.fullmatch(r"[1-9][0-9]*", raw_pid):
-        raise CoordinationRefusal(
-            "forge: FORGE_SESSION_PID must be exported as a positive base-10 integer"
-        )
-    host = socket.gethostname()
-    if not host or "\n" in host or "\r" in host:
-        raise CoordinationRefusal("forge: current journal owner host is unavailable")
-    return Owner(pid=int(raw_pid), host=host, started_at=_utc_now())
+        raise CoordinationRefusal(SESSION_PID_INVALID)
+    try:
+        pid = int(raw_pid)
+    except (OverflowError, ValueError) as exc:
+        raise CoordinationRefusal(SESSION_PID_NOT_LIVE) from exc
+    if _pid_is_live(pid) is not True:
+        raise CoordinationRefusal(SESSION_PID_NOT_LIVE)
+    try:
+        host = socket.gethostname()
+    except OSError as exc:
+        raise CoordinationRefusal(SESSION_PID_NOT_LIVE) from exc
+    if not _safe_diagnostic_text(host):
+        raise CoordinationRefusal(SESSION_PID_NOT_LIVE)
+    return Owner(pid=pid, host=host, started_at=_utc_now())
 
 
 def _owner_bytes(owner: Owner) -> bytes:
@@ -160,11 +327,7 @@ def _owner_bytes(owner: Owner) -> bytes:
     ).encode("utf-8")
 
 
-def _parse_owner(path: Path) -> Owner | None:
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None
+def _parse_owner_bytes(raw: bytes) -> Owner | None:
     match = OWNER_PATTERN.fullmatch(raw)
     if match is None:
         return None
@@ -174,9 +337,28 @@ def _parse_owner(path: Path) -> Owner | None:
         owner = Owner(pid=int(match.group(1)), host=host, started_at=started_at)
     except (UnicodeError, ValueError):
         return None
-    if not owner.host or not _valid_utc(owner.started_at):
+    if not _safe_diagnostic_text(owner.host) or not _valid_utc(owner.started_at):
         return None
     return owner
+
+
+def _parse_owner(path: Path) -> Owner | None:
+    try:
+        return _parse_owner_bytes(path.read_bytes())
+    except OSError:
+        return None
+
+
+def _safe_diagnostic_text(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        return False
+    return True
 
 
 def _pid_is_live(pid: int) -> bool | None:
@@ -385,6 +567,8 @@ def _validate_append_citations(
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         repo_root = _recorded_repository_root(run_dir, state_root)
     for field, citation in citations:
+        if not _safe_diagnostic_text(citation):
+            raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
         if not _citation_is_contained(repo_root, run_dir, citation):
             raise CoordinationRefusal(
                 "forge: journal append refused — record cites path outside run or "
@@ -392,10 +576,16 @@ def _validate_append_citations(
             )
 
 
-def _recorded_repository_root(run_dir: Path, state_root: Path) -> Path:
+def _recorded_repository_root(
+    run_dir: Path,
+    state_root: Path,
+    *,
+    records: tuple[dict[str, object], ...] | None = None,
+) -> Path:
     """Resolve a run's repository without letting journal data widen its authority."""
 
-    records = _read_raw_records(run_dir / "journal.jsonl")
+    if records is None:
+        records = tuple(_read_raw_records(run_dir / "journal.jsonl"))
     if not records or records[0].get("type") != "run_started":
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     opening = records[0]
@@ -405,19 +595,24 @@ def _recorded_repository_root(run_dir: Path, state_root: Path) -> Path:
         # Their common Git root is the only repository authority still provable.
         if "scope" not in opening:
             return state_root
-        # A coordinated journal without its recorded repository has no safe
-        # second citation root. Keep append-time enforcement available, but
-        # fail closed to the run directory instead of trusting the caller's
-        # worktree or widening authority to the shared Git common root.
-        return run_dir
+        raise CoordinationRefusal(
+            f"forge: journal append refused — recorded repository unavailable for run "
+            f"{run_dir.name}"
+        )
+    refusal = CoordinationRefusal(
+        f"forge: journal append refused — recorded repository unavailable for run "
+        f"{run_dir.name}"
+    )
     if not isinstance(recorded, str) or not recorded or not Path(recorded).is_absolute():
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        raise refusal
     try:
-        repository = Path(recorded).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
-    if not repository.is_dir() or _resolve_state_root(repository) != state_root:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        repository, recorded_state_root = _resolve_repository(
+            Path(recorded), "journal append"
+        )
+    except CoordinationRefusal as exc:
+        raise refusal from exc
+    if recorded_state_root != state_root:
+        raise refusal
     return repository
 
 
@@ -440,13 +635,31 @@ def _atomic_replace(path: Path, payload: bytes) -> None:
 
 def _journal_line(record: dict[str, object]) -> bytes:
     return (
-        json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        json.dumps(
+            record,
+            allow_nan=False,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
     ).encode("utf-8")
 
 
-def _resolve_state_root(repo: Path) -> Path:
+def _journal_payload(record: dict[str, object]) -> bytes:
+    """Serialize a candidate before any owner or coordination byte is mutated."""
+
+    try:
+        return _journal_line(record)
+    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+        raise CoordinationRefusal(INVALID_JOURNAL_RECORD) from exc
+
+
+def _resolve_repository(repo: Path, operation: str) -> tuple[Path, Path]:
     try:
         repository = repo.expanduser().resolve(strict=True)
+        if not repository.is_dir():
+            raise ValueError
         common: Path | None = None
         for arguments, require_absolute in (
             (("--path-format=absolute", "--git-common-dir"), True),
@@ -474,26 +687,128 @@ def _resolve_state_root(repo: Path) -> Path:
             break
         if common is None or not common.is_dir():
             raise ValueError
-        return common.parent
-    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        return repository, common.parent
+    except (
+        OSError,
+        RuntimeError,
+        subprocess.SubprocessError,
+        UnicodeError,
+        ValueError,
+    ) as exc:
+        raise CoordinationRefusal(
+            f"forge: {operation} refused — repository unavailable"
+        ) from exc
+
+
+def _resolve_state_root(repo: Path, operation: str = "new run") -> Path:
+    return _resolve_repository(repo, operation)[1]
+
+
+def _validate_registry_lock(state_root: Path, locked: RegistryLock) -> None:
+    try:
+        directory_path = state_root / ".forge/tmp"
+        directory_path_stat = os.lstat(directory_path)
+        directory_open_stat = os.fstat(locked.directory_descriptor)
+        lock_path_stat = os.stat(
+            "run-registry.lock",
+            dir_fd=locked.directory_descriptor,
+            follow_symlinks=False,
+        )
+        lock_open_stat = os.fstat(locked.lock_descriptor)
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_LOCK_UNAVAILABLE) from exc
+    if (
+        directory_path != locked.directory
+        or not _matches_observation(
+            directory_path_stat, locked.directory_observation
+        )
+        or not _matches_observation(
+            directory_open_stat, locked.directory_observation
+        )
+        or not _matches_observation(lock_path_stat, locked.lock_observation)
+        or not _matches_observation(lock_open_stat, locked.lock_observation)
+        or not stat.S_ISDIR(directory_open_stat.st_mode)
+        or not stat.S_ISREG(lock_open_stat.st_mode)
+        or stat.S_ISLNK(lock_path_stat.st_mode)
+    ):
+        raise CoordinationRefusal(REGISTRY_LOCK_UNAVAILABLE)
 
 
 @contextmanager
-def _registry_lock(state_root: Path) -> Iterator[None]:
+def _registry_lock(state_root: Path) -> Iterator[RegistryLock]:
     lock_path = state_root / ".forge/tmp/run-registry.lock"
+    directory_descriptor: int | None = None
+    lock_descriptor: int | None = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+b") as stream:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        directory_descriptor, directory_observation = _open_bound_directory(
+            lock_path.parent
+        )
+        try:
+            before = os.stat(
+                lock_path.name,
+                dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            before = None
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        lock_descriptor = os.open(
+            lock_path.name, flags, 0o600, dir_fd=directory_descriptor
+        )
+        opened = os.fstat(lock_descriptor)
+        rebound = os.stat(
+            lock_path.name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+        lock_observation = _file_observation(opened)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or stat.S_ISLNK(rebound.st_mode)
+            or not _matches_observation(rebound, lock_observation)
+            or (
+                before is not None
+                and not _matches_observation(before, lock_observation)
+            )
+        ):
+            raise OSError(errno.EAGAIN, "registry lock identity changed")
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        locked = RegistryLock(
+            lock_path.parent,
+            directory_descriptor,
+            directory_observation,
+            lock_descriptor,
+            lock_observation,
+        )
+        _validate_registry_lock(state_root, locked)
     except CoordinationRefusal:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
         raise
     except OSError as exc:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
+        raise CoordinationRefusal(REGISTRY_LOCK_UNAVAILABLE) from exc
+    try:
+        yield locked
+    finally:
+        assert lock_descriptor is not None
+        assert directory_descriptor is not None
+        try:
+            fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_descriptor)
+            os.close(directory_descriptor)
 
 
 def _valid_run_id(run_id: object) -> bool:
@@ -505,6 +820,8 @@ def _valid_run_id(run_id: object) -> bool:
     ):
         return False
     if any(character in run_id for character in ("/", "\\", "\x00", "\n", "\r")):
+        return False
+    if any(ord(character) < 32 or ord(character) == 127 for character in run_id):
         return False
     try:
         run_id.encode("utf-8")
@@ -656,11 +973,379 @@ def _all_task_files_contained(
     )
 
 
-def _read_raw_records(journal: Path) -> list[dict[str, object]]:
-    try:
-        raw = journal.read_bytes()
-    except OSError as exc:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+# forge: modified from upstream — FR-019 validates proposed writes, never history
+def _invalid_record_field(kind: str, field: str, requirement: str) -> None:
+    raise CoordinationRefusal(
+        f"{INVALID_JOURNAL_RECORD}: {kind}.{field} {requirement}"
+    )
+
+
+def _validate_record_envelope(record: object) -> dict[str, object]:
+    if (
+        not isinstance(record, dict)
+        or not isinstance(record.get("type"), str)
+        or record.get("type") not in JOURNAL_ENTRY_TYPES
+    ):
+        raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
+    return record
+
+
+def _required_string(
+    record: dict[str, object], kind: str, field: str, *, nonempty: bool = True
+) -> str:
+    if field not in record:
+        _invalid_record_field(kind, field, "is required")
+    value = record.get(field)
+    if not isinstance(value, str):
+        _invalid_record_field(kind, field, "must be a string")
+    assert isinstance(value, str)
+    if nonempty and not value:
+        _invalid_record_field(kind, field, "must be nonempty")
+    return value
+
+
+def _string_array(
+    record: dict[str, object],
+    kind: str,
+    field: str,
+    *,
+    required: bool = True,
+    nonempty: bool = False,
+) -> list[str] | None:
+    if field not in record:
+        if required:
+            _invalid_record_field(kind, field, "is required")
+        return None
+    value = record.get(field)
+    if not isinstance(value, list):
+        _invalid_record_field(kind, field, "must be an array")
+    assert isinstance(value, list)
+    if nonempty and not value:
+        _invalid_record_field(kind, field, "must be nonempty")
+    for index, member in enumerate(value):
+        if not isinstance(member, str) or not member:
+            _invalid_record_field(
+                kind, f"{field}[{index}]", "must be a nonempty string"
+            )
+    return value  # type: ignore[return-value]
+
+
+def _task_inherited_field(
+    record: dict[str, object],
+    prior_records: tuple[dict[str, object], ...],
+    field: str,
+) -> object:
+    if field in record:
+        return record[field]
+    if record.get("status") not in TERMINAL_TASK_STATUSES:
+        return _MISSING
+    task_id = record.get("id")
+    for prior in reversed(prior_records):
+        if prior.get("type") == "task" and prior.get("id") == task_id:
+            return prior[field] if field in prior else _MISSING
+    return _MISSING
+
+
+def _validate_proposed_record(
+    record: object,
+    *,
+    run_id: str,
+    repo_root: Path,
+    scope: tuple[str, ...],
+    prior_records: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
+    """Validate one FR-019 new-write candidate without mutating coordination state."""
+
+    candidate = _validate_record_envelope(record)
+    if "schema" not in NEW_WRITE_VALIDATION_CONTROLS:
+        return candidate
+
+    kind = str(candidate["type"])
+    if "recorded_at" not in candidate:
+        _invalid_record_field(kind, "recorded_at", "is required")
+    recorded_at = candidate.get("recorded_at")
+    if not isinstance(recorded_at, str) or not _valid_utc(recorded_at):
+        _invalid_record_field(
+            kind,
+            "recorded_at",
+            "must be a valid UTC RFC-3339 timestamp ending in Z",
+        )
+    if "run_id" in candidate:
+        candidate_run_id = candidate.get("run_id")
+        if not _valid_run_id(candidate_run_id):
+            _invalid_record_field(kind, "run_id", "must be a valid run ID")
+        if candidate_run_id != run_id:
+            _invalid_record_field(kind, "run_id", "must match target run")
+
+    if kind == "run_started":
+        if "run_id" not in candidate:
+            _invalid_record_field(kind, "run_id", "is required")
+        _required_string(candidate, kind, "goal")
+        repository = _required_string(candidate, kind, "repo", nonempty=False)
+        repository_path = Path(repository)
+        if not repository_path.is_absolute():
+            _invalid_record_field(kind, "repo", "must be an absolute path")
+        try:
+            matches_repository = repository_path.resolve(strict=True) == repo_root
+        except (OSError, RuntimeError, UnicodeError, ValueError):
+            matches_repository = False
+        if not matches_repository:
+            _invalid_record_field(kind, "repo", "must match target repository")
+        head = _required_string(candidate, kind, "repo_head", nonempty=False)
+        if GIT_OBJECT_ID_PATTERN.fullmatch(head) is None:
+            _invalid_record_field(kind, "repo_head", "must be a full Git object ID")
+        _string_array(candidate, kind, "repo_status")
+        _required_string(candidate, kind, "plugin_ref")
+        opening_scope = _string_array(candidate, kind, "scope", nonempty=True)
+        assert opening_scope is not None
+        if _scope_from_record(opening_scope) is None:
+            _invalid_record_field(
+                kind, "scope", "must be a canonical nonempty admitted scope"
+            )
+        if "successor_of" in candidate:
+            successor_of = candidate.get("successor_of")
+            if not _valid_run_id(successor_of):
+                _invalid_record_field(kind, "successor_of", "must be a valid run ID")
+        return candidate
+
+    if kind == "task":
+        _required_string(candidate, kind, "id")
+        status = _required_string(candidate, kind, "status", nonempty=False)
+        if status not in {"active", "complete", "blocked", "failed"}:
+            _invalid_record_field(
+                kind, "status", "must be one of active, complete, blocked, failed"
+            )
+        effective_goal = _task_inherited_field(candidate, prior_records, "goal")
+        if effective_goal is _MISSING:
+            _invalid_record_field(kind, "goal", "is required")
+        if not isinstance(effective_goal, str):
+            _invalid_record_field(kind, "goal", "must be a string")
+        if not effective_goal:
+            _invalid_record_field(kind, "goal", "must be nonempty")
+        for field in ("acceptance", "files"):
+            effective = _task_inherited_field(candidate, prior_records, field)
+            if effective is _MISSING:
+                _invalid_record_field(kind, field, "is required")
+            if not isinstance(effective, list):
+                _invalid_record_field(kind, field, "must be an array")
+            if not effective:
+                _invalid_record_field(kind, field, "must be nonempty")
+            for index, member in enumerate(effective):
+                if not isinstance(member, str) or not member:
+                    _invalid_record_field(
+                        kind, f"{field}[{index}]", "must be a nonempty string"
+                    )
+                if field == "files":
+                    if not _valid_scope_item(member):
+                        _invalid_record_field(
+                            kind,
+                            f"files[{index}]",
+                            "must be a positive repository-relative Git pathspec",
+                        )
+                    if not any(pathspec_contained(member, admitted) for admitted in scope):
+                        _invalid_record_field(
+                            kind, f"files[{index}]", "must be contained by admitted scope"
+                        )
+        return candidate
+
+    if kind == "execution":
+        for field in ("agent", "task", "provider", "role", "mode", "model", "effort"):
+            _required_string(candidate, kind, field)
+        execution = _required_string(candidate, kind, "execution", nonempty=False)
+        if EXECUTION_ID_PATTERN.fullmatch(execution) is None:
+            _invalid_record_field(kind, "execution", "must match execution-NN")
+        worktree = _required_string(candidate, kind, "worktree", nonempty=False)
+        if not Path(worktree).is_absolute():
+            _invalid_record_field(kind, "worktree", "must be an absolute path")
+        head = _required_string(candidate, kind, "head", nonempty=False)
+        if GIT_OBJECT_ID_PATTERN.fullmatch(head) is None:
+            _invalid_record_field(kind, "head", "must be a full Git object ID")
+        for field in ("prompt", "handoff", "event_source"):
+            _required_string(candidate, kind, field)
+        if "events" in candidate:
+            events = candidate.get("events")
+            if not isinstance(events, str):
+                _invalid_record_field(kind, "events", "must be a string")
+            if candidate.get("event_source") == "exec" and not events:
+                _invalid_record_field(kind, "events", "must be nonempty")
+        elif candidate.get("event_source") == "exec":
+            _invalid_record_field(kind, "events", "is required")
+        return candidate
+
+    if kind == "execution_result":
+        for field in ("agent", "task", "summary"):
+            _required_string(candidate, kind, field)
+        execution = _required_string(candidate, kind, "execution", nonempty=False)
+        if EXECUTION_ID_PATTERN.fullmatch(execution) is None:
+            _invalid_record_field(kind, "execution", "must match execution-NN")
+        status = _required_string(candidate, kind, "status", nonempty=False)
+        if status not in {"complete", "blocked", "failed"}:
+            _invalid_record_field(
+                kind, "status", "must be one of complete, blocked, failed"
+            )
+        _string_array(candidate, kind, "files_changed")
+        _string_array(candidate, kind, "caveats")
+        if "handoff" in candidate:
+            handoff = candidate.get("handoff")
+            if not isinstance(handoff, str):
+                _invalid_record_field(kind, "handoff", "must be a string")
+            if status == "complete" and not handoff:
+                _invalid_record_field(kind, "handoff", "must be nonempty")
+        elif status == "complete":
+            _invalid_record_field(kind, "handoff", "is required")
+        return candidate
+
+    if kind == "verification":
+        for field in ("id", "task", "criterion", "method", "check", "observation"):
+            _required_string(candidate, kind, field)
+        result = _required_string(candidate, kind, "result", nonempty=False)
+        if result not in {"passed", "failed", "inconclusive", "skipped"}:
+            _invalid_record_field(
+                kind,
+                "result",
+                "must be one of passed, failed, inconclusive, skipped",
+            )
+        _string_array(candidate, kind, "evidence", required=False)
+        return candidate
+
+    if kind == "decision":
+        decision_id = _required_string(candidate, kind, "id")
+        resolution = _required_string(candidate, kind, "resolution")
+        for field in ("task", "finding", "outcome", "risk"):
+            if field in candidate and not isinstance(candidate.get(field), str):
+                _invalid_record_field(kind, field, "must be a string")
+        _string_array(candidate, kind, "basis", required=False)
+        if decision_id == "forge-run-retired" or resolution == RETIREMENT_RESOLUTION:
+            if decision_id != "forge-run-retired":
+                _invalid_record_field(kind, "id", "must be forge-run-retired")
+            if resolution != RETIREMENT_RESOLUTION:
+                _invalid_record_field(
+                    kind, "resolution", f"must be {RETIREMENT_RESOLUTION}"
+                )
+        if resolution == READMISSION_RESOLUTION or decision_id.startswith(
+            "forge-scope-readmission-"
+        ):
+            if READMISSION_ID_PATTERN.fullmatch(decision_id) is None:
+                _invalid_record_field(
+                    kind, "id", "must match forge-scope-readmission-<uuid-hex>"
+                )
+            if resolution != READMISSION_RESOLUTION:
+                _invalid_record_field(
+                    kind, "resolution", f"must be {READMISSION_RESOLUTION}"
+                )
+            admitted = _string_array(candidate, kind, "scope", nonempty=True)
+            assert admitted is not None
+            if _scope_from_record(admitted) is None:
+                _invalid_record_field(
+                    kind, "scope", "must be a canonical nonempty admitted scope"
+                )
+        if decision_id == LEGACY_COMPATIBILITY_DECLARATION_ID:
+            if (
+                not resolution.startswith(LEGACY_COMPATIBILITY_RESOLUTION_PREFIX)
+                or "\n" in resolution
+                or "\r" in resolution
+                or not resolution[len(LEGACY_COMPATIBILITY_RESOLUTION_PREFIX) :].strip()
+            ):
+                _invalid_record_field(
+                    kind, "resolution", "must match legacy-dialect-compat grammar"
+                )
+        return candidate
+
+    assert kind == "run_closed"
+    judgment = _required_string(candidate, kind, "judgment", nonempty=False)
+    if judgment not in {"passed", "blocked"}:
+        _invalid_record_field(kind, "judgment", "must be one of passed, blocked")
+    _required_string(candidate, kind, "summary")
+    if "validation" not in candidate:
+        _invalid_record_field(kind, "validation", "is required")
+    validation = candidate.get("validation")
+    if not isinstance(validation, dict):
+        _invalid_record_field(kind, "validation", "must be an object")
+    assert isinstance(validation, dict)
+    if "ok" not in validation:
+        _invalid_record_field(kind, "validation.ok", "is required")
+    if not isinstance(validation.get("ok"), bool):
+        _invalid_record_field(kind, "validation.ok", "must be Boolean")
+    for field in ("issues", "warnings", "non_passing_verifications"):
+        path = f"validation.{field}"
+        if field not in validation:
+            _invalid_record_field(kind, path, "is required")
+        values = validation.get(field)
+        if not isinstance(values, list):
+            _invalid_record_field(kind, path, "must be an array")
+        if field == "non_passing_verifications":
+            continue
+        for index, member in enumerate(values):
+            if not isinstance(member, str) or not member:
+                _invalid_record_field(
+                    kind, f"{path}[{index}]", "must be a nonempty string"
+                )
+    if "profile" not in validation:
+        _invalid_record_field(kind, "validation.profile", "is required")
+    if validation.get("profile") != "gates":
+        _invalid_record_field(kind, "validation.profile", "must be exactly gates")
+    _string_array(candidate, kind, "risks")
+    _string_array(candidate, kind, "follow_ups")
+    return candidate
+
+
+def _reserved_lifecycle_decision(record: dict[str, object]) -> bool:
+    if record.get("type") != "decision":
+        return False
+    decision_id = record.get("id")
+    resolution = record.get("resolution")
+    return bool(
+        decision_id == "forge-run-retired"
+        or resolution == RETIREMENT_RESOLUTION
+        or (
+            isinstance(decision_id, str)
+            and decision_id.startswith("forge-scope-readmission-")
+        )
+        or resolution == READMISSION_RESOLUTION
+    )
+
+
+def _ordinary_append_requires_lifecycle_command(record: dict[str, object]) -> bool:
+    return record.get("type") in {"run_started", "run_closed"} or _reserved_lifecycle_decision(
+        record
+    )
+
+
+def _file_observation(value: os.stat_result) -> FileObservation:
+    return FileObservation(value.st_dev, value.st_ino, value.st_mode)
+
+
+def _matches_observation(
+    value: os.stat_result, observation: FileObservation
+) -> bool:
+    return _file_observation(value) == observation
+
+
+def _directory_open_flags() -> int:
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+
+
+def _regular_open_flags(*, writable: bool = False) -> int:
+    flags = os.O_RDWR | os.O_APPEND if writable else os.O_RDONLY
+    return flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def _read_descriptor(descriptor: int) -> bytes:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _parse_raw_records(raw: bytes) -> list[dict[str, object]]:
     if not raw or not raw.endswith(b"\n"):
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     records: list[dict[str, object]] = []
@@ -670,70 +1355,208 @@ def _read_raw_records(journal: Path) -> list[dict[str, object]]:
             if not isinstance(value, dict):
                 raise ValueError
             records.append(value)
-    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
     return records
 
 
-def _scan_run(run_dir: Path) -> RunState:
+def _open_bound_directory(path: Path) -> tuple[int, FileObservation]:
+    before = os.lstat(path)
+    if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+        raise OSError(errno.EINVAL, "not a real directory")
+    descriptor = os.open(path, _directory_open_flags())
+    try:
+        opened = os.fstat(descriptor)
+        rebound = os.lstat(path)
+        observation = _file_observation(before)
+        if (
+            not _matches_observation(opened, observation)
+            or not _matches_observation(rebound, observation)
+            or not stat.S_ISDIR(opened.st_mode)
+            or stat.S_ISLNK(opened.st_mode)
+        ):
+            raise OSError(errno.EAGAIN, "directory identity changed")
+        return descriptor, observation
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_bound_child_directory(
+    parent_descriptor: int,
+    name: str,
+    before: os.stat_result,
+) -> tuple[int, FileObservation]:
+    observation = _file_observation(before)
+    if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
+        raise OSError(errno.EINVAL, "not a real directory")
+    descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_descriptor)
+    try:
+        opened = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (
+            not _matches_observation(opened, observation)
+            or not _matches_observation(rebound, observation)
+            or not stat.S_ISDIR(opened.st_mode)
+            or stat.S_ISLNK(opened.st_mode)
+        ):
+            raise OSError(errno.EAGAIN, "directory identity changed")
+        return descriptor, observation
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_bound_regular(
+    directory_descriptor: int,
+    name: str,
+    *,
+    require_nonempty: bool = False,
+) -> tuple[bytes, FileObservation]:
+    before = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    observation = _file_observation(before)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or not _readable_mode(before.st_mode)
+        or (require_nonempty and before.st_size <= 0)
+    ):
+        raise OSError(errno.EINVAL, "not a readable regular file")
+    descriptor = os.open(
+        name, _regular_open_flags(), dir_fd=directory_descriptor
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if not _matches_observation(opened, observation):
+            raise OSError(errno.EAGAIN, "file identity changed")
+        raw = _read_descriptor(descriptor)
+        after = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        if (
+            not _matches_observation(after, observation)
+            or not _matches_observation(rebound, observation)
+            or (require_nonempty and not raw)
+        ):
+            raise OSError(errno.EAGAIN, "file identity changed")
+        return raw, observation
+    finally:
+        os.close(descriptor)
+
+
+def _read_raw_records(journal: Path) -> list[dict[str, object]]:
+    try:
+        run_descriptor, directory_observation = _open_bound_directory(journal.parent)
+        try:
+            raw, _ = _read_bound_regular(
+                run_descriptor, journal.name, require_nonempty=True
+            )
+            rebound = os.lstat(journal.parent)
+            if not _matches_observation(rebound, directory_observation):
+                raise OSError(errno.EAGAIN, "journal directory identity changed")
+        finally:
+            os.close(run_descriptor)
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    return _parse_raw_records(raw)
+
+
+def _scan_run(
+    run_dir: Path,
+    *,
+    raw: bytes | None = None,
+    directory_observation: FileObservation | None = None,
+    journal_observation: FileObservation | None = None,
+) -> RunState:
+    """Read historical lifecycle state without applying the FR-019 write schema."""
+
     run_id = run_dir.name
     if not _valid_run_id(run_id):
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    records = _read_raw_records(run_dir / "journal.jsonl")
+    if raw is None:
+        run_descriptor: int | None = None
+        try:
+            run_descriptor, directory_observation = _open_bound_directory(run_dir)
+            raw, journal_observation = _read_bound_regular(
+                run_descriptor, "journal.jsonl", require_nonempty=True
+            )
+            rebound = os.lstat(run_dir)
+            assert directory_observation is not None
+            if not _matches_observation(rebound, directory_observation):
+                raise OSError(errno.EAGAIN, "run directory identity changed")
+        except OSError as exc:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        finally:
+            if run_descriptor is not None:
+                os.close(run_descriptor)
+    assert raw is not None
+    records = _parse_raw_records(raw)
     starts = [record for record in records if record.get("type") == "run_started"]
     closures = [record for record in records if record.get("type") == "run_closed"]
     if len(starts) != 1 or records[0] is not starts[0]:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    # Pre-D13 journals record their identity under `id`; D13 journals use `run_id`.
-    # FR-014 scopes admission to journals that lack `run_closed`, so a closed legacy
-    # journal must not make the registry unavailable — but identity must still match
-    # the directory, and D13 journals keep the strict key.
     legacy = "run_id" not in starts[0]
     identity = starts[0].get("id") if legacy else starts[0].get("run_id")
-    if identity != run_id:
+    if identity != run_id or len(closures) > 1:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    if len(closures) > 1:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    if closures and records[-1] is not closures[0]:
-        # The old FR-120 correction rule appended a re-verification plus a
-        # citation-correction decision after close (run-20260811's real tail is
-        # run_closed -> verification -> decision). Tolerate exactly those record
-        # types, for legacy journals only — D13 journals never append after close.
+    close_position: int | None = None
+    if closures:
         close_position = next(
             position for position, record in enumerate(records) if record is closures[0]
         )
-        trailing = records[close_position + 1 :]
-        if not legacy or any(
-            record.get("type") not in {"decision", "verification"} for record in trailing
-        ):
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    scope = _scope_from_record(starts[0].get("scope"))
+        if records[-1] is not closures[0]:
+            trailing = records[close_position + 1 :]
+            if not legacy or any(
+                record.get("type") not in {"decision", "verification"}
+                for record in trailing
+            ):
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    opening_scope = _scope_from_record(starts[0].get("scope"))
+    scope = opening_scope
     successor_of = starts[0].get("successor_of")
     if successor_of is not None and not _valid_run_id(successor_of):
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    for record in records[1:]:
-        if record.get("type") == "decision" and record.get("resolution") == READMISSION_RESOLUTION:
+    retirement_positions: list[int] = []
+    for position, record in enumerate(records[1:], start=1):
+        if record.get("type") != "decision":
+            continue
+        decision_id = record.get("id")
+        resolution = record.get("resolution")
+        readmission_id = (
+            isinstance(decision_id, str)
+            and decision_id.startswith("forge-scope-readmission-")
+        )
+        if readmission_id or resolution == READMISSION_RESOLUTION:
+            if (
+                not isinstance(decision_id, str)
+                or READMISSION_ID_PATTERN.fullmatch(decision_id) is None
+                or resolution != READMISSION_RESOLUTION
+            ):
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
             updated = _scope_from_record(record.get("scope"))
             if updated is None:
                 raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
             scope = updated
-    retired = bool(
-        records
-        and records[-1].get("type") == "decision"
-        and records[-1].get("id") == "forge-run-retired"
-        and records[-1].get("resolution") == RETIREMENT_RESOLUTION
-    )
-    disposition = "closed" if closures else "retired" if retired else "open"
-    # A run opened before D13 coordination existed has no scope key in its
-    # run_started (D13's atomic open always records one). Its scope is
-    # unknown, so FR-014 treats it as repository-wide: it blocks every new
-    # admission by overlap — never by poisoning the registry — and stays
-    # appendable so it can be adopted and closed. The first adopting append
-    # writes the owner sidecar, so its presence cannot disqualify the run;
-    # normal ownership rules govern every append either way.
-    pre_coordination = (
-        disposition == "open" and scope is None and "scope" not in starts[0]
-    )
+        retirement_id = decision_id == "forge-run-retired"
+        if retirement_id or resolution == RETIREMENT_RESOLUTION:
+            if not retirement_id or resolution != RETIREMENT_RESOLUTION:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            retirement_positions.append(position)
+    if len(retirement_positions) > 1:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if retirement_positions:
+        expected_position = (
+            close_position - 1 if close_position is not None else len(records) - 1
+        )
+        if retirement_positions[0] != expected_position:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    was_retired = bool(retirement_positions)
+    disposition = "closed" if closures else "retired" if was_retired else "open"
+    close_judgment = closures[0].get("judgment") if closures else None
+    if closures and not legacy and close_judgment not in {"passed", "blocked"}:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    pre_coordination = disposition == "open" and scope is None and "scope" not in starts[0]
     if pre_coordination:
         scope = PRE_COORDINATION_SCOPE
     if disposition != "closed" and scope is None:
@@ -743,36 +1566,431 @@ def _scan_run(run_dir: Path) -> RunState:
         run_dir=run_dir,
         disposition=disposition,
         scope=scope or (),
+        opening_scope=opening_scope or (),
         successor_of=successor_of if isinstance(successor_of, str) else None,
         pre_coordination=pre_coordination,
+        records=tuple(records),
+        was_retired=was_retired,
+        close_judgment=close_judgment if isinstance(close_judgment, str) else None,
+        legacy=legacy,
+        directory_observation=directory_observation,
+        journal_observation=journal_observation,
+    )
+
+
+def _decode_registry_snapshot(
+    raw: bytes, observation: FileObservation
+) -> RegistrySnapshot:
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+        RecursionError,
+    ) as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if not isinstance(value, dict) or set(value) != {"open_runs", "schema_version"}:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if value.get("schema_version") != REGISTRY_SCHEMA_VERSION or not isinstance(
+        value.get("open_runs"), list
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    loaded: dict[str, tuple[str, ...]] = {}
+    for item in value["open_runs"]:
+        if not isinstance(item, dict) or set(item) != {"run_id", "scope"}:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        run_id = item.get("run_id")
+        scope = _scope_from_record(item.get("scope"))
+        if not _valid_run_id(run_id) or scope is None or run_id in loaded:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        loaded[str(run_id)] = scope
+    if raw != _registry_payload(loaded):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    return RegistrySnapshot(True, raw, loaded, observation)
+
+
+def _read_registry_snapshot(
+    state_root: Path, *, locked: RegistryLock | None = None
+) -> RegistrySnapshot:
+    registry_path = state_root / ".forge/tmp/run-registry.json"
+    if locked is not None:
+        _validate_registry_lock(state_root, locked)
+        try:
+            raw, observation = _read_bound_regular(
+                locked.directory_descriptor, registry_path.name
+            )
+        except FileNotFoundError:
+            _validate_registry_lock(state_root, locked)
+            return RegistrySnapshot(False, None, {})
+        except OSError as exc:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        _validate_registry_lock(state_root, locked)
+        return _decode_registry_snapshot(raw, observation)
+
+    directory_descriptor: int | None = None
+    try:
+        directory_descriptor, directory_observation = _open_bound_directory(
+            registry_path.parent
+        )
+    except FileNotFoundError:
+        return RegistrySnapshot(False, None, {})
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    try:
+        raw, registry_observation = _read_bound_regular(
+            directory_descriptor, registry_path.name
+        )
+        rebound = os.lstat(registry_path.parent)
+        if not _matches_observation(rebound, directory_observation):
+            raise OSError(errno.EAGAIN, "registry directory identity changed")
+    except FileNotFoundError:
+        try:
+            rebound = os.lstat(registry_path.parent)
+        except OSError as exc:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        if not _matches_observation(rebound, directory_observation):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        return RegistrySnapshot(False, None, {})
+    except (
+        OSError,
+    ) as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    finally:
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
+    return _decode_registry_snapshot(raw, registry_observation)
+
+
+def _readable_mode(mode: int, *, directory: bool = False) -> bool:
+    read_mask = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
+    execute_mask = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    return bool(mode & read_mask) and (not directory or bool(mode & execute_mask))
+
+
+def _read_owner_observation_at(
+    directory_descriptor: int, name: str = "owner"
+) -> tuple[OwnerObservation, Owner] | None:
+    try:
+        observed, observation = _read_bound_regular(directory_descriptor, name)
+    except OSError:
+        return None
+    owner = _parse_owner_bytes(observed)
+    if owner is None:
+        return None
+    return (
+        OwnerObservation(
+            observed=observed,
+            device=observation.device,
+            inode=observation.inode,
+            mode=observation.mode,
+        ),
+        owner,
+    )
+
+
+def _read_owner_observation(path: Path) -> tuple[OwnerObservation, Owner] | None:
+    descriptor: int | None = None
+    try:
+        descriptor, directory_observation = _open_bound_directory(path.parent)
+        result = _read_owner_observation_at(descriptor, path.name)
+        rebound = os.lstat(path.parent)
+        if not _matches_observation(rebound, directory_observation):
+            return None
+        return result
+    except OSError:
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _safe_run_entry_name(name: str) -> bool:
+    return _safe_diagnostic_text(name) and "/" not in name and "\\" not in name
+
+
+def _classify_runs(
+    state_root: Path,
+    registered_ids: frozenset[str],
+    *,
+    owner_target_ids: frozenset[str] = frozenset(),
+) -> tuple[
+    dict[str, RunState],
+    dict[str, PlaceholderObservation],
+    dict[str, OwnerObservation],
+    FileObservation | None,
+]:
+    runs_root = state_root / ".codex-orchestrator/runs"
+    root_descriptor: int | None = None
+    try:
+        root_descriptor, root_observation = _open_bound_directory(runs_root)
+    except FileNotFoundError:
+        return {}, {}, {}, None
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if not _readable_mode(root_observation.mode, directory=True):
+        os.close(root_descriptor)
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    try:
+        names = os.listdir(root_descriptor)
+    except OSError as exc:
+        os.close(root_descriptor)
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+
+    states: dict[str, RunState] = {}
+    placeholders: dict[str, PlaceholderObservation] = {}
+    owners: dict[str, OwnerObservation] = {}
+    try:
+        for name in sorted(names, key=os.fsencode):
+            run_descriptor: int | None = None
+            try:
+                entry_stat = os.stat(
+                    name, dir_fd=root_descriptor, follow_symlinks=False
+                )
+                if stat.S_ISREG(entry_stat.st_mode) and not name.startswith("."):
+                    rebound_regular = os.stat(
+                        name, dir_fd=root_descriptor, follow_symlinks=False
+                    )
+                    if _file_observation(rebound_regular) != _file_observation(entry_stat):
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                    continue
+                if not _safe_run_entry_name(name) or name.startswith("."):
+                    raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                if (
+                    not stat.S_ISDIR(entry_stat.st_mode)
+                    or stat.S_ISLNK(entry_stat.st_mode)
+                    or not _readable_mode(entry_stat.st_mode, directory=True)
+                ):
+                    raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                run_descriptor, run_observation = _open_bound_child_directory(
+                    root_descriptor, name, entry_stat
+                )
+                children = os.listdir(run_descriptor)
+                child_names = set(children)
+                has_journal = "journal.jsonl" in child_names
+                has_owner = "owner" in child_names
+                run_dir = runs_root / name
+                if not has_journal:
+                    rebound = os.stat(
+                        name, dir_fd=root_descriptor, follow_symlinks=False
+                    )
+                    if not _matches_observation(rebound, run_observation):
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                    if name in registered_ids or has_owner:
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                    if "classify" not in ORPHAN_CLASSIFICATION_CONTROLS:
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                    if not children:
+                        placeholders[name] = PlaceholderObservation(
+                            path=run_dir,
+                            device=run_observation.device,
+                            inode=run_observation.inode,
+                            mode=run_observation.mode,
+                        )
+                        continue
+                    try:
+                        rendered = run_dir.relative_to(state_root).as_posix()
+                    except ValueError as exc:
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+                    if not _safe_diagnostic_text(rendered):
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                    raise CoordinationRefusal(
+                        f"forge: new run refused — run directory {rendered} "
+                        "lacks journal.jsonl"
+                    )
+                raw, journal_observation = _read_bound_regular(
+                    run_descriptor, "journal.jsonl", require_nonempty=True
+                )
+                owner_result = _read_owner_observation_at(run_descriptor)
+                rebound = os.stat(
+                    name, dir_fd=root_descriptor, follow_symlinks=False
+                )
+                if not _matches_observation(rebound, run_observation):
+                    raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                state = _scan_run(
+                    run_dir,
+                    raw=raw,
+                    directory_observation=run_observation,
+                    journal_observation=journal_observation,
+                )
+                if state.run_id in states:
+                    raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                states[state.run_id] = state
+                if owner_result is None:
+                    if (
+                        not state.pre_coordination
+                        and not state.legacy
+                        and state.run_id not in owner_target_ids
+                    ):
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                else:
+                    owners[state.run_id] = owner_result[0]
+            except CoordinationRefusal:
+                raise
+            except OSError as exc:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+            finally:
+                if run_descriptor is not None:
+                    os.close(run_descriptor)
+        rebound_root = os.lstat(runs_root)
+        if not _matches_observation(rebound_root, root_observation):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        return states, placeholders, owners, root_observation
+    finally:
+        os.close(root_descriptor)
+
+
+def _reconcile_registry(
+    snapshot: RegistrySnapshot, states: dict[str, RunState]
+) -> dict[str, tuple[str, ...]]:
+    persisted = {
+        run_id: state.scope
+        for run_id, state in states.items()
+        if state.disposition == "open" and not state.pre_coordination
+    }
+    if snapshot.exists:
+        if snapshot.open_runs != persisted:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    elif persisted or any(
+        not state.legacy and not state.pre_coordination for state in states.values()
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    admitted = dict(persisted)
+    admitted.update(
+        {
+            run_id: state.scope
+            for run_id, state in states.items()
+            if state.disposition == "open" and state.pre_coordination
+        }
+    )
+    return admitted
+
+
+def _derive_reservations(states: dict[str, RunState]) -> dict[str, ScopeReservation]:
+    children: dict[str, list[str]] = {run_id: [] for run_id in states}
+    for run_id, state in states.items():
+        predecessor_id = state.successor_of
+        if predecessor_id is None:
+            continue
+        predecessor = states.get(predecessor_id)
+        if predecessor is None or not predecessor.was_retired or predecessor.disposition != "retired":
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        children[predecessor_id].append(run_id)
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(run_id: str) -> None:
+        if run_id in visiting:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        if run_id in visited:
+            return
+        visiting.add(run_id)
+        for child in children[run_id]:
+            visit(child)
+        visiting.remove(run_id)
+        visited.add(run_id)
+
+    for run_id in sorted(states, key=_byte_key):
+        visit(run_id)
+    if any(
+        state.disposition in {"open", "closed"} and children[run_id]
+        for run_id, state in states.items()
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if any(
+        state.successor_of is not None
+        and state.disposition == "closed"
+        and state.close_judgment not in {"passed", "blocked"}
+        for state in states.values()
+    ):
+        # Only an explicitly successful successor close releases its branch.
+        # Legacy records without that judgment cannot prove release semantics.
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    effective: dict[str, tuple[frozenset[str], tuple[str, ...]]] = {}
+
+    def effective_lineage(run_id: str) -> tuple[frozenset[str], tuple[str, ...]]:
+        cached = effective.get(run_id)
+        if cached is not None:
+            return cached
+        state = states[run_id]
+        lineage = {run_id}
+        combined = set(state.scope)
+        predecessor_id = state.successor_of
+        if predecessor_id is not None:
+            predecessor_lineage, predecessor_scope = effective_lineage(predecessor_id)
+            if not scopes_overlap(state.opening_scope, predecessor_scope):
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            lineage.update(predecessor_lineage)
+            combined.update(predecessor_scope)
+        result = (
+            frozenset(lineage),
+            tuple(sorted(combined, key=_byte_key)),
+        )
+        effective[run_id] = result
+        return result
+
+    for run_id in sorted(states, key=_byte_key):
+        effective_lineage(run_id)
+
+    if any(
+        state.was_retired
+        and state.disposition == "closed"
+        and state.successor_of is None
+        for state in states.values()
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    reservations: dict[str, ScopeReservation] = {}
+    for run_id, state in states.items():
+        unresolved = state.disposition in {"open", "retired"}
+        if (
+            "release" not in SUCCESSOR_DAG_CONTROLS
+            and state.disposition == "closed"
+            and (state.successor_of is not None or state.was_retired)
+        ):
+            unresolved = True
+        if not unresolved or children[run_id]:
+            continue
+        lineage, effective_scope = effective[run_id]
+        disposition = state.disposition if state.disposition != "closed" else "retired"
+        reservations[run_id] = ScopeReservation(
+            run_id=run_id,
+            disposition=disposition,
+            scope=effective_scope,
+            lineage=lineage,
+        )
+    return reservations
+
+
+def _coordination_view(
+    state_root: Path,
+    *,
+    owner_target_ids: frozenset[str] = frozenset(),
+    locked: RegistryLock | None = None,
+) -> CoordinationView:
+    snapshot = _read_registry_snapshot(state_root, locked=locked)
+    states, placeholders, owners, runs_root_observation = _classify_runs(
+        state_root,
+        frozenset(snapshot.open_runs),
+        owner_target_ids=owner_target_ids,
+    )
+    open_runs = _reconcile_registry(snapshot, states)
+    reservations = _derive_reservations(states)
+    return CoordinationView(
+        snapshot,
+        states,
+        open_runs,
+        reservations,
+        placeholders,
+        owners,
+        runs_root_observation,
     )
 
 
 def _scan_runs(state_root: Path) -> dict[str, RunState]:
-    runs_root = state_root / ".codex-orchestrator/runs"
-    if not runs_root.exists():
-        return {}
-    try:
-        entries = list(runs_root.iterdir())
-    except OSError as exc:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
-    # An atomic-open temporary can survive a process crash after ownership and
-    # run_started were written but before rename/registry replacement. Its
-    # scope is therefore ambiguous open-run state and must never be skipped.
-    if any(entry.name.startswith(".") for entry in entries):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    # A non-dot regular file cannot be a run in any disposition: runs live in
-    # directories, and atomic-open crash temps are dot-prefixed (refused
-    # above). Session tooling drops scratch files (CLAUDE.md stubs) into this
-    # root; they hold no journal and no scope, so they are not registry state.
-    directories = [entry for entry in entries if entry.is_dir()]
-    states: dict[str, RunState] = {}
-    for run_dir in sorted(directories, key=lambda path: _byte_key(path.name)):
-        state = _scan_run(run_dir)
-        if state.run_id in states:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        states[state.run_id] = state
-    return states
+    return _coordination_view(state_root).states
 
 
 def _registry_payload(open_runs: dict[str, tuple[str, ...]]) -> bytes:
@@ -787,59 +2005,1055 @@ def _registry_payload(open_runs: dict[str, tuple[str, ...]]) -> bytes:
 
 
 def _load_registry(state_root: Path, states: dict[str, RunState]) -> dict[str, tuple[str, ...]]:
-    registry_path = state_root / ".forge/tmp/run-registry.json"
-    if not registry_path.exists():
-        open_states = [state for state in states.values() if state.disposition == "open"]
-        if any(not state.pre_coordination for state in open_states):
+    return _reconcile_registry(_read_registry_snapshot(state_root), states)
+
+
+def _revalidate_placeholders(placeholders: dict[str, PlaceholderObservation]) -> None:
+    for observation in placeholders.values():
+        descriptor: int | None = None
+        try:
+            flags = os.O_RDONLY
+            flags |= getattr(os, "O_DIRECTORY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            flags |= getattr(os, "O_CLOEXEC", 0)
+            descriptor = os.open(observation.path, flags)
+            current = os.fstat(descriptor)
+            children = os.listdir(descriptor)
+            rebound = os.lstat(observation.path)
+        except (OSError, TypeError) as exc:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+        if (
+            current.st_dev != observation.device
+            or current.st_ino != observation.inode
+            or current.st_mode != observation.mode
+            or rebound.st_dev != current.st_dev
+            or rebound.st_ino != current.st_ino
+            or rebound.st_mode != current.st_mode
+            or not stat.S_ISDIR(current.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+            or children
+        ):
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        # Pre-coordination runs predate the registry itself, so a missing
-        # registry is expected history, not corruption. Their repository-wide
-        # scopes exist only in memory — the sentinel is not a validatable
-        # pathspec, so nothing is persisted until a real scope is admitted.
-        return {state.run_id: state.scope for state in open_states}
+
+
+def _assert_coordination_view_unchanged(
+    state_root: Path, view: CoordinationView, *, locked: RegistryLock | None = None
+) -> None:
+    if _coordination_view(state_root, locked=locked) != view:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+
+def _validate_new_run_claim(state_root: Path, claim: NewRunClaim) -> None:
+    runs_root = state_root / ".codex-orchestrator/runs"
+    root_descriptor: int | None = None
+    run_descriptor: int | None = None
     try:
-        raw = registry_path.read_bytes()
-        value = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        root_descriptor, root_observation = _open_bound_directory(runs_root)
+        if root_observation != claim.runs_root_observation:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        run_stat = os.stat(
+            claim.run_id,
+            dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+        run_descriptor, run_observation = _open_bound_child_directory(
+            root_descriptor, claim.run_id, run_stat
+        )
+        if run_observation != claim.directory_observation:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        expected_names = {name for name, _, _ in claim.files}
+        if set(os.listdir(run_descriptor)) != expected_names:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        for name, expected_observation, expected_payload in claim.files:
+            raw, observed = _read_bound_regular(run_descriptor, name)
+            if observed != expected_observation or raw != expected_payload:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        rebound_run = os.stat(
+            claim.run_id,
+            dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+        rebound_root = os.lstat(runs_root)
+        if (
+            not _matches_observation(rebound_run, claim.directory_observation)
+            or not _matches_observation(rebound_root, claim.runs_root_observation)
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    except CoordinationRefusal:
+        raise
+    except OSError as exc:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
-    if not isinstance(value, dict) or set(value) != {"open_runs", "schema_version"}:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    if value.get("schema_version") != REGISTRY_SCHEMA_VERSION or not isinstance(value.get("open_runs"), list):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    loaded: dict[str, tuple[str, ...]] = {}
-    for item in value["open_runs"]:
-        if not isinstance(item, dict) or set(item) != {"run_id", "scope"}:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        run_id = item.get("run_id")
-        scope = _scope_from_record(item.get("scope"))
-        if not _valid_run_id(run_id) or scope is None or run_id in loaded:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        loaded[run_id] = scope
-    if raw != _registry_payload(loaded):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    reconciled: dict[str, tuple[str, ...]] = {}
-    for run_id, scope in loaded.items():
-        state = states.get(run_id)
-        if state is None:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        if state.disposition == "open":
-            if state.scope != scope:
-                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-            reconciled[run_id] = scope
-    admitted = dict(reconciled)
-    for run_id, state in states.items():
-        if state.disposition == "open" and run_id not in loaded:
-            if not state.pre_coordination:
-                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-            # A pre-coordination run joins admission in memory only; its
-            # sentinel scope never reaches the persisted registry.
-            admitted[run_id] = state.scope
-    if reconciled != loaded:
-        _atomic_replace(registry_path, _registry_payload(reconciled))
-    return admitted
+    finally:
+        if run_descriptor is not None:
+            os.close(run_descriptor)
+        if root_descriptor is not None:
+            os.close(root_descriptor)
 
 
-def _write_registry(state_root: Path, open_runs: dict[str, tuple[str, ...]]) -> None:
+def _validate_registry_publication(
+    state_root: Path,
+    open_runs: dict[str, tuple[str, ...]],
+    view: CoordinationView,
+    *,
+    changed_run_id: str,
+    appended_record: dict[str, object],
+    expected_owner: Owner,
+    locked: RegistryLock,
+    expected_runs_root: FileObservation | None,
+    new_run_claim: NewRunClaim | None = None,
+) -> None:
+    """Re-derive every persisted admission predicate at the publication fence."""
+
+    _revalidate_placeholders(view.placeholders)
+    _validate_registry_lock(state_root, locked)
+    if new_run_claim is not None:
+        _validate_new_run_claim(state_root, new_run_claim)
+    snapshot = _read_registry_snapshot(state_root, locked=locked)
+    if snapshot != view.registry:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    states, placeholders, owners, runs_root_observation = _classify_runs(
+        state_root, frozenset(snapshot.open_runs)
+    )
+    if runs_root_observation != expected_runs_root:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if placeholders != view.placeholders:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    expected_ids = set(view.states)
+    if changed_run_id not in view.states:
+        expected_ids.add(changed_run_id)
+    if set(states) != expected_ids:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    for run_id, prior in view.states.items():
+        if run_id == changed_run_id:
+            continue
+        if states.get(run_id) != prior:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    changed = states.get(changed_run_id)
+    if changed is None:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    prior_changed = view.states.get(changed_run_id)
+    expected_records = (
+        (appended_record,)
+        if prior_changed is None
+        else prior_changed.records + (appended_record,)
+    )
+    if changed.records != expected_records:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    prior_owners = {
+        run_id: owner
+        for run_id, owner in view.owners.items()
+        if run_id != changed_run_id
+    }
+    current_owners = {
+        run_id: owner
+        for run_id, owner in owners.items()
+        if run_id != changed_run_id
+    }
+    if current_owners != prior_owners:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    changed_owner_observation = owners.get(changed_run_id)
+    changed_owner = (
+        _parse_owner_bytes(changed_owner_observation.observed)
+        if changed_owner_observation is not None
+        else None
+    )
+    if (
+        changed_owner is None
+        or changed_owner.pid != expected_owner.pid
+        or changed_owner.host != expected_owner.host
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    persistable = {
+        run_id: scope
+        for run_id, scope in open_runs.items()
+        if scope != PRE_COORDINATION_SCOPE
+    }
+    derived = {
+        run_id: state.scope
+        for run_id, state in states.items()
+        if state.disposition == "open" and not state.pre_coordination
+    }
+    if derived != persistable:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    _derive_reservations(states)
+    if new_run_claim is not None:
+        _validate_new_run_claim(state_root, new_run_claim)
+    _validate_registry_lock(state_root, locked)
+
+
+def _exchange_names_at(
+    directory_descriptor: int, first_name: str, second_name: str
+) -> None:
+    """Atomically exchange two existing names without making either absent."""
+
+    library = ctypes.CDLL(None, use_errno=True)
+    first = os.fsencode(first_name)
+    second = os.fsencode(second_name)
+    if sys.platform.startswith("linux"):
+        exchange = getattr(library, "renameat2", None)
+        if exchange is None:
+            raise OSError(errno.ENOTSUP, "atomic name exchange unavailable")
+        exchange.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        exchange.restype = ctypes.c_int
+        result = exchange(
+            directory_descriptor,
+            first,
+            directory_descriptor,
+            second,
+            2,  # RENAME_EXCHANGE
+        )
+    elif sys.platform == "darwin":
+        exchange = getattr(library, "renameatx_np", None)
+        if exchange is None:
+            raise OSError(errno.ENOTSUP, "atomic name exchange unavailable")
+        exchange.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        exchange.restype = ctypes.c_int
+        result = exchange(
+            directory_descriptor,
+            first,
+            directory_descriptor,
+            second,
+            0x00000002,  # RENAME_SWAP
+        )
+    else:
+        raise OSError(errno.ENOTSUP, "atomic name exchange unavailable")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _move_name_noreplace_at(
+    directory_descriptor: int, source_name: str, destination_name: str
+) -> None:
+    """Atomically move one name only when the destination remains absent."""
+
+    library = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(source_name)
+    destination = os.fsencode(destination_name)
+    if sys.platform.startswith("linux"):
+        move = getattr(library, "renameat2", None)
+        if move is None:
+            raise OSError(errno.ENOTSUP, "atomic no-replace move unavailable")
+        move.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        move.restype = ctypes.c_int
+        result = move(
+            directory_descriptor,
+            source,
+            directory_descriptor,
+            destination,
+            1,  # RENAME_NOREPLACE
+        )
+    elif sys.platform == "darwin":
+        move = getattr(library, "renameatx_np", None)
+        if move is None:
+            raise OSError(errno.ENOTSUP, "atomic no-replace move unavailable")
+        move.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        move.restype = ctypes.c_int
+        result = move(
+            directory_descriptor,
+            source,
+            directory_descriptor,
+            destination,
+            0x00000004,  # RENAME_EXCL
+        )
+    else:
+        raise OSError(errno.ENOTSUP, "atomic no-replace move unavailable")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _named_observation_at(
+    directory_descriptor: int, name: str
+) -> FileObservation:
+    return _file_observation(
+        os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    )
+
+
+def _optional_exact_file_at(
+    directory_descriptor: int, name: str
+) -> ExactFile | None:
+    try:
+        raw, observation = _read_bound_regular(directory_descriptor, name)
+    except FileNotFoundError:
+        return None
+    return ExactFile(raw, observation)
+
+
+def _exchange_exact_at(
+    directory_descriptor: int,
+    first_name: str,
+    second_name: str,
+    first_before: ExactFile,
+    second_before: ExactFile,
+) -> NamespaceMutationOutcome:
+    try:
+        if (
+            _optional_exact_file_at(directory_descriptor, first_name)
+            != first_before
+            or _optional_exact_file_at(directory_descriptor, second_name)
+            != second_before
+        ):
+            return NamespaceMutationOutcome("foreign", None)
+    except BaseException as exc:
+        return NamespaceMutationOutcome("foreign", exc)
+    failure: BaseException | None = None
+    try:
+        _exchange_names_at(directory_descriptor, first_name, second_name)
+    except BaseException as exc:
+        failure = exc
+    try:
+        first_after = _optional_exact_file_at(directory_descriptor, first_name)
+        second_after = _optional_exact_file_at(directory_descriptor, second_name)
+    except BaseException as exc:
+        return NamespaceMutationOutcome("foreign", failure or exc)
+    if first_after == second_before and second_after == first_before:
+        return NamespaceMutationOutcome("post", failure)
+    if first_after == first_before and second_after == second_before:
+        return NamespaceMutationOutcome("pre", failure)
+    return NamespaceMutationOutcome("foreign", failure)
+
+
+def _link_exact_at(
+    directory_descriptor: int,
+    source_name: str,
+    destination_name: str,
+    expected: ExactFile,
+) -> NamespaceMutationOutcome:
+    try:
+        if (
+            _optional_exact_file_at(directory_descriptor, source_name)
+            != expected
+        ):
+            return NamespaceMutationOutcome("foreign", None)
+    except BaseException as exc:
+        return NamespaceMutationOutcome("foreign", exc)
+    try:
+        destination_stat = os.stat(
+            destination_name,
+            dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        pass
+    except BaseException as exc:
+        return NamespaceMutationOutcome("foreign", exc)
+    else:
+        if _matches_observation(destination_stat, expected.observation):
+            # Another actor installed the exact intended hard link. Treat the
+            # namespace as published so normal validation/rollback owns it.
+            return NamespaceMutationOutcome("post", None)
+        # The no-clobber destination was occupied before the syscall.  Its
+        # type and contents are deliberately not inspected or followed.
+        return NamespaceMutationOutcome("occupied", None)
+    failure: BaseException | None = None
+    try:
+        os.link(
+            source_name,
+            destination_name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+            follow_symlinks=False,
+        )
+    except BaseException as exc:
+        failure = exc
+    link_collision = isinstance(failure, FileExistsError) or (
+        isinstance(failure, OSError) and failure.errno == errno.EEXIST
+    )
+    if link_collision:
+        try:
+            source_after_collision = _optional_exact_file_at(
+                directory_descriptor, source_name
+            )
+        except BaseException as exc:
+            return NamespaceMutationOutcome("foreign", failure or exc)
+        if source_after_collision != expected:
+            return NamespaceMutationOutcome("foreign", failure)
+        try:
+            destination_stat = os.stat(
+                destination_name,
+                dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            # A transient collision is no longer observable; let the exact
+            # pair classifier below determine whether state is PRE or foreign.
+            pass
+        except BaseException as exc:
+            return NamespaceMutationOutcome("foreign", failure or exc)
+        else:
+            if _matches_observation(destination_stat, expected.observation):
+                # Defensive fault-injection case: the candidate actually has
+                # a canonical link despite the reported collision.
+                return NamespaceMutationOutcome("post", failure)
+            # EEXIST cannot partially create a link. The occupied destination
+            # is observed without reading or following the node.
+            return NamespaceMutationOutcome("occupied", failure)
+    try:
+        source_after = _optional_exact_file_at(
+            directory_descriptor, source_name
+        )
+        destination_after = _optional_exact_file_at(
+            directory_descriptor, destination_name
+        )
+    except BaseException as exc:
+        return NamespaceMutationOutcome("foreign", failure or exc)
+    if source_after == expected and destination_after == expected:
+        return NamespaceMutationOutcome("post", failure)
+    if source_after == expected and destination_after is None:
+        return NamespaceMutationOutcome("pre", failure)
+    return NamespaceMutationOutcome("foreign", failure)
+
+
+def _move_exact_at(
+    directory_descriptor: int,
+    source_name: str,
+    destination_name: str,
+    expected: ExactFile,
+) -> NamespaceMutationOutcome:
+    try:
+        if (
+            _optional_exact_file_at(directory_descriptor, source_name)
+            != expected
+            or _optional_exact_file_at(directory_descriptor, destination_name)
+            is not None
+        ):
+            return NamespaceMutationOutcome("foreign", None)
+    except BaseException as exc:
+        return NamespaceMutationOutcome("foreign", exc)
+    failure: BaseException | None = None
+    try:
+        _move_name_noreplace_at(
+            directory_descriptor, source_name, destination_name
+        )
+    except BaseException as exc:
+        failure = exc
+    try:
+        source_after = _optional_exact_file_at(
+            directory_descriptor, source_name
+        )
+        destination_after = _optional_exact_file_at(
+            directory_descriptor, destination_name
+        )
+    except BaseException as exc:
+        return NamespaceMutationOutcome("foreign", failure or exc)
+    if source_after is None and destination_after == expected:
+        return NamespaceMutationOutcome("post", failure)
+    if source_after == expected and destination_after is None:
+        return NamespaceMutationOutcome("pre", failure)
+    return NamespaceMutationOutcome("foreign", failure)
+
+
+def _reverse_exchange_with_exact_canonical_at(
+    directory_descriptor: int,
+    canonical_name: str,
+    exchange_name: str,
+    candidate_payload: bytes,
+    candidate_observation: FileObservation,
+) -> BaseException | None:
+    """Reverse only while canonical retains the exact expected payload/inode."""
+
+    try:
+        canonical = _read_bound_regular(directory_descriptor, canonical_name)
+        displaced_observation = _named_observation_at(
+            directory_descriptor, exchange_name
+        )
+    except OSError as exc:
+        raise NamespaceMutationAmbiguity from exc
+    if canonical != (candidate_payload, candidate_observation):
+        raise NamespaceMutationAmbiguity
+    failure: BaseException | None = None
+    try:
+        _exchange_names_at(directory_descriptor, exchange_name, canonical_name)
+    except BaseException as exc:
+        failure = exc
+    try:
+        restored_canonical = _named_observation_at(
+            directory_descriptor, canonical_name
+        )
+        retained_candidate = _read_bound_regular(
+            directory_descriptor, exchange_name
+        )
+        if (
+            restored_canonical != displaced_observation
+            or retained_candidate
+            != (candidate_payload, candidate_observation)
+        ):
+            raise NamespaceMutationAmbiguity
+        return failure
+    except NamespaceMutationAmbiguity:
+        raise
+    except BaseException as exc:
+        raise NamespaceMutationAmbiguity from exc
+
+
+def _reverse_exact_exchange_at(
+    directory_descriptor: int,
+    canonical_name: str,
+    retention_name: str,
+    canonical_expected: ExactFile,
+    retention_expected: ExactFile,
+) -> BaseException | None:
+    """Exchange an authoritative exact pair back to its published ordering."""
+
+    outcome = _exchange_exact_at(
+        directory_descriptor,
+        retention_name,
+        canonical_name,
+        retention_expected,
+        canonical_expected,
+    )
+    if outcome.phase != "post":
+        raise NamespaceMutationAmbiguity
+    return outcome.failure
+
+
+def _restore_exact_move_at(
+    directory_descriptor: int,
+    retention_name: str,
+    canonical_name: str,
+    expected: ExactFile,
+) -> BaseException | None:
+    outcome = _move_exact_at(
+        directory_descriptor,
+        retention_name,
+        canonical_name,
+        expected,
+    )
+    if outcome.phase != "post":
+        raise NamespaceMutationAmbiguity
+    return outcome.failure
+
+
+def _verified_named_payload(
+    locked: RegistryLock, name: str
+) -> tuple[bytes, FileObservation]:
+    try:
+        return _read_bound_regular(locked.directory_descriptor, name)
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+
+
+def _unlink_if_observed(
+    directory_descriptor: int, name: str, observation: FileObservation
+) -> None:
+    try:
+        current = os.stat(
+            name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        if _matches_observation(current, observation):
+            os.unlink(name, dir_fd=directory_descriptor)
+    except BaseException:
+        pass
+
+
+def _unlink_if_exact(
+    directory_descriptor: int, name: str, expected: ExactFile
+) -> None:
+    """Best-effort cleanup without unlinking a substituted name."""
+
+    try:
+        if _optional_exact_file_at(directory_descriptor, name) == expected:
+            os.unlink(name, dir_fd=directory_descriptor)
+    except BaseException:
+        pass
+
+
+def _validate_restored_registry_publication(
+    state_root: Path,
+    locked: RegistryLock,
+    publication: RegistryPublication,
+) -> None:
+    if _read_registry_snapshot(state_root, locked=locked) != publication.prior:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    _validate_registry_lock(state_root, locked)
+    if _read_registry_snapshot(state_root, locked=locked) != publication.prior:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+
+def _restore_registry_candidate_from_retention(
+    state_root: Path,
+    locked: RegistryLock,
+    publication: RegistryPublication,
+    retention_name: str,
+    prior_exact: ExactFile | None,
+) -> BaseException | None:
+    candidate = ExactFile(
+        publication.candidate_payload, publication.candidate_observation
+    )
+    _validate_registry_lock(state_root, locked)
+    if prior_exact is not None:
+        failure = _reverse_exact_exchange_at(
+            locked.directory_descriptor,
+            "run-registry.json",
+            retention_name,
+            prior_exact,
+            candidate,
+        )
+    else:
+        failure = _restore_exact_move_at(
+            locked.directory_descriptor,
+            retention_name,
+            "run-registry.json",
+            candidate,
+        )
+    if (
+        _optional_exact_file_at(
+            locked.directory_descriptor, "run-registry.json"
+        )
+        != candidate
+    ):
+        raise NamespaceMutationAmbiguity
+    return failure
+
+
+def _rollback_registry_publication(
+    state_root: Path,
+    locked: RegistryLock,
+    publication: RegistryPublication,
+) -> None:
+    """Restore prior registry, retaining candidate until final proof succeeds."""
+
+    candidate = ExactFile(
+        publication.candidate_payload, publication.candidate_observation
+    )
+    retention_name: str | None = None
+    prior_exact: ExactFile | None = None
+    rollback_phase = "published"
+    try:
+        _validate_registry_lock(state_root, locked)
+        if (
+            _optional_exact_file_at(
+                locked.directory_descriptor, "run-registry.json"
+            )
+            != candidate
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        if publication.prior.exists:
+            if (
+                publication.backup_name is None
+                or publication.prior.raw is None
+                or publication.prior.observation is None
+            ):
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            retention_name = publication.backup_name
+            prior_exact = ExactFile(
+                publication.prior.raw, publication.prior.observation
+            )
+            rollback_phase = "restoration-indeterminate"
+            outcome = _exchange_exact_at(
+                locked.directory_descriptor,
+                retention_name,
+                "run-registry.json",
+                prior_exact,
+                candidate,
+            )
+            if outcome.phase == "foreign":
+                # If our exact prior became canonical, the exchange moved an
+                # unexpected canonical into retention. Put it back only while
+                # canonical is still that exact prior; otherwise preserve it.
+                try:
+                    _reverse_exchange_with_exact_canonical_at(
+                        locked.directory_descriptor,
+                        "run-registry.json",
+                        retention_name,
+                        prior_exact.payload,
+                        prior_exact.observation,
+                    )
+                except NamespaceMutationAmbiguity:
+                    pass
+                raise RegistryRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+            if outcome.phase != "post":
+                raise RegistryRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+            rollback_phase = "restored-unvalidated"
+            pending_failure = outcome.failure
+        else:
+            retention_name = (
+                f".run-registry.json.{uuid.uuid4().hex}.rollback"
+            )
+            rollback_phase = "restoration-indeterminate"
+            outcome = _move_exact_at(
+                locked.directory_descriptor,
+                "run-registry.json",
+                retention_name,
+                candidate,
+            )
+            if outcome.phase != "post":
+                raise RegistryRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+            rollback_phase = "restored-unvalidated"
+            pending_failure = outcome.failure
+
+        assert retention_name is not None
+        try:
+            if pending_failure is not None:
+                raise pending_failure
+            _validate_restored_registry_publication(
+                state_root, locked, publication
+            )
+        except BaseException as validation_failure:
+            try:
+                rollback_phase = "candidate-reapply-indeterminate"
+                _restore_registry_candidate_from_retention(
+                    state_root,
+                    locked,
+                    publication,
+                    retention_name,
+                    prior_exact,
+                )
+                rollback_phase = "published"
+            except BaseException as restore_failure:
+                raise RegistryRestorationRefusal(
+                    JOURNAL_ROLLBACK_FAILED
+                ) from restore_failure
+            raise RegistryRestorationRefusal(
+                JOURNAL_ROLLBACK_FAILED
+            ) from validation_failure
+
+        # From this point prior state is proven. Cleanup is deliberately
+        # no-fail so callers can safely roll their journal append back.
+        rollback_phase = "prior-committed"
+        _unlink_if_observed(
+            locked.directory_descriptor,
+            retention_name,
+            publication.candidate_observation,
+        )
+    except RegistryRestorationRefusal:
+        raise
+    except BaseException as exc:
+        if rollback_phase == "prior-committed":
+            raise
+        if (
+            rollback_phase
+            in {"restoration-indeterminate", "restored-unvalidated"}
+            and retention_name is not None
+        ):
+            try:
+                canonical = _optional_exact_file_at(
+                    locked.directory_descriptor, "run-registry.json"
+                )
+                retained = _optional_exact_file_at(
+                    locked.directory_descriptor, retention_name
+                )
+                if canonical == candidate:
+                    pass
+                elif retained == candidate and canonical == prior_exact:
+                    _restore_registry_candidate_from_retention(
+                        state_root,
+                        locked,
+                        publication,
+                        retention_name,
+                        prior_exact,
+                    )
+                else:
+                    raise NamespaceMutationAmbiguity
+            except BaseException as restore_failure:
+                raise RegistryRestorationRefusal(
+                    JOURNAL_ROLLBACK_FAILED
+                ) from restore_failure
+        raise RegistryRestorationRefusal(JOURNAL_ROLLBACK_FAILED) from exc
+
+
+def _begin_registry_publication(
+    state_root: Path,
+    locked: RegistryLock,
+    prior: RegistrySnapshot,
+    payload: bytes,
+) -> RegistryPublication:
+    """Publish candidate bytes while retaining a verified prior-inode backup."""
+
+    _validate_registry_lock(state_root, locked)
+    if _read_registry_snapshot(state_root, locked=locked) != prior:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    temporary = f".run-registry.json.{uuid.uuid4().hex}.candidate"
+    candidate_observation: FileObservation | None = None
+    backup_name: str | None = None
+    publication: RegistryPublication | None = None
+    candidate: ExactFile | None = None
+    prior_exact: ExactFile | None = None
+    phase = "unstaged"
+    try:
+        candidate_observation = _write_exclusive_at(
+            locked.directory_descriptor, temporary, payload
+        )
+        candidate = ExactFile(payload, candidate_observation)
+        phase = "staged"
+        backup_name = (
+            f".run-registry.json.{uuid.uuid4().hex}.previous"
+            if prior.exists
+            else None
+        )
+        publication = RegistryPublication(
+            prior, candidate_observation, payload, backup_name
+        )
+        if prior.exists:
+            if prior.raw is None or prior.observation is None:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            prior_exact = ExactFile(prior.raw, prior.observation)
+            assert backup_name is not None
+            link_outcome = _link_exact_at(
+                locked.directory_descriptor,
+                "run-registry.json",
+                backup_name,
+                prior_exact,
+            )
+            if link_outcome.phase != "post":
+                if link_outcome.failure is not None:
+                    raise link_outcome.failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            phase = "backup"
+            if link_outcome.failure is not None:
+                raise link_outcome.failure
+            phase = "exchange-indeterminate"
+            exchange_outcome = _exchange_exact_at(
+                locked.directory_descriptor,
+                temporary,
+                "run-registry.json",
+                candidate,
+                prior_exact,
+            )
+            if exchange_outcome.phase == "foreign":
+                try:
+                    reverse_failure = _reverse_exchange_with_exact_canonical_at(
+                        locked.directory_descriptor,
+                        "run-registry.json",
+                        temporary,
+                        payload,
+                        candidate_observation,
+                    )
+                except NamespaceMutationAmbiguity as restore_exc:
+                    raise RegistryRestorationRefusal(
+                        JOURNAL_ROLLBACK_FAILED
+                    ) from restore_exc
+                phase = "backup"
+                if reverse_failure is not None:
+                    raise reverse_failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            if exchange_outcome.phase != "post":
+                phase = "backup"
+                if exchange_outcome.failure is not None:
+                    raise exchange_outcome.failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            phase = "published"
+            if exchange_outcome.failure is not None:
+                raise exchange_outcome.failure
+            _unlink_if_observed(
+                locked.directory_descriptor,
+                temporary,
+                prior_exact.observation,
+            )
+        else:
+            phase = "link-indeterminate"
+            link_outcome = _link_exact_at(
+                locked.directory_descriptor,
+                temporary,
+                "run-registry.json",
+                candidate,
+            )
+            if link_outcome.phase != "post":
+                if link_outcome.phase == "occupied":
+                    # The exact staged candidate was verified before a
+                    # no-follow occupancy check.  No link syscall occurred.
+                    phase = "staged"
+                    raise CoordinationRefusal(REGISTRY_UPDATE_FAILED)
+                if link_outcome.phase == "foreign":
+                    raise RegistryRestorationRefusal(
+                        JOURNAL_ROLLBACK_FAILED
+                    )
+                phase = "staged"
+                if link_outcome.failure is not None:
+                    raise link_outcome.failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            phase = "published"
+            if link_outcome.failure is not None:
+                raise link_outcome.failure
+            _unlink_if_observed(
+                locked.directory_descriptor,
+                temporary,
+                candidate_observation,
+            )
+        if (
+            _optional_exact_file_at(
+                locked.directory_descriptor, "run-registry.json"
+            )
+            != candidate
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        return publication
+    except RegistryRestorationRefusal:
+        # An exchanged name could not be put back without risking a foreign
+        # inode. Preserve every remaining link for operator inspection.
+        raise
+    except BaseException:
+        if phase in {"exchange-indeterminate", "link-indeterminate"}:
+            try:
+                canonical = _optional_exact_file_at(
+                    locked.directory_descriptor, "run-registry.json"
+                )
+                staged = _optional_exact_file_at(
+                    locked.directory_descriptor, temporary
+                )
+            except BaseException as exc:
+                raise RegistryRestorationRefusal(
+                    JOURNAL_ROLLBACK_FAILED
+                ) from exc
+            if canonical == candidate:
+                phase = "published"
+            elif (
+                prior_exact is not None
+                and canonical == prior_exact
+                and staged == candidate
+            ):
+                phase = "backup"
+            elif (
+                prior_exact is None
+                and canonical is None
+                and staged == candidate
+            ):
+                phase = "staged"
+            else:
+                raise RegistryRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+        if phase == "published":
+            if publication is None:
+                raise RegistryRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+            _rollback_registry_publication(state_root, locked, publication)
+            if prior_exact is not None:
+                # A successful existing-registry rollback proves the
+                # canonical prior state.  The exchange staging name then
+                # holds only the exact displaced prior hard link.
+                _unlink_if_exact(
+                    locked.directory_descriptor, temporary, prior_exact
+                )
+        if candidate is not None:
+            _unlink_if_exact(
+                locked.directory_descriptor, temporary, candidate
+            )
+        if backup_name is not None and prior.observation is not None:
+            _unlink_if_observed(
+                locked.directory_descriptor,
+                backup_name,
+                prior.observation,
+            )
+        raise
+
+
+def _commit_registry_publication(
+    state_root: Path,
+    locked: RegistryLock,
+    publication: RegistryPublication,
+) -> None:
+    """Best-effort removal after consistent state is fully committed."""
+
+    if publication.backup_name is None or publication.prior.observation is None:
+        return
+    try:
+        _validate_registry_lock(state_root, locked)
+        if (
+            _optional_exact_file_at(
+                locked.directory_descriptor, "run-registry.json"
+            )
+            != ExactFile(
+                publication.candidate_payload,
+                publication.candidate_observation,
+            )
+        ):
+            return
+        raw, observation = _verified_named_payload(
+            locked, publication.backup_name
+        )
+        if (
+            observation == publication.prior.observation
+            and raw == publication.prior.raw
+        ):
+            os.unlink(
+                publication.backup_name, dir_fd=locked.directory_descriptor
+            )
+    except BaseException:
+        # Canonical registry/journal state is already consistent. A leftover
+        # verified backup is inert; cleanup failure must not trigger rollback.
+        return
+
+
+def _validate_post_registry_publication(
+    state_root: Path,
+    locked: RegistryLock,
+    expected_open_runs: dict[str, tuple[str, ...]],
+    expected_payload: bytes,
+    expected_runs_root: FileObservation | None,
+    new_run_claim: NewRunClaim | None,
+) -> None:
+    _validate_registry_lock(state_root, locked)
+    published = _read_registry_snapshot(state_root, locked=locked)
+    if (
+        published.raw != expected_payload
+        or published.open_runs != expected_open_runs
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    states, _placeholders, _owners, runs_root_observation = _classify_runs(
+        state_root, frozenset(published.open_runs)
+    )
+    if runs_root_observation != expected_runs_root:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    reconciled = _reconcile_registry(published, states)
+    if {
+        run_id: scope
+        for run_id, scope in reconciled.items()
+        if scope != PRE_COORDINATION_SCOPE
+    } != expected_open_runs:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    _derive_reservations(states)
+    if new_run_claim is not None:
+        _validate_new_run_claim(state_root, new_run_claim)
+    _validate_registry_lock(state_root, locked)
+    if _read_registry_snapshot(state_root, locked=locked) != published:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+
+def _write_registry(
+    state_root: Path,
+    open_runs: dict[str, tuple[str, ...]],
+    *,
+    view: CoordinationView | None = None,
+    changed_run_id: str | None = None,
+    appended_record: dict[str, object] | None = None,
+    expected_owner: Owner | None = None,
+    locked: RegistryLock | None = None,
+    expected_runs_root: FileObservation | None = None,
+    new_run_claim: NewRunClaim | None = None,
+) -> None:
     # Pre-coordination sentinel scopes are in-memory admission state, never
     # registry bytes: the persisted file holds only validatable pathspecs.
     persistable = {
@@ -847,9 +3061,61 @@ def _write_registry(state_root: Path, open_runs: dict[str, tuple[str, ...]]) -> 
         for run_id, scope in open_runs.items()
         if scope != PRE_COORDINATION_SCOPE
     }
-    _atomic_replace(
-        state_root / ".forge/tmp/run-registry.json", _registry_payload(persistable)
-    )
+    if view is not None:
+        if (
+            changed_run_id is None
+            or appended_record is None
+            or expected_owner is None
+            or locked is None
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        _validate_registry_publication(
+            state_root,
+            open_runs,
+            view,
+            changed_run_id=changed_run_id,
+            appended_record=appended_record,
+            expected_owner=expected_owner,
+            locked=locked,
+            expected_runs_root=expected_runs_root,
+            new_run_claim=new_run_claim,
+        )
+    try:
+        payload = _registry_payload(persistable)
+        if locked is None:
+            _atomic_replace(state_root / ".forge/tmp/run-registry.json", payload)
+            return
+        if new_run_claim is not None:
+            _validate_new_run_claim(state_root, new_run_claim)
+        _validate_registry_lock(state_root, locked)
+        current_snapshot = _read_registry_snapshot(state_root, locked=locked)
+        if view is not None and current_snapshot != view.registry:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        publication = _begin_registry_publication(
+            state_root, locked, current_snapshot, payload
+        )
+        try:
+            _validate_post_registry_publication(
+                state_root,
+                locked,
+                persistable,
+                payload,
+                expected_runs_root,
+                new_run_claim,
+            )
+        except BaseException:
+            _rollback_registry_publication(state_root, locked, publication)
+            raise
+        _commit_registry_publication(state_root, locked, publication)
+    except RegistryRestorationRefusal:
+        # The registry's authoritative state is no longer provable. Callers
+        # must retain their journal/run mutation rather than creating a known
+        # mismatch by rolling it back.
+        raise
+    except CoordinationRefusal:
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise CoordinationRefusal(REGISTRY_UPDATE_FAILED) from exc
 
 
 def _owner_refusal(run_id: str, owner: Owner) -> JournalAppendRefusal:
@@ -858,30 +3124,787 @@ def _owner_refusal(run_id: str, owner: Owner) -> JournalAppendRefusal:
     )
 
 
-def _ensure_owner(
-    run_dir: Path, run_id: str, current: Owner, *, adopt_missing: bool = False
-) -> bool:
-    owner_path = run_dir / "owner"
-    if adopt_missing and not owner_path.exists():
-        # A pre-coordination run has no owner sidecar; the first session to
-        # touch it under the registry lock adopts it, after which the normal
-        # ownership rules apply unchanged.
-        _atomic_replace(owner_path, _owner_bytes(current))
-        return True
-    owner = _parse_owner(owner_path)
-    if owner is None:
+def _bound_run_descriptor(state: RunState) -> int:
+    expected = state.directory_observation
+    if expected is None:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    try:
+        descriptor, observed = _open_bound_directory(state.run_dir)
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if observed != expected:
+        os.close(descriptor)
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    return descriptor
+
+
+def _owner_result_for_state(
+    state: RunState, *, locked: LockedJournal | None = None
+) -> tuple[OwnerObservation, Owner] | None:
+    close_descriptor = locked is None
+    descriptor = (
+        _bound_run_descriptor(state) if locked is None else locked.run_descriptor
+    )
+    try:
+        expected = state.directory_observation
+        if expected is None or not _matches_observation(
+            os.fstat(descriptor), expected
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        result = _read_owner_observation_at(descriptor)
+        rebound = os.lstat(state.run_dir)
+        if not _matches_observation(rebound, expected):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        return result
+    finally:
+        if close_descriptor:
+            os.close(descriptor)
+
+
+def _classify_owner(
+    state: RunState,
+    current: Owner,
+    *,
+    adopt_missing: bool = False,
+    locked: LockedJournal | None = None,
+) -> OwnerClassification:
+    run_id = state.run_id
+    owner_result = _owner_result_for_state(state, locked=locked)
+    if owner_result is None:
+        if adopt_missing:
+            return OwnerClassification("adopt", None)
         raise JournalAppendRefusal(
             f"forge: journal append refused — owner record missing or malformed for run {run_id}"
         )
+    observation, owner = owner_result
     if owner.host == current.host and owner.pid == current.pid:
-        return False
+        return OwnerClassification(
+            "owned",
+            observation.observed,
+            owner,
+            observation.device,
+            observation.inode,
+            observation.mode,
+        )
     if owner.host != current.host:
         raise _owner_refusal(run_id, owner)
     live = _pid_is_live(owner.pid)
     if live is not False:
         raise _owner_refusal(run_id, owner)
-    _atomic_replace(owner_path, _owner_bytes(current))
-    return True
+    return OwnerClassification(
+        "stale",
+        observation.observed,
+        owner,
+        observation.device,
+        observation.inode,
+        observation.mode,
+    )
+
+
+def _atomic_replace_at(
+    directory_descriptor: int, name: str, payload: bytes
+) -> None:
+    temporary = f".{name}.{uuid.uuid4().hex}.tmp"
+    descriptor: int | None = None
+    try:
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        descriptor = os.open(temporary, flags, 0o600, dir_fd=directory_descriptor)
+        remaining = memoryview(payload)
+        while remaining:
+            count = os.write(descriptor, remaining)
+            if count <= 0:
+                raise OSError(errno.EIO, "short atomic write")
+            remaining = remaining[count:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+        )
+    except BaseException:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        try:
+            os.unlink(temporary, dir_fd=directory_descriptor)
+        except OSError:
+            pass
+        raise
+
+
+def _write_exclusive_at(
+    directory_descriptor: int, name: str, payload: bytes
+) -> FileObservation:
+    descriptor: int | None = None
+    try:
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        descriptor = os.open(name, flags, 0o600, dir_fd=directory_descriptor)
+        remaining = memoryview(payload)
+        while remaining:
+            count = os.write(descriptor, remaining)
+            if count <= 0:
+                raise OSError(errno.EIO, "short exclusive write")
+            remaining = remaining[count:]
+        os.fsync(descriptor)
+        opened = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        observation = _file_observation(opened)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or stat.S_ISLNK(opened.st_mode)
+            or not _matches_observation(rebound, observation)
+        ):
+            raise OSError(errno.EAGAIN, "exclusive file identity changed")
+        return observation
+    except BaseException:
+        if descriptor is not None:
+            try:
+                opened = os.fstat(descriptor)
+                rebound = os.stat(
+                    name,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                if _file_observation(opened) == _file_observation(rebound):
+                    os.unlink(name, dir_fd=directory_descriptor)
+            except OSError:
+                pass
+        raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _classify_late_run_target(parent_descriptor: int, name: str) -> str:
+    descriptor: int | None = None
+    try:
+        before = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        descriptor, observation = _open_bound_child_directory(
+            parent_descriptor, name, before
+        )
+        if not _readable_mode(observation.mode, directory=True):
+            return "ambiguous"
+        children = os.listdir(descriptor)
+        rebound = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if not _matches_observation(rebound, observation):
+            return "ambiguous"
+        if not children:
+            return "empty"
+        if "owner" in children or "journal.jsonl" in children:
+            return "ambiguous"
+        return "nonempty"
+    except OSError:
+        return "ambiguous"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _cleanup_claimed_run(
+    parent_descriptor: int,
+    name: str,
+    directory_descriptor: int,
+    directory_observation: FileObservation,
+    created: dict[str, tuple[FileObservation, bytes]],
+) -> bool:
+    """Quarantine first, then remove only the exact claimed inode and contents."""
+
+    quarantine = f".{name}.rollback.{uuid.uuid4().hex}"
+    try:
+        os.rename(
+            name,
+            quarantine,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        quarantined = os.stat(
+            quarantine,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError:
+        return False
+
+    def restore() -> bool:
+        try:
+            os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+            return False
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        try:
+            current = os.stat(
+                quarantine,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            os.rename(
+                quarantine,
+                name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            restored = os.stat(
+                name, dir_fd=parent_descriptor, follow_symlinks=False
+            )
+            return _file_observation(current) == _file_observation(restored)
+        except OSError:
+            return False
+
+    if (
+        not _matches_observation(quarantined, directory_observation)
+        or not _matches_observation(
+            os.fstat(directory_descriptor), directory_observation
+        )
+    ):
+        restore()
+        return False
+    try:
+        for file_name, (observation, payload) in created.items():
+            raw, rebound = _read_bound_regular(directory_descriptor, file_name)
+            if rebound != observation or raw != payload:
+                restore()
+                return False
+        for file_name in created:
+            os.unlink(file_name, dir_fd=directory_descriptor)
+        if os.listdir(directory_descriptor):
+            # Foreign children are never deleted. Restoring the quarantined
+            # claimed directory after removing only our verified files is a
+            # successful rollback of the candidate's bytes.
+            return restore()
+        if not _matches_observation(
+            os.stat(
+                quarantine,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            ),
+            directory_observation,
+        ):
+            return False
+        os.rmdir(quarantine, dir_fd=parent_descriptor)
+        return True
+    except OSError:
+        restore()
+        return False
+
+
+def _classification_observation(
+    classification: OwnerClassification,
+) -> FileObservation:
+    if (
+        classification.device is None
+        or classification.inode is None
+        or classification.mode is None
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    return FileObservation(
+        classification.device,
+        classification.inode,
+        classification.mode,
+    )
+
+
+def _validate_owner_run_binding(locked: LockedJournal) -> None:
+    expected = locked.state.directory_observation
+    if expected is None:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    try:
+        opened = os.fstat(locked.run_descriptor)
+        rebound = os.lstat(locked.state.run_dir)
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if (
+        not _matches_observation(opened, expected)
+        or not _matches_observation(rebound, expected)
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+
+def _validate_owner_takeover(
+    locked: LockedJournal, takeover: OwnerTakeover
+) -> None:
+    _validate_owner_run_binding(locked)
+    if takeover.candidate_observation is None:
+        refreshed = _read_owner_observation_at(locked.run_descriptor)
+        expected = takeover.prior
+        if (
+            refreshed is None
+            or expected.observed is None
+            or refreshed[0].observed != expected.observed
+            or FileObservation(
+                refreshed[0].device,
+                refreshed[0].inode,
+                refreshed[0].mode,
+            )
+            != _classification_observation(expected)
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        return
+    try:
+        raw, observation = _read_bound_regular(locked.run_descriptor, "owner")
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if (
+        raw != takeover.candidate_payload
+        or observation != takeover.candidate_observation
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+
+def _validate_restored_owner_takeover(
+    locked: LockedJournal, prior: ExactFile | None
+) -> None:
+    _validate_owner_run_binding(locked)
+    if _optional_exact_file_at(locked.run_descriptor, "owner") != prior:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    _validate_owner_run_binding(locked)
+
+
+def _restore_owner_candidate_from_retention(
+    locked: LockedJournal,
+    takeover: OwnerTakeover,
+    retention_name: str,
+    prior_exact: ExactFile | None,
+) -> BaseException | None:
+    if (
+        takeover.candidate_payload is None
+        or takeover.candidate_observation is None
+    ):
+        raise NamespaceMutationAmbiguity
+    candidate = ExactFile(
+        takeover.candidate_payload, takeover.candidate_observation
+    )
+    _validate_owner_run_binding(locked)
+    if prior_exact is not None:
+        failure = _reverse_exact_exchange_at(
+            locked.run_descriptor,
+            "owner",
+            retention_name,
+            prior_exact,
+            candidate,
+        )
+    else:
+        failure = _restore_exact_move_at(
+            locked.run_descriptor,
+            retention_name,
+            "owner",
+            candidate,
+        )
+    if _optional_exact_file_at(locked.run_descriptor, "owner") != candidate:
+        raise NamespaceMutationAmbiguity
+    return failure
+
+
+def _rollback_owner_takeover(
+    locked: LockedJournal, takeover: OwnerTakeover
+) -> None:
+    """Restore exact prior owner, retaining candidate until final proof."""
+
+    if takeover.candidate_observation is None:
+        return
+    if takeover.candidate_payload is None:
+        raise OwnerRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+    candidate = ExactFile(
+        takeover.candidate_payload, takeover.candidate_observation
+    )
+    retention_name: str | None = None
+    prior_exact: ExactFile | None = None
+    rollback_phase = "published"
+    try:
+        _validate_owner_run_binding(locked)
+        if (
+            _optional_exact_file_at(locked.run_descriptor, "owner")
+            != candidate
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        prior = takeover.prior
+        if prior.observed is None:
+            retention_name = f".owner.{uuid.uuid4().hex}.rollback"
+            rollback_phase = "restoration-indeterminate"
+            outcome = _move_exact_at(
+                locked.run_descriptor,
+                "owner",
+                retention_name,
+                candidate,
+            )
+            if outcome.phase != "post":
+                raise OwnerRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+            rollback_phase = "restored-unvalidated"
+            pending_failure = outcome.failure
+        else:
+            if takeover.backup_name is None:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            retention_name = takeover.backup_name
+            prior_exact = ExactFile(
+                prior.observed, _classification_observation(prior)
+            )
+            rollback_phase = "restoration-indeterminate"
+            outcome = _exchange_exact_at(
+                locked.run_descriptor,
+                retention_name,
+                "owner",
+                prior_exact,
+                candidate,
+            )
+            if outcome.phase == "foreign":
+                try:
+                    _reverse_exchange_with_exact_canonical_at(
+                        locked.run_descriptor,
+                        "owner",
+                        retention_name,
+                        prior_exact.payload,
+                        prior_exact.observation,
+                    )
+                except NamespaceMutationAmbiguity:
+                    pass
+                raise OwnerRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+            if outcome.phase != "post":
+                raise OwnerRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+            rollback_phase = "restored-unvalidated"
+            pending_failure = outcome.failure
+
+        assert retention_name is not None
+        try:
+            if pending_failure is not None:
+                raise pending_failure
+            _validate_restored_owner_takeover(locked, prior_exact)
+        except BaseException as validation_failure:
+            try:
+                rollback_phase = "candidate-reapply-indeterminate"
+                _restore_owner_candidate_from_retention(
+                    locked,
+                    takeover,
+                    retention_name,
+                    prior_exact,
+                )
+                rollback_phase = "published"
+            except BaseException as restore_failure:
+                raise OwnerRestorationRefusal(
+                    JOURNAL_ROLLBACK_FAILED
+                ) from restore_failure
+            raise OwnerRestorationRefusal(
+                JOURNAL_ROLLBACK_FAILED
+            ) from validation_failure
+
+        rollback_phase = "prior-committed"
+        _unlink_if_observed(
+            locked.run_descriptor,
+            retention_name,
+            takeover.candidate_observation,
+        )
+    except OwnerRestorationRefusal:
+        raise
+    except BaseException as exc:
+        if rollback_phase == "prior-committed":
+            raise
+        if (
+            rollback_phase
+            in {"restoration-indeterminate", "restored-unvalidated"}
+            and retention_name is not None
+        ):
+            try:
+                canonical = _optional_exact_file_at(
+                    locked.run_descriptor, "owner"
+                )
+                retained = _optional_exact_file_at(
+                    locked.run_descriptor, retention_name
+                )
+                if canonical == candidate:
+                    pass
+                elif retained == candidate and canonical == prior_exact:
+                    _restore_owner_candidate_from_retention(
+                        locked,
+                        takeover,
+                        retention_name,
+                        prior_exact,
+                    )
+                else:
+                    raise NamespaceMutationAmbiguity
+            except BaseException as restore_failure:
+                raise OwnerRestorationRefusal(
+                    JOURNAL_ROLLBACK_FAILED
+                ) from restore_failure
+        raise OwnerRestorationRefusal(JOURNAL_ROLLBACK_FAILED) from exc
+
+
+def _commit_owner_takeover(
+    locked: LockedJournal, takeover: OwnerTakeover
+) -> None:
+    """Discard the retained prior-owner link after candidate success."""
+
+    prior = takeover.prior
+    if (
+        takeover.backup_name is None
+        or prior.observed is None
+        or takeover.candidate_payload is None
+        or takeover.candidate_observation is None
+    ):
+        return
+    try:
+        if (
+            _optional_exact_file_at(locked.run_descriptor, "owner")
+            != ExactFile(
+                takeover.candidate_payload,
+                takeover.candidate_observation,
+            )
+        ):
+            return
+        prior_observation = _classification_observation(prior)
+        raw, observation = _read_bound_regular(
+            locked.run_descriptor, takeover.backup_name
+        )
+        if raw == prior.observed and observation == prior_observation:
+            os.unlink(takeover.backup_name, dir_fd=locked.run_descriptor)
+    except BaseException:
+        # The installed current owner is authoritative after success. A
+        # retained verified hard link to the prior owner is inert.
+        return
+
+
+def _begin_owner_takeover(
+    state: RunState,
+    current: Owner,
+    classification: OwnerClassification,
+    *,
+    adopt_missing: bool = False,
+    locked: LockedJournal,
+) -> OwnerTakeover:
+    run_id = state.run_id
+    refreshed = _classify_owner(
+        state,
+        current,
+        adopt_missing=adopt_missing,
+        locked=locked,
+    )
+    if refreshed != classification:
+        raise JournalAppendRefusal(
+            f"forge: journal append refused — owner record missing or malformed for run {run_id}"
+        )
+    if classification.disposition == "owned":
+        return OwnerTakeover(classification, None, None, None)
+    payload = _owner_bytes(current)
+    temporary = f".owner.{uuid.uuid4().hex}.candidate"
+    backup_name = (
+        f".owner.{uuid.uuid4().hex}.previous"
+        if classification.observed is not None
+        else None
+    )
+    candidate_observation: FileObservation | None = None
+    takeover: OwnerTakeover | None = None
+    candidate: ExactFile | None = None
+    prior_exact: ExactFile | None = None
+    phase = "unstaged"
+    try:
+        candidate_observation = _write_exclusive_at(
+            locked.run_descriptor, temporary, payload
+        )
+        candidate = ExactFile(payload, candidate_observation)
+        phase = "staged"
+        takeover = OwnerTakeover(
+            classification,
+            candidate_observation,
+            payload,
+            backup_name,
+        )
+        if classification.observed is None:
+            phase = "link-indeterminate"
+            link_outcome = _link_exact_at(
+                locked.run_descriptor,
+                temporary,
+                "owner",
+                candidate,
+            )
+            if link_outcome.phase != "post":
+                if link_outcome.phase == "foreign":
+                    raise OwnerRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+                phase = "staged"
+                if link_outcome.failure is not None:
+                    raise link_outcome.failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            phase = "published"
+            if link_outcome.failure is not None:
+                raise link_outcome.failure
+            _unlink_if_observed(
+                locked.run_descriptor, temporary, candidate_observation
+            )
+        else:
+            assert backup_name is not None
+            prior_exact = ExactFile(
+                classification.observed,
+                _classification_observation(classification),
+            )
+            link_outcome = _link_exact_at(
+                locked.run_descriptor,
+                "owner",
+                backup_name,
+                prior_exact,
+            )
+            if link_outcome.phase != "post":
+                if link_outcome.failure is not None:
+                    raise link_outcome.failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            phase = "backup"
+            if link_outcome.failure is not None:
+                raise link_outcome.failure
+            phase = "exchange-indeterminate"
+            exchange_outcome = _exchange_exact_at(
+                locked.run_descriptor,
+                temporary,
+                "owner",
+                candidate,
+                prior_exact,
+            )
+            if exchange_outcome.phase == "foreign":
+                try:
+                    reverse_failure = _reverse_exchange_with_exact_canonical_at(
+                        locked.run_descriptor,
+                        "owner",
+                        temporary,
+                        payload,
+                        candidate_observation,
+                    )
+                except NamespaceMutationAmbiguity as exc:
+                    raise OwnerRestorationRefusal(
+                        JOURNAL_ROLLBACK_FAILED
+                    ) from exc
+                phase = "backup"
+                if reverse_failure is not None:
+                    raise reverse_failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            if exchange_outcome.phase != "post":
+                phase = "backup"
+                if exchange_outcome.failure is not None:
+                    raise exchange_outcome.failure
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            phase = "published"
+            if exchange_outcome.failure is not None:
+                raise exchange_outcome.failure
+            _unlink_if_observed(
+                locked.run_descriptor,
+                temporary,
+                prior_exact.observation,
+            )
+        _validate_owner_takeover(locked, takeover)
+        return takeover
+    except OwnerRestorationRefusal:
+        raise
+    except BaseException as exc:
+        if phase in {"exchange-indeterminate", "link-indeterminate"}:
+            try:
+                canonical = _optional_exact_file_at(
+                    locked.run_descriptor, "owner"
+                )
+                staged = _optional_exact_file_at(
+                    locked.run_descriptor, temporary
+                )
+            except BaseException as observe_exc:
+                raise OwnerRestorationRefusal(
+                    JOURNAL_ROLLBACK_FAILED
+                ) from observe_exc
+            if canonical == candidate:
+                phase = "published"
+            elif (
+                prior_exact is not None
+                and canonical == prior_exact
+                and staged == candidate
+            ):
+                phase = "backup"
+            elif (
+                prior_exact is None
+                and canonical is None
+                and staged == candidate
+            ):
+                phase = "staged"
+            else:
+                raise OwnerRestorationRefusal(JOURNAL_ROLLBACK_FAILED)
+        if phase == "published" and takeover is not None:
+            _rollback_owner_takeover(locked, takeover)
+            if prior_exact is not None:
+                # As with registry publication, the successful rollback has
+                # proved the canonical prior owner before this redundant
+                # displaced-prior link is removed.
+                _unlink_if_exact(
+                    locked.run_descriptor, temporary, prior_exact
+                )
+        if candidate_observation is not None:
+            _unlink_if_observed(
+                locked.run_descriptor, temporary, candidate_observation
+            )
+        if backup_name is not None and classification.observed is not None:
+            _unlink_if_observed(
+                locked.run_descriptor,
+                backup_name,
+                _classification_observation(classification),
+            )
+        if isinstance(exc, CoordinationRefusal):
+            raise
+        if not isinstance(exc, Exception):
+            raise
+        raise CoordinationRefusal(
+            "forge: journal append refused — journal write failed"
+        ) from exc
+
+
+def _apply_owner_classification(
+    state: RunState,
+    current: Owner,
+    classification: OwnerClassification,
+    *,
+    adopt_missing: bool = False,
+    locked: LockedJournal,
+) -> OwnerTakeover:
+    return _begin_owner_takeover(
+        state,
+        current,
+        classification,
+        adopt_missing=adopt_missing,
+        locked=locked,
+    )
+
+
+@contextmanager
+def _owner_takeover_transaction(
+    state: RunState,
+    current: Owner,
+    classification: OwnerClassification,
+    *,
+    adopt_missing: bool = False,
+    locked: LockedJournal,
+) -> Iterator[OwnerTakeover]:
+    """Keep a prior-owner link until every candidate operation succeeds."""
+
+    takeover = _apply_owner_classification(
+        state,
+        current,
+        classification,
+        adopt_missing=adopt_missing,
+        locked=locked,
+    )
+    try:
+        yield takeover
+    except BaseException:
+        _rollback_owner_takeover(locked, takeover)
+        raise
+    else:
+        _commit_owner_takeover(locked, takeover)
 
 
 def _append_with_locked_stream(
@@ -890,25 +3913,15 @@ def _append_with_locked_stream(
     run_id: str,
     record: dict[str, object],
     *,
-    allow_lifecycle: bool = False,
-    adopt_missing: bool = False,
+    payload: bytes | None = None,
 ) -> int:
-    current = _session_owner()
-    _ensure_owner(run_dir, run_id, current, adopt_missing=adopt_missing)
-    if not isinstance(record, dict) or record.get("type") not in JOURNAL_ENTRY_TYPES:
-        raise CoordinationRefusal("forge: journal append refused — invalid journal record")
-    if not allow_lifecycle and record.get("type") in {"run_started", "run_closed"}:
-        raise CoordinationRefusal("forge: journal append refused — lifecycle command required")
-    if "run_id" in record and record.get("run_id") != run_id:
-        raise CoordinationRefusal("forge: journal append refused — run identity mismatch")
-    # CONTROL citation-correction-grammar BEGIN
-    stream_path = Path(stream.name)  # type: ignore[attr-defined]
-    _validate_citation_targets(record, _read_raw_records(stream_path))
-    # CONTROL citation-correction-grammar END
-    payload = _journal_line(record)
+    if payload is None:
+        payload = _journal_payload(record)
     try:
         descriptor = stream.fileno()  # type: ignore[attr-defined]
         offset = os.lseek(descriptor, 0, os.SEEK_END)
+        if isinstance(stream, LockedJournal):
+            _validate_locked_journal_path(stream)
         remaining = memoryview(payload)
         while remaining:
             count = os.write(descriptor, remaining)
@@ -916,7 +3929,16 @@ def _append_with_locked_stream(
                 raise OSError(errno.EIO, "short journal write")
             remaining = remaining[count:]
         os.fsync(descriptor)
+        if isinstance(stream, LockedJournal):
+            try:
+                _validate_locked_journal_path(stream)
+            except CoordinationRefusal:
+                os.ftruncate(descriptor, offset)
+                os.fsync(descriptor)
+                raise
         return offset
+    except CoordinationRefusal:
+        raise
     except (AttributeError, OSError) as exc:
         try:
             os.ftruncate(descriptor, offset)  # type: ignore[possibly-undefined]
@@ -933,256 +3955,813 @@ def _rollback_append(stream: object, offset: int) -> None:
         os.lseek(descriptor, offset, os.SEEK_SET)
         os.fsync(descriptor)
     except (AttributeError, OSError) as exc:
+        raise CoordinationRefusal(JOURNAL_ROLLBACK_FAILED) from exc
+
+
+def _validate_locked_journal_path(locked: LockedJournal) -> None:
+    state = locked.state
+    expected_run = state.directory_observation
+    expected_journal = state.journal_observation
+    if expected_run is None or expected_journal is None:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    try:
+        run_open = os.fstat(locked.run_descriptor)
+        run_path = os.lstat(state.run_dir)
+        journal_open = os.fstat(locked.fileno())
+        journal_path = os.stat(
+            "journal.jsonl",
+            dir_fd=locked.run_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if (
+        not _matches_observation(run_open, expected_run)
+        or not _matches_observation(run_path, expected_run)
+        or not _matches_observation(journal_open, expected_journal)
+        or not _matches_observation(journal_path, expected_journal)
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
 
 
 @contextmanager
-def _locked_journal(run_dir: Path) -> Iterator[object]:
-    journal = run_dir / "journal.jsonl"
+def _locked_journal(state: RunState) -> Iterator[LockedJournal]:
+    run_descriptor: int | None = None
+    journal_descriptor: int | None = None
+    stream: object | None = None
     try:
-        with journal.open("a+b", buffering=0) as stream:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        expected_journal = state.journal_observation
+        if expected_journal is None:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        run_descriptor = _bound_run_descriptor(state)
+        before = os.stat(
+            "journal.jsonl", dir_fd=run_descriptor, follow_symlinks=False
+        )
+        if not _matches_observation(before, expected_journal):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        try:
+            journal_descriptor = os.open(
+                "journal.jsonl",
+                _regular_open_flags(writable=True),
+                dir_fd=run_descriptor,
+            )
+        except OSError as exc:
             try:
-                yield stream
-            finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                rebound_after_failure = os.stat(
+                    "journal.jsonl",
+                    dir_fd=run_descriptor,
+                    follow_symlinks=False,
+                )
+            except OSError:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+            if _matches_observation(rebound_after_failure, expected_journal):
+                raise CoordinationRefusal(
+                    "forge: journal append refused — journal write failed"
+                ) from exc
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        opened = os.fstat(journal_descriptor)
+        if (
+            not _matches_observation(opened, expected_journal)
+            or not stat.S_ISREG(opened.st_mode)
+            or stat.S_ISLNK(opened.st_mode)
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        stream = os.fdopen(journal_descriptor, "r+b", buffering=0)
+        journal_descriptor = None
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+        after_lock = os.fstat(stream.fileno())  # type: ignore[attr-defined]
+        rebound = os.stat(
+            "journal.jsonl", dir_fd=run_descriptor, follow_symlinks=False
+        )
+        run_rebound = os.lstat(state.run_dir)
+        if (
+            not _matches_observation(after_lock, expected_journal)
+            or not _matches_observation(rebound, expected_journal)
+            or state.directory_observation is None
+            or not _matches_observation(run_rebound, state.directory_observation)
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        raw = _read_descriptor(stream.fileno())  # type: ignore[attr-defined]
+        if tuple(_parse_raw_records(raw)) != state.records:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        yield LockedJournal(stream, run_descriptor, state)
     except CoordinationRefusal:
         raise
     except OSError as exc:
-        raise CoordinationRefusal("forge: journal append refused — journal write failed") from exc
+        # A journal that disappears, changes identity, or cannot be proven to
+        # be the classified regular file is persisted coordination ambiguity.
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    finally:
+        if stream is not None:
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            except (AttributeError, OSError):
+                pass
+            try:
+                stream.close()  # type: ignore[attr-defined]
+            except (AttributeError, OSError):
+                pass
+        elif journal_descriptor is not None:
+            os.close(journal_descriptor)
+        if run_descriptor is not None:
+            os.close(run_descriptor)
 
 
-def append_owned_record(journal: Path, record: dict[str, object]) -> None:
+def _operation_run_id(operation: str, run_id: object) -> str:
+    if not _valid_run_id(run_id):
+        raise CoordinationRefusal(f"forge: {operation} refused — invalid run id")
+    return str(run_id)
+
+
+def _operation_scope(operation: str, values: object) -> tuple[str, ...]:
+    try:
+        scope = canonical_scope(values)
+    except CoordinationRefusal as exc:
+        raise CoordinationRefusal(f"forge: {operation} refused — invalid scope") from exc
+    if not isinstance(values, (list, tuple)) or tuple(values) != scope:
+        raise CoordinationRefusal(f"forge: {operation} refused — invalid scope")
+    return scope
+
+
+def _target_state(
+    view: CoordinationView,
+    run_id: str,
+    operation: str,
+    *,
+    allow_reserving_retired_close: bool = False,
+) -> RunState:
+    state = view.states.get(run_id)
+    if state is None:
+        raise CoordinationRefusal(
+            f"forge: {operation} refused — run {run_id} does not exist"
+        )
+    if state.disposition == "closed":
+        raise CoordinationRefusal(
+            f"forge: {operation} refused — run {run_id} is closed"
+        )
+    if state.disposition == "retired":
+        reserving_leaf = view.reservations.get(run_id)
+        if not (
+            allow_reserving_retired_close
+            and state.successor_of is not None
+            and reserving_leaf is not None
+            and reserving_leaf.disposition == "retired"
+        ):
+            raise CoordinationRefusal(
+                f"forge: {operation} refused — run {run_id} is retired"
+            )
+    return state
+
+
+def _conflict_refusal(
+    run_id: str,
+    scope: tuple[str, ...],
+    reservations: dict[str, ScopeReservation],
+    *,
+    excluded: frozenset[str] = frozenset(),
+) -> None:
+    conflicts: list[tuple[str, str]] = []
+    for other_id, reservation in reservations.items():
+        if other_id in excluded or not scopes_overlap(scope, reservation.scope):
+            continue
+        if reservation.disposition == "open":
+            diagnostic = (
+                f"forge: new run refused — scope overlap between {run_id} and open run "
+                f"{other_id}"
+            )
+        else:
+            diagnostic = (
+                f"forge: new run refused — scope overlap between {run_id} and "
+                f"scope-reserving retired run {other_id}"
+            )
+        conflicts.append((other_id, diagnostic))
+    if conflicts:
+        raise CoordinationRefusal(
+            "\n".join(line for _, line in sorted(conflicts, key=lambda item: _byte_key(item[0])))
+        )
+
+
+def _rollback_registry_failure(stream: object, offset: int, failure: BaseException) -> None:
+    try:
+        _rollback_append(stream, offset)
+    except CoordinationRefusal as exc:
+        raise CoordinationRefusal(JOURNAL_ROLLBACK_FAILED) from exc
+    if isinstance(failure, CoordinationRefusal):
+        raise failure
+    raise CoordinationRefusal(REGISTRY_UPDATE_FAILED) from failure
+
+
+def _preflight_existing_candidate(
+    state_root: Path,
+    run_id: str,
+    operation: str,
+    candidate: dict[str, object],
+    *,
+    repository: Path | None = None,
+) -> tuple[RunState, Path]:
+    """Perform the read-only candidate checks that precede DM-010 identity."""
+
+    run_dir = state_root / ".codex-orchestrator/runs" / run_id
+    try:
+        os.lstat(run_dir)
+    except FileNotFoundError as exc:
+        raise CoordinationRefusal(
+            f"forge: {operation} refused — run {run_id} does not exist"
+        ) from exc
+    except OSError as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    state = _scan_run(run_dir)
+    if repository is None:
+        repository = _recorded_repository_root(
+            state.run_dir, state_root, records=state.records
+        )
+    _validate_append_citations(repository, state.run_dir, candidate)
+    _validate_citation_targets(candidate, list(state.records))
+    return state, repository
+
+
+def append_owned_record(journal: Path, record: object) -> None:
     """Append one record only after the current session proves DM-010 ownership."""
 
-    run_dir = journal.expanduser().resolve().parent
-    run_id = run_dir.name
-    if not _valid_run_id(run_id):
-        raise CoordinationRefusal("forge: journal append refused — invalid run identity")
-    state_root = _resolve_state_root(run_dir)
-    _validate_append_citations(None, run_dir, record, state_root=state_root)
-    with _registry_lock(state_root):
-        states = _scan_runs(state_root)
-        open_runs = _load_registry(state_root, states)
-        state = states.get(run_id)
-        expected = state_root / ".codex-orchestrator/runs" / run_id / "journal.jsonl"
-        if (
-            state is None
-            or state.disposition != "open"
-            or run_id not in open_runs
-            or journal.expanduser().resolve() != expected.resolve()
-        ):
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        with _locked_journal(state.run_dir) as stream:
-            _append_with_locked_stream(
-                stream, state.run_dir, run_id, record, adopt_missing=state.pre_coordination
+    candidate = _validate_record_envelope(record)
+    supplied = Path(os.path.abspath(os.fspath(journal.expanduser())))
+    run_dir = supplied.parent
+    run_id = _operation_run_id("journal append", run_dir.name)
+    repository_probe = run_dir
+    while not repository_probe.exists() and repository_probe.parent != repository_probe:
+        repository_probe = repository_probe.parent
+    _, state_root = _resolve_repository(repository_probe, "journal append")
+    expected = state_root / ".codex-orchestrator/runs" / run_id / "journal.jsonl"
+    if supplied != expected:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    _preflight_existing_candidate(
+        state_root, run_id, "journal append", candidate
+    )
+    current = _session_owner()
+    with _registry_lock(state_root) as registry_lock:
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = _target_state(view, run_id, "journal append")
+        repository = _recorded_repository_root(
+            state.run_dir, state_root, records=state.records
+        )
+        with _locked_journal(state) as locked:
+            prior = state.records
+            _validate_append_citations(repository, state.run_dir, candidate)
+            _validate_citation_targets(candidate, list(prior))
+            owner = _classify_owner(
+                state,
+                current,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
             )
+            _validate_proposed_record(
+                candidate,
+                run_id=run_id,
+                repo_root=repository,
+                scope=view.open_runs[run_id],
+                prior_records=prior,
+            )
+            if _ordinary_append_requires_lifecycle_command(candidate):
+                raise CoordinationRefusal(
+                    "forge: journal append refused — lifecycle command required"
+                )
+            payload = _journal_payload(candidate)
+            with _owner_takeover_transaction(
+                state,
+                current,
+                owner,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            ) as takeover:
+                offset = _append_with_locked_stream(
+                    locked,
+                    state.run_dir,
+                    run_id,
+                    candidate,
+                    payload=payload,
+                )
+                try:
+                    _validate_registry_lock(state_root, registry_lock)
+                    if (
+                        _read_registry_snapshot(
+                            state_root, locked=registry_lock
+                        )
+                        != view.registry
+                    ):
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                    _validate_owner_takeover(locked, takeover)
+                except BaseException:
+                    _rollback_append(locked, offset)
+                    raise
 
 
 def open_run(
     repo: Path,
     run_id: str,
     scope_values: list[str],
-    record: dict[str, object],
+    record: object,
     *,
     successor_of: str | None = None,
 ) -> Path:
-    if not _valid_run_id(run_id) or (successor_of is not None and not _valid_run_id(successor_of)):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    scope = canonical_scope(scope_values)
-    current = _session_owner()
-    state_root = _resolve_state_root(repo)
+    candidate = _validate_record_envelope(record)
+    run_id = _operation_run_id("new run", run_id)
+    repository, state_root = _resolve_repository(repo, "new run")
+    scope = _operation_scope("new run", scope_values)
     target = state_root / ".codex-orchestrator/runs" / run_id
-    _validate_append_citations(repo, target, record)
-    with _registry_lock(state_root):
-        states = _scan_runs(state_root)
-        open_runs = _load_registry(state_root, states)
-        if run_id in states:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        if successor_of is not None:
-            predecessor = states.get(successor_of)
-            if predecessor is None or predecessor.disposition != "retired":
-                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-            if not scopes_overlap(scope, predecessor.scope):
-                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-            with _locked_journal(predecessor.run_dir):
-                _ensure_owner(predecessor.run_dir, predecessor.run_id, current)
-        conflicts = [
-            other_id
-            for other_id, other_scope in open_runs.items()
-            if scopes_overlap(scope, other_scope)
-        ]
-        if conflicts:
-            lines = [
-                f"forge: new run refused — scope overlap between {run_id} and open run {other_id}"
-                for other_id in sorted(conflicts, key=_byte_key)
-            ]
-            raise CoordinationRefusal("\n".join(lines))
-        for predecessor in states.values():
-            if predecessor.disposition != "retired" or not scopes_overlap(scope, predecessor.scope):
-                continue
-            if predecessor.run_id != successor_of:
+    opening = dict(candidate)
+    opening["scope"] = list(scope)
+    proposed_successor = opening.get("successor_of", _MISSING)
+    if successor_of is not None:
+        opening["successor_of"] = successor_of
+    _validate_append_citations(repository, target, opening)
+    _validate_citation_targets(opening, [])
+    current = _session_owner()
+    with _registry_lock(state_root) as registry_lock:
+        predecessor_target = (
+            frozenset({successor_of})
+            if successor_of is not None and _valid_run_id(successor_of)
+            else frozenset()
+        )
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=predecessor_target,
+            locked=registry_lock,
+        )
+        if run_id in view.states:
+            raise CoordinationRefusal(
+                f"forge: new run refused — run {run_id} already exists"
+            )
+        if run_id in view.placeholders:
+            raise CoordinationRefusal(
+                f"forge: new run refused — run {run_id} directory exists without journal.jsonl"
+            )
+        _validate_append_citations(repository, target, opening)
+        _validate_citation_targets(opening, [])
+        predecessor_owner: OwnerClassification | None = None
+        predecessor: RunState | None = None
+        predecessor_reservation: ScopeReservation | None = None
+        if successor_of is not None and _valid_run_id(successor_of):
+            predecessor = view.states.get(successor_of)
+            predecessor_reservation = view.reservations.get(successor_of)
+            if (
+                "transfer" not in SUCCESSOR_DAG_CONTROLS
+                or predecessor is None
+                or predecessor.disposition != "retired"
+                or predecessor_reservation is None
+                or predecessor_reservation.disposition != "retired"
+            ):
                 raise CoordinationRefusal(
-                    f"forge: new run refused — scope overlap between {run_id} and open run {predecessor.run_id}"
+                    f"forge: successor run refused — predecessor {successor_of} is not a "
+                    "scope-reserving retired run"
                 )
-        if not isinstance(record, dict) or record.get("type") != "run_started":
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        if record.get("run_id") != run_id:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        opening = dict(record)
-        opening["scope"] = list(scope)
-        if successor_of is not None:
-            opening["successor_of"] = successor_of
-        elif "successor_of" in opening:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+            predecessor_owner = _classify_owner(predecessor, current)
+        _validate_proposed_record(
+            opening,
+            run_id=run_id,
+            repo_root=repository,
+            scope=scope,
+        )
+        if (
+            (successor_of is None and proposed_successor is not _MISSING)
+            or (
+                successor_of is not None
+                and proposed_successor is not _MISSING
+                and proposed_successor != successor_of
+            )
+        ):
+            _invalid_record_field(
+                "run_started", "successor_of", "must match designated predecessor"
+            )
+        if opening.get("type") != "run_started":
+            raise CoordinationRefusal(
+                "forge: journal append refused — lifecycle command required"
+            )
+        opening_payload = _journal_payload(opening)
+        if predecessor_reservation is not None:
+            if not scopes_overlap(scope, predecessor_reservation.scope):
+                raise CoordinationRefusal(
+                    f"forge: successor run refused — scope of {run_id} does not overlap "
+                    f"scope-reserving retired run {predecessor_reservation.run_id}"
+                )
+        excluded = frozenset({successor_of}) if successor_of is not None else frozenset()
+        _conflict_refusal(run_id, scope, view.reservations, excluded=excluded)
+        _assert_coordination_view_unchanged(
+            state_root, view, locked=registry_lock
+        )
+        if predecessor is not None and predecessor_owner is not None:
+            refreshed = _classify_owner(predecessor, current)
+            if refreshed != predecessor_owner:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         runs_root = state_root / ".codex-orchestrator/runs"
-        runs_root.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=f".{run_id}.open.", dir=runs_root))
-        installed = False
         try:
-            (temporary / "owner").write_bytes(_owner_bytes(current))
-            (temporary / "journal.jsonl").write_bytes(_journal_line(opening))
-            os.replace(temporary, target)
-            installed = True
-            updated = dict(open_runs)
-            updated[run_id] = scope
-            _write_registry(state_root, updated)
-        except BaseException:
-            cleanup = target if installed else temporary
-            for name in ("owner", "journal.jsonl"):
+            runs_root.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise CoordinationRefusal(
+                "forge: journal append refused — journal write failed"
+            ) from exc
+        runs_descriptor: int | None = None
+        target_descriptor: int | None = None
+        target_observation: FileObservation | None = None
+        runs_root_observation: FileObservation | None = None
+        created: dict[str, tuple[FileObservation, bytes]] = {}
+        runs_parent_descriptor: int | None = None
+        try:
+            runs_parent_descriptor, _ = _open_bound_directory(runs_root.parent)
+            if view.runs_root_observation is None:
                 try:
-                    (cleanup / name).unlink()
+                    os.mkdir("runs", 0o700, dir_fd=runs_parent_descriptor)
+                except FileExistsError as exc:
+                    raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+            root_stat = os.stat(
+                "runs",
+                dir_fd=runs_parent_descriptor,
+                follow_symlinks=False,
+            )
+            runs_descriptor, runs_root_observation = _open_bound_child_directory(
+                runs_parent_descriptor, "runs", root_stat
+            )
+            if (
+                view.runs_root_observation is not None
+                and runs_root_observation != view.runs_root_observation
+            ):
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        except CoordinationRefusal:
+            if runs_descriptor is not None:
+                os.close(runs_descriptor)
+                runs_descriptor = None
+            raise
+        except OSError as exc:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        finally:
+            if runs_parent_descriptor is not None:
+                os.close(runs_parent_descriptor)
+        try:
+            os.mkdir(run_id, 0o700, dir_fd=runs_descriptor)
+        except FileExistsError as exc:
+            classification = _classify_late_run_target(
+                runs_descriptor, run_id
+            )
+            if runs_descriptor is not None:
+                os.close(runs_descriptor)
+                runs_descriptor = None
+            if classification == "empty":
+                raise CoordinationRefusal(
+                    f"forge: new run refused — run {run_id} directory exists "
+                    "without journal.jsonl"
+                ) from exc
+            if classification == "nonempty":
+                raise CoordinationRefusal(
+                    "forge: new run refused — run directory "
+                    f".codex-orchestrator/runs/{run_id} lacks journal.jsonl"
+                ) from exc
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+        except OSError as exc:
+            if runs_descriptor is not None:
+                os.close(runs_descriptor)
+                runs_descriptor = None
+            raise CoordinationRefusal(
+                "forge: journal append refused — journal write failed"
+            ) from exc
+        try:
+            assert runs_descriptor is not None
+            target_stat = os.stat(
+                run_id, dir_fd=runs_descriptor, follow_symlinks=False
+            )
+            target_descriptor, target_observation = _open_bound_child_directory(
+                runs_descriptor, run_id, target_stat
+            )
+            if os.listdir(target_descriptor):
+                raise OSError(errno.EEXIST, "claimed run directory is not empty")
+            owner_payload = _owner_bytes(current)
+            created["owner"] = (
+                _write_exclusive_at(target_descriptor, "owner", owner_payload),
+                owner_payload,
+            )
+            created["journal.jsonl"] = (
+                _write_exclusive_at(
+                    target_descriptor, "journal.jsonl", opening_payload
+                ),
+                opening_payload,
+            )
+            assert runs_root_observation is not None
+            assert target_observation is not None
+            claim = NewRunClaim(
+                run_id,
+                runs_root_observation,
+                target_observation,
+                tuple(
+                    (name, observation, payload)
+                    for name, (observation, payload) in created.items()
+                ),
+            )
+            updated = dict(view.open_runs)
+            updated[run_id] = scope
+            _write_registry(
+                state_root,
+                updated,
+                view=view,
+                changed_run_id=run_id,
+                appended_record=opening,
+                expected_owner=current,
+                locked=registry_lock,
+                expected_runs_root=runs_root_observation,
+                new_run_claim=claim,
+            )
+        except RegistryRestorationRefusal:
+            # Registry authority is ambiguous; retaining the candidate run is
+            # safer than manufacturing a known journal/registry mismatch.
+            raise
+        except BaseException as exc:
+            cleanup_succeeded = bool(
+                target_descriptor is not None
+                and target_observation is not None
+                and runs_descriptor is not None
+                and _cleanup_claimed_run(
+                    runs_descriptor,
+                    run_id,
+                    target_descriptor,
+                    target_observation,
+                    created,
+                )
+            )
+            if not cleanup_succeeded:
+                raise CoordinationRefusal(JOURNAL_ROLLBACK_FAILED) from exc
+            if isinstance(exc, CoordinationRefusal):
+                raise
+            diagnostic = (
+                REGISTRY_UPDATE_FAILED
+                if "journal.jsonl" in created
+                else "forge: journal append refused — journal write failed"
+            )
+            raise CoordinationRefusal(diagnostic) from exc
+        finally:
+            if target_descriptor is not None:
+                try:
+                    os.close(target_descriptor)
                 except OSError:
                     pass
-            try:
-                cleanup.rmdir()
-            except OSError:
-                pass
-            raise
+            if runs_descriptor is not None:
+                try:
+                    os.close(runs_descriptor)
+                except OSError:
+                    pass
         return target
 
 
-def append_run_record(repo: Path, run_id: str, record: dict[str, object]) -> None:
-    if not _valid_run_id(run_id):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    state_root = _resolve_state_root(repo)
-    run_dir = state_root / ".codex-orchestrator/runs" / run_id
-    _validate_append_citations(None, run_dir, record, state_root=state_root)
-    with _registry_lock(state_root):
-        states = _scan_runs(state_root)
-        open_runs = _load_registry(state_root, states)
-        state = states.get(run_id)
-        if state is None or state.disposition != "open" or run_id not in open_runs:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        with _locked_journal(state.run_dir) as stream:
-            if not _task_files_contained(record, open_runs[run_id]):
-                raise CoordinationRefusal(
-                    f"forge: journal append refused — task files exceed admitted scope for run {run_id}"
-                )
-            _append_with_locked_stream(
-                stream, state.run_dir, run_id, record, adopt_missing=state.pre_coordination
+def append_run_record(repo: Path, run_id: str, record: object) -> None:
+    candidate = _validate_record_envelope(record)
+    run_id = _operation_run_id("journal append", run_id)
+    _, state_root = _resolve_repository(repo, "journal append")
+    _preflight_existing_candidate(
+        state_root, run_id, "journal append", candidate
+    )
+    current = _session_owner()
+    with _registry_lock(state_root) as registry_lock:
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = _target_state(view, run_id, "journal append")
+        repository = _recorded_repository_root(
+            state.run_dir, state_root, records=state.records
+        )
+        with _locked_journal(state) as locked:
+            prior = state.records
+            _validate_append_citations(repository, state.run_dir, candidate)
+            _validate_citation_targets(candidate, list(prior))
+            owner = _classify_owner(
+                state,
+                current,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
             )
+            _validate_proposed_record(
+                candidate,
+                run_id=run_id,
+                repo_root=repository,
+                scope=view.open_runs[run_id],
+                prior_records=prior,
+            )
+            if _ordinary_append_requires_lifecycle_command(candidate):
+                raise CoordinationRefusal(
+                    "forge: journal append refused — lifecycle command required"
+                )
+            payload = _journal_payload(candidate)
+            with _owner_takeover_transaction(
+                state,
+                current,
+                owner,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            ) as takeover:
+                offset = _append_with_locked_stream(
+                    locked,
+                    state.run_dir,
+                    run_id,
+                    candidate,
+                    payload=payload,
+                )
+                try:
+                    _validate_registry_lock(state_root, registry_lock)
+                    if (
+                        _read_registry_snapshot(
+                            state_root, locked=registry_lock
+                        )
+                        != view.registry
+                    ):
+                        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+                    _validate_owner_takeover(locked, takeover)
+                except BaseException:
+                    _rollback_append(locked, offset)
+                    raise
 
 
 def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
-    if not _valid_run_id(run_id):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    scope = canonical_scope(scope_values)
-    state_root = _resolve_state_root(repo)
-    with _registry_lock(state_root):
-        states = _scan_runs(state_root)
-        open_runs = _load_registry(state_root, states)
-        state = states.get(run_id)
-        if state is None or state.disposition != "open" or run_id not in open_runs:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        conflicts = [
-            other_id
-            for other_id, other_scope in open_runs.items()
-            if other_id != run_id and scopes_overlap(scope, other_scope)
-        ]
-        if conflicts:
-            raise CoordinationRefusal(
-                "\n".join(
-                    f"forge: new run refused — scope overlap between {run_id} and open run {other_id}"
-                    for other_id in sorted(conflicts, key=_byte_key)
-                )
-            )
-        for other in states.values():
-            if other.disposition != "retired" or other.run_id == state.successor_of:
-                continue
-            if scopes_overlap(scope, other.scope):
-                raise CoordinationRefusal(
-                    f"forge: new run refused — scope overlap between {run_id} and open run {other.run_id}"
-                )
-        record = {
+    run_id = _operation_run_id("run readmit", run_id)
+    repository, state_root = _resolve_repository(repo, "run readmit")
+    scope = _operation_scope("run readmit", scope_values)
+    record = _validate_record_envelope(
+        {
             "type": "decision",
             "id": f"forge-scope-readmission-{uuid.uuid4().hex}",
             "resolution": READMISSION_RESOLUTION,
             "scope": list(scope),
             "recorded_at": _utc_now(),
         }
-        with _locked_journal(state.run_dir) as stream:
-            _ensure_owner(
-                state.run_dir, run_id, _session_owner(), adopt_missing=state.pre_coordination
-            )
-            if not _all_task_files_contained(
-                _read_raw_records(state.run_dir / "journal.jsonl"), scope
-            ):
-                raise CoordinationRefusal(
-                    f"forge: journal append refused — task files exceed admitted scope for run {run_id}"
-                )
-            offset = _append_with_locked_stream(stream, state.run_dir, run_id, record)
-            try:
-                updated = dict(open_runs)
-                updated[run_id] = scope
-                _write_registry(state_root, updated)
-            except BaseException:
-                _rollback_append(stream, offset)
-                raise
-
-
-def close_run(repo: Path, run_id: str, record: dict[str, object]) -> None:
-    if not _valid_run_id(run_id):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    state_root = _resolve_state_root(repo)
-    run_dir = state_root / ".codex-orchestrator/runs" / run_id
-    _validate_append_citations(None, run_dir, record, state_root=state_root)
-    if not isinstance(record, dict) or record.get("type") != "run_closed":
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    with _registry_lock(state_root):
-        states = _scan_runs(state_root)
-        open_runs = _load_registry(state_root, states)
-        state = states.get(run_id)
-        if state is None or state.disposition != "open" or run_id not in open_runs:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-        with _locked_journal(state.run_dir) as stream:
-            offset = _append_with_locked_stream(
-                stream,
-                state.run_dir,
-                run_id,
-                record,
-                allow_lifecycle=True,
+    )
+    current = _session_owner()
+    with _registry_lock(state_root) as registry_lock:
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = _target_state(view, run_id, "run readmit")
+        with _locked_journal(state) as locked:
+            prior = state.records
+            _validate_append_citations(repository, state.run_dir, record)
+            _validate_citation_targets(record, list(prior))
+            owner = _classify_owner(
+                state,
+                current,
                 adopt_missing=state.pre_coordination,
+                locked=locked,
             )
-            try:
-                updated = dict(open_runs)
-                updated.pop(run_id, None)
-                _write_registry(state_root, updated)
-            except BaseException:
-                _rollback_append(stream, offset)
-                raise
+            _validate_proposed_record(
+                record,
+                run_id=run_id,
+                repo_root=repository,
+                scope=scope,
+                prior_records=prior,
+            )
+            if not _all_task_files_contained(list(prior), scope):
+                raise CoordinationRefusal(
+                    f"forge: journal append refused — task files exceed admitted scope "
+                    f"for run {run_id}"
+                )
+            _conflict_refusal(
+                run_id,
+                scope,
+                view.reservations,
+                excluded=frozenset({run_id}),
+            )
+            payload = _journal_payload(record)
+            with _owner_takeover_transaction(
+                state,
+                current,
+                owner,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            ):
+                offset = _append_with_locked_stream(
+                    locked,
+                    state.run_dir,
+                    run_id,
+                    record,
+                    payload=payload,
+                )
+                try:
+                    updated = dict(view.open_runs)
+                    updated[run_id] = scope
+                    _write_registry(
+                        state_root,
+                        updated,
+                        view=view,
+                        changed_run_id=run_id,
+                        appended_record=record,
+                        expected_owner=current,
+                        locked=registry_lock,
+                        expected_runs_root=view.runs_root_observation,
+                    )
+                except RegistryRestorationRefusal:
+                    raise
+                except BaseException as exc:
+                    _rollback_registry_failure(locked, offset, exc)
+
+
+def close_run(repo: Path, run_id: str, record: object) -> None:
+    candidate = _validate_record_envelope(record)
+    run_id = _operation_run_id("run close", run_id)
+    repository, state_root = _resolve_repository(repo, "run close")
+    _preflight_existing_candidate(
+        state_root,
+        run_id,
+        "run close",
+        candidate,
+        repository=repository,
+    )
+    current = _session_owner()
+    with _registry_lock(state_root) as registry_lock:
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = _target_state(
+            view,
+            run_id,
+            "run close",
+            allow_reserving_retired_close=True,
+        )
+        with _locked_journal(state) as locked:
+            prior = state.records
+            _validate_append_citations(repository, state.run_dir, candidate)
+            _validate_citation_targets(candidate, list(prior))
+            owner = _classify_owner(
+                state,
+                current,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            )
+            _validate_proposed_record(
+                candidate,
+                run_id=run_id,
+                repo_root=repository,
+                scope=state.scope,
+                prior_records=prior,
+            )
+            if candidate.get("type") != "run_closed":
+                raise CoordinationRefusal(
+                    "forge: journal append refused — lifecycle command required"
+                )
+            payload = _journal_payload(candidate)
+            with _owner_takeover_transaction(
+                state,
+                current,
+                owner,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            ):
+                offset = _append_with_locked_stream(
+                    locked,
+                    state.run_dir,
+                    run_id,
+                    candidate,
+                    payload=payload,
+                )
+                try:
+                    updated = dict(view.open_runs)
+                    updated.pop(run_id, None)
+                    _write_registry(
+                        state_root,
+                        updated,
+                        view=view,
+                        changed_run_id=run_id,
+                        appended_record=candidate,
+                        expected_owner=current,
+                        locked=registry_lock,
+                        expected_runs_root=view.runs_root_observation,
+                    )
+                except RegistryRestorationRefusal:
+                    raise
+                except BaseException as exc:
+                    _rollback_registry_failure(locked, offset, exc)
 
 
 def retire_run(repo: Path, run_id: str) -> None:
-    if not _valid_run_id(run_id):
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
-    state_root = _resolve_state_root(repo)
-    with _registry_lock(state_root):
-        states = _scan_runs(state_root)
-        open_runs = _load_registry(state_root, states)
-        state = states.get(run_id)
-        if state is None or state.disposition != "open" or run_id not in open_runs:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    run_id = _operation_run_id("run retire", run_id)
+    record = _validate_record_envelope(
+        {
+            "type": "decision",
+            "id": "forge-run-retired",
+            "resolution": RETIREMENT_RESOLUTION,
+            "recorded_at": _utc_now(),
+        }
+    )
+    current = _session_owner()
+    repository, state_root = _resolve_repository(repo, "run retire")
+    with _registry_lock(state_root) as registry_lock:
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = _target_state(view, run_id, "run retire")
         if state.pre_coordination:
             # Retirement exists so a successor can reuse an admitted scope; a
             # pre-coordination run has none, and its retired state (scope-less,
@@ -1192,21 +4771,55 @@ def retire_run(repo: Path, run_id: str) -> None:
                 "forge: run retire refused — pre-coordination run "
                 f"{run_id} has no admitted scope to reuse; adopt and close it instead"
             )
-        record = {
-            "type": "decision",
-            "id": "forge-run-retired",
-            "resolution": RETIREMENT_RESOLUTION,
-            "recorded_at": _utc_now(),
-        }
-        with _locked_journal(state.run_dir) as stream:
-            offset = _append_with_locked_stream(stream, state.run_dir, run_id, record)
-            try:
-                updated = dict(open_runs)
-                updated.pop(run_id, None)
-                _write_registry(state_root, updated)
-            except BaseException:
-                _rollback_append(stream, offset)
-                raise
+        with _locked_journal(state) as locked:
+            prior = state.records
+            _validate_append_citations(repository, state.run_dir, record)
+            _validate_citation_targets(record, list(prior))
+            owner = _classify_owner(
+                state,
+                current,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            )
+            _validate_proposed_record(
+                record,
+                run_id=run_id,
+                repo_root=repository,
+                scope=state.scope,
+                prior_records=prior,
+            )
+            payload = _journal_payload(record)
+            with _owner_takeover_transaction(
+                state,
+                current,
+                owner,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            ):
+                offset = _append_with_locked_stream(
+                    locked,
+                    state.run_dir,
+                    run_id,
+                    record,
+                    payload=payload,
+                )
+                try:
+                    updated = dict(view.open_runs)
+                    updated.pop(run_id, None)
+                    _write_registry(
+                        state_root,
+                        updated,
+                        view=view,
+                        changed_run_id=run_id,
+                        appended_record=record,
+                        expected_owner=current,
+                        locked=registry_lock,
+                        expected_runs_root=view.runs_root_observation,
+                    )
+                except RegistryRestorationRefusal:
+                    raise
+                except BaseException as exc:
+                    _rollback_registry_failure(locked, offset, exc)
 
 
 def read_journal(
