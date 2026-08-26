@@ -296,6 +296,12 @@ if mode == "nonzero":
 if mode == "no-verdict":
     raise SystemExit(0)
 output = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+# Regression pin: real codex writes --output-last-message by path (atomic,
+# possibly rename-based), which /dev/fd indirection breaks silently. Refuse
+# descriptor paths so the suite fails if the launcher regresses to them.
+if str(output).startswith("/dev/fd/"):
+    print("fixture reviewer refuses /dev/fd output target", file=sys.stderr)
+    raise SystemExit(8)
 candidate = re.search(r"^candidate: ([0-9a-f]{64})$", prompt, re.MULTILINE)
 package = re.search(r"^package: ([0-9a-f]{64})$", prompt, re.MULTILINE)
 if candidate is None or package is None:

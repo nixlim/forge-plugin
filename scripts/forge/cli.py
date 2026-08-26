@@ -298,15 +298,21 @@ try:
         returncode = child.returncode
     finally:
         os.close(events_fd)
-    os.lseek(verdict_fd, 0, os.SEEK_SET)
-    verdict_parts = []
-    while True:
-        chunk = os.read(verdict_fd, 65536)
-        if not chunk:
-            break
-        verdict_parts.append(chunk)
-        if sum(len(part) for part in verdict_parts) > 65536:
-            raise ValueError("reviewer verdict exceeds 65536 bytes")
+    # Re-open the verdict by name under the guarded attempt directory: the
+    # reviewer writes --output-last-message by path and may replace the
+    # inode (atomic rename), so the pre-opened descriptor can go stale.
+    read_fd = open_regular("verdict.txt", os.O_RDONLY)
+    try:
+        verdict_parts = []
+        while True:
+            chunk = os.read(read_fd, 65536)
+            if not chunk:
+                break
+            verdict_parts.append(chunk)
+            if sum(len(part) for part in verdict_parts) > 65536:
+                raise ValueError("reviewer verdict exceeds 65536 bytes")
+    finally:
+        os.close(read_fd)
     verdict_data = b"".join(verdict_parts)
     verdict_digest = hashlib.sha256(verdict_data).hexdigest()
     verdict_size = len(verdict_data)
@@ -4531,12 +4537,20 @@ class Engine:
                             or opened_verdict.st_uid != os.geteuid()
                         ):
                             raise OSError("verdict path is not an owner-controlled regular file")
+                        # The verdict target is passed as a real filesystem
+                        # path: codex writes --output-last-message by path
+                        # (atomically, possibly via rename), which a /dev/fd
+                        # indirection breaks silently. The wrapper re-opens
+                        # the name under the guarded attempt directory after
+                        # the child exits, and collect revalidates content.
                         reviewer_argv = [
                             executable,
                             "exec",
                             "--json",
                             "--output-last-message",
-                            f"/dev/fd/{verdict_fd}",
+                            str(
+                                self.ctx.store.common_root / str(verdict_ref)
+                            ),
                             "-s",
                             "read-only",
                             "-c",
