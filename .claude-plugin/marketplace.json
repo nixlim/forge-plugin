@@ -9,7 +9,7 @@
       "name": "forge",
       "source": "./",
       "description": "Coordinate reusable monitored OpenAI Codex agents from Claude Code with forge governance.",
-      "version": "0.6.7",
+      "version": "0.6.8",
       "author": {
         "name": "nixlim"
       }
