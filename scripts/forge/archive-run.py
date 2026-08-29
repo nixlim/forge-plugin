@@ -3526,11 +3526,6 @@ def _render_archive_candidate(
             raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL) from exc
         raise
     relative = f".forge/history/runs/{run_dir.name}.md"
-    listed = run_git(repo, "ls-tree", "-z", "--name-only", "HEAD", "--", relative)
-    if listed.returncode != 0:
-        raise ArchiveRefusal("forge: archive refused — could not inspect archive history")
-    if listed.stdout:
-        raise ArchiveRefusal(f"forge: archive refused — archive already exists: {relative}")
     started = only_record(records, "run_started")
     closed = only_record(records, "run_closed")
     closing = closing_mode_from_options(
@@ -3541,6 +3536,16 @@ def _render_archive_candidate(
         legacy_approval=legacy_approval,
         prove_legacy_approval=prove_legacy_approval,
     )
+    # Authority is proven before destination state: an invalid or unactivated
+    # approval refuses on its own literal even when the archive also exists.
+    listed = run_git(repo, "ls-tree", "-z", "--name-only", "HEAD", "--", relative)
+    if listed.returncode != 0:
+        raise ArchiveRefusal("forge: archive refused — could not inspect archive history")
+    if listed.stdout and prove_legacy_approval:
+        # Absence is a commit-time property; a non-authorizing preview
+        # (prove_legacy_approval=False) may re-render an already-committed
+        # archive, e.g. for hash comparison or an operator prompt.
+        raise ArchiveRefusal(f"forge: archive refused — archive already exists: {relative}")
     embedded_pre_close = canonical_payload(closed.get("validation"))
     if not is_passing_gated_payload(embedded_pre_close):
         raise ArchiveRefusal("forge: archive refused — pre-close gated validation did not pass")
