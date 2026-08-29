@@ -2405,3 +2405,64 @@ class LegacyChainKeySetTests(unittest.TestCase):
         with self.assertRaises(module.FrozenError) as caught:
             module.validate_state(dict(broken), legacy["chain_id"])
         self.assertIn("invalid top-level key set", str(caught.exception))
+
+
+class GateEnvironmentScrubTests(unittest.TestCase):
+    def test_gate_run_source_retains_the_scrub(self) -> None:
+        # Supplementary source pin; the behavioral proof lives in
+        # GateEnvironmentScrubBehaviorTests below.
+        import inspect
+
+        source = inspect.getsource(CLI.Engine.gate_run)
+        self.assertIn('environment.pop("FORGE_SESSION_PID", None)', source)
+
+
+class GateEnvironmentScrubBehaviorTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
+    def test_every_stack_cell_child_env_lacks_the_session_identity(self) -> None:
+        # Regression: a live inherited FORGE_SESSION_PID leaked into gate
+        # children and collided with hermetic fixture owners; the scrub must
+        # cover the first cell AND every remaining cell of a multi-cell
+        # stack, which previously inherited the unscrubbed environment.
+        policy_path = self.repo / "forge-project.md"
+        policy = policy_path.read_text(encoding="utf-8")
+        original_region = (
+            "<!-- FORGE:REGION stack-validations BEGIN -->\n"
+            "```bash\n"
+            'python3 "$FORGE_CLI_SCRIPTS_DIR/gate.py" stack:python "$@"\n'
+            "```\n"
+            "<!-- FORGE:REGION stack-validations END -->"
+        )
+        probe_region = (
+            "<!-- FORGE:REGION stack-validations BEGIN -->\n"
+            "```bash\n"
+            'printf "cell1:%s\\n" "${FORGE_SESSION_PID:-unset}" >> "$FORGE_TEST_GATE_LOG"\n'
+            "```\n"
+            "```bash\n"
+            'printf "cell2:%s\\n" "${FORGE_SESSION_PID:-unset}" >> "$FORGE_TEST_GATE_LOG"\n'
+            "```\n"
+            "<!-- FORGE:REGION stack-validations END -->"
+        )
+        self.assertIn(original_region, policy)
+        policy_path.write_text(
+            policy.replace(original_region, probe_region, 1), encoding="utf-8"
+        )
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "-m", "two-cell stack probe policy")
+
+        self.change("src/app.py", "VALUE = 3\n")
+        chain_id = str(self.start("src/app.py")["chain_id"])
+        self.cli(
+            "gate",
+            "run",
+            "stack:python",
+            "--chain-id",
+            chain_id,
+            expected=0,
+            FORGE_SESSION_PID="424242",
+        )
+        lines = [
+            line
+            for line in self.gate_log.read_text(encoding="utf-8").splitlines()
+            if line.startswith("cell")
+        ]
+        self.assertEqual(lines, ["cell1:unset", "cell2:unset"])

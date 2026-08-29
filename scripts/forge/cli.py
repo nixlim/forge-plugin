@@ -8474,6 +8474,11 @@ class Engine:
                 "cell_count": 1 + len(remaining_cells),
             }
         environment = os.environ.copy()
+        # The DM-010 session identity is coordination state, not gate
+        # context: an inherited live FORGE_SESSION_PID collides with the
+        # hermetic fixture owners the test suites create, so gate children
+        # never see it. Lock and coordination subprocesses keep it.
+        environment.pop("FORGE_SESSION_PID", None)
         if gate_id == "strict-evals":
             environment["STRICT"] = "1"
         process = run_bounded(
@@ -8553,6 +8558,7 @@ class Engine:
             extra_process = run_bounded(
                 extra_argv,
                 cwd=self.ctx.repo.root,
+                env=environment,
                 timeout=COMMAND_TIMEOUT_SECONDS,
                 verbose=self.ctx.options.verbose,
             )
