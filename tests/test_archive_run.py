@@ -922,10 +922,12 @@ class ArchiveRunTests(unittest.TestCase):
 
         self.git("reset", "--quiet")
         self.archive_path.unlink()
+        # Revision 9 (FR-171/FR-191): the rendered audit fragment remains the
+        # archive's citation-correction authority and must be behaviorally observed.
         mutant = self.mutant_archiver(
             "citation-corrections-disabled",
-            'lines.extend(["", audit_fragment.rstrip("\\n"), "", "## Provenance", ""])',
-            'lines.extend(["", "## Residual Risks\\n\\n- none", "", "## Provenance", ""])',
+            '            audit_fragment.rstrip("\\n"),\n',
+            '            "## Residual Risks\\n\\n- none",\n',
         )
 
         disabled = self.invoke(archiver=mutant)
@@ -1218,15 +1220,17 @@ class ArchiveRunTests(unittest.TestCase):
         self.assert_archive_absent_and_unstaged()
 
     def test_unexpected_exception_during_initial_write_rolls_back_archive(self) -> None:
+        # Revision 9 (FR-170/FR-174): exclusive descriptor creation must retain
+        # enough exact-file identity to roll back every interrupted initial write.
         mutant_root = self.root / "initial-write-failure-plugin"
         shutil.copytree(ROOT / "scripts", mutant_root / "scripts")
         mutant = mutant_root / "scripts" / "forge" / "archive-run.py"
         source = mutant.read_text(encoding="utf-8")
-        needle = "        created = True\n        with handle:\n"
+        needle = '        exact = ExactFile(relative, b"", file_identity(opened))\n'
         replacement = (
-            "        created = True\n"
+            needle
+            +
             "        raise KeyboardInterrupt('injected initial-write failure')\n"
-            "        with handle:\n"
         )
         self.assertEqual(source.count(needle), 1)
         mutant.write_text(source.replace(needle, replacement), encoding="utf-8")
@@ -1389,6 +1393,8 @@ class ArchiveRunTests(unittest.TestCase):
         self.assertTrue((self.repo / "raced-unrelated.txt").is_file())
 
     def test_rollback_verification_control_is_killed(self) -> None:
+        # Revision 9 (FR-170/FR-174): staged-transaction cleanup must quarantine
+        # and unlink only its exact candidate, then fail closed on any residue.
         mutant = self.mutant_archiver(
             "mutant-rollback",
             '    if failed:\n        raise ArchiveRefusal("forge: archive refused — transaction rollback failed")\n',
@@ -1406,14 +1412,15 @@ class ArchiveRunTests(unittest.TestCase):
             rm_call,
             '        failed = True  # forced git rollback failure\n',
         )
-        unlink = "        archive_path.unlink(missing_ok=True)\n"
+        unlink = "            unlink_archive_candidate(repo, relative, expected_worktree)\n"
         self.assertEqual(source.count(unlink), 1)
-        source = source.replace(unlink, "        pass  # forced rollback residue\n")
-        race = "    try:\n        if nul_paths(git_stdout(repo, \"diff\", \"--name-only\", \"-z\")):\n"
+        source = source.replace(unlink, "            pass  # forced rollback residue\n")
+        race = '        staged_blob = git_stdout(repo, "show", f":{relative}")\n'
         self.assertEqual(source.count(race), 1)
         source = source.replace(
             race,
-            "    try:\n        (repo / 'rollback-race.txt').write_text('race\\n', encoding='utf-8')\n        if nul_paths(git_stdout(repo, \"diff\", \"--name-only\", \"-z\")):\n",
+            race
+            + "        (repo / 'rollback-race.txt').write_text('race\\n', encoding='utf-8')\n",
         )
         mutant.write_text(source, encoding="utf-8")
         result = self.invoke(archiver=mutant)
@@ -1528,6 +1535,8 @@ class ArchiveRunTests(unittest.TestCase):
         self.assertTrue(self.archive_path.is_file())
 
     def test_overwrite_guard_mutant_is_killed(self) -> None:
+        # Revision 9 (FR-170/FR-174): absent-history creation uses descriptor-level
+        # no-follow exclusivity, while an existing DM-008 archive stays immutable.
         # Commit a sentinel so the repository is clean: append-only history is
         # allowed to exist in HEAD, but must never be replaced. First prove the
         # real control refuses it without changing a byte.
@@ -1547,45 +1556,48 @@ class ArchiveRunTests(unittest.TestCase):
         )
         self.assertEqual(self.archive_path.read_bytes(), sentinel)
 
-        # Disable the full append-only defense in an isolated copy: the early
-        # existence guard, exclusive creation, and the transaction's new-file
-        # proof. The mutant then overwrites the committed history path.
+        # Disable exclusive descriptor creation in an isolated copy and invoke
+        # that primitive directly; no pathname-based open is reintroduced.
         mutant = self.mutant_archiver(
             "mutant-overwrite",
-            "    if archive_path.exists() or archive_path.is_symlink():\n        raise ArchiveRefusal(f\"forge: archive refused — archive already exists: {relative}\")\n",
-            "    pass  # CONTROL DISABLED: append-only preflight\n",
+            "                | os.O_EXCL\n",
+            "                | os.O_TRUNC\n",
         )
-        source = mutant.read_text(encoding="utf-8")
-        needle = '            handle = archive_path.open("x", encoding="utf-8", newline="")\n'
-        replacement = '            handle = archive_path.open("w", encoding="utf-8", newline="")\n'
-        self.assertEqual(source.count(needle), 1)
-        source = source.replace(needle, replacement)
-        needle = '        if nul_paths(git_stdout(repo, "diff", "--name-only", "-z")):\n'
-        replacement = '        if False:  # CONTROL DISABLED: archive must be a new path\n'
-        self.assertEqual(source.count(needle), 1)
-        source = source.replace(needle, replacement)
-        needle = (
-            '        if nul_paths(git_stdout(repo, "ls-files", "--others", '
-            '"--exclude-standard", "-z")) != [\n'
-            '            os.fsencode(relative)\n'
-            '        ]:\n'
+        import importlib.util
+
+        module_name = "_forge_archive_overwrite_mutant"
+        specification = importlib.util.spec_from_file_location(module_name, mutant)
+        self.assertIsNotNone(specification)
+        assert specification is not None
+        self.assertIsNotNone(specification.loader)
+        assert specification.loader is not None
+        module = importlib.util.module_from_spec(specification)
+        sys.modules[module_name] = module
+        self.addCleanup(sys.modules.pop, module_name, None)
+        specification.loader.exec_module(module)
+        module.create_archive_file(
+            self.repo,
+            self.archive_path,
+            self.archive_relative.as_posix(),
+            "mutant overwrite\n",
         )
-        replacement = '        if False:  # CONTROL DISABLED: archive must start untracked\n'
-        self.assertEqual(source.count(needle), 1)
-        mutant.write_text(source.replace(needle, replacement), encoding="utf-8")
-        result = self.invoke(archiver=mutant)
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertNotEqual(self.archive_path.read_bytes(), sentinel)
 
     def test_closing_head_binding_mutant_is_killed(self) -> None:
+        # Revision 9 (FR-172): a normal archive accepts only the current closing
+        # commit, even when a caller supplies another valid repository commit.
+        earlier_head = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.repo / "later.txt").write_text("later\n", encoding="utf-8")
+        self.git("add", "later.txt")
+        self.git("commit", "--quiet", "-m", "later closing head")
         mutant = self.mutant_archiver(
             "mutant-closing-head",
-            "    if closing_head != recorded_head:\n        raise ArchiveRefusal(\"forge: archive refused — closing HEAD does not match repository HEAD\")\n",
-            "    pass  # CONTROL DISABLED: closing-HEAD binding\n",
+            "        if closing_head != recorded_head:\n            raise ArchiveRefusal(\"forge: archive refused — closing HEAD does not match repository HEAD\")\n",
+            "        pass  # CONTROL DISABLED: closing-HEAD binding\n",
         )
-        result = self.invoke(archiver=mutant, closing_head="0" * 40)
+        result = self.invoke(archiver=mutant, closing_head=earlier_head)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
-        self.assertIn("Closing HEAD: " + "0" * 40, self.archive_path.read_text(encoding="utf-8"))
+        self.assertIn("Closing HEAD: " + earlier_head, self.archive_path.read_text(encoding="utf-8"))
 
     def test_post_close_pass_binding_mutant_is_killed(self) -> None:
         mutant = self.mutant_archiver(

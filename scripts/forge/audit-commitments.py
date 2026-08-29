@@ -7,6 +7,8 @@ therefore writes nothing to stdout and prevents the archive from being made.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import subprocess
 import sys
@@ -18,10 +20,27 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
-from commitment_paths import path_tokens  # noqa: E402
+from commitment_paths import (  # noqa: E402
+    AUDIT_ACTIVATED_REQUIRED,
+    AUDIT_CAPTURE_SURROGATE,
+    AUDIT_OPTIONAL_DERIVED,
+    AUDIT_RECORD_CITATION,
+    AUDIT_STRUCTURED_LANDING,
+    CAPTURED_PACKAGE_NAMES,
+    CommitmentPathSurface,
+    CommitmentPathResolution,
+    RecordPathCitation,
+    commitment_surfaces,
+    iter_record_citations,
+    parse_run_captured_path,
+    resolution_matches_surface,
+    resolve_surface_path,
+    validate_surface_path,
+)
 
 from scripts.codex_orchestrator.journal import (  # noqa: E402
     TERMINAL_TASK_STATUSES,
+    WRITER_CONTRACT,
     _legacy_compatibility_declaration,
     read_journal,
     record_line,
@@ -61,7 +80,8 @@ class Failure(Exception):
 class Citation:
     value: str
     source: str
-    target: tuple[str, str, int | str]
+    target: tuple[str, str, int | str] | None
+    surface: CommitmentPathSurface
     line: int = 0
 
 
@@ -289,6 +309,39 @@ def audit_non_terminal_tasks(records: list[dict[str, object]]) -> list[str]:
     ]
 
 
+def _citation_target(
+    record: dict[str, object], citation: RecordPathCitation
+) -> tuple[str, str, int | str] | None:
+    """Keep correction/dispensation authority narrower than audit coverage."""
+
+    if not citation.surface.correctable:
+        return None
+    identifier = str(record.get("id"))
+    if citation.surface.label == "decision.basis" and citation.index is not None:
+        return "decision", identifier, citation.index
+    if (
+        citation.surface.label == "verification.observation"
+        and citation.token is not None
+    ):
+        return "verification", identifier, citation.token
+    return None
+
+
+def _citation_source(
+    record: dict[str, object], citation: RecordPathCitation
+) -> str:
+    if citation.surface.label == "decision.basis":
+        return f"{record_name(record)} basis[{citation.index}]"
+    if citation.surface.label == "verification.observation":
+        return f"{record_name(record)} observation"
+    if citation.surface.label == "verification.evidence":
+        return f"{record_name(record)} evidence[{citation.index}]"
+    execution = record.get("execution")
+    if isinstance(execution, str) and execution:
+        return f"{record.get('type')} {execution} {citation.surface.field}"
+    return f"{record_name(record)} {citation.surface.field}"
+
+
 def citations(records: Iterable[dict[str, object]]) -> list[Citation]:
     result: list[Citation] = []
     for record in records:
@@ -299,34 +352,35 @@ def citations(records: Iterable[dict[str, object]]) -> list[Citation]:
             for index, value in enumerate(basis):
                 if not isinstance(value, str):
                     fail(2, f"{record_name(record)} basis[{index}] must be a string")
-                for token in path_tokens(value, context="basis"):
-                    result.append(
-                        Citation(
-                            token,
-                            f"{record_name(record)} basis[{index}]",
-                            ("decision", str(record.get("id")), index),
-                            int(record.get("_line", 0)),
-                        )
-                    )
-        elif record.get("type") == "verification":
-            observation = record.get("observation")
-            if isinstance(observation, str):
-                for token in path_tokens(observation, context="observation"):
-                    result.append(
-                        Citation(
-                            token,
-                            f"{record_name(record)} observation",
-                            ("verification", str(record.get("id")), token),
-                            int(record.get("_line", 0)),
-                        )
-                    )
+        elif record.get("type") == "verification" and "evidence" in record:
+            evidence = record.get("evidence")
+            if not isinstance(evidence, list):
+                fail(2, f"{record_name(record)} evidence must be an array")
+            for index, value in enumerate(evidence):
+                if not isinstance(value, str):
+                    fail(2, f"{record_name(record)} evidence[{index}] must be a string")
+
+        for expanded in iter_record_citations(record, enforcement="audit"):
+            result.append(
+                Citation(
+                    expanded.value,
+                    _citation_source(record, expanded),
+                    _citation_target(record, expanded),
+                    expanded.surface,
+                    int(record.get("_line", 0)),
+                )
+            )
     return result
 
 
 def citation_corrections(
     records: list[dict[str, object]], source_citations: list[Citation]
 ) -> dict[tuple[str, str, int | str], Correction]:
-    available = {citation.target for citation in source_citations}
+    available = {
+        citation.target
+        for citation in source_citations
+        if citation.target is not None
+    }
     result: dict[tuple[str, str, int | str], Correction] = {}
     for record in records:
         if record.get("type") != "decision":
@@ -386,23 +440,10 @@ def apply_corrections(
             corrections[citation.target].corrected_path,
             corrections[citation.target],
         )
-        if citation.target in corrections
+        if citation.target is not None and citation.target in corrections
         else AuditedCitation(citation, citation.value)
         for citation in source_citations
     ]
-
-
-def confined_existing(root: Path, relative: str) -> bool:
-    try:
-        value = Path(relative)
-        if value.is_absolute():
-            return False
-        root = root.resolve()
-        target = (root / value).resolve()
-        target.relative_to(root)
-        return target.exists()
-    except (OSError, RuntimeError, ValueError):
-        return False
 
 
 def confined_relative_path(relative: str) -> bool:
@@ -460,13 +501,9 @@ def recorded_branch_contains(
     # CONTROL branch-aware END
 
 
-def audit_missing_paths(
-    audited_citations: list[AuditedCitation],
-    records: list[dict[str, object]],
-    run_dir: Path,
-    start: dict[str, object],
-) -> list[AuditedCitation]:
-    roots = [run_dir]
+def recorded_repository(start: dict[str, object]) -> Path:
+    """Return the one existing absolute repository recorded by run_started."""
+
     repo = start.get("repo")
     if not isinstance(repo, str) or not repo or not Path(repo).is_absolute():
         fail(2, "run_started repo must name an existing absolute directory")
@@ -476,15 +513,256 @@ def audit_missing_paths(
         fail(2, "run_started repo must name an existing absolute directory")
     if not repo_root.is_dir():
         fail(2, "run_started repo must name an existing absolute directory")
-    if repo_root not in roots:
-        roots.append(repo_root)
+    return repo_root
+
+
+def audit_missing_paths(
+    audited_citations: list[AuditedCitation],
+    records: list[dict[str, object]],
+    run_dir: Path,
+    repo_root: Path,
+) -> list[AuditedCitation]:
     branches = recorded_branches(records)
-    return [
-        citation
-        for citation in audited_citations
-        if not any(confined_existing(root, citation.value) for root in roots)
-        and not recorded_branch_contains(repo_root, branches, citation.value)
-    ]
+    missing: list[AuditedCitation] = []
+    for citation in audited_citations:
+        selected = resolve_surface_path(
+            citation.original.surface,
+            citation.value,
+            repository=repo_root,
+            run_dir=run_dir,
+        )
+        if resolution_matches_surface(citation.original.surface, selected):
+            continue
+        # A recorded branch can supply a path absent from both working roots,
+        # but cannot override an anchored symlink escape or a present non-file.
+        if (
+            selected is not None
+            and selected.contained
+            and not selected.anchored
+            and recorded_branch_contains(repo_root, branches, citation.value)
+        ):
+            continue
+        missing.append(citation)
+    return missing
+
+
+def _path_observation(value: os.stat_result) -> tuple[int, ...]:
+    """Return the identity and mutation fields needed around a no-follow read."""
+
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_uid,
+        value.st_nlink,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _surface_digest(
+    surface: CommitmentPathSurface,
+    selected: CommitmentPathResolution | None,
+) -> str | None:
+    """Hash one stable surface file without following its final component."""
+
+    if not resolution_matches_surface(surface, selected) or selected is None:
+        return None
+    descriptor = -1
+    try:
+        before = os.lstat(selected.candidate)
+        descriptor = os.open(
+            selected.candidate,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        opened = os.fstat(descriptor)
+        if _path_observation(opened) != _path_observation(before):
+            return None
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        rebound = os.lstat(selected.candidate)
+        if (
+            _path_observation(after) != _path_observation(before)
+            or _path_observation(rebound) != _path_observation(before)
+        ):
+            return None
+        return digest.hexdigest()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _surface_finding(value: str, source: str) -> None:
+    """Keep the established audit path diagnostic for every table projection."""
+
+    fail(
+        5,
+        "cited path does not exist within run or repository: "
+        f"{value} ({source})",
+    )
+
+
+def _derived_parent(
+    surface: CommitmentPathSurface,
+    *,
+    repository: Path,
+    run_dir: Path,
+) -> Path | None:
+    if surface.direct_child_parent == "run":
+        return run_dir
+    if surface.direct_child_parent == "archive-history":
+        return repository / ".forge" / "history" / "runs"
+    return None
+
+
+def _audit_derived_node(
+    surface: CommitmentPathSurface,
+    *,
+    value: str,
+    repository: Path,
+    run_dir: Path,
+    required: bool,
+) -> None:
+    """Require or conditionally validate one table-derived direct child."""
+
+    root = run_dir if surface.roots == ("run",) else repository
+    candidate = root / value
+    try:
+        os.lstat(candidate)
+    except FileNotFoundError:
+        if required:
+            _surface_finding(value, surface.label)
+        return
+    except OSError:
+        _surface_finding(value, surface.label)
+    selected = validate_surface_path(
+        surface,
+        value,
+        repository=repository,
+        run_dir=run_dir,
+        direct_parent=_derived_parent(
+            surface,
+            repository=repository,
+            run_dir=run_dir,
+        ),
+        require_file=True,
+    )
+    if _surface_digest(surface, selected) is None:
+        _surface_finding(value, surface.label)
+
+
+def _audit_structured_landings(
+    surface: CommitmentPathSurface,
+    records: list[dict[str, object]],
+    *,
+    run_id: str,
+    repository: Path,
+    run_dir: Path,
+) -> None:
+    """Validate the durable capture triplet carried by each ingest landing."""
+
+    for record in records:
+        if (
+            record.get("type") != "decision"
+            or record.get("outcome") != "chain-landing"
+            or not isinstance(record.get("binding"), dict)
+        ):
+            continue
+        basis = record.get("basis")
+        if not isinstance(basis, list) or not basis:
+            # Native event-drained landings carry an empty basis; retrospective
+            # ingest landings are distinguished by their nonempty capture triplet.
+            continue
+        parsed = [
+            parse_run_captured_path(value, run_id=run_id)
+            if isinstance(value, str)
+            else None
+            for value in basis
+        ]
+        if (
+            len(parsed) != len(CAPTURED_PACKAGE_NAMES)
+            or any(value is None for value in parsed)
+            or tuple(value.name for value in parsed if value is not None)
+            != CAPTURED_PACKAGE_NAMES
+        ):
+            value = next(
+                (member for member in basis if isinstance(member, str)),
+                "<structured landing basis>",
+            )
+            _surface_finding(value, f"{record_name(record)} ingest.captured_package")
+        for index, captured in enumerate(parsed):
+            assert captured is not None
+            candidate = run_dir / captured.relative
+            selected = validate_surface_path(
+                surface,
+                captured.relative,
+                repository=repository,
+                run_dir=run_dir,
+                direct_parent=candidate.parent,
+                require_file=True,
+            )
+            if _surface_digest(surface, selected) != captured.digest:
+                _surface_finding(
+                    captured.relative,
+                    f"{record_name(record)} basis[{index}]",
+                )
+
+
+def audit_projected_surfaces(
+    records: list[dict[str, object]],
+    start: dict[str, object],
+    *,
+    repository: Path,
+    run_dir: Path,
+) -> None:
+    """Apply every non-record audit policy projected from the shared table."""
+
+    run_id = start.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        fail(2, "run_started run_id must be a nonempty string")
+    activated = start.get("writer_contract") == WRITER_CONTRACT
+    for surface in commitment_surfaces(enforcement="audit"):
+        policy = surface.audit_policy
+        if policy == AUDIT_RECORD_CITATION:
+            if surface.owner != "record":
+                fail(2, f"invalid commitment audit policy: {surface.label}")
+            continue
+        if policy == AUDIT_CAPTURE_SURROGATE:
+            # Caller source spellings are intentionally absent from durable
+            # records; the structured capture package below is their surrogate.
+            continue
+        if policy == AUDIT_STRUCTURED_LANDING:
+            _audit_structured_landings(
+                surface,
+                records,
+                run_id=run_id,
+                repository=repository,
+                run_dir=run_dir,
+            )
+            continue
+        if policy in {AUDIT_OPTIONAL_DERIVED, AUDIT_ACTIVATED_REQUIRED}:
+            if surface.derived_path is None:
+                fail(2, f"invalid commitment audit policy: {surface.label}")
+            value = surface.derived_path.format(run_id=run_id)
+            _audit_derived_node(
+                surface,
+                value=value,
+                repository=repository,
+                run_dir=run_dir,
+                required=policy == AUDIT_ACTIVATED_REQUIRED and activated,
+            )
+            continue
+        fail(2, f"invalid commitment audit policy: {surface.label}")
 
 
 def commitment_items(close: dict[str, object], field: str) -> list[str]:
@@ -593,6 +871,7 @@ def audit(
     dispense_reason: str | None = None,
 ) -> str:
     records, start, close = closed_records(run_dir)
+    repo_root = recorded_repository(start)
     source_citations = citations(records)
     audited_citations = [
         AuditedCitation(citation, citation.value) for citation in source_citations
@@ -615,7 +894,12 @@ def audit(
         fail(4, f"task is non-terminal at close: {non_terminal[0]}")
     # CONTROL terminal-task END
 
-    missing = audit_missing_paths(audited_citations, records, run_dir, start)
+    missing = audit_missing_paths(
+        audited_citations,
+        records,
+        run_dir,
+        repo_root,
+    )
     # A journal-dialect-compat declaration (the legacy posture whose grammar
     # is owned by scripts/codex_orchestrator/journal.py's
     # _legacy_compatibility_declaration) covers citations
@@ -632,6 +916,7 @@ def audit(
         citation
         for citation in missing
         if citation.correction is None
+        and citation.original.surface.legacy_missing
         and declaration_line is not None
         and 0 < citation.original.line < declaration_line
     ]
@@ -685,6 +970,13 @@ def audit(
             f"{hard_missing[0].missing_finding()}",
         )
     # CONTROL cited-path END
+
+    audit_projected_surfaces(
+        records,
+        start,
+        repository=repo_root,
+        run_dir=run_dir,
+    )
 
     risks = commitment_items(close, "risks")
     follow_ups = commitment_items(close, "follow_ups")

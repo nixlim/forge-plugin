@@ -16,6 +16,8 @@ import errno
 import fcntl
 import functools
 import hashlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -63,8 +65,72 @@ class ReasonCode(str, Enum):
     TTL_EXPIRED = "ttl-expired"
 
 
+class V2ReasonCode(str, Enum):
+    """The complete additive 53-member ``forge-cli/2`` reason union."""
+
+    AMBIGUOUS_TARGET = "ambiguous-target"
+    APPROVAL_REQUIRED = "approval-required"
+    ARCHIVE_RERENDER_MISMATCH = "archive-rerender-mismatch"
+    ARCHIVE_SIZE_LIMIT = "archive-size-limit"
+    BATCH_IDEMPOTENCY_CONFLICT = "batch-idempotency-conflict"
+    BATCH_PENDING = "batch-pending"
+    BINDING_INVALID = "binding-invalid"
+    CANDIDATE_STALE = "candidate-stale"
+    CITATION_OUT_OF_ROOT = "citation-out-of-root"
+    CLEANUP_FAILED = "cleanup-failed"
+    DIRTY_INDEX = "dirty-index"
+    DIRTY_WORKTREE = "dirty-worktree"
+    DRIFT_TREE_INDEX = "drift-tree-index"
+    EVIDENCE_INCOMPLETE = "evidence-incomplete"
+    FETCH_FAILED = "fetch-failed"
+    FROZEN_CHAIN = "frozen-chain"
+    HALT_ENGAGED = "halt-engaged"
+    HEAD_MOVED = "head-moved"
+    INACTIVE_CHAIN = "inactive-chain"
+    INGEST_PROOF_INVALID = "ingest-proof-invalid"
+    ITERATION_CAP = "iteration-cap"
+    JOURNAL_OUTBOX_PENDING = "journal-outbox-pending"
+    LEGACY_RECOVERY_APPROVAL_REQUIRED = "legacy-recovery-approval-required"
+    LIVE_CHAIN_EXISTS = "live-chain-exists"
+    LIVE_MERGE_CHAIN_EXISTS = "live-merge-chain-exists"
+    LOCK_RELEASE_FAILED = "lock-release-failed"
+    LOCK_UNAVAILABLE = "lock-unavailable"
+    MERGE_GATE_FAILED = "merge-gate-failed"
+    MUTATING_GATE_PENDING = "mutating-gate-pending"
+    NON_FAST_FORWARD = "non-fast-forward"
+    OK = "ok"
+    OPERATOR_VERB_DENIED = "operator-verb-denied"
+    OPTION_DUPLICATE = "option-duplicate"
+    OPTION_EMPTY = "option-empty"
+    PATH_MISSING = "path-missing"
+    POLICY_CHANGED = "policy-changed"
+    POLICY_UNREADABLE = "policy-unreadable"
+    PUSH_FAILED = "push-failed"
+    PUSH_OUTCOME_UNKNOWN = "push-outcome-unknown"
+    PUSH_TARGET_INVALID = "push-target-invalid"
+    REBASE_CONFLICT = "rebase-conflict"
+    REBASE_FAILED = "rebase-failed"
+    REBASE_LOCK_UNAVAILABLE = "rebase-lock-unavailable"
+    REMOTE_CHURN = "remote-churn"
+    REVIEW_VERDICT_INVALID = "review-verdict-invalid"
+    RUN_TASK_BINDING_INVALID = "run-task-binding-invalid"
+    RUN_TASK_BINDING_REQUIRED = "run-task-binding-required"
+    SKIP_NOT_PERMITTED = "skip-not-permitted"
+    STATE_PRECONDITION = "state-precondition"
+    TOKEN_CONSUMED = "token-consumed"
+    TTL_EXPIRED = "ttl-expired"
+    WORKTREE_INVALID = "worktree-invalid"
+    WORKTREE_MISSING = "worktree-missing"
+
+
+# Descriptive compatibility alias for callers that imported the initial
+# Revision-9 implementation name while still exposing the complete v2 union.
+Revision9ReasonCode = V2ReasonCode
+
+
 SCHEMA = "forge-chain/1"
 OUTPUT_SCHEMA = "forge-cli/1"
+REVISION9_OUTPUT_SCHEMA = "forge-cli/2"
 KIND = "commit"
 STATES = {
     "classifying",
@@ -113,6 +179,8 @@ STATE_KEYS = {
     "approval",
     "authorization",
     "commit_result",
+    "run_binding",
+    "journal_outbox",
 }
 EVENT_KEYS = {"sequence", "prev_digest", "payload", "digest"}
 ENVELOPE_KEYS = {
@@ -138,6 +206,44 @@ CHAIN_ID_RE = re.compile(r"^c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_REQUIRED_REVISION9_STATE_CONTROLS = frozenset(
+    {"run-binding-shape", "journal-outbox-shape"}
+)
+REVISION9_STATE_CONTROLS = _REQUIRED_REVISION9_STATE_CONTROLS
+_REQUIRED_ARCHIVE_RECHECK_CONTROLS = frozenset(
+    {"start", "authorization", "commit"}
+)
+ARCHIVE_RECHECK_CONTROLS = _REQUIRED_ARCHIVE_RECHECK_CONTROLS
+INGEST_PROOF_ORDER = (
+    "chain-schema-and-digest-replay",
+    "materialized-state",
+    "repository",
+    "policy",
+    "generation",
+    "current-gates",
+    "review-package",
+    "reviewer-role",
+    "reviewer-iteration",
+    "reviewer-verdict",
+    "operator-approval",
+    "landing-proof",
+    "monotonic-transitions",
+    "closing-head-containment",
+    "task-membership",
+    "scope-membership",
+)
+_REQUIRED_INGEST_PROOF_CONTROLS = frozenset(INGEST_PROOF_ORDER)
+INGEST_PROOF_CONTROLS = _REQUIRED_INGEST_PROOF_CONTROLS
+
+# Lazy coordination imports preserve the phase-1 module's import-safe and
+# old-face behavior.  The shared task-03 modules are imported only for a
+# Revision-9 face or when replay discovers a bound chain.
+_COORDINATION_MODULE_CACHE: tuple[Any, Any, Any] | None = None
+_COORDINATION_MODULE_LOCK = threading.Lock()
+_CHAIN_CAPABILITY_LOCK = threading.Lock()
+_CHAIN_CAPABILITIES: dict[object, dict[str, Any]] = {}
+_ARCHIVE_MODULE: Any | None = None
+_ARCHIVE_MODULE_LOCK = threading.Lock()
 
 # ``flock`` calls made through separately opened descriptors can deadlock a
 # process against itself.  A process-local re-entrant lock makes the
@@ -378,6 +484,2521 @@ def canonical_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _coordination_modules() -> tuple[Any, Any, Any]:
+    """Load the task-03 package from the plugin's scripts parent on demand."""
+
+    global _COORDINATION_MODULE_CACHE
+    if _COORDINATION_MODULE_CACHE is not None:
+        return _COORDINATION_MODULE_CACHE
+    with _COORDINATION_MODULE_LOCK:
+        if _COORDINATION_MODULE_CACHE is not None:
+            return _COORDINATION_MODULE_CACHE
+        scripts_parent = str(PLUGIN_ROOT / "scripts")
+        if scripts_parent not in sys.path:
+            sys.path.insert(0, scripts_parent)
+        from codex_orchestrator import batch, builders, journal
+
+        _COORDINATION_MODULE_CACHE = (batch, builders, journal)
+        return _COORDINATION_MODULE_CACHE
+
+
+def _chain_storage_root(repository: Path) -> Path:
+    """Resolve the shared Git-common DM-012/DM-014 authority root."""
+
+    _coordination_modules()
+    from codex_orchestrator.chain_paths import chain_storage_root
+
+    return chain_storage_root(repository)
+
+
+def _validated_commitment_path(
+    label: str,
+    value: str,
+    *,
+    repository: Path,
+    run_dir: Path | None = None,
+    direct_parent: Path | None = None,
+    require_file: bool = False,
+) -> object | None:
+    """Project one CLI path decision through the shared FR-017 inventory."""
+
+    _coordination_modules()
+    from commitment_paths import commitment_surface, validate_surface_path
+
+    try:
+        surface = commitment_surface(label)
+    except KeyError:
+        return None
+    return validate_surface_path(
+        surface,
+        value,
+        repository=repository,
+        run_dir=run_dir,
+        direct_parent=direct_parent,
+        require_file=require_file,
+    )
+
+
+def _parsed_run_captured_path(value: str, run_id: str) -> object | None:
+    """Apply the shared grammar for run-relative ingest captures."""
+
+    _coordination_modules()
+    from commitment_paths import parse_run_captured_path
+
+    return parse_run_captured_path(value, run_id=run_id)
+
+
+def _require_ingest_proof(
+    name: str, completed: list[str] | None = None
+) -> None:
+    """Fail closed when a named proof is disabled or reached out of order."""
+
+    _batch, builders, journal = _coordination_modules()
+    if (
+        name not in _REQUIRED_INGEST_PROOF_CONTROLS
+        or name not in INGEST_PROOF_CONTROLS
+        or (
+            completed is not None
+            and (
+                len(completed) >= len(INGEST_PROOF_ORDER)
+                or INGEST_PROOF_ORDER[len(completed)] != name
+            )
+        )
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    if completed is not None:
+        completed.append(name)
+
+
+def _merge_event_outbox(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    has_source = "source_event_digest" in payload
+    has_batch = "journal_batch" in payload
+    if not has_source and not has_batch:
+        return None
+    carried = payload.get("journal_batch")
+    source = payload.get("source_event_digest")
+    if (
+        not has_source
+        or not has_batch
+        or not isinstance(source, str)
+        or SHA256_RE.fullmatch(source) is None
+        or not isinstance(carried, Mapping)
+        or set(carried)
+        != {"idempotency_key", "batch_digest", "record_count", "records"}
+        or carried.get("idempotency_key") != source
+        or not isinstance(carried.get("batch_digest"), str)
+        or SHA256_RE.fullmatch(str(carried["batch_digest"])) is None
+        or type(carried.get("record_count")) is not int
+        or int(carried["record_count"]) <= 0
+        or not isinstance(carried.get("records"), list)
+        or len(carried["records"]) != carried["record_count"]
+    ):
+        raise ValueError("merge journal batch is malformed")
+    return {
+        "idempotency_key": source,
+        "batch_digest": carried["batch_digest"],
+        "record_count": carried["record_count"],
+        "source_event_digest": source,
+    }
+
+
+def reduce_merge_event(
+    previous: dict[str, object] | None, event: dict[str, object]
+) -> dict[str, object]:
+    """Reduce one DM-014 event from an explicit top-level delta only.
+
+    The implementation-owned payload grammar is deliberately small:
+    consequential and ordinary events carry ``payload.delta`` containing only
+    changed materialized top-level members; the optional event-carried batch
+    pair is adjacent in ``payload``.  ``payload.state`` is never consulted and
+    is rejected as an unknown member.  ``journal_receipted`` instead carries
+    only its exact three receipt members and clears the pending outbox.
+    """
+
+    if not isinstance(event, dict) or not isinstance(event.get("payload"), dict):
+        raise ValueError("merge event payload is malformed")
+    payload = event["payload"]
+    assert isinstance(payload, dict)
+    event_name = event.get("event")
+    at = event.get("at")
+    if not isinstance(at, str):
+        raise ValueError("merge event timestamp is malformed")
+    parsed_at = parse_time(at)
+
+    if event_name == "journal_receipted":
+        if previous is None or set(payload) != {
+            "idempotency_key",
+            "batch_digest",
+            "receipt_digest",
+        }:
+            raise ValueError("merge receipt transition is malformed")
+        state: dict[str, object] = copy.deepcopy(previous)
+        state["journal_outbox"] = None
+    else:
+        _batch, builders, _journal = _coordination_modules()
+        try:
+            delta = builders._merge_payload_delta(event, previous)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("merge transition lacks an explicit state delta")
+        assert isinstance(delta, dict)
+        if previous is None:
+            if event_name != "chain_started":
+                raise ValueError("merge history does not start with chain_started")
+            state = copy.deepcopy(delta)
+        else:
+            if event_name == "chain_started":
+                raise ValueError("merge chain_started is not repeatable")
+            state = copy.deepcopy(previous)
+            for name, value in delta.items():
+                state[name] = copy.deepcopy(value)
+        outbox = _merge_event_outbox(payload)
+        if outbox is not None:
+            state["journal_outbox"] = outbox
+        elif "journal_outbox" not in state:
+            state["journal_outbox"] = None
+    state["last_event_at"] = at
+    prior_deadline = None
+    if previous is not None:
+        deadline_value = previous.get("inactive_after")
+        if not isinstance(deadline_value, str):
+            raise ValueError("merge inactivity deadline is malformed")
+        prior_deadline = parse_time(deadline_value)
+    if prior_deadline is not None and parsed_at >= prior_deadline:
+        state["inactive_after"] = str(previous["inactive_after"])
+    else:
+        state["inactive_after"] = (
+            parsed_at + dt.timedelta(seconds=INACTIVE_SECONDS)
+        ).isoformat().replace("+00:00", "Z")
+    return state
+
+
+def _authorize_chain_batch(**arguments: Any) -> object:
+    """Exchange one process-local opaque capability for task-03 authority."""
+
+    batch, builders, journal = _coordination_modules()
+    capability = arguments.get("capability")
+    registry = getattr(batch, "_FORGE_CLI_CHAIN_CAPABILITIES", None)
+    registry_lock = getattr(batch, "_FORGE_CLI_CHAIN_CAPABILITIES_LOCK", None)
+    if not isinstance(registry, dict) or registry_lock is None:
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    with registry_lock:
+        registered = registry.get(id(capability))
+        if (
+            not isinstance(registered, tuple)
+            or len(registered) != 2
+            or registered[0] is not capability
+        ):
+            raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+        authority = copy.deepcopy(registered[1])
+    if not isinstance(authority, dict):
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    required = {
+        "repository",
+        "run_id",
+        "task_id",
+        "chain_id",
+        "source_event_digest",
+        "records",
+    }
+    if set(authority) != required or any(
+        arguments.get(name) != authority[name]
+        for name in (
+            "repository",
+            "run_id",
+            "task_id",
+            "chain_id",
+            "source_event_digest",
+        )
+    ) or tuple(arguments.get("supplied_records", ())) != tuple(authority["records"]):
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+
+    repository = Path(str(authority["repository"]))
+    chain_id = str(authority["chain_id"])
+    chains_root = _chain_storage_root(repository)
+    chains_descriptor: int | None = None
+    try:
+        chains_descriptor, chains_observation = journal._open_bound_directory(
+            chains_root
+        )
+        replayed = builders._resolve_binding_from_descriptor(
+            repository,
+            chains_descriptor,
+            chain_id,
+            "0" * 64,
+            expected_type=None,
+            expected_fields=None,
+            expected_run_id=None,
+            expected_task_id=None,
+            replay_only=True,
+            allow_pending=True,
+        )
+        binding = replayed.get("run_binding")
+        pending = replayed.get("journal_outbox")
+        if (
+            not isinstance(binding, dict)
+            or binding.get("run_id") != authority["run_id"]
+            or binding.get("task_id") != authority["task_id"]
+            or binding.get("repository") != str(repository)
+            or not isinstance(pending, dict)
+            or pending.get("source_event_digest")
+            != authority["source_event_digest"]
+            or journal._file_observation(os.fstat(chains_descriptor))
+            != chains_observation
+            or journal._file_observation(os.lstat(chains_root))
+            != chains_observation
+        ):
+            raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    finally:
+        if chains_descriptor is not None:
+            os.close(chains_descriptor)
+
+    _canonical_repository, state_root = journal._resolve_repository(
+        repository, "journal batch"
+    )
+    run_dir = state_root / ".codex-orchestrator" / "runs" / str(authority["run_id"])
+    active = batch._active_locks().get(os.path.abspath(os.fspath(run_dir)))
+    if active is None:
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    journal_exact = batch._optional_exact_named_file(active, "journal.jsonl")
+    receipts_exact = batch._optional_exact_named_file(
+        active, journal.BATCH_RECEIPTS_NAME
+    )
+    if journal_exact is None or receipts_exact is None:
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    records = tuple(authority["records"])
+    batch_bytes = b"".join(journal._journal_line(record) for record in records)
+    _, request_sha256 = batch.normalized_request(
+        repository,
+        str(authority["run_id"]),
+        "chain outbox-drain",
+        {
+            "chain_id": chain_id,
+            "source_event_digest": authority["source_event_digest"],
+            "batch_digest": journal._sha256(batch_bytes),
+            "record_count": len(records),
+        },
+    )
+    return batch._ChainBatchAuthorization(
+        repository=str(repository),
+        run_id=str(authority["run_id"]),
+        task_id=str(authority["task_id"]),
+        chain_id=chain_id,
+        source_event_digest=str(authority["source_event_digest"]),
+        request_sha256=request_sha256,
+        batch_bytes=batch_bytes,
+        record_count=len(records),
+        journal_exact=journal_exact,
+        receipts_exact=receipts_exact,
+    )
+
+
+def _read_ingest_input(
+    repository: Path,
+    relative: str,
+    label: str,
+    *,
+    run_dir: Path | None = None,
+    expected_capture_name: str | None = None,
+) -> bytes:
+    """Read one repository input or canonical run capture without symlinks."""
+
+    _batch, _builders, journal = _coordination_modules()
+    candidate_relative = Path(relative)
+    inventory_labels = {
+        "ingest.state_file",
+        "ingest.events_file",
+        "ingest.outcome_map",
+    }
+    read_root = repository
+    if run_dir is None:
+        inventory_invalid = bool(
+            label in inventory_labels
+            and _validated_commitment_path(
+                label,
+                relative,
+                repository=repository,
+                require_file=True,
+            )
+            is None
+        )
+    else:
+        parsed_capture = _parsed_run_captured_path(relative, run_dir.name)
+        capture_path = run_dir / candidate_relative
+        inventory_invalid = bool(
+            parsed_capture is None
+            or parsed_capture.name != expected_capture_name
+            or _validated_commitment_path(
+                "ingest.captured_package",
+                relative,
+                repository=repository,
+                run_dir=run_dir,
+                direct_parent=capture_path.parent,
+                require_file=True,
+            )
+            is None
+        )
+        read_root = run_dir
+    diagnostic_label = (
+        "ingest.captured_package" if run_dir is not None else label
+    )
+    if (
+        inventory_invalid
+        or not relative
+        or candidate_relative.is_absolute()
+        or not candidate_relative.parts
+        or any(part in {"", ".", ".."} for part in candidate_relative.parts)
+        or not journal._citation_is_contained(read_root, read_root, relative)
+    ):
+        raise journal.CoordinationRefusal(
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: {diagnostic_label}: {relative}"
+        )
+    descriptors: list[int] = []
+
+    def stable_metadata(value: os.stat_result) -> tuple[int, ...]:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_uid,
+            value.st_gid,
+            value.st_nlink,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+
+    try:
+        root_before = os.lstat(read_root)
+        current = os.open(
+            read_root,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        descriptors.append(current)
+        root_opened = os.fstat(current)
+        if (
+            not stat.S_ISDIR(root_opened.st_mode)
+            or root_opened.st_uid != os.geteuid()
+            or stable_metadata(root_before) != stable_metadata(root_opened)
+        ):
+            raise OSError("repository root is not owner-controlled")
+
+        anchored: list[tuple[int, str, tuple[int, ...]]] = []
+        for component in candidate_relative.parts[:-1]:
+            before = os.stat(component, dir_fd=current, follow_symlinks=False)
+            child = os.open(
+                component,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=current,
+            )
+            opened = os.fstat(child)
+            rebound = os.stat(
+                component, dir_fd=current, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or opened.st_uid != os.geteuid()
+                or stable_metadata(before) != stable_metadata(opened)
+                or stable_metadata(rebound) != stable_metadata(opened)
+            ):
+                os.close(child)
+                raise OSError("input ancestor is not owner-controlled")
+            anchored.append((current, component, stable_metadata(opened)))
+            descriptors.append(child)
+            current = child
+
+        name = candidate_relative.parts[-1]
+        before = os.stat(name, dir_fd=current, follow_symlinks=False)
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=current,
+        )
+        descriptors.append(descriptor)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or opened.st_nlink != 1
+            or stable_metadata(before) != stable_metadata(opened)
+        ):
+            raise OSError("input is not an owner-controlled regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=current, follow_symlinks=False)
+        if (
+            stable_metadata(after) != stable_metadata(opened)
+            or stable_metadata(rebound) != stable_metadata(opened)
+        ):
+            raise OSError("input changed while captured")
+        for parent, component, expected in reversed(anchored):
+            if stable_metadata(
+                os.stat(component, dir_fd=parent, follow_symlinks=False)
+            ) != expected:
+                raise OSError("input ancestor changed while captured")
+        if stable_metadata(os.lstat(read_root)) != stable_metadata(root_opened):
+            raise OSError("input root changed while captured")
+        return b"".join(chunks)
+    except (FileNotFoundError, OSError) as exc:
+        raise journal.CoordinationRefusal(
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: {diagnostic_label}: {relative}"
+        ) from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _capture_ingest_blob(
+    repository: Path,
+    run_dir: Path,
+    *,
+    digest: str,
+    name: str,
+    data: bytes,
+) -> str:
+    """Install one immutable content-addressed direct-child capture."""
+
+    _batch, _builders, journal = _coordination_modules()
+    descriptors: list[int] = []
+    try:
+        current, _observation = journal._open_bound_directory(run_dir)
+        descriptors.append(current)
+        for component in ("captured", "sha256", digest):
+            try:
+                os.mkdir(component, 0o700, dir_fd=current)
+                os.fsync(current)
+            except FileExistsError:
+                pass
+            before = os.stat(component, dir_fd=current, follow_symlinks=False)
+            child, _ = journal._open_bound_child_directory(
+                current, component, before
+            )
+            if os.fstat(child).st_uid != os.geteuid():
+                os.close(child)
+                raise OSError("capture directory has a foreign owner")
+            descriptors.append(child)
+            current = child
+        try:
+            existing, _ = journal._read_bound_regular(current, name)
+        except FileNotFoundError:
+            descriptor = os.open(
+                name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=current,
+            )
+            try:
+                opened = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or opened.st_uid != os.geteuid()
+                    or opened.st_nlink != 1
+                ):
+                    raise OSError("capture file is unsafe")
+                written = 0
+                while written < len(data):
+                    count = os.write(descriptor, data[written:])
+                    if count <= 0:
+                        raise OSError("short capture write")
+                    written += count
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.fsync(current)
+            existing, _ = journal._read_bound_regular(current, name)
+        if existing != data or sha256_bytes(existing) != digest:
+            raise OSError("content-addressed capture differs")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise journal.CoordinationRefusal(
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: ingest.captured_package: {name}"
+        ) from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+    path = run_dir / "captured" / "sha256" / digest / name
+    capture_relative = path.relative_to(run_dir).as_posix()
+    parsed_capture = _parsed_run_captured_path(capture_relative, run_dir.name)
+    if _validated_commitment_path(
+        "ingest.captured_package",
+        capture_relative,
+        repository=repository,
+        run_dir=run_dir,
+        direct_parent=path.parent,
+        require_file=True,
+    ) is None or parsed_capture is None:
+        raise journal.CoordinationRefusal(
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: ingest.captured_package: {path}"
+        )
+    return capture_relative
+
+
+def _read_ingest_sources(
+    repository: Path,
+    run_id: str,
+    *,
+    state_file: str,
+    events_file: str,
+    outcome_map: str,
+) -> tuple[
+    Path,
+    Path,
+    dict[str, bytes],
+    dict[str, str],
+    dict[str, str],
+]:
+    _batch, _builders, journal = _coordination_modules()
+    canonical_repository, state_root = journal._resolve_repository(
+        repository, "journal ingest-chain"
+    )
+    run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
+    sources = {
+        "state_file": (state_file, "ingest.state_file", "state.json"),
+        "events_file": (events_file, "ingest.events_file", "events.jsonl"),
+        "outcome_map": (outcome_map, "ingest.outcome_map", "outcome-map.json"),
+    }
+    data_by_field: dict[str, bytes] = {}
+    captured: dict[str, str] = {}
+    digests: dict[str, str] = {}
+    for field, (source, label, name) in sources.items():
+        data = _read_ingest_input(canonical_repository, source, label)
+        digest = sha256_bytes(data)
+        data_by_field[field] = data
+        digests[field] = digest
+        captured_path = run_dir / "captured" / "sha256" / digest / name
+        capture_relative = captured_path.relative_to(run_dir).as_posix()
+        if _parsed_run_captured_path(capture_relative, run_id) is None:
+            raise journal.CoordinationRefusal(
+                "forge: journal append refused — record cites path outside run or "
+                f"repository: ingest.captured_package: {captured_path}"
+            )
+        captured[field] = capture_relative
+    return canonical_repository, run_dir, data_by_field, captured, digests
+
+
+def _install_ingest_sources(
+    repository: Path,
+    run_dir: Path,
+    data_by_field: Mapping[str, bytes],
+    digests: Mapping[str, str],
+) -> None:
+    names = {
+        "state_file": "state.json",
+        "events_file": "events.jsonl",
+        "outcome_map": "outcome-map.json",
+    }
+    for field, name in names.items():
+        _capture_ingest_blob(
+            repository,
+            run_dir,
+            digest=str(digests[field]),
+            name=name,
+            data=data_by_field[field],
+        )
+
+
+def _ingest_captured_paths(
+    repository: Path,
+    run_dir: Path,
+    inputs: Mapping[str, object],
+) -> dict[str, str]:
+    """Derive the only citable paths from the request's captured digests."""
+
+    _batch, builders, journal = _coordination_modules()
+    names = {
+        "state_file": "state.json",
+        "events_file": "events.jsonl",
+        "outcome_map": "outcome-map.json",
+    }
+    result: dict[str, str] = {}
+    for field, name in names.items():
+        digest = inputs.get(f"{field}_sha256")
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        path = run_dir / "captured" / "sha256" / digest / name
+        try:
+            capture_relative = path.relative_to(run_dir).as_posix()
+        except ValueError as exc:
+            raise journal.CoordinationRefusal(
+                builders.INGEST_PROOF_INVALID
+            ) from exc
+        if _validated_commitment_path(
+            "ingest.captured_package",
+            capture_relative,
+            repository=repository,
+            run_dir=run_dir,
+            direct_parent=path.parent,
+            require_file=True,
+        ) is None or _parsed_run_captured_path(
+            capture_relative, run_dir.name
+        ) is None:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        result[field] = capture_relative
+    return result
+
+
+def _capture_ingest_inputs(
+    repository: Path,
+    run_id: str,
+    *,
+    state_file: str,
+    events_file: str,
+    outcome_map: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Compatibility helper used by focused capture tests."""
+
+    canonical, run_dir, data, captured, digests = _read_ingest_sources(
+        repository,
+        run_id,
+        state_file=state_file,
+        events_file=events_file,
+        outcome_map=outcome_map,
+    )
+    _install_ingest_sources(canonical, run_dir, data, digests)
+    return captured, digests
+
+
+def _ingest_step_is_current(
+    final_state: Mapping[str, Any],
+    event_state: Mapping[str, Any],
+    details: Mapping[str, Any],
+) -> bool:
+    step_id = details.get("step_id")
+    run_number = details.get("run")
+    if (
+        not isinstance(step_id, str)
+        or step_id
+        in {"classification", "fast-eligibility", "fast-finalize-eligibility"}
+        or type(run_number) is not int
+        or run_number <= 0
+    ):
+        return False
+    final_runs = final_state.get("steps", {}).get(step_id)
+    event_runs = event_state.get("steps", {}).get(step_id)
+    index = run_number - 1
+    if (
+        not isinstance(final_runs, list)
+        or not isinstance(event_runs, list)
+        or index >= len(final_runs)
+        or index >= len(event_runs)
+        or final_runs[index] != event_runs[index]
+        or not isinstance(final_runs[index], dict)
+        or final_runs[index].get("candidate")
+        != final_state.get("candidate", {}).get("sha256")
+    ):
+        return False
+    current = [
+        position
+        for position, fact in enumerate(final_runs)
+        if isinstance(fact, dict)
+        and fact.get("candidate") == final_state.get("candidate", {}).get("sha256")
+    ]
+    if not current:
+        return False
+    if step_id == "gate-1":
+        active = set(current[-2:])
+    elif step_id.startswith("stack:"):
+        latest = final_runs[current[-1]]
+        batch_id = latest.get("batch_id") if isinstance(latest, dict) else None
+        active = {
+            position
+            for position in current
+            if isinstance(final_runs[position], dict)
+            and final_runs[position].get("batch_id") == batch_id
+        }
+    else:
+        active = {current[-1]}
+    return index in active
+
+
+def _ingest_secret_scan_is_current(
+    final_state: Mapping[str, Any],
+    event: dict[str, object],
+    prior_state: dict[str, object] | None,
+    event_state: dict[str, object],
+) -> bool:
+    """Select only the exact latest current-candidate secret-scan append."""
+
+    _batch, builders, _journal = _coordination_modules()
+    introduced = builders._commit_secret_scan_delta(
+        event, prior_state, event_state
+    )
+    final_steps = final_state.get("steps")
+    final_runs = (
+        final_steps.get("secret-scan")
+        if isinstance(final_steps, Mapping)
+        else None
+    )
+    candidate = final_state.get("candidate")
+    candidate_sha = (
+        candidate.get("sha256") if isinstance(candidate, Mapping) else None
+    )
+    if (
+        introduced is None
+        or not isinstance(final_runs, list)
+        or introduced[0] >= len(final_runs)
+        or final_runs[introduced[0]] != introduced[1]
+        or introduced[1].get("candidate") != candidate_sha
+    ):
+        return False
+    current = [
+        index
+        for index, fact in enumerate(final_runs)
+        if isinstance(fact, Mapping) and fact.get("candidate") == candidate_sha
+    ]
+    return bool(current and introduced[0] == current[-1])
+
+
+def _merge_ingest_binding(
+    builders: Any,
+    state: dict[str, object],
+    source_event_digest: str,
+    review: dict[str, object] | None,
+) -> dict[str, object]:
+    candidate = builders._candidate_binding_for_state("merge", state)
+    if candidate is None:
+        raise ValueError("merge candidate cannot be bound")
+    preimage: dict[str, object] = {
+        "schema": "forge-gate-binding/1",
+        "source_record": {
+            "chain_id": state["chain_id"],
+            "event_digest": source_event_digest,
+        },
+        "candidate": candidate,
+        "review": copy.deepcopy(review),
+    }
+    return {
+        **preimage,
+        "binding_id": sha256_bytes(canonical_bytes(preimage)),
+    }
+
+
+def _prove_ingest_live_chain(
+    repository: Path,
+    chain_id: str,
+    materialized: dict[str, object],
+    captured_state: bytes,
+    captured_events: bytes,
+) -> None:
+    """Bind captured bytes to the stable live chain without consuming grammar."""
+
+    _batch, builders, journal = _coordination_modules()
+    chains_root = _chain_storage_root(repository)
+    descriptor: int | None = None
+    try:
+        descriptor, observation = journal._open_bound_directory(chains_root)
+        with builders._chain_event_lock(
+            chains_root,
+            chain_id,
+            root_descriptor=descriptor,
+            root_observation=observation,
+        ):
+            live_state_bytes = builders._read_regular_bytes_at(
+                descriptor, f"{chain_id}.json"
+            )
+            live_events = builders._read_regular_bytes_at(
+                descriptor, f"{chain_id}.events.jsonl"
+            )
+            try:
+                live_state = json.loads(live_state_bytes.decode("utf-8"))
+            except (UnicodeError, ValueError, RecursionError) as exc:
+                raise journal.CoordinationRefusal(
+                    builders.INGEST_PROOF_INVALID
+                ) from exc
+            if (
+                live_state_bytes != captured_state
+                or live_events != captured_events
+                or live_state != materialized
+            ):
+                raise journal.CoordinationRefusal(
+                    builders.INGEST_PROOF_INVALID
+                )
+            if (
+                journal._file_observation(os.fstat(descriptor))
+                != observation
+                or journal._file_observation(os.lstat(chains_root))
+                != observation
+            ):
+                raise journal.CoordinationRefusal(
+                    builders.INGEST_PROOF_INVALID
+                )
+    except journal.CoordinationRefusal as exc:
+        if str(exc) == builders.INGEST_PROOF_INVALID:
+            raise
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _merge_gate_event_fact(
+    prior: Mapping[str, object] | None,
+    current: Mapping[str, object],
+) -> tuple[str, dict[str, object]] | None:
+    """Return the one gate fact introduced by a DM-014 gate event."""
+
+    if prior is None:
+        return None
+    prior_steps = prior.get("steps")
+    current_steps = current.get("steps")
+    if not isinstance(prior_steps, Mapping) or not isinstance(
+        current_steps, Mapping
+    ):
+        return None
+    changed = {
+        name
+        for name in set(prior_steps) | set(current_steps)
+        if prior_steps.get(name) != current_steps.get(name)
+    }
+    if len(changed) != 1:
+        return None
+    step_id = next(iter(changed))
+    old_value = prior_steps.get(step_id)
+    new_value = current_steps.get(step_id)
+    if isinstance(new_value, list):
+        old_runs = old_value if isinstance(old_value, list) else []
+        if len(new_value) != len(old_runs) + 1 or new_value[:-1] != old_runs:
+            return None
+        fact = new_value[-1]
+    else:
+        fact = new_value
+    if not isinstance(step_id, str) or not isinstance(fact, dict):
+        return None
+    return step_id, copy.deepcopy(fact)
+
+
+def _merge_current_gate_facts(
+    step_id: str,
+    value: object,
+    generation_digest: str,
+) -> tuple[dict[str, object], ...] | None:
+    """Validate the final current-generation fact(s) for one merge gate."""
+
+    if isinstance(value, dict):
+        facts = (value,)
+    elif isinstance(value, list) and value and all(
+        isinstance(item, dict) for item in value
+    ):
+        current = [item for item in value if isinstance(item, dict)]
+        if step_id.startswith("stack:"):
+            latest = current[-1]
+            batch_id = latest.get("batch_id")
+            cell_count = latest.get("cell_count")
+            if (
+                not isinstance(batch_id, str)
+                or type(cell_count) is not int
+                or cell_count <= 0
+            ):
+                return None
+            facts = tuple(
+                item for item in current if item.get("batch_id") == batch_id
+            )
+            if (
+                len(facts) != cell_count
+                or {item.get("cell_index") for item in facts}
+                != set(range(1, cell_count + 1))
+            ):
+                return None
+        else:
+            facts = (current[-1],)
+    else:
+        return None
+    expected_prefix = "gate-1: " if step_id == "gate-1" else "gate-2: "
+    if any(
+        fact.get("result") != "passed"
+        or fact.get("generation_digest") != generation_digest
+        or not isinstance(fact.get("criterion"), str)
+        or not str(fact["criterion"]).startswith(expected_prefix)
+        for fact in facts
+    ):
+        return None
+    return tuple(copy.deepcopy(fact) for fact in facts)
+
+
+def _merge_ingest_record_templates(
+    builders: Any,
+    journal: Any,
+    event: dict[str, object],
+    prior: dict[str, object] | None,
+    current: dict[str, object],
+    *,
+    task: str,
+    approval_required: bool,
+    required_gate_ids: frozenset[str],
+) -> tuple[tuple[dict[str, object], str | None], ...]:
+    """Derive ordinary records solely from one authenticated merge delta."""
+
+    event_name = event.get("event")
+    templates: list[tuple[dict[str, object], str | None]] = []
+    if event_name == "gate_recorded":
+        introduced = _merge_gate_event_fact(prior, current)
+        if introduced is None:
+            return ()
+        step_id, fact = introduced
+        if step_id not in required_gate_ids:
+            return ()
+        result = fact.get("result")
+        criterion = fact.get("criterion")
+        if result not in {"passed", "failed"} or not isinstance(
+            criterion, str
+        ):
+            return ()
+        argv = fact.get("command_argv")
+        transcript = fact.get("transcript")
+        templates.append(
+            (
+                {
+                    "type": "verification",
+                    "task": task,
+                    "criterion": criterion,
+                    "method": "Forge CLI merge chain",
+                    "check": (
+                        " ".join(str(value) for value in argv)
+                        if isinstance(argv, list) and argv
+                        else step_id
+                    ),
+                    "result": result,
+                    "observation": (
+                        f"Forge CLI recorded merge {step_id} result {result}"
+                    ),
+                    "evidence": (
+                        [transcript] if isinstance(transcript, str) else []
+                    ),
+                },
+                step_id,
+            )
+        )
+
+    if event_name in {"review_attached", "generation_carried_forward"}:
+        review = builders._review_binding_for_state(current)
+        if (
+            isinstance(review, dict)
+            and review.get("verdict") == "PASS"
+            and review.get("reviewer_role") == "review-final"
+        ):
+            review_state = current.get("review")
+            verdict = (
+                review_state.get("verdict")
+                if isinstance(review_state, dict)
+                else None
+            )
+            verdict_path = (
+                verdict.get("verdict_path")
+                if isinstance(verdict, dict)
+                else None
+            )
+            templates.append(
+                (
+                    {
+                        "type": "verification",
+                        "task": task,
+                        "criterion": journal.GATE_3_CRITERION,
+                        "method": "independent review-final",
+                        "check": "validated merge review-final verdict transport",
+                        "result": "passed",
+                        "observation": (
+                            "Forge CLI recorded merge review-final verdict PASS"
+                        ),
+                        "evidence": (
+                            [verdict_path]
+                            if isinstance(verdict_path, str)
+                            else []
+                        ),
+                    },
+                    None,
+                )
+            )
+
+    if approval_required and event_name in {
+        "approval_recorded",
+        "generation_carried_forward",
+    }:
+        approval = current.get("approval")
+        candidate = current.get("candidate")
+        if (
+            isinstance(approval, dict)
+            and isinstance(candidate, dict)
+            and approval.get("purpose") == "gate-4"
+            and approval.get("chain_id") == current.get("chain_id")
+            and approval.get("candidate") == candidate.get("candidate_head")
+            and approval.get("generation_digest")
+            == candidate.get("generation_digest")
+        ):
+            templates.append(
+                (
+                    {
+                        "type": "decision",
+                        "task": task,
+                        "resolution": "Forge merge chain Gate-4 approval recorded",
+                        "outcome": "chain-approval",
+                        "basis": [],
+                    },
+                    None,
+                )
+            )
+
+    if event_name == "push_observed":
+        integration = current.get("integration")
+        push = (
+            integration.get("push")
+            if isinstance(integration, dict)
+            else None
+        )
+        landed = push.get("landed_head") if isinstance(push, dict) else None
+        if (
+            isinstance(landed, str)
+            and isinstance(prior, dict)
+            and prior.get("state") != "pushed"
+            and current.get("state") == "pushed"
+            and builders._merge_current_head_contained(current)
+        ):
+            templates.append(
+                (
+                    {
+                        "type": "decision",
+                        "task": task,
+                        "resolution": (
+                            f"Forge merge chain landing recorded: {landed}"
+                        ),
+                        "outcome": "chain-landing",
+                        "basis": [],
+                    },
+                    None,
+                )
+            )
+    return tuple(templates)
+
+
+def _verify_and_build_merge_ingest_records(
+    *,
+    canonical_repository: Path,
+    run_id: str,
+    run_dir: Path,
+    inputs: dict[str, object],
+    materialized: dict[str, object],
+    outcome_map: object,
+    events: Sequence[
+        tuple[
+            dict[str, object],
+            dict[str, object] | None,
+            dict[str, object],
+        ]
+    ],
+    existing_records: tuple[dict[str, object], ...] | None,
+    base_records: list[dict[str, object]] | None,
+    captured_state: bytes,
+    captured_events: bytes,
+    completed_proofs: list[str],
+) -> tuple[Sequence[dict[str, object]], tuple[str, ...]]:
+    """Prove a closed DM-014 landing and synthesize its ordinary journal rows."""
+
+    _batch, builders, journal = _coordination_modules()
+
+    # Proof 3: the terminal, previously unbound merge chain belongs to the
+    # repository selected by the caller.
+    _require_ingest_proof("repository", completed_proofs)
+    candidate = materialized.get("candidate")
+    worktree = materialized.get("worktree")
+    integration = materialized.get("integration")
+    cleanup = materialized.get("cleanup")
+    policy_source = materialized.get("policy_source")
+    tier = materialized.get("tier")
+    run_state = journal._scan_run(run_dir)
+    proof_records = base_records if base_records is not None else run_state.records
+    opening = proof_records[0] if proof_records else None
+    try:
+        opening_repository = (
+            Path(str(opening.get("repo", ""))).resolve(strict=True)
+            if isinstance(opening, dict)
+            else None
+        )
+    except OSError as exc:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+    if (
+        materialized.get("schema") != "forge-merge-chain/1"
+        or materialized.get("kind") != "merge"
+        or materialized.get("state") != "closed"
+        or materialized.get("run") is not None
+        or materialized.get("run_binding") is not None
+        or materialized.get("journal_outbox") is not None
+        or materialized.get("repository") != str(canonical_repository)
+        or not isinstance(candidate, dict)
+        or opening_repository != canonical_repository
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 4: the final generation names exact committed policy bytes.
+    # ``policy_source``'s inner field names were not fixed by DM-014, so require
+    # it to carry both normative values rather than accepting guessed aliases.
+    _require_ingest_proof("policy", completed_proofs)
+    if (
+        not isinstance(policy_source, dict)
+        or candidate.get("policy_digest") not in policy_source.values()
+        or candidate.get("policy_commit") not in policy_source.values()
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    policy = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "show",
+            f"{candidate['policy_commit']}:forge-project.md",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if (
+        policy.returncode != 0
+        or sha256_bytes(policy.stdout) != candidate.get("policy_digest")
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    try:
+        parsed_policy = parse_policy(str(candidate["policy_commit"]), policy.stdout)
+    except (KeyError, PolicyError, UnicodeError) as exc:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+
+    # Proof 5: the generation is well formed and is still the exact live chain
+    # materialization under task-03's native event lock.
+    _require_ingest_proof("generation", completed_proofs)
+    generation = builders._merge_generation(candidate)
+    if generation is None:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    generation_digest = str(candidate["generation_digest"])
+    candidate_head = str(candidate["candidate_head"])
+    remote_tip = str(candidate["remote_tip"])
+    _prove_ingest_live_chain(
+        canonical_repository,
+        str(materialized["chain_id"]),
+        materialized,
+        captured_state,
+        captured_events,
+    )
+
+    # Proof 6: every gate required by the final policy/tier is present, passing,
+    # and bound to the current generation.
+    _require_ingest_proof("current-gates", completed_proofs)
+    if (
+        not isinstance(tier, dict)
+        or type(tier.get("control")) is not bool
+        or not isinstance(tier.get("categories"), list)
+        or not all(
+            isinstance(category, str) and category
+            for category in tier["categories"]
+        )
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    required_gate_ids = {
+        "gate-1",
+        "assertion-sensor",
+        *(
+            f"stack:{category}"
+            for category in sorted(set(str(value) for value in tier["categories"]))
+        ),
+        *(
+            f"invariant:{invariant['row_number']}"
+            for invariant in parsed_policy.invariants
+            if invariant["enforcement"] == "merge"
+        ),
+    }
+    steps = materialized.get("steps")
+    if not isinstance(steps, dict) or any(
+        _merge_current_gate_facts(
+            gate_id, steps.get(gate_id), generation_digest
+        )
+        is None
+        for gate_id in required_gate_ids
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proofs 7–10: re-open the exact package, then bind role, iteration, and
+    # verdict independently in the normative order.
+    review = materialized.get("review")
+    review_binding = builders._review_binding_for_state(materialized)
+    request = review.get("request") if isinstance(review, dict) else None
+    verdict = review.get("verdict") if isinstance(review, dict) else None
+
+    _require_ingest_proof("review-package", completed_proofs)
+    if (
+        not isinstance(review, dict)
+        or not isinstance(review_binding, dict)
+        or not isinstance(request, dict)
+        or not isinstance(verdict, dict)
+        or request.get("candidate") != candidate_head
+        or not isinstance(request.get("package"), str)
+        or not isinstance(request.get("package_digest"), str)
+        or SHA256_RE.fullmatch(str(request["package_digest"])) is None
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    package = _read_ingest_input(
+        canonical_repository,
+        str(request["package"]),
+        "ingest.reviewer_package",
+    )
+    if sha256_bytes(package) != request.get("package_digest"):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    _require_ingest_proof("reviewer-role", completed_proofs)
+    if (
+        review_binding.get("reviewer_role") != "review-final"
+        or request.get("reviewer") != "review-final"
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    _require_ingest_proof("reviewer-iteration", completed_proofs)
+    if (
+        type(review.get("iteration")) is not int
+        or int(review["iteration"]) <= 0
+        or request.get("iteration") != review.get("iteration")
+        or review_binding.get("iteration") != review.get("iteration")
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    _require_ingest_proof("reviewer-verdict", completed_proofs)
+    if (
+        review_binding.get("verdict") != "PASS"
+        or verdict.get("verdict") != "PASS"
+        or verdict.get("candidate") != candidate_head
+        or verdict.get("package_digest") != request.get("package_digest")
+        or review_binding.get("package_digest") != request.get("package_digest")
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 11: a control generation requires its current purpose:gate-4
+    # operator approval; other acknowledgements never substitute for it.
+    _require_ingest_proof("operator-approval", completed_proofs)
+    approval_required = bool(tier["control"])
+    approval = materialized.get("approval")
+    if approval_required and (
+        not isinstance(approval, dict)
+        or approval.get("purpose") != "gate-4"
+        or approval.get("chain_id") != materialized.get("chain_id")
+        or approval.get("candidate") != candidate_head
+        or approval.get("generation_digest") != generation_digest
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 12: recompute the exact DM-014 range and prove the durable remote
+    # landing observation.  Closing-HEAD containment remains a separate proof.
+    _require_ingest_proof("landing-proof", completed_proofs)
+    if (
+        not isinstance(worktree, dict)
+        or set(worktree) != {"path", "git_dir", "common_dir", "claim"}
+        or not isinstance(worktree.get("claim"), dict)
+        or set(worktree["claim"]) != {"status", "path", "inode", "digest"}
+        or worktree["claim"].get("status") != "released"
+        or not isinstance(integration, dict)
+        or set(integration)
+        != {
+            "condition",
+            "primary_condition",
+            "epoch",
+            "remote_movement_count",
+            "intent",
+            "observed",
+            "pre_rebase",
+            "conflict",
+            "push",
+        }
+        or integration.get("condition") != "none"
+        or integration.get("primary_condition") != "none"
+        or not isinstance(cleanup, dict)
+        or cleanup.get("condition") != "none"
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    diff = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "diff",
+            f"{remote_tip}...{candidate_head}",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    names = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "diff",
+            "--name-only",
+            "-z",
+            f"{remote_tip}...{candidate_head}",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if (
+        diff.returncode != 0
+        or names.returncode != 0
+        or sha256_bytes(diff.stdout) != candidate.get("diff_sha256")
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    try:
+        changed_paths = tuple(
+            item.decode("utf-8") for item in names.stdout.split(b"\0") if item
+        )
+    except UnicodeDecodeError as exc:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+    if not changed_paths or not all(
+        journal._valid_scope_item(path) for path in changed_paths
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    push = integration.get("push")
+    observed = integration.get("observed")
+    if (
+        not isinstance(push, dict)
+        or set(push)
+        != {
+            "expected_old_tip",
+            "intended_head",
+            "destination_ref",
+            "intended_at",
+            "result",
+            "attempted_heads",
+            "landed_head",
+        }
+        or push.get("intended_head") != candidate_head
+        or push.get("destination_ref") != candidate.get("destination_ref")
+        or push.get("landed_head") != candidate_head
+        or not isinstance(push.get("attempted_heads"), list)
+        or not push["attempted_heads"]
+        or push["attempted_heads"][-1] != candidate_head
+        or not all(
+            isinstance(head, str) and COMMIT_RE.fullmatch(head) is not None
+            for head in push["attempted_heads"]
+        )
+        or not isinstance(observed, dict)
+        or set(observed)
+        != {
+            "exists",
+            "oid",
+            "contains_intended_head",
+            "attempted_head_containment",
+            "observed_at",
+            "inflight_digest",
+            "output_digest",
+        }
+        or observed.get("exists") is not True
+        or observed.get("contains_intended_head") is not True
+        or not isinstance(observed.get("oid"), str)
+        or COMMIT_RE.fullmatch(str(observed["oid"])) is None
+        or not isinstance(observed.get("attempted_head_containment"), list)
+        or len(observed["attempted_head_containment"])
+        != len(push["attempted_heads"])
+        or any(
+            not isinstance(entry, dict)
+            or set(entry) != {"head", "contained"}
+            or entry.get("head") != head
+            or type(entry.get("contained")) is not bool
+            for entry, head in zip(
+                observed["attempted_head_containment"],
+                push["attempted_heads"],
+            )
+        )
+        or observed["attempted_head_containment"][-1].get("contained") is not True
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    remote_contains = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "merge-base",
+            "--is-ancestor",
+            candidate_head,
+            str(observed["oid"]),
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if remote_contains.returncode != 0:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 13: every DM-014 transition is monotonic.  This is intentionally
+    # deferred until after the landing proof instead of being conflated with
+    # digest replay.
+    _require_ingest_proof("monotonic-transitions", completed_proofs)
+    merge_context: dict[str, object] = {}
+    for event, prior_state, event_state in events:
+        if not builders._merge_transition_valid(
+            event,
+            prior_state,
+            event_state,
+            context=merge_context,
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 14: the landed head is contained by the caller's proposed closing
+    # HEAD, independently of the durable remote observation above.
+    _require_ingest_proof("closing-head-containment", completed_proofs)
+    closing_head = inputs.get("closing_head")
+    if (
+        not isinstance(closing_head, str)
+        or COMMIT_RE.fullmatch(closing_head) is None
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    closing_contains = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "merge-base",
+            "--is-ancestor",
+            candidate_head,
+            closing_head,
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if closing_contains.returncode != 0:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 15: the explicit task belongs to this run/repository and remains
+    # active until this one terminal batch is appended.
+    _require_ingest_proof("task-membership", completed_proofs)
+    task = inputs.get("task")
+    task_status = inputs.get("task_status")
+    task_records = [
+        record
+        for record in proof_records
+        if record.get("type") == "task" and record.get("id") == task
+    ]
+    if (
+        not isinstance(task, str)
+        or not task_records
+        or task_records[-1].get("status") != "active"
+        or task_status not in journal.TERMINAL_TASK_STATUSES
+        or not isinstance(outcome_map, dict)
+        or set(outcome_map)
+        != {"schema", "chain_id", "task", "task_status", "event_digests"}
+        or outcome_map.get("schema")
+        != "forge-chain-ingest-outcome-map/1"
+        or outcome_map.get("chain_id") != materialized.get("chain_id")
+        or outcome_map.get("task") != task
+        or outcome_map.get("task_status") != task_status
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    if existing_records is not None:
+        terminal_tasks = [
+            record
+            for record in existing_records
+            if record.get("type") == "task" and record.get("id") == task
+        ]
+        if (
+            len(terminal_tasks) != 1
+            or terminal_tasks[0].get("status") != task_status
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    task_record = task_records[-1]
+
+    # Proof 16: every changed path is admitted by both task and run scope.
+    _require_ingest_proof("scope-membership", completed_proofs)
+    files = task_record.get("files")
+    if not isinstance(files, list) or not files:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    for path in changed_paths:
+        if not any(
+            isinstance(pattern, str)
+            and journal.pathspec_contained(path, pattern)
+            for pattern in files
+        ) or not any(
+            journal.pathspec_contained(path, admitted)
+            for admitted in run_state.scope
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    assert isinstance(outcome_map, dict)
+    if (
+        not isinstance(outcome_map.get("event_digests"), list)
+        or not all(
+            isinstance(value, str) and SHA256_RE.fullmatch(value) is not None
+            for value in outcome_map["event_digests"]
+        )
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    replay_entries = tuple(
+        (event, prior, event_state, (), str(event["digest"]))
+        for event, prior, event_state in events
+    )
+    projected = list(proof_records)
+    records: list[dict[str, object]] = []
+    selected_digests: list[str] = []
+    covered_gates: set[str] = set()
+    captured = _ingest_captured_paths(
+        canonical_repository, run_dir, inputs
+    )
+    captured_citations = [
+        captured["state_file"],
+        captured["events_file"],
+        captured["outcome_map"],
+    ]
+    gate3_count = 0
+    approval_count = 0
+    landing_count = 0
+    for event, prior, event_state in events:
+        accepted_event = False
+        templates = _merge_ingest_record_templates(
+            builders,
+            journal,
+            event,
+            prior,
+            event_state,
+            task=task,
+            approval_required=approval_required,
+            required_gate_ids=frozenset(required_gate_ids),
+        )
+        for template, gate_id in templates:
+            record = copy.deepcopy(template)
+            record_type = str(record["type"])
+            record["id"] = builders._allocate_id(projected, record_type)
+            record["run_id"] = run_id
+            record["recorded_at"] = event["at"]
+            review_for_binding = (
+                review_binding
+                if record.get("criterion") == journal.GATE_3_CRITERION
+                else None
+            )
+            record["binding"] = _merge_ingest_binding(
+                builders,
+                event_state,
+                str(event["digest"]),
+                review_for_binding,
+            )
+            if record.get("outcome") == "chain-landing":
+                record["basis"] = list(captured_citations)
+            binding = record["binding"]
+            assert isinstance(binding, dict)
+            if not builders._binding_matches_source_fact(
+                binding,
+                record,
+                event,
+                prior,
+                event_state,
+                family="merge",
+            ) or not builders._binding_is_current(
+                materialized,
+                binding,
+                record,
+                event,
+                prior,
+                event_state,
+                replay_entries,
+                chain_family="merge",
+            ):
+                continue
+            accepted_event = True
+            if gate_id is not None:
+                covered_gates.add(gate_id)
+            if record.get("criterion") == journal.GATE_3_CRITERION:
+                gate3_count += 1
+            if record.get("outcome") == "chain-approval":
+                approval_count += 1
+            if record.get("outcome") == "chain-landing":
+                landing_count += 1
+            records.append(record)
+            projected.append(record)
+        if accepted_event:
+            selected_digests.append(str(event["digest"]))
+
+    if (
+        selected_digests != outcome_map["event_digests"]
+        or covered_gates != required_gate_ids
+        or gate3_count != 1
+        or landing_count != 1
+        or approval_count != (1 if approval_required else 0)
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    terminal = {
+        "type": "task",
+        "id": task,
+        "status": task_status,
+        "goal": task_record["goal"],
+        "acceptance": copy.deepcopy(task_record["acceptance"]),
+        "files": copy.deepcopy(task_record["files"]),
+        "run_id": run_id,
+        "recorded_at": events[-1][0]["at"],
+    }
+    records.append(terminal)
+    completed_records = tuple(records)
+    if existing_records is not None:
+        if completed_records != existing_records:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        completed_records = existing_records
+    completed = tuple(completed_proofs)
+    if completed != INGEST_PROOF_ORDER:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    return completed_records, completed
+
+
+def _verify_and_build_ingest_records(
+    repository: Path, run_id: str, inputs: dict[str, object]
+) -> tuple[Sequence[dict[str, object]], tuple[str, ...]]:
+    """Prove and synthesize one terminal, previously unbound commit/merge chain.
+
+    The specification intentionally leaves the outcome-map dialect open.  This
+    implementation owns one strict, versioned form: exactly ``schema``,
+    ``chain_id``, ``task``, ``task_status``, and the ordered
+    ``event_digests`` selected for ordinary records.  Unknown members fail
+    closed instead of becoming implicit authority.
+    """
+
+    _batch, builders, journal = _coordination_modules()
+    if (
+        INGEST_PROOF_CONTROLS != _REQUIRED_INGEST_PROOF_CONTROLS
+        or tuple(builders._INGEST_PROOF_ORDER) != INGEST_PROOF_ORDER
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    required_inputs = {
+        "task",
+        "state_file",
+        "events_file",
+        "outcome_map",
+        "state_file_sha256",
+        "events_file_sha256",
+        "outcome_map_sha256",
+        "closing_head",
+        "task_status",
+    }
+    if set(inputs) != required_inputs:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    canonical_repository, state_root = journal._resolve_repository(
+        repository, "journal ingest-chain"
+    )
+    run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
+
+    # Matching intent/receipt recovery is handled by task-03's pre-allocation
+    # lookup before this verifier is entered.  Proof must never search receipts
+    # by request digest or re-authorize an already receipted terminal batch.
+    existing_records: tuple[dict[str, object], ...] | None = None
+    base_records: list[dict[str, object]] | None = None
+    captured_paths = _ingest_captured_paths(
+        canonical_repository, run_dir, inputs
+    )
+    raw: dict[str, bytes] = {}
+    capture_names = {
+        "state_file": "state.json",
+        "events_file": "events.jsonl",
+        "outcome_map": "outcome-map.json",
+    }
+    for field in ("state_file", "events_file", "outcome_map"):
+        path = inputs.get(field)
+        digest = inputs.get(f"{field}_sha256")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        raw[field] = _read_ingest_input(
+            canonical_repository,
+            captured_paths[field],
+            f"ingest.{field}",
+            run_dir=run_dir,
+            expected_capture_name=capture_names[field],
+        )
+        if sha256_bytes(raw[field]) != digest:
+            raise journal.CoordinationRefusal(
+                "forge: journal append refused — record cites path outside run or "
+                "repository: ingest.captured_package: "
+                f"{captured_paths[field]}"
+            )
+    try:
+        materialized = json.loads(raw["state_file"].decode("utf-8"))
+        outcome_map = json.loads(raw["outcome_map"].decode("utf-8"))
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+    if not isinstance(materialized, dict):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    chain_id = materialized.get("chain_id")
+    family = materialized.get("kind")
+    if not isinstance(chain_id, str):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    if family == "commit":
+        try:
+            validate_state(materialized, chain_id)
+        except FrozenError as exc:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+    elif family == "merge":
+        if not builders._state_shape_valid(materialized, chain_id, "merge"):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    else:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    completed_proofs: list[str] = []
+
+    # Proof 1: canonical schema and digest replay in original event order.
+    _require_ingest_proof(
+        "chain-schema-and-digest-replay", completed_proofs
+    )
+    event_bytes = raw["events_file"]
+    if not event_bytes or not event_bytes.endswith(b"\n"):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    replayed: dict[str, object] | None = None
+    events: list[
+        tuple[
+            dict[str, object],
+            dict[str, object] | None,
+            dict[str, object],
+        ]
+    ] = []
+    previous_digest = ZERO_DIGEST
+    for sequence, line in enumerate(event_bytes.splitlines(keepends=True), 1):
+        try:
+            event = json.loads(line.decode("utf-8"))
+        except (UnicodeError, ValueError, RecursionError) as exc:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+        if family == "commit":
+            event_shape_valid = bool(
+                isinstance(event, dict)
+                and set(event) == EVENT_KEYS
+                and event.get("sequence") == sequence
+                and event.get("prev_digest") == previous_digest
+            )
+        else:
+            event_shape_valid = bool(
+                isinstance(event, dict)
+                and set(event)
+                == {
+                    "schema",
+                    "chain_id",
+                    "sequence",
+                    "at",
+                    "event",
+                    "generation_digest",
+                    "previous_digest",
+                    "payload",
+                    "digest",
+                }
+                and event.get("schema") == "forge-merge-event/1"
+                and event.get("chain_id") == chain_id
+                and event.get("sequence") == sequence
+                and event.get("previous_digest") == previous_digest
+            )
+        if (
+            not event_shape_valid
+            or not isinstance(event, dict)
+            or line != canonical_bytes(event) + b"\n"
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        projection = {name: event[name] for name in event if name != "digest"}
+        if sha256_bytes(canonical_bytes(projection)) != event.get("digest"):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        payload = event.get("payload")
+        prior_state = copy.deepcopy(replayed)
+        if family == "commit":
+            if not isinstance(payload, dict) or set(payload) != {
+                "at",
+                "details",
+                "event",
+                "state",
+            }:
+                raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+            details = payload.get("details")
+            state = payload.get("state")
+            if (
+                not isinstance(details, dict)
+                or "journal_batch" in details
+                or "source_event_digest" in details
+                or not isinstance(state, dict)
+            ):
+                raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+            try:
+                validate_state(state, chain_id)
+            except FrozenError as exc:
+                raise journal.CoordinationRefusal(
+                    builders.INGEST_PROOF_INVALID
+                ) from exc
+            next_state = copy.deepcopy(state)
+        else:
+            if (
+                not isinstance(payload, dict)
+                or "state" in payload
+                or "journal_batch" in payload
+                or "source_event_digest" in payload
+                or event.get("event") == "journal_receipted"
+            ):
+                raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+            try:
+                next_state = reduce_merge_event(replayed, event)
+            except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                raise journal.CoordinationRefusal(
+                    builders.INGEST_PROOF_INVALID
+                ) from exc
+            if (
+                not builders._state_shape_valid(next_state, chain_id, "merge")
+            ):
+                raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        replayed = copy.deepcopy(next_state)
+        events.append((event, prior_state, copy.deepcopy(next_state)))
+        previous_digest = str(event["digest"])
+    # Proof 2: the exact replay result is the caller-supplied materialization.
+    _require_ingest_proof("materialized-state", completed_proofs)
+    if replayed != materialized:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    if family == "merge":
+        return _verify_and_build_merge_ingest_records(
+            canonical_repository=canonical_repository,
+            run_id=run_id,
+            run_dir=run_dir,
+            inputs=inputs,
+            materialized=materialized,
+            outcome_map=outcome_map,
+            events=events,
+            existing_records=existing_records,
+            base_records=base_records,
+            captured_state=raw["state_file"],
+            captured_events=raw["events_file"],
+            completed_proofs=completed_proofs,
+        )
+
+    # Proof 3: the terminal unbound chain names this repository.  A bound or
+    # carried chain belongs to the autoappend path and cannot be ingested.
+    _require_ingest_proof("repository", completed_proofs)
+    run_state = journal._scan_run(run_dir)
+    proof_records = base_records if base_records is not None else run_state.records
+    opening = proof_records[0] if proof_records else None
+    try:
+        opening_repository = (
+            Path(str(opening.get("repo", ""))).resolve(strict=True)
+            if isinstance(opening, dict)
+            else None
+        )
+    except OSError as exc:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+    if (
+        materialized.get("kind") != "commit"
+        or materialized.get("state") != "closed"
+        or materialized.get("run_binding") is not None
+        or materialized.get("journal_outbox") is not None
+        or materialized.get("staging", {}).get("worktree_root")
+        != str(canonical_repository)
+        or not isinstance(materialized.get("candidate"), dict)
+        or SHA256_RE.fullmatch(
+            str(materialized.get("candidate", {}).get("sha256", ""))
+        )
+        is None
+        or opening_repository != canonical_repository
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 4: the generation's policy identity resolves to exact committed
+    # bytes, not a mutable worktree copy.
+    _require_ingest_proof("policy", completed_proofs)
+    policy_source = materialized.get("policy_source")
+    if not isinstance(policy_source, dict):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    policy = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "show",
+            f"{policy_source.get('sha')}:forge-project.md",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if (
+        policy.returncode != 0
+        or sha256_bytes(policy.stdout) != policy_source.get("digest")
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    try:
+        parsed_policy = parse_policy(str(policy_source["sha"]), policy.stdout)
+    except (KeyError, PolicyError, UnicodeError) as exc:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
+
+    # Proof 5: freshness is established against the live authoritative chain
+    # while holding its native event lock, including byte-identical events.
+    _require_ingest_proof("generation", completed_proofs)
+    _prove_ingest_live_chain(
+        canonical_repository,
+        chain_id,
+        materialized,
+        raw["state_file"],
+        raw["events_file"],
+    )
+
+    # Proof 6: every required gate remains satisfied by the current candidate.
+    _require_ingest_proof("current-gates", completed_proofs)
+    context = CommandContext(
+        repo=Repository(canonical_repository),
+        store=ChainStore(Repository(canonical_repository).common_root()),
+        options=CLIOptions(repo=str(canonical_repository), revision9_face=True),
+        policy=parsed_policy,
+    )
+    tier = materialized.get("tier")
+    if (
+        not isinstance(tier, dict)
+        or tier.get("effective") not in TIER_RANK
+        or tier.get("derived") not in TIER_RANK
+        or (
+            tier.get("declared") is not None
+            and tier.get("declared") not in TIER_RANK
+        )
+        or type(tier.get("control")) is not bool
+        or not _latest_current_pass(materialized, "classification")
+        or (
+            tier.get("effective") == "fast"
+            and (
+                bool(_fast_mechanical_skips(materialized))
+                or not _latest_current_pass(materialized, "fast-eligibility")
+                or not _latest_current_pass(
+                    materialized, "fast-finalize-eligibility"
+                )
+            )
+        )
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    required_steps = _required_steps(context, materialized)
+    if (
+        not _gate_one_complete(materialized)
+        or not all(
+            _gate_satisfied(materialized, step)
+            for step in set(required_steps) - {"gate-1"}
+        )
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proofs 7–10: independently re-open the current review package, then bind
+    # role, iteration, and verdict in normative order.  Fast chains make the
+    # predicates vacuous, but every control remains load-bearing.
+    review = materialized.get("review")
+    if not isinstance(review, dict) or not isinstance(tier, dict):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    review_required = tier.get("effective") != "fast"
+    request = review.get("request")
+    verdict = review.get("verdict")
+
+    _require_ingest_proof("review-package", completed_proofs)
+    if review_required:
+        if (
+            not isinstance(request, dict)
+            or not isinstance(verdict, dict)
+            or request.get("candidate")
+            != materialized["candidate"]["sha256"]
+            or not isinstance(request.get("package"), str)
+            or not isinstance(request.get("package_digest"), str)
+            or SHA256_RE.fullmatch(str(request["package_digest"])) is None
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        package = _read_ingest_input(
+            canonical_repository,
+            str(request["package"]),
+            "ingest.reviewer_package",
+        )
+        if sha256_bytes(package) != request.get("package_digest"):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    _require_ingest_proof("reviewer-role", completed_proofs)
+    if review_required:
+        assert isinstance(request, dict)
+        expected_role = (
+            "review-cheap"
+            if tier.get("effective") == "standard"
+            else "review-final"
+        )
+        if request.get("reviewer") != expected_role:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    _require_ingest_proof("reviewer-iteration", completed_proofs)
+    if review_required:
+        assert isinstance(request, dict)
+        if (
+            type(review.get("iteration")) is not int
+            or int(review["iteration"]) <= 0
+            or request.get("iteration") != review.get("iteration")
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    _require_ingest_proof("reviewer-verdict", completed_proofs)
+    if review_required:
+        assert isinstance(request, dict) and isinstance(verdict, dict)
+        if (
+            verdict.get("verdict") != "PASS"
+            or verdict.get("candidate")
+            != materialized["candidate"]["sha256"]
+            or verdict.get("package_digest") != request.get("package_digest")
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 11: approval is required exactly for the native parked classes.
+    _require_ingest_proof("operator-approval", completed_proofs)
+    approval_required = bool(
+        tier.get("control") or review.get("operator_cosign_required")
+    )
+    approval = materialized.get("approval")
+    if approval_required and (
+        not isinstance(approval, dict)
+        or approval.get("candidate") != materialized["candidate"]["sha256"]
+        or not isinstance(approval.get("approved_at"), str)
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 12: the staged candidate is exactly the produced commit.
+    _require_ingest_proof("landing-proof", completed_proofs)
+    result = materialized.get("commit_result")
+    commit_sha = result.get("commit_sha") if isinstance(result, dict) else None
+    intent = result.get("intent") if isinstance(result, dict) else None
+    if (
+        not isinstance(commit_sha, str)
+        or COMMIT_RE.fullmatch(commit_sha) is None
+        or not isinstance(intent, dict)
+        or intent.get("candidate") != materialized["candidate"]["sha256"]
+        or not isinstance(intent.get("pre_head"), str)
+        or COMMIT_RE.fullmatch(str(intent["pre_head"])) is None
+        or not isinstance(intent.get("message_digest"), str)
+        or SHA256_RE.fullmatch(str(intent["message_digest"])) is None
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    parent = subprocess.run(
+        ["git", "-C", str(canonical_repository), "rev-parse", f"{commit_sha}^"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if parent.returncode != 0:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    parent_sha = parent.stdout.decode("ascii", "replace").strip()
+    commit_object = subprocess.run(
+        ["git", "-C", str(canonical_repository), "cat-file", "commit", commit_sha],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        commit_headers, commit_message = commit_object.stdout.split(b"\n\n", 1)
+    except IndexError as exc:
+        raise journal.CoordinationRefusal(
+            builders.INGEST_PROOF_INVALID
+        ) from exc
+    parent_headers = [
+        line[len(b"parent ") :]
+        for line in commit_headers.splitlines()
+        if line.startswith(b"parent ")
+    ]
+    diff = subprocess.run(
+        ["git", "-C", str(canonical_repository), "diff", parent_sha, commit_sha],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    names = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "diff",
+            "--name-only",
+            "-z",
+            parent_sha,
+            commit_sha,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        changed_paths = tuple(
+            item.decode("utf-8") for item in names.stdout.split(b"\0") if item
+        )
+    except UnicodeDecodeError as exc:
+        raise journal.CoordinationRefusal(
+            builders.INGEST_PROOF_INVALID
+        ) from exc
+    if (
+        parent_sha != intent["pre_head"]
+        or commit_object.returncode != 0
+        or parent_headers != [str(intent["pre_head"]).encode("ascii")]
+        or sha256_bytes(commit_message) != intent["message_digest"]
+        or diff.returncode != 0
+        or names.returncode != 0
+        or sha256_bytes(diff.stdout) != materialized["candidate"]["sha256"]
+        or not changed_paths
+        or not all(journal._valid_scope_item(path) for path in changed_paths)
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 13: every native transition is monotonic in its original order.
+    _require_ingest_proof("monotonic-transitions", completed_proofs)
+    if any(
+        not builders._commit_transition_valid(event, prior_state, event_state)
+        for event, prior_state, event_state in events
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 14: the landed commit is contained by the caller's proposed
+    # closing HEAD.
+    _require_ingest_proof("closing-head-containment", completed_proofs)
+    closing_head = inputs.get("closing_head")
+    if not isinstance(closing_head, str) or COMMIT_RE.fullmatch(closing_head) is None:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    contained = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(canonical_repository),
+            "merge-base",
+            "--is-ancestor",
+            commit_sha,
+            closing_head,
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if contained.returncode != 0:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    # Proof 15: the explicit task belongs to this run and is still active.
+    _require_ingest_proof("task-membership", completed_proofs)
+    task = inputs.get("task")
+    task_status = inputs.get("task_status")
+    task_records = [
+        record
+        for record in proof_records
+        if record.get("type") == "task" and record.get("id") == task
+    ]
+    if (
+        not isinstance(task, str)
+        or not task_records
+        or task_records[-1].get("status") != "active"
+        or task_status not in journal.TERMINAL_TASK_STATUSES
+        or not isinstance(outcome_map, dict)
+        or set(outcome_map)
+        != {"schema", "chain_id", "task", "task_status", "event_digests"}
+        or outcome_map.get("schema")
+        != "forge-chain-ingest-outcome-map/1"
+        or outcome_map.get("chain_id") != chain_id
+        or outcome_map.get("task") != task
+        or outcome_map.get("task_status") != task_status
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    if existing_records is not None:
+        terminal_tasks = [
+            record
+            for record in existing_records
+            if record.get("type") == "task" and record.get("id") == task
+        ]
+        if (
+            len(terminal_tasks) != 1
+            or terminal_tasks[0].get("status") != task_status
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    task_record = task_records[-1]
+
+    # Proof 16: every landed path is admitted by both task and run scope.
+    _require_ingest_proof("scope-membership", completed_proofs)
+    files = task_record.get("files")
+    if not isinstance(files, list) or not files:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    for path in changed_paths:
+        if (
+            not any(
+                journal.pathspec_contained(path, pattern)
+                for pattern in files
+                if isinstance(pattern, str)
+            )
+            or not any(
+                journal.pathspec_contained(path, admitted)
+                for admitted in run_state.scope
+            )
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    assert isinstance(outcome_map, dict)
+    if (
+        not isinstance(outcome_map.get("event_digests"), list)
+        or not all(
+            isinstance(value, str) and SHA256_RE.fullmatch(value) is not None
+            for value in outcome_map["event_digests"]
+        )
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    binding = {
+        "run_id": run_id,
+        "task_id": task,
+        "repository": str(canonical_repository),
+        "policy_digest": policy_source["digest"],
+    }
+    selected: list[
+        tuple[
+            dict[str, object],
+            dict[str, object] | None,
+            dict[str, object],
+        ]
+    ] = []
+    final_candidate = materialized["candidate"]["sha256"]
+    for event, prior_state, event_state in events:
+        payload = event["payload"]
+        assert isinstance(payload, dict)
+        details = payload["details"]
+        assert isinstance(details, dict)
+        event_name = payload.get("event")
+        active = False
+        if event_name == "step_recorded":
+            active = _ingest_step_is_current(materialized, event_state, details)
+        elif event_name == "secret_scan_recorded":
+            active = _ingest_secret_scan_is_current(
+                materialized, event, prior_state, event_state
+            )
+        elif event_name in {"review_passed", "review_blocked"}:
+            active = bool(
+                tier.get("effective") == "hard"
+                and event_name == "review_passed"
+                and event_state.get("review", {}).get("verdict")
+                == materialized.get("review", {}).get("verdict")
+            )
+        elif event_name == "operator_approved":
+            active = bool(approval_required and event_state.get("approval") == approval)
+        elif event_name == "operator_skip":
+            gate_id = details.get("gate_id")
+            active = bool(
+                isinstance(gate_id, str)
+                and _user_skip(materialized, gate_id)
+                == _user_skip(event_state, gate_id)
+            )
+        elif event_name in {"commit_produced", "commit_close_recovered"}:
+            active = details.get("commit_sha") == commit_sha
+        if active and event_state.get("candidate", {}).get("sha256") == final_candidate:
+            selected.append((event, prior_state, event_state))
+    selected_digests = [
+        str(event["digest"]) for event, _prior, _state in selected
+    ]
+    if selected_digests != outcome_map["event_digests"]:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+
+    projected = list(proof_records)
+    records: list[dict[str, object]] = []
+    captured_citations = [
+        captured_paths["state_file"],
+        captured_paths["events_file"],
+        captured_paths["outcome_map"],
+    ]
+    replay_entries = tuple(
+        (
+            event,
+            prior_state,
+            event_state,
+            (),
+            str(event["digest"]),
+        )
+        for event, prior_state, event_state in events
+    )
+    for event, prior_state, event_state in selected:
+        payload = event["payload"]
+        assert isinstance(payload, dict)
+        details = payload["details"]
+        assert isinstance(details, dict)
+        event_name = str(payload["event"])
+        bound_state = copy.deepcopy(event_state)
+        bound_state["run_binding"] = copy.deepcopy(binding)
+        generated = _build_chain_journal_records(
+            canonical_repository,
+            bound_state,
+            event_name,
+            details,
+            str(event["digest"]),
+        )
+        for generated_record in generated:
+            record = copy.deepcopy(generated_record)
+            record_type = str(record["type"])
+            record["id"] = builders._allocate_id(projected, record_type)
+            record["run_id"] = run_id
+            record["recorded_at"] = payload["at"]
+            if record.get("outcome") == "chain-landing":
+                record["basis"] = list(captured_citations)
+            record_binding = record.get("binding")
+            if (
+                not isinstance(record_binding, dict)
+                or not builders._binding_matches_source_fact(
+                    record_binding,
+                    record,
+                    event,
+                    prior_state,
+                    event_state,
+                    family="commit",
+                )
+                or not builders._binding_is_current(
+                    materialized,
+                    record_binding,
+                    record,
+                    event,
+                    prior_state,
+                    event_state,
+                    replay_entries,
+                    chain_family="commit",
+                )
+            ):
+                raise journal.CoordinationRefusal(
+                    builders.INGEST_PROOF_INVALID
+                )
+            records.append(record)
+            projected.append(record)
+    if not any(record.get("outcome") == "chain-landing" for record in records):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    if approval_required and not any(
+        record.get("outcome") == "chain-approval" for record in records
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    terminal = {
+        "type": "task",
+        "id": task,
+        "status": task_status,
+        "goal": task_record["goal"],
+        "acceptance": copy.deepcopy(task_record["acceptance"]),
+        "files": copy.deepcopy(task_record["files"]),
+        "run_id": run_id,
+        "recorded_at": events[-1][0]["payload"]["at"],
+    }
+    records.append(terminal)
+    completed_records = tuple(records)
+    if existing_records is not None:
+        if completed_records != existing_records:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        completed_records = existing_records
+    completed = tuple(completed_proofs)
+    if completed != INGEST_PROOF_ORDER:
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    return completed_records, completed
+
+
+def _ingest_proof_verifier(
+    repository: Path, run_id: str, inputs: dict[str, object]
+) -> tuple[Sequence[dict[str, object]], tuple[str, ...]]:
+    return _verify_and_build_ingest_records(repository, run_id, inputs)
+
+
+for _seam in (reduce_merge_event, _authorize_chain_batch, _ingest_proof_verifier):
+    setattr(_seam, "_forge_cli_revision9_seam", True)
+
+
+def register_coordination_seams() -> None:
+    """Idempotently install task-04 authority in the shared task-03 modules."""
+
+    batch, builders, _journal = _coordination_modules()
+    existing_reducer = builders.MERGE_TRANSITION_REDUCER
+    if existing_reducer is None:
+        builders.register_merge_transition_reducer(reduce_merge_event)
+    elif not getattr(existing_reducer, "_forge_cli_revision9_seam", False):
+        raise RuntimeError("merge transition reducer registration conflict")
+
+    existing_verifier = builders._INGEST_PROOF_VERIFIER
+    if existing_verifier is None:
+        builders._register_ingest_proof_verifier(_ingest_proof_verifier)
+    elif not getattr(existing_verifier, "_forge_cli_revision9_seam", False):
+        raise RuntimeError("ingest proof verifier registration conflict")
+
+    existing_authorizer = batch._CHAIN_BATCH_AUTHORIZER
+    if existing_authorizer is None:
+        if not hasattr(batch, "_FORGE_CLI_CHAIN_CAPABILITIES"):
+            batch._FORGE_CLI_CHAIN_CAPABILITIES = {}
+            batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK = threading.Lock()
+        batch._register_chain_batch_authorizer(_authorize_chain_batch)
+    elif not getattr(existing_authorizer, "_forge_cli_revision9_seam", False):
+        raise RuntimeError("chain batch authorizer registration conflict")
+    elif not hasattr(batch, "_FORGE_CLI_CHAIN_CAPABILITIES"):
+        # A module-alias import may reach the shared registrar after another
+        # alias installed the callback; the registry itself lives on task-03's
+        # shared batch module so both aliases exchange the same capabilities.
+        batch._FORGE_CLI_CHAIN_CAPABILITIES = {}
+        batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK = threading.Lock()
+
+
+def _coordination_refusal(exc: BaseException) -> Refusal | FrozenError:
+    """Map task-03 diagnostics onto the closed Revision-9 CLI union."""
+
+    batch, builders, journal = _coordination_modules()
+    message = str(exc)
+    if message == journal.BATCH_PENDING:
+        return Refusal(
+            V2ReasonCode.BATCH_PENDING,
+            message,
+            remediation="run journal batch-recover for the named run",
+        )
+    if message == journal.BATCH_KEY_CONFLICT:
+        return Refusal(
+            V2ReasonCode.BATCH_IDEMPOTENCY_CONFLICT,
+            message,
+            remediation="reuse the exact original request or choose a new idempotency key",
+        )
+    if message == journal.BATCH_KEY_REFUSAL:
+        return Refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            message,
+            remediation="supply exactly one 64-lowercase-hex idempotency key",
+        )
+    if "cites path outside run or repository" in message:
+        return Refusal(
+            V2ReasonCode.CITATION_OUT_OF_ROOT,
+            message,
+            remediation="supply an owner-controlled repository-relative ingest input",
+        )
+    if message in {builders.INGEST_PROOF_INVALID, builders.TERMINAL_CHAIN_INVALID}:
+        return Refusal(
+            V2ReasonCode.INGEST_PROOF_INVALID
+            if message == builders.INGEST_PROOF_INVALID
+            else V2ReasonCode.BINDING_INVALID,
+            message,
+            remediation="repair the authoritative chain proof and retry",
+        )
+    if message == builders.JOURNAL_OUTBOX_PENDING:
+        return Refusal(
+            V2ReasonCode.JOURNAL_OUTBOX_PENDING,
+            message,
+            remediation="replay and drain the pending chain journal outbox",
+        )
+    if message == journal.BATCH_DIVERGED:
+        return FrozenError(
+            message,
+            observed="journal transaction suffix or inode divergence",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    if "binding" in message or message == journal.INVALID_JOURNAL_RECORD:
+        return Refusal(
+            V2ReasonCode.BINDING_INVALID,
+            message,
+            remediation="repair the structured chain binding and retry",
+        )
+    return Refusal(
+        V2ReasonCode.INGEST_PROOF_INVALID,
+        message,
+        remediation="inspect the Revision-9 coordination proof and retry",
+    )
+
+
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -416,7 +3037,7 @@ def promoted_tier(*tiers: str | None) -> str:
 @dataclasses.dataclass(frozen=True)
 class Outcome:
     ok: bool
-    reason_code: ReasonCode
+    reason_code: ReasonCode | Revision9ReasonCode
     message: str
     chain_id: str | None = None
     state: str | None = None
@@ -425,12 +3046,13 @@ class Outcome:
     remediation: str | None = None
     next_required_step: str = "none — chain closed"
     evidence_refs: tuple[str, ...] = ()
+    schema: str = OUTPUT_SCHEMA
 
     @property
     def exit_code(self) -> int:
-        if self.reason_code is ReasonCode.OK and self.ok:
+        if self.reason_code.value == "ok" and self.ok:
             return 0
-        if self.reason_code is ReasonCode.FROZEN_CHAIN:
+        if self.reason_code.value == "frozen-chain":
             return 2
         return 1
 
@@ -445,7 +3067,7 @@ class Outcome:
             "ok": self.ok,
             "reason_code": self.reason_code.value,
             "remediation": self.remediation,
-            "schema": OUTPUT_SCHEMA,
+            "schema": self.schema,
             "state": self.state,
         }
         assert set(result) == ENVELOPE_KEYS
@@ -455,7 +3077,7 @@ class Outcome:
 class Refusal(Exception):
     def __init__(
         self,
-        reason_code: ReasonCode,
+        reason_code: ReasonCode | Revision9ReasonCode,
         message: str,
         *,
         expected: str | None = None,
@@ -464,9 +3086,10 @@ class Refusal(Exception):
         next_required_step: str | None = None,
         chain: Mapping[str, Any] | None = None,
         evidence_refs: Iterable[str] = (),
+        schema: str | None = None,
     ) -> None:
         super().__init__(message)
-        if reason_code in {ReasonCode.OK, ReasonCode.FROZEN_CHAIN}:
+        if reason_code.value in {"ok", "frozen-chain"}:
             raise ValueError("refusal must use an exit-1 reason code")
         self.reason_code = reason_code
         self.message = message
@@ -476,6 +3099,19 @@ class Refusal(Exception):
         self.next_required_step = next_required_step or self.remediation
         self.chain = chain
         self.evidence_refs = tuple(evidence_refs)
+        chain_is_revision9 = bool(
+            isinstance(chain, Mapping)
+            and (
+                chain.get("run_binding") is not None
+                or isinstance(chain.get("staging"), Mapping)
+                and chain.get("staging", {}).get("archive") is not None
+            )
+        )
+        self.schema = schema or (
+            REVISION9_OUTPUT_SCHEMA
+            if isinstance(reason_code, V2ReasonCode) or chain_is_revision9
+            else OUTPUT_SCHEMA
+        )
 
     def outcome(self) -> Outcome:
         return Outcome(
@@ -489,6 +3125,7 @@ class Refusal(Exception):
             remediation=self.remediation,
             next_required_step=self.next_required_step,
             evidence_refs=self.evidence_refs,
+            schema=self.schema,
         )
 
 
@@ -500,12 +3137,14 @@ class FrozenError(Exception):
         chain_id: str | None = None,
         state: str | None = None,
         observed: str | None = None,
+        schema: str = OUTPUT_SCHEMA,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.chain_id = chain_id
         self.state = state
         self.observed = observed
+        self.schema = schema
 
     def outcome(self) -> Outcome:
         remediation = (
@@ -525,6 +3164,7 @@ class FrozenError(Exception):
             observed=self.observed,
             remediation=remediation,
             next_required_step=remediation,
+            schema=self.schema,
         )
 
 
@@ -735,18 +3375,10 @@ class Repository:
         return value
 
     def common_root(self) -> Path:
-        result = self.git(
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            check=False,
-        )
-        if result.returncode == 0:
-            common = Path(os.fsdecode(result.stdout.rstrip(b"\n")))
-        else:
-            common_raw = self.git(["rev-parse", "--git-common-dir"]).stdout.rstrip(b"\n")
-            common = Path(os.fsdecode(common_raw))
-            if not common.is_absolute():
-                common = self.root / common
-        return Path(os.path.realpath(common)).parent
+        _coordination_modules()
+        from codex_orchestrator.chain_paths import common_worktree_root
+
+        return common_worktree_root(self.root)
 
     def policy(self, sha: str | None = None) -> tuple[str, bytes]:
         resolved = sha or self.head()
@@ -1022,6 +3654,20 @@ def parse_policy(sha: str, raw: bytes) -> Policy:
 
 
 def validate_state(state: Any, chain_id: str | None = None) -> dict[str, Any]:
+    if REVISION9_STATE_CONTROLS != _REQUIRED_REVISION9_STATE_CONTROLS:
+        raise FrozenError(
+            "Revision-9 chain-state validation control is unavailable",
+            chain_id=chain_id,
+        )
+    if isinstance(state, dict) and set(state) == STATE_KEYS - {
+        "run_binding",
+        "journal_outbox",
+    }:
+        # A pre-Revision-9 chain file lacks the two added keys; absence reads
+        # as null (unbound / drained), which is exactly what a legacy chain
+        # is. Every new write includes both keys explicitly.
+        state["run_binding"] = None
+        state["journal_outbox"] = None
     if not isinstance(state, dict) or set(state) != STATE_KEYS:
         raise FrozenError(
             "materialized chain state has an invalid top-level key set",
@@ -1079,6 +3725,101 @@ def validate_state(state: Any, chain_id: str | None = None) -> dict[str, Any]:
     candidate = state["candidate"].get("sha256")
     if candidate is not None and not SHA256_RE.fullmatch(str(candidate)):
         raise FrozenError("chain candidate digest is malformed", chain_id=actual_id)
+    archive = state["staging"].get("archive")
+    if archive is not None:
+        archive_keys = {
+            "run_id",
+            "path",
+            "closing_head",
+            "legacy_recovered_head",
+            "legacy_approval",
+            "post_close_validation",
+            "dispense_targets",
+            "dispense_reason",
+            "rendered_sha256",
+        }
+        normal = bool(
+            isinstance(archive, dict)
+            and isinstance(archive.get("closing_head"), str)
+            and COMMIT_RE.fullmatch(str(archive["closing_head"])) is not None
+            and archive.get("legacy_recovered_head") is None
+            and archive.get("legacy_approval") is None
+        )
+        legacy = bool(
+            isinstance(archive, dict)
+            and archive.get("closing_head") is None
+            and isinstance(archive.get("legacy_recovered_head"), str)
+            and COMMIT_RE.fullmatch(str(archive["legacy_recovered_head"]))
+            is not None
+            and isinstance(archive.get("legacy_approval"), str)
+            and archive["legacy_approval"]
+        )
+        if (
+            not isinstance(archive, dict)
+            or set(archive) != archive_keys
+            or not isinstance(archive.get("run_id"), str)
+            or RUN_ID_RE.fullmatch(str(archive["run_id"])) is None
+            or archive.get("path")
+            != f".forge/history/runs/{archive.get('run_id')}.md"
+            or normal is legacy
+            or not isinstance(archive.get("post_close_validation"), str)
+            or not Path(str(archive["post_close_validation"])).is_absolute()
+            or not isinstance(archive.get("dispense_targets"), list)
+            or not all(
+                isinstance(value, str) and value
+                for value in archive["dispense_targets"]
+            )
+            or archive.get("dispense_reason") is not None
+            and not isinstance(archive.get("dispense_reason"), str)
+            or bool(archive.get("dispense_targets"))
+            != bool(archive.get("dispense_reason"))
+            or not isinstance(archive.get("rendered_sha256"), str)
+            or SHA256_RE.fullmatch(str(archive["rendered_sha256"])) is None
+            or state.get("run_binding") is not None
+            or state.get("paths") != [archive.get("path")]
+        ):
+            raise FrozenError("chain archive metadata is malformed", chain_id=actual_id)
+    run_binding = state.get("run_binding")
+    if run_binding is not None:
+        if (
+            not isinstance(run_binding, dict)
+            or set(run_binding)
+            != {"run_id", "task_id", "repository", "policy_digest"}
+            or not isinstance(run_binding.get("run_id"), str)
+            or not RUN_ID_RE.fullmatch(str(run_binding["run_id"]))
+            or not isinstance(run_binding.get("task_id"), str)
+            or not run_binding["task_id"]
+            or not isinstance(run_binding.get("repository"), str)
+            or not Path(str(run_binding["repository"])).is_absolute()
+            or run_binding.get("repository")
+            != state["staging"].get("worktree_root")
+            or not isinstance(run_binding.get("policy_digest"), str)
+            or SHA256_RE.fullmatch(str(run_binding["policy_digest"])) is None
+            or run_binding.get("policy_digest")
+            != state["policy_source"].get("digest")
+        ):
+            raise FrozenError("chain run binding is malformed", chain_id=actual_id)
+    journal_outbox = state.get("journal_outbox")
+    if journal_outbox is not None:
+        if (
+            not isinstance(journal_outbox, dict)
+            or set(journal_outbox)
+            != {
+                "idempotency_key",
+                "batch_digest",
+                "record_count",
+                "source_event_digest",
+            }
+            or not isinstance(journal_outbox.get("idempotency_key"), str)
+            or SHA256_RE.fullmatch(str(journal_outbox["idempotency_key"])) is None
+            or not isinstance(journal_outbox.get("batch_digest"), str)
+            or SHA256_RE.fullmatch(str(journal_outbox["batch_digest"])) is None
+            or type(journal_outbox.get("record_count")) is not int
+            or int(journal_outbox["record_count"]) <= 0
+            or journal_outbox.get("source_event_digest")
+            != journal_outbox.get("idempotency_key")
+        ):
+            raise FrozenError("chain journal outbox is malformed", chain_id=actual_id)
     return state
 
 
@@ -1307,7 +4048,20 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
         "--finding",
         "--severity",
         "--resolution",
+        "--task",
+        "--state-file",
+        "--events-file",
+        "--outcome-map",
+        "--closing-head",
+        "--task-status",
+        "--idempotency-key",
+        "--archive-run-id",
+        "--legacy-recovered-head",
+        "--legacy-approval",
+        "--dispense-citation",
+        "--dispense-reason",
     }
+    seen_singletons: set[str] = set()
     index = 0
     while index < len(argv):
         token = argv[index]
@@ -1332,6 +4086,15 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
             options.verbose = True
             index += 1
         elif token in {"--chain-id", "--repo", "--run-id"}:
+            if token in seen_singletons:
+                raise Refusal(
+                    Revision9ReasonCode.OPTION_DUPLICATE,
+                    f"forge: CLI option refused — duplicate {token}",
+                    expected=f"exactly one nonempty {token}",
+                    observed=f"duplicate {token}",
+                    remediation=f"remove the duplicate {token} and retry",
+                )
+            seen_singletons.add(token)
             if index + 1 >= len(argv):
                 raise Refusal(
                     ReasonCode.STATE_PRECONDITION,
@@ -1340,6 +4103,14 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
                     remediation="forge status",
                 )
             value = argv[index + 1]
+            if value == "":
+                raise Refusal(
+                    Revision9ReasonCode.OPTION_EMPTY,
+                    f"forge: CLI option refused — empty {token}",
+                    expected=f"one nonempty value for {token}",
+                    observed=f"empty {token}",
+                    remediation=f"supply a nonempty {token} value",
+                )
             if token == "--chain-id":
                 options.chain_id = value
             elif token == "--repo":
@@ -1347,14 +4118,34 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
             else:
                 options.run_id = value
             index += 2
-        elif token.startswith("--chain-id="):
-            options.chain_id = token.partition("=")[2]
-            index += 1
-        elif token.startswith("--repo="):
-            options.repo = token.partition("=")[2]
-            index += 1
-        elif token.startswith("--run-id="):
-            options.run_id = token.partition("=")[2]
+        elif any(
+            token.startswith(f"{name}=")
+            for name in ("--chain-id", "--repo", "--run-id")
+        ):
+            name, _, value = token.partition("=")
+            if name in seen_singletons:
+                raise Refusal(
+                    Revision9ReasonCode.OPTION_DUPLICATE,
+                    f"forge: CLI option refused — duplicate {name}",
+                    expected=f"exactly one nonempty {name}",
+                    observed=f"duplicate {name}",
+                    remediation=f"remove the duplicate {name} and retry",
+                )
+            seen_singletons.add(name)
+            if value == "":
+                raise Refusal(
+                    Revision9ReasonCode.OPTION_EMPTY,
+                    f"forge: CLI option refused — empty {name}",
+                    expected=f"one nonempty value for {name}",
+                    observed=f"empty {name}",
+                    remediation=f"supply a nonempty {name} value",
+                )
+            if name == "--chain-id":
+                options.chain_id = value
+            elif name == "--repo":
+                options.repo = value
+            else:
+                options.run_id = value
             index += 1
         else:
             remaining.append(token)
@@ -1388,8 +4179,15 @@ def build_parser() -> ContractArgumentParser:
     commit = commands.add_parser("commit")
     commit_commands = commit.add_subparsers(dest="commit_command", required=True)
     start = commit_commands.add_parser("start")
-    start.add_argument("--paths", nargs="+", required=True)
+    start_target = start.add_mutually_exclusive_group(required=True)
+    start_target.add_argument("--paths", nargs="+")
+    start_target.add_argument("--archive-run-id")
     start.add_argument("--declare-tier", choices=tuple(TIER_RANK))
+    start.add_argument("--task")
+    start.add_argument("--legacy-recovered-head")
+    start.add_argument("--legacy-approval")
+    start.add_argument("--dispense-citation", action="append", default=[])
+    start.add_argument("--dispense-reason")
     restage = commit_commands.add_parser("restage")
     restage.add_argument("--paths", nargs="+", required=True)
     commit_commands.add_parser("rebase")
@@ -1428,6 +4226,22 @@ def build_parser() -> ContractArgumentParser:
         "--severity", choices=("CRITICAL", "MAJOR", "MINOR"), required=True
     )
     disposition.add_argument("--resolution", required=True)
+
+    journal_command = commands.add_parser("journal")
+    journal_commands = journal_command.add_subparsers(
+        dest="journal_command", required=True
+    )
+    ingest = journal_commands.add_parser("ingest-chain")
+    ingest.add_argument("--task", required=True)
+    ingest.add_argument("--state-file", required=True)
+    ingest.add_argument("--events-file", required=True)
+    ingest.add_argument("--outcome-map", required=True)
+    ingest.add_argument("--closing-head", required=True)
+    ingest.add_argument(
+        "--task-status", choices=("complete", "blocked", "failed"), required=True
+    )
+    ingest.add_argument("--idempotency-key", required=True)
+    journal_commands.add_parser("batch-recover")
     return parser
 
 
@@ -1455,6 +4269,56 @@ def _message_from_args(args: argparse.Namespace) -> str:
     return message
 
 
+def _validate_revision9_cross_options(
+    options: CLIOptions, args: argparse.Namespace
+) -> None:
+    """Refuse Revision-9 flag tuples before repository discovery."""
+
+    if args.command != "commit" or args.commit_command != "start":
+        return
+    task = args.task
+    if (options.run_id is None) != (task is None):
+        raise Refusal(
+            V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
+            "forge: commit start refused — --run-id and --task must be supplied together",
+            expected="both --run-id and --task, or neither",
+            observed="exactly one run/task binding flag",
+            remediation="rerun commit start with both binding flags or neither",
+        )
+    legacy_pair = (
+        args.legacy_recovered_head is not None,
+        args.legacy_approval is not None,
+    )
+    if legacy_pair[0] != legacy_pair[1]:
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            "forge: archive refused — legacy recovery approval missing or mismatched",
+            expected="paired --legacy-recovered-head and --legacy-approval",
+            observed="exactly one legacy recovery flag",
+            remediation="supply both legacy recovery flags with the reviewed tuple",
+        )
+    if args.archive_run_id is not None and (
+        args.task is not None or options.run_id is not None
+    ):
+        raise Refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: archive refused — archive-only chains cannot carry a run/task binding",
+            expected="--archive-run-id without --run-id or --task",
+            observed="archive and run/task binding flags",
+            remediation="remove --run-id and --task from archive commit start",
+        )
+    if args.archive_run_id is None and (
+        any(legacy_pair) or args.dispense_citation or args.dispense_reason
+    ):
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            "forge: archive refused — legacy recovery approval missing or mismatched",
+            expected="archive flags only with --archive-run-id",
+            observed="archive-only flag on an ordinary commit start",
+            remediation="supply --archive-run-id or remove archive-only flags",
+        )
+
+
 def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
     if args.command == "status":
         return engine.status()
@@ -1477,9 +4341,71 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
             return engine.review_disposition(
                 args.finding, args.severity, args.resolution
             )
+    if args.command == "journal":
+        if args.journal_command == "batch-recover":
+            return engine.journal_batch_recover()
+        if args.journal_command == "ingest-chain":
+            return engine.journal_ingest_chain(
+                task=args.task,
+                state_file=args.state_file,
+                events_file=args.events_file,
+                outcome_map=args.outcome_map,
+                closing_head=args.closing_head,
+                task_status=args.task_status,
+                idempotency_key=args.idempotency_key,
+            )
     if args.command == "commit":
         if args.commit_command == "start":
-            return engine.start(args.paths, args.declare_tier)
+            if (engine.ctx.options.run_id is None) != (args.task is None):
+                raise Refusal(
+                    V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
+                    "forge: commit start refused — --run-id and --task must be supplied together",
+                    expected="both --run-id and --task, or neither",
+                    observed="exactly one run/task binding flag",
+                    remediation="rerun commit start with both binding flags or neither",
+                )
+            legacy_pair = (
+                args.legacy_recovered_head is not None,
+                args.legacy_approval is not None,
+            )
+            if legacy_pair[0] != legacy_pair[1]:
+                raise Refusal(
+                    V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+                    "forge: archive refused — legacy recovery approval missing or mismatched",
+                    expected="paired --legacy-recovered-head and --legacy-approval",
+                    observed="exactly one legacy recovery flag",
+                    remediation="supply both legacy recovery flags with the reviewed tuple",
+                )
+            if args.archive_run_id is not None and (
+                args.task is not None or engine.ctx.options.run_id is not None
+            ):
+                raise Refusal(
+                    V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                    "forge: archive refused — archive-only chains cannot carry a run/task binding",
+                    expected="--archive-run-id without --run-id or --task",
+                    observed="archive and run/task binding flags",
+                    remediation="remove --run-id and --task from archive commit start",
+                )
+            if args.archive_run_id is None and (
+                any(legacy_pair) or args.dispense_citation or args.dispense_reason
+            ):
+                raise Refusal(
+                    V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+                    "forge: archive refused — legacy recovery approval missing or mismatched",
+                    expected="archive flags only with --archive-run-id",
+                    observed="archive-only flag on an ordinary commit start",
+                    remediation="supply --archive-run-id or remove archive-only flags",
+                )
+            return engine.start(
+                args.paths or (),
+                args.declare_tier,
+                task=args.task,
+                archive_run_id=args.archive_run_id,
+                legacy_recovered_head=args.legacy_recovered_head,
+                legacy_approval=args.legacy_approval,
+                dispense_targets=tuple(args.dispense_citation),
+                dispense_reason=args.dispense_reason,
+            )
         if args.commit_command == "restage":
             return engine.restage(args.paths)
         if args.commit_command == "rebase":
@@ -1536,13 +4462,73 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         options, command_argv = _extract_global_options(raw_argv)
+        # Establish the envelope generation before argparse can refuse a
+        # malformed new face.  Old phase-1 commands that merely use --repo or
+        # --chain-id remain v1.
+        options.revision9_face = bool(
+            options.run_id is not None
+            or "journal" in command_argv
+            or any(
+                token == name or token.startswith(f"{name}=")
+                for token in command_argv
+                for name in (
+                    "--task",
+                    "--archive-run-id",
+                    "--legacy-recovered-head",
+                    "--legacy-approval",
+                    "--dispense-citation",
+                    "--dispense-reason",
+                )
+            )
+        )
         args = build_parser().parse_args(command_argv)
+        options.revision9_face = options.revision9_face or bool(
+            args.command == "journal"
+            or (
+                args.command == "commit"
+                and args.commit_command == "start"
+                and (
+                    args.archive_run_id is not None
+                    or args.task is not None
+                    or options.run_id is not None
+                )
+            )
+        )
+        run_id_admitted = bool(
+            args.command == "journal"
+            or (
+                args.command == "commit"
+                and args.commit_command == "start"
+                and getattr(args, "archive_run_id", None) is None
+            )
+        )
+        if options.run_id is not None and not run_id_admitted:
+            options.revision9_face = True
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: CLI run/task binding refused — later chain verbs inherit state and take no --run-id",
+                expected="no --run-id on a later chain verb",
+                observed="--run-id supplied outside chain start or journal operation",
+                remediation="remove --run-id and select the immutable chain binding",
+            )
+        if args.command == "journal" and (
+            options.repo is None or options.run_id is None
+        ):
+            options.revision9_face = True
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: journal operation refused — explicit --repo and --run-id are required",
+                expected="one nonempty --repo and --run-id",
+                observed="missing journal repository or run identity",
+                remediation="rerun with the exact --repo and --run-id",
+            )
+        _validate_revision9_cross_options(options, args)
+        if options.revision9_face:
+            register_coordination_seams()
         repo = Repository.discover(options.repo)
         store = ChainStore(repo.common_root())
         ctx = CommandContext(repo=repo, store=store, options=options)
-        run_dir = ctx.validate_run_id()
         outcome = dispatch(Engine(ctx), args)
-        ctx.append_run_stub(run_dir, outcome)
     except Refusal as exc:
         outcome = exc.outcome()
     except FrozenError as exc:
@@ -1554,9 +4540,228 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"unexpected internal failure while attempting CLI command: {exc}",
             chain_id=options.chain_id,
             observed=type(exc).__name__,
+            schema=(
+                REVISION9_OUTPUT_SCHEMA
+                if options.revision9_face
+                else OUTPUT_SCHEMA
+            ),
         ).outcome()
+    if options.revision9_face and outcome.schema != REVISION9_OUTPUT_SCHEMA:
+        outcome = dataclasses.replace(outcome, schema=REVISION9_OUTPUT_SCHEMA)
     render(outcome, as_json=options.json)
     return outcome.exit_code
+
+
+def _binding_for_commit_event(
+    state: Mapping[str, Any], source_event_digest: str, review: object
+) -> dict[str, Any]:
+    preimage = {
+        "schema": "forge-gate-binding/1",
+        "source_record": {
+            "chain_id": state["chain_id"],
+            "event_digest": source_event_digest,
+        },
+        "candidate": {
+            "kind": "staged-diff-sha256",
+            "value": state["candidate"]["sha256"],
+        },
+        "review": copy.deepcopy(review),
+    }
+    return {**preimage, "binding_id": sha256_bytes(canonical_bytes(preimage))}
+
+
+def _build_chain_journal_records(
+    repository: Path,
+    state: Mapping[str, Any],
+    event: str,
+    details: Mapping[str, Any],
+    source_event_digest: str,
+) -> tuple[dict[str, Any], ...]:
+    """Build the exact ordinary records carried by one consequential event."""
+
+    binding = state.get("run_binding")
+    if not isinstance(binding, Mapping):
+        return ()
+    run_id = str(binding["run_id"])
+    task_id = str(binding["task_id"])
+    batch, builders, journal = _coordination_modules()
+    _canonical_repository, state_root = journal._resolve_repository(
+        repository, "journal batch"
+    )
+    run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
+    run_state = journal._scan_run(run_dir)
+    task_records = [
+        record
+        for record in run_state.records
+        if record.get("type") == "task" and record.get("id") == task_id
+    ]
+    if not task_records or task_records[-1].get("status") != "active":
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+
+    record: dict[str, Any] | None = None
+    binding_review: dict[str, Any] | None = None
+    if event == "step_recorded":
+        step_id = details.get("step_id")
+        run_number = details.get("run")
+        steps = state.get("steps")
+        runs = steps.get(step_id) if isinstance(steps, Mapping) else None
+        if (
+            not isinstance(step_id, str)
+            or step_id
+            in {"classification", "fast-eligibility", "fast-finalize-eligibility"}
+            or not isinstance(runs, list)
+            or type(run_number) is not int
+            or run_number <= 0
+            or run_number > len(runs)
+            or not isinstance(runs[run_number - 1], Mapping)
+        ):
+            return ()
+        # Retrospective ingest may select both members of a counted Gate-1
+        # pair or several rows in one stack batch.  Bind the exact fact first
+        # made durable by this event, never the current list tail.
+        fact = runs[run_number - 1]
+        result = fact.get("result")
+        if result not in {"passed", "failed"} or details.get("result") != result:
+            return ()
+        criterion = (
+            f"gate-1: {step_id}"
+            if step_id == "gate-1"
+            else f"gate-2: {step_id}"
+        )
+        transcript = fact.get("transcript")
+        argv = fact.get("command_argv")
+        record = {
+            "type": "verification",
+            "id": builders._allocate_id(run_state.records, "verification"),
+            "task": task_id,
+            "criterion": criterion,
+            "method": "Forge CLI commit chain",
+            "check": (
+                " ".join(str(value) for value in argv)
+                if isinstance(argv, list) and argv
+                else step_id
+            ),
+            "result": result,
+            "observation": f"Forge CLI recorded {step_id} result {result}",
+            "evidence": [transcript] if isinstance(transcript, str) else [],
+        }
+    elif event == "secret_scan_recorded":
+        steps = state.get("steps")
+        runs = steps.get("secret-scan") if isinstance(steps, Mapping) else None
+        result = details.get("result")
+        finding_count = details.get("finding_count")
+        fact = runs[-1] if isinstance(runs, list) and runs else None
+        if (
+            set(details) != {"result", "finding_count"}
+            or not builders._commit_secret_scan_fact_valid(
+                fact,
+                state,
+                result=result,
+                finding_count=finding_count,
+            )
+        ):
+            return ()
+        assert isinstance(fact, Mapping)
+        argv = fact["command_argv"]
+        record = {
+            "type": "verification",
+            "id": builders._allocate_id(run_state.records, "verification"),
+            "task": task_id,
+            "criterion": "gate-2: secret-scan",
+            "method": "Forge CLI commit chain",
+            "check": " ".join(str(value) for value in argv),
+            "result": result,
+            "observation": f"Forge CLI recorded secret-scan result {result}",
+            "evidence": [],
+        }
+    elif event in {"review_passed", "review_blocked"}:
+        review_state = state.get("review")
+        verdict = (
+            review_state.get("verdict")
+            if isinstance(review_state, Mapping)
+            else None
+        )
+        request = (
+            review_state.get("request")
+            if isinstance(review_state, Mapping)
+            else None
+        )
+        reviewer_role = (
+            request.get("reviewer") if isinstance(request, Mapping) else None
+        )
+        # Gate 3 is normatively review-final; a legacy review-cheap fact is not
+        # silently relabelled as that stronger authority.
+        if (
+            not isinstance(verdict, Mapping)
+            or reviewer_role != "review-final"
+            or verdict.get("verdict") not in {"PASS", "BLOCK"}
+            or not isinstance(review_state.get("iteration"), int)
+            or int(review_state["iteration"]) <= 0
+            or not isinstance(verdict.get("package_digest"), str)
+        ):
+            return ()
+        binding_review = {
+            "verdict": verdict["verdict"],
+            "iteration": review_state["iteration"],
+            "reviewer_role": reviewer_role,
+            "package_digest": verdict["package_digest"],
+        }
+        verdict_path = verdict.get("verdict_path")
+        record = {
+            "type": "verification",
+            "id": builders._allocate_id(run_state.records, "verification"),
+            "task": task_id,
+            "criterion": journal.GATE_3_CRITERION,
+            "method": "independent review-final",
+            "check": "validated review-final verdict transport",
+            "result": "passed" if verdict["verdict"] == "PASS" else "failed",
+            "observation": (
+                f"Forge CLI recorded review-final verdict {verdict['verdict']}"
+            ),
+            "evidence": [verdict_path] if isinstance(verdict_path, str) else [],
+        }
+    elif event in {
+        "operator_approved",
+        "operator_skip",
+        "commit_produced",
+        "commit_close_recovered",
+    }:
+        outcome = {
+            "operator_approved": "chain-approval",
+            "operator_skip": "chain-skip",
+            "commit_produced": "chain-landing",
+            "commit_close_recovered": "chain-landing",
+        }[event]
+        resolution = {
+            "operator_approved": "Forge commit chain approval recorded",
+            "operator_skip": (
+                "Forge commit chain skip recorded: "
+                f"{details.get('gate_id', 'unknown')}"
+            ),
+            "commit_produced": (
+                "Forge commit chain landing recorded: "
+                f"{details.get('commit_sha', 'unknown')}"
+            ),
+            "commit_close_recovered": (
+                "Forge commit chain landing recovered: "
+                f"{details.get('commit_sha', 'unknown')}"
+            ),
+        }[event]
+        record = {
+            "type": "decision",
+            "id": builders._allocate_id(run_state.records, "decision"),
+            "task": task_id,
+            "resolution": resolution,
+            "outcome": outcome,
+            "basis": [],
+        }
+    if record is None:
+        return ()
+    record = builders._with_derived(record, run_id)
+    record["binding"] = _binding_for_commit_event(
+        state, source_event_digest, binding_review
+    )
+    return (record,)
 
 
 class ChainStore:
@@ -1814,7 +5019,7 @@ class ChainStore:
             )
         events: list[dict[str, Any]] = []
         previous = ZERO_DIGEST
-        for sequence, line in enumerate(data.splitlines(), 1):
+        for sequence, line in enumerate(data.splitlines(keepends=True), 1):
             try:
                 event = json.loads(line)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1824,6 +5029,10 @@ class ChainStore:
             if not isinstance(event, dict) or set(event) != EVENT_KEYS:
                 raise FrozenError(
                     f"chain event {sequence} has an invalid key set", chain_id=chain_id
+                )
+            if line != canonical_bytes(event) + b"\n":
+                raise FrozenError(
+                    f"chain event {sequence} is not canonical", chain_id=chain_id
                 )
             if event["sequence"] != sequence or event["prev_digest"] != previous:
                 raise FrozenError(
@@ -1860,9 +5069,197 @@ class ChainStore:
         with self.event_lock(chain_id):
             return self._load_locked(chain_id)
 
+    def _validate_bound_event_history(
+        self,
+        chain_id: str,
+        events: Sequence[dict[str, Any]],
+        binding: Mapping[str, Any],
+    ) -> None:
+        """Validate the nonrecursive batch/receipt algebra before repair.
+
+        Materialized state is recoverable from an fsynced event, so the
+        task-03 resolver cannot be called until after a missing/stale state
+        projection is repaired.  This pre-repair pass applies its transition,
+        source-projection, carried-record, pending-outbox, and durable receipt
+        predicates to the event authority first.
+        """
+
+        register_coordination_seams()
+        batch, builders, journal = _coordination_modules()
+        run_dir = (
+            self.common_root
+            / ".codex-orchestrator"
+            / "runs"
+            / str(binding.get("run_id"))
+        )
+        if batch._active_locks().get(os.path.abspath(os.fspath(run_dir))) is None:
+            raise FrozenError(
+                "bound chain replay lacks the outer journal lock",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        repository = Path(str(binding.get("repository")))
+        replayed: dict[str, object] | None = None
+        pending: dict[str, object] | None = None
+        pending_records: tuple[dict[str, object], ...] = ()
+        replay_entries: list[
+            tuple[
+                dict[str, object],
+                dict[str, object] | None,
+                dict[str, object],
+                tuple[dict[str, object], ...],
+                str | None,
+            ]
+        ] = []
+        try:
+            for event in events:
+                payload = event.get("payload")
+                if not isinstance(payload, dict):
+                    raise ValueError("event payload is malformed")
+                current = payload.get("state")
+                if not isinstance(current, dict) or not builders._commit_transition_valid(
+                    event, replayed, current
+                ):
+                    raise ValueError("commit transition is invalid")
+                records, event_outbox, source_digest = builders._event_batch_records(
+                    event, "commit"
+                )
+                event_name = payload.get("event")
+                is_receipt = event_name == "journal_receipted"
+                if pending is not None and not is_receipt:
+                    raise ValueError("pending outbox was bypassed")
+                if pending is None and is_receipt:
+                    raise ValueError("receipt has no pending outbox")
+                if is_receipt:
+                    acknowledgement = builders._receipt_metadata(event, "commit")
+                    if (
+                        acknowledgement is None
+                        or records
+                        or event_outbox is not None
+                        or source_digest is not None
+                        or acknowledgement.get("idempotency_key")
+                        != pending.get("idempotency_key")
+                        or acknowledgement.get("batch_digest")
+                        != pending.get("batch_digest")
+                        or replayed is None
+                    ):
+                        raise ValueError("receipt transition is invalid")
+                    builders._verify_receipted_batch(
+                        repository,
+                        chain_id,
+                        replayed,
+                        pending,
+                        pending_records,
+                        acknowledgement,
+                    )
+                    if current.get("journal_outbox") is not None:
+                        raise ValueError("receipt did not clear outbox")
+                    pending = None
+                    pending_records = ()
+                elif event_outbox is not None:
+                    if pending is not None or current.get("journal_outbox") != event_outbox:
+                        raise ValueError("event outbox projection is invalid")
+                    pending = event_outbox
+                    pending_records = records
+                elif current.get("journal_outbox") != pending:
+                    raise ValueError("event changed the pending outbox")
+                for record in records:
+                    record_binding = record.get("binding")
+                    if (
+                        not isinstance(record_binding, dict)
+                        or not builders._binding_matches_source_fact(
+                            record_binding,
+                            record,
+                            event,
+                            replayed,
+                            current,
+                            family="commit",
+                        )
+                    ):
+                        raise ValueError("carried binding fact is invalid")
+                replay_entries.append(
+                    (
+                        copy.deepcopy(event),
+                        copy.deepcopy(replayed),
+                        copy.deepcopy(current),
+                        tuple(copy.deepcopy(records)),
+                        source_digest,
+                    )
+                )
+                replayed = copy.deepcopy(current)
+            if replayed is None:
+                raise ValueError("bound chain replay is empty")
+            frozen_entries = tuple(replay_entries)
+            for event, prior, current, records, _source_digest in frozen_entries:
+                for record in records:
+                    record_binding = record.get("binding")
+                    current_fact = bool(
+                        isinstance(record_binding, dict)
+                        and builders._binding_is_current(
+                            replayed,
+                            record_binding,
+                            record,
+                            event,
+                            prior,
+                            current,
+                            frozen_entries,
+                            chain_family="commit",
+                        )
+                    )
+                    # ``commit_produced`` is the authoritative landing fact,
+                    # while the following ``chain_closed`` projection is a
+                    # separate non-consequential event.  A crash after the
+                    # landing batch was receipted therefore leaves one valid
+                    # in-flight landing in ``committing``.  Admit only that
+                    # exact recovery window; every other stale fact freezes.
+                    if not current_fact and isinstance(record_binding, dict):
+                        final_result = replayed.get("commit_result")
+                        final_candidate = replayed.get("candidate")
+                        source_payload = event.get("payload")
+                        source_details = (
+                            source_payload.get("details")
+                            if isinstance(source_payload, dict)
+                            else None
+                        )
+                        bound_candidate = record_binding.get("candidate")
+                        current_fact = bool(
+                            record.get("outcome") == "chain-landing"
+                            and replayed.get("state") == "committing"
+                            and isinstance(final_result, dict)
+                            and isinstance(final_candidate, dict)
+                            and isinstance(source_payload, dict)
+                            and source_payload.get("event") == "commit_produced"
+                            and isinstance(source_details, dict)
+                            and isinstance(bound_candidate, dict)
+                            and bound_candidate.get("kind")
+                            == "staged-diff-sha256"
+                            and bound_candidate.get("value")
+                            == final_candidate.get("sha256")
+                            and isinstance(final_result.get("intent"), dict)
+                            and final_result["intent"].get("candidate")
+                            == final_candidate.get("sha256")
+                            and source_details.get("commit_sha")
+                            == final_result.get("commit_sha")
+                        )
+                    if (
+                        not isinstance(record_binding, dict)
+                        or not current_fact
+                    ):
+                        raise ValueError("carried binding fact is stale")
+        except (KeyError, TypeError, ValueError, RuntimeError, journal.CoordinationRefusal) as exc:
+            raise FrozenError(
+                "bound chain event replay failed",
+                chain_id=chain_id,
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+
     def _load_locked(self, chain_id: str) -> dict[str, Any]:
         events = self._events_unlocked(chain_id)
         replayed = copy.deepcopy(events[-1]["payload"]["state"])
+        binding = replayed.get("run_binding")
+        if isinstance(binding, Mapping):
+            self._validate_bound_event_history(chain_id, events, binding)
         path = self.state_path(chain_id)
         materialized: dict[str, Any] | None = None
         try:
@@ -1886,6 +5283,36 @@ class ChainStore:
                     state="committing",
                 )
             self._atomic_state(replayed)
+        if isinstance(binding, Mapping):
+            _batch, builders, journal = _coordination_modules()
+            try:
+                with self.root_descriptor() as root:
+                    root_observation = journal._file_observation(os.fstat(root))
+                    authoritative = builders._resolve_binding_from_descriptor(
+                        Path(str(binding["repository"])),
+                        root,
+                        chain_id,
+                        ZERO_DIGEST,
+                        expected_type=None,
+                        expected_fields=None,
+                        expected_run_id=None,
+                        expected_task_id=None,
+                        replay_only=True,
+                        allow_pending=True,
+                    )
+                    if (
+                        authoritative != replayed
+                        or journal._file_observation(os.fstat(root))
+                        != root_observation
+                    ):
+                        raise ValueError("authoritative replay changed")
+            except (KeyError, OSError, TypeError, ValueError, RuntimeError, journal.CoordinationRefusal) as exc:
+                raise FrozenError(
+                    "bound chain authority replay failed",
+                    chain_id=chain_id,
+                    observed=str(exc),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                ) from exc
         self._state_versions[id(replayed)] = (
             replayed,
             int(events[-1]["sequence"]),
@@ -1910,10 +5337,47 @@ class ChainStore:
         *,
         initial: bool = False,
         touch: bool = True,
+        _journal_locked: bool = False,
     ) -> None:
         validate_state(state, str(state.get("chain_id")))
         self.ensure_root()
         chain_id = str(state["chain_id"])
+        binding = state.get("run_binding")
+        if isinstance(binding, Mapping) and not _journal_locked:
+            register_coordination_seams()
+            batch, _builders, journal = _coordination_modules()
+            run_dir = (
+                self.common_root
+                / ".codex-orchestrator"
+                / "runs"
+                / str(binding["run_id"])
+            )
+            try:
+                with batch.batch_lock(run_dir, create=False):
+                    self.persist(
+                        state,
+                        event,
+                        details,
+                        initial=initial,
+                        touch=touch,
+                        _journal_locked=True,
+                    )
+                return
+            except journal.CoordinationRefusal as exc:
+                raise _coordination_refusal(exc) from exc
+        if isinstance(binding, Mapping):
+            _validate_bound_chain_state(state)
+        if state.get("journal_outbox") is not None and event != "journal_receipted":
+            raise Refusal(
+                V2ReasonCode.JOURNAL_OUTBOX_PENDING,
+                "forge: chain transition refused — journal outbox is pending",
+                expected="a receipted null journal_outbox",
+                observed=str(state.get("journal_outbox")),
+                remediation=_forge_command(state, "status"),
+                chain=state,
+            )
+        carried_records: tuple[dict[str, Any], ...] = ()
+        pending_outbox: dict[str, Any] | None = None
         with self.event_lock(chain_id):
             existing: list[dict[str, Any]] = []
             if not initial:
@@ -1965,6 +5429,41 @@ class ChainStore:
                 "prev_digest": previous,
                 "payload": payload,
             }
+            if isinstance(binding, Mapping) and event != "journal_receipted":
+                source_event_digest = sha256_bytes(canonical_bytes(unsigned))
+                carried_records = _build_chain_journal_records(
+                    Path(str(binding["repository"])),
+                    state,
+                    event,
+                    details,
+                    source_event_digest,
+                )
+                if carried_records:
+                    _batch, _builders, journal = _coordination_modules()
+                    batch_bytes = b"".join(
+                        journal._journal_line(record)
+                        for record in carried_records
+                    )
+                    batch_digest = sha256_bytes(batch_bytes)
+                    pending_outbox = {
+                        "idempotency_key": source_event_digest,
+                        "batch_digest": batch_digest,
+                        "record_count": len(carried_records),
+                        "source_event_digest": source_event_digest,
+                    }
+                    state["journal_outbox"] = copy.deepcopy(pending_outbox)
+                    payload["state"] = copy.deepcopy(state)
+                    payload["details"] = {
+                        **dict(details),
+                        "source_event_digest": source_event_digest,
+                        "journal_batch": {
+                            "idempotency_key": source_event_digest,
+                            "batch_digest": batch_digest,
+                            "record_count": len(carried_records),
+                            "records": copy.deepcopy(list(carried_records)),
+                        },
+                    }
+                    unsigned["payload"] = payload
             record = {**unsigned, "digest": sha256_bytes(canonical_bytes(unsigned))}
             encoded = canonical_bytes(record) + b"\n"
             flags = (
@@ -2009,6 +5508,173 @@ class ChainStore:
                 sequence,
                 str(record["digest"]),
             )
+        if pending_outbox is not None:
+            self._drain_pending_batch(
+                state,
+                pending_outbox,
+                carried_records,
+                journal_locked=True,
+            )
+
+    def _drain_pending_batch(
+        self,
+        state: dict[str, Any],
+        pending_outbox: Mapping[str, Any],
+        carried_records: Sequence[dict[str, Any]],
+        *,
+        journal_locked: bool,
+    ) -> None:
+        binding = state.get("run_binding")
+        if not isinstance(binding, Mapping):
+            raise FrozenError(
+                "pending journal outbox lacks an immutable run binding",
+                chain_id=str(state.get("chain_id") or "") or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if not journal_locked:
+            register_coordination_seams()
+            batch, _builders, journal = _coordination_modules()
+            run_dir = (
+                self.common_root
+                / ".codex-orchestrator"
+                / "runs"
+                / str(binding["run_id"])
+            )
+            try:
+                with batch.batch_lock(run_dir, create=False):
+                    self._drain_pending_batch(
+                        state,
+                        pending_outbox,
+                        carried_records,
+                        journal_locked=True,
+                    )
+                return
+            except journal.CoordinationRefusal as exc:
+                raise _coordination_refusal(exc) from exc
+
+        batch, _builders, _journal = _coordination_modules()
+        capability = object()
+        registry = batch._FORGE_CLI_CHAIN_CAPABILITIES
+        registry_lock = batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK
+        with registry_lock:
+            registry[id(capability)] = (
+                capability,
+                {
+                    "repository": Path(str(binding["repository"])),
+                    "run_id": str(binding["run_id"]),
+                    "task_id": str(binding["task_id"]),
+                    "chain_id": str(state["chain_id"]),
+                    "source_event_digest": pending_outbox[
+                        "source_event_digest"
+                    ],
+                    "records": tuple(copy.deepcopy(tuple(carried_records))),
+                },
+            )
+        try:
+            outcome = batch.drain_chain_batch(
+                Path(str(binding["repository"])),
+                str(binding["run_id"]),
+                chain_id=str(state["chain_id"]),
+                source_event_digest=str(pending_outbox["source_event_digest"]),
+                records=carried_records,
+                capability=capability,
+            )
+        finally:
+            with registry_lock:
+                registered = registry.get(id(capability))
+                if isinstance(registered, tuple) and registered[0] is capability:
+                    registry.pop(id(capability), None)
+        receipt_details = batch.journal_receipted_details(
+            dict(pending_outbox), outcome.receipt
+        )
+        if state.get("journal_outbox") != pending_outbox:
+            raise FrozenError(
+                "pending journal outbox identity changed before acknowledgement",
+                chain_id=str(state["chain_id"]),
+                state=str(state.get("state")),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        state["journal_outbox"] = None
+        self.persist(
+            state,
+            "journal_receipted",
+            receipt_details,
+            _journal_locked=True,
+        )
+
+    def recover_pending_outbox(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Replay and receipt the exact last unacknowledged carried batch."""
+
+        pending = state.get("journal_outbox")
+        if pending is None:
+            return state
+        binding = state.get("run_binding")
+        if not isinstance(binding, Mapping) or not isinstance(pending, dict):
+            raise FrozenError(
+                "pending journal outbox is not recoverable",
+                chain_id=str(state.get("chain_id") or "") or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        register_coordination_seams()
+        batch, _builders, journal = _coordination_modules()
+        run_dir = (
+            self.common_root
+            / ".codex-orchestrator"
+            / "runs"
+            / str(binding["run_id"])
+        )
+        try:
+            with batch.batch_lock(run_dir, create=False):
+                with self.event_lock(str(state["chain_id"])):
+                    fresh = self._load_locked(str(state["chain_id"]))
+                    current_pending = fresh.get("journal_outbox")
+                    if current_pending is None:
+                        return fresh
+                    if current_pending != pending:
+                        raise FrozenError(
+                            "pending journal outbox changed during replay",
+                            chain_id=str(state["chain_id"]),
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    events = self._events_unlocked(str(state["chain_id"]))
+                    carrier = events[-1]["payload"].get("details")
+                    carried = (
+                        carrier.get("journal_batch")
+                        if isinstance(carrier, dict)
+                        else None
+                    )
+                    if (
+                        not isinstance(carried, dict)
+                        or set(carried)
+                        != {
+                            "idempotency_key",
+                            "batch_digest",
+                            "record_count",
+                            "records",
+                        }
+                        or carried.get("idempotency_key")
+                        != current_pending.get("idempotency_key")
+                        or carried.get("batch_digest")
+                        != current_pending.get("batch_digest")
+                        or carried.get("record_count")
+                        != current_pending.get("record_count")
+                        or not isinstance(carried.get("records"), list)
+                    ):
+                        raise FrozenError(
+                            "pending journal outbox lacks its exact carried batch",
+                            chain_id=str(state["chain_id"]),
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    records = tuple(copy.deepcopy(carried["records"]))
+                self._drain_pending_batch(
+                    fresh,
+                    current_pending,
+                    records,
+                    journal_locked=True,
+                )
+                return fresh
+        except journal.CoordinationRefusal as exc:
+            raise _coordination_refusal(exc) from exc
 
     def _atomic_state(self, state: Mapping[str, Any]) -> None:
         chain_id = str(state["chain_id"])
@@ -2076,6 +5742,7 @@ class CLIOptions:
     repo: str | None = None
     run_id: str | None = None
     original_argv: tuple[str, ...] = ()
+    revision9_face: bool = False
 
 
 @dataclasses.dataclass
@@ -2130,73 +5797,6 @@ class CommandContext:
             remediation="rerun without --run-id or pass the exact open run id",
         )
 
-    def append_run_stub(self, run_dir: Path | None, outcome: Outcome) -> None:
-        if run_dir is None:
-            return
-        run_id = str(self.options.run_id)
-        record_dir = run_dir / "forge-cli" / (outcome.chain_id or "unbound")
-        record_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        record = {
-            "type": "decision",
-            "id": (
-                f"decision-forge-cli-{utc_now().strftime('%Y%m%dT%H%M%S%fZ')}-"
-                f"{secrets.token_hex(2)}"
-            ),
-            "resolution": (
-                f"Forge CLI outcome {outcome.reason_code.value}: {outcome.message}"
-            ),
-            "basis": [],
-            "risk": "",
-            "recorded_at": iso_z(),
-        }
-        record_path = record_dir / f"{record['id']}.json"
-        descriptor = os.open(
-            record_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-        )
-        try:
-            data = canonical_bytes(record) + b"\n"
-            written = 0
-            while written < len(data):
-                count = os.write(descriptor, data[written:])
-                if count <= 0:
-                    raise OSError("short run-journal record write")
-                written += count
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        ChainStore._fsync_dir(record_dir)
-        tool = self.plugin_root() / "scripts" / "codex_orch_tools.py"
-        process = run_bounded(
-            [
-                sys.executable,
-                str(tool),
-                "journal-append",
-                "--repo",
-                str(self.repo.root),
-                "--run-id",
-                run_id,
-                "--record-json",
-                str(record_path),
-            ],
-            cwd=self.repo.root,
-            timeout=30.0,
-            verbose=self.options.verbose,
-        )
-        if process.returncode != 0 or process.timed_out or process.output_limit:
-            raise Refusal(
-                ReasonCode.CITATION_OUT_OF_ROOT,
-                "explicit run journal append was refused",
-                expected="codex_orch_tools.py journal-append exit 0",
-                observed=process.output.decode("utf-8", "replace").strip() or f"exit {process.returncode}",
-                remediation=f"inspect run ownership and retry with --run-id {run_id}",
-                chain=(
-                    {"chain_id": outcome.chain_id, "state": outcome.state}
-                    if outcome.chain_id and outcome.state
-                    else None
-                ),
-            )
-
-
 def _new_state(
     chain_id: str,
     repo: Repository,
@@ -2204,6 +5804,7 @@ def _new_state(
     policy: Policy,
     paths: Sequence[str],
     declared_tier: str | None,
+    run_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
     session_identity = os.environ.get("CLAUDE_SESSION_ID")
@@ -2253,6 +5854,8 @@ def _new_state(
         "approval": {},
         "authorization": {},
         "commit_result": {},
+        "run_binding": copy.deepcopy(dict(run_binding)) if run_binding else None,
+        "journal_outbox": None,
     }
     return validate_state(state, chain_id)
 
@@ -2279,6 +5882,580 @@ def _policy_for_state(ctx: CommandContext, state: Mapping[str, Any]) -> Policy:
         )
     ctx.policy = policy
     return policy
+
+
+def _prove_run_task_binding(
+    ctx: CommandContext,
+    run_id: str,
+    task_id: str,
+    paths: Sequence[str],
+    policy: Policy,
+) -> dict[str, str]:
+    """Prove the immutable run/task/repository/scope/policy start tuple."""
+
+    batch, _builders, journal = _coordination_modules()
+    run_dir = ctx.store.common_root / ".codex-orchestrator" / "runs" / run_id
+    try:
+        with batch.batch_lock(run_dir, create=False):
+            run_state = journal._scan_run(run_dir)
+            if run_state.disposition != "open":
+                raise ValueError("run is not open")
+            opening = run_state.records[0] if run_state.records else None
+            if (
+                not isinstance(opening, dict)
+                or Path(str(opening.get("repo", ""))).resolve(strict=True)
+                != ctx.repo.root
+            ):
+                raise ValueError("run repository differs from chain repository")
+            matching_tasks = [
+                record
+                for record in run_state.records
+                if record.get("type") == "task" and record.get("id") == task_id
+            ]
+            if not matching_tasks or matching_tasks[-1].get("status") != "active":
+                raise ValueError("task is not active")
+            task_files = matching_tasks[-1].get("files")
+            if (
+                not isinstance(task_files, list)
+                or not task_files
+                or not all(isinstance(item, str) and item for item in task_files)
+            ):
+                raise ValueError("task files are malformed")
+            for path in paths:
+                if not any(
+                    journal.pathspec_contained(path, item) for item in task_files
+                ):
+                    raise ValueError(f"path {path} is outside task membership")
+                if not any(
+                    journal.pathspec_contained(path, admitted)
+                    for admitted in run_state.scope
+                ):
+                    raise ValueError(f"path {path} is outside admitted scope")
+    except (OSError, RuntimeError, ValueError, journal.CoordinationRefusal) as exc:
+        raise Refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: commit start refused — run/task binding is invalid",
+            expected="matching repository, active task, admitted paths, and committed policy",
+            observed=str(exc),
+            remediation="inspect the named run/task and retry the exact paired start",
+        ) from exc
+    return {
+        "run_id": run_id,
+        "task_id": task_id,
+        "repository": str(ctx.repo.root),
+        "policy_digest": policy.digest,
+    }
+
+
+def _validate_bound_chain_state(state: Mapping[str, Any]) -> None:
+    """Re-prove a bound chain against current journal and committed policy."""
+
+    binding = state.get("run_binding")
+    if not isinstance(binding, Mapping):
+        return
+    batch, _builders, journal = _coordination_modules()
+    repository = Path(str(binding.get("repository", "")))
+    run_id = str(binding.get("run_id", ""))
+    task_id = str(binding.get("task_id", ""))
+    try:
+        canonical_repository, state_root = journal._resolve_repository(
+            repository, "chain binding"
+        )
+        run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
+        with batch.batch_lock(run_dir, create=False):
+            run_state = journal._scan_run(run_dir)
+            opening = run_state.records[0] if run_state.records else None
+            if (
+                run_state.disposition != "open"
+                or not isinstance(opening, dict)
+                or Path(str(opening.get("repo", ""))).resolve(strict=True)
+                != canonical_repository
+            ):
+                raise ValueError("run is terminal or belongs to another repository")
+            tasks = [
+                record
+                for record in run_state.records
+                if record.get("type") == "task" and record.get("id") == task_id
+            ]
+            if not tasks or tasks[-1].get("status") != "active":
+                raise ValueError("bound task is not active")
+            files = tasks[-1].get("files")
+            if not isinstance(files, list) or not files:
+                raise ValueError("bound task files are malformed")
+            for path in state.get("paths", ()):
+                if not isinstance(path, str) or not any(
+                    journal.pathspec_contained(path, pattern)
+                    for pattern in files
+                    if isinstance(pattern, str)
+                ):
+                    raise ValueError("chain path is outside bound task membership")
+                if not any(
+                    journal.pathspec_contained(path, admitted)
+                    for admitted in run_state.scope
+                ):
+                    raise ValueError("chain path is outside admitted run scope")
+            policy_source = state.get("policy_source")
+            if not isinstance(policy_source, Mapping):
+                raise ValueError("chain policy source is malformed")
+            policy = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(canonical_repository),
+                    "show",
+                    f"{policy_source.get('sha')}:forge-project.md",
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            if (
+                policy.returncode != 0
+                or sha256_bytes(policy.stdout) != binding.get("policy_digest")
+            ):
+                raise ValueError("committed policy identity changed")
+    except (OSError, RuntimeError, ValueError, journal.CoordinationRefusal) as exc:
+        raise Refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: chain transition refused — run/task binding is invalid",
+            expected="open run, active task, matching repository/scope/policy binding",
+            observed=str(exc),
+            remediation=_forge_command(state, "status"),
+            chain=state,
+        ) from exc
+
+
+def _archive_module() -> Any:
+    global _ARCHIVE_MODULE
+    if _ARCHIVE_MODULE is not None:
+        return _ARCHIVE_MODULE
+    with _ARCHIVE_MODULE_LOCK:
+        if _ARCHIVE_MODULE is not None:
+            return _ARCHIVE_MODULE
+        path = SCRIPT_DIR / "archive-run.py"
+        specification = importlib.util.spec_from_file_location(
+            "forge_archive_run_revision9", path
+        )
+        if specification is None or specification.loader is None:
+            raise RuntimeError("archive renderer module is unavailable")
+        existing = sys.modules.get(specification.name)
+        if existing is not None:
+            if not callable(getattr(existing, "render_archive_candidate", None)):
+                raise RuntimeError("archive renderer module identity is occupied")
+            _ARCHIVE_MODULE = existing
+            return existing
+        module = importlib.util.module_from_spec(specification)
+        sys.modules[specification.name] = module
+        try:
+            specification.loader.exec_module(module)
+        except BaseException:
+            if sys.modules.get(specification.name) is module:
+                sys.modules.pop(specification.name, None)
+            raise
+        _ARCHIVE_MODULE = module
+        return module
+
+
+def _archive_refusal(message: str, *, chain: Mapping[str, Any] | None = None) -> Refusal:
+    if "exceeds 16 MiB" in message or "16,777,216" in message:
+        reason = V2ReasonCode.ARCHIVE_SIZE_LIMIT
+    elif "legacy" in message.lower() and (
+        "approval" in message.lower() or "recovered" in message.lower()
+    ):
+        reason = V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED
+    elif "differ" in message.lower() or "mismatch" in message.lower():
+        reason = V2ReasonCode.ARCHIVE_RERENDER_MISMATCH
+    else:
+        reason = V2ReasonCode.BINDING_INVALID
+    return Refusal(
+        reason,
+        message,
+        expected="a safe archive-only candidate equal to deterministic rerender",
+        observed=message,
+        remediation="repair the immutable archive inputs and retry archive commit start",
+        chain=chain,
+    )
+
+
+ARCHIVE_CONTAMINATION = (
+    "forge: archive refused — close tree contains unrelated changes"
+)
+
+
+def _archive_contamination_refusal(
+    *, chain: Mapping[str, Any] | None = None
+) -> Refusal:
+    return Refusal(
+        ReasonCode.STATE_PRECONDITION,
+        ARCHIVE_CONTAMINATION,
+        expected="only the deterministic archive candidate in the index",
+        observed="unrelated staged, tracked, or untracked close-tree content",
+        remediation="restore a clean close tree and restart archive commit",
+        chain=chain,
+        schema=REVISION9_OUTPUT_SCHEMA,
+    )
+
+
+def _nul_git_paths(value: bytes) -> list[str]:
+    return [os.fsdecode(item) for item in value.split(b"\0") if item]
+
+
+def _archive_close_tree_clean(
+    repository: Repository,
+    relative: str,
+    *,
+    before_staging: bool,
+) -> bool:
+    staged = repository.staged_paths()
+    unstaged = _nul_git_paths(
+        repository.git(["diff", "--name-only", "-z"]).stdout
+    )
+    untracked = _nul_git_paths(
+        repository.git(
+            ["ls-files", "--others", "--exclude-standard", "-z"]
+        ).stdout
+    )
+    if before_staging:
+        return not staged and not unstaged and untracked in ([], [relative])
+    return staged == [relative] and not unstaged and not untracked
+
+
+@contextlib.contextmanager
+def _archive_parent_descriptor(repository: Path, *, create: bool) -> Iterable[int]:
+    """Open the fixed archive parent one no-follow component at a time."""
+
+    root = Path(os.path.realpath(repository))
+    descriptor = os.open(
+        root,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        opened_root = os.fstat(descriptor)
+        if not stat.S_ISDIR(opened_root.st_mode) or opened_root.st_uid != os.geteuid():
+            raise OSError("repository is not an owner-controlled directory")
+        for name in (".forge", "history", "runs"):
+            if create:
+                try:
+                    os.mkdir(name, 0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                except FileExistsError:
+                    pass
+            child = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=descriptor,
+            )
+            child_stat = os.fstat(child)
+            named_stat = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(child_stat.st_mode)
+                or stat.S_ISLNK(named_stat.st_mode)
+                or child_stat.st_uid != os.geteuid()
+                or (child_stat.st_dev, child_stat.st_ino)
+                != (named_stat.st_dev, named_stat.st_ino)
+            ):
+                os.close(child)
+                raise OSError("archive destination parent is unsafe")
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def _read_archive_candidate_at(parent: int, name: str) -> bytes:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent,
+        )
+        opened = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or stat.S_ISLNK(rebound.st_mode)
+            or opened.st_uid != os.geteuid()
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (rebound.st_dev, rebound.st_ino)
+            or opened.st_size > 16_777_216
+        ):
+            raise OSError("archive candidate is not a safe owner-controlled regular file")
+        data = b""
+        while len(data) <= 16_777_216:
+            chunk = os.read(descriptor, min(65536, 16_777_217 - len(data)))
+            if not chunk:
+                break
+            data += chunk
+        if len(data) > 16_777_216:
+            raise OSError("archive candidate exceeds 16 MiB")
+        after = os.fstat(descriptor)
+        final_named = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            (after.st_dev, after.st_ino, after.st_size)
+            != (opened.st_dev, opened.st_ino, opened.st_size)
+            or (final_named.st_dev, final_named.st_ino)
+            != (opened.st_dev, opened.st_ino)
+        ):
+            raise OSError("archive candidate changed while read")
+        return data
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _read_archive_candidate(repository: Path, run_id: str) -> bytes:
+    with _archive_parent_descriptor(repository, create=False) as parent:
+        return _read_archive_candidate_at(parent, f"{run_id}.md")
+
+
+def _render_archive_bytes(
+    ctx: CommandContext, metadata: Mapping[str, Any]
+) -> bytes:
+    renderer = _archive_module()
+    run_dir = (
+        ctx.store.common_root
+        / ".codex-orchestrator"
+        / "runs"
+        / str(metadata["run_id"])
+    )
+    captured_stdout = io.BytesIO()
+    captured_text = io.TextIOWrapper(captured_stdout, encoding="utf-8")
+    try:
+        try:
+            with contextlib.redirect_stdout(captured_text):
+                rendered = renderer.render_archive_candidate(
+                    repo=ctx.repo.root,
+                    run_dir=run_dir,
+                    closing_head=metadata.get("closing_head"),
+                    legacy_recovered_head=metadata.get("legacy_recovered_head"),
+                    legacy_approval=metadata.get("legacy_approval"),
+                    post_close_validation=Path(
+                        str(metadata["post_close_validation"])
+                    ),
+                    dispense_targets=tuple(metadata.get("dispense_targets", ())),
+                    dispense_reason=metadata.get("dispense_reason"),
+                )
+        except SystemExit as exc:
+            captured_text.flush()
+            diagnostic = captured_stdout.getvalue().decode(
+                "utf-8", "replace"
+            ).strip()
+            suffix = f": {diagnostic}" if diagnostic else ""
+            raise _archive_refusal(
+                "forge: archive refused — commitments audit failed "
+                f"(exit {exc.code}){suffix}"
+            ) from exc
+    except Exception as exc:
+        if exc.__class__.__name__ == "ArchiveRefusal":
+            raise _archive_refusal(str(getattr(exc, "message", exc))) from exc
+        raise
+    finally:
+        try:
+            captured_text.detach()
+        except (ValueError, OSError):
+            pass
+    if not isinstance(rendered, bytes):
+        raise FrozenError(
+            "archive renderer returned a non-byte candidate",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    if len(rendered) > 16_777_216:
+        raise Refusal(
+            V2ReasonCode.ARCHIVE_SIZE_LIMIT,
+            "forge: archive refused — rendered archive exceeds 16 MiB",
+            remediation="reduce citable evidence without truncating authority",
+        )
+    return rendered
+
+
+def _prepare_archive_candidate(
+    ctx: CommandContext,
+    run_id: str,
+    *,
+    legacy_recovered_head: str | None,
+    legacy_approval: str | None,
+    dispense_targets: Sequence[str],
+    dispense_reason: str | None,
+) -> tuple[list[str], dict[str, Any]]:
+    if RUN_ID_RE.fullmatch(run_id) is None:
+        raise _archive_refusal("forge: archive refused — invalid run identity")
+    if legacy_recovered_head is not None and COMMIT_RE.fullmatch(
+        legacy_recovered_head
+    ) is None:
+        raise _archive_refusal(
+            "forge: archive refused — legacy recovery approval missing or mismatched"
+        )
+    relative = f".forge/history/runs/{run_id}.md"
+    if Path(relative).parts != (".forge", "history", "runs", f"{run_id}.md"):
+        raise _archive_refusal("forge: archive refused — unsafe archive candidate path")
+    if not _archive_close_tree_clean(
+        ctx.repo, relative, before_staging=True
+    ):
+        raise _archive_contamination_refusal()
+    committed = ctx.repo.git(["cat-file", "-e", f"HEAD:{relative}"], check=False)
+    if committed.returncode == 0:
+        raise _archive_refusal(
+            f"forge: archive refused — archive already exists in HEAD: {relative}"
+        )
+    run_dir = (
+        ctx.store.common_root / ".codex-orchestrator" / "runs" / run_id
+    )
+    metadata: dict[str, Any] = {
+        "run_id": run_id,
+        "path": relative,
+        "closing_head": None if legacy_recovered_head is not None else ctx.repo.head(),
+        "legacy_recovered_head": legacy_recovered_head,
+        "legacy_approval": legacy_approval,
+        "post_close_validation": str(run_dir / "post-close-validation.json"),
+        "dispense_targets": list(dispense_targets),
+        "dispense_reason": dispense_reason,
+    }
+    rendered = _render_archive_bytes(ctx, metadata)
+    try:
+        with _archive_parent_descriptor(ctx.repo.root, create=True) as parent:
+            try:
+                existing = _read_archive_candidate_at(parent, f"{run_id}.md")
+            except FileNotFoundError:
+                descriptor = os.open(
+                    f"{run_id}.md",
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                    dir_fd=parent,
+                )
+                try:
+                    opened = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(opened.st_mode)
+                        or opened.st_uid != os.geteuid()
+                        or opened.st_nlink != 1
+                    ):
+                        raise OSError("new archive candidate is unsafe")
+                    written = 0
+                    while written < len(rendered):
+                        count = os.write(descriptor, rendered[written:])
+                        if count <= 0:
+                            raise OSError("short archive candidate write")
+                        written += count
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+                os.fsync(parent)
+                existing = _read_archive_candidate_at(parent, f"{run_id}.md")
+    except OSError as exc:
+        raise _archive_refusal(f"forge: archive refused — {exc}") from exc
+    if _validated_commitment_path(
+        "archive.candidate",
+        relative,
+        repository=ctx.repo.root,
+        direct_parent=ctx.repo.root / ".forge" / "history" / "runs",
+        require_file=True,
+    ) is None:
+        raise _archive_refusal(
+            "forge: archive refused — unsafe archive candidate path"
+        )
+    if existing != rendered:
+        raise Refusal(
+            V2ReasonCode.ARCHIVE_RERENDER_MISMATCH,
+            "forge: archive refused — rerendered bytes differ from candidate",
+            expected=sha256_bytes(rendered),
+            observed=sha256_bytes(existing),
+            remediation="remove the mismatched uncommitted archive and rerender",
+        )
+    metadata["rendered_sha256"] = sha256_bytes(rendered)
+    return [relative], metadata
+
+
+def _archive_recheck(
+    ctx: CommandContext,
+    state: Mapping[str, Any],
+    phase: str,
+    *,
+    require_staged: bool = True,
+) -> None:
+    if ARCHIVE_RECHECK_CONTROLS != _REQUIRED_ARCHIVE_RECHECK_CONTROLS:
+        raise FrozenError(
+            "Revision-9 archive rerender control is unavailable",
+            chain_id=str(state.get("chain_id") or "") or None,
+            state=str(state.get("state") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    staging = state.get("staging")
+    metadata = (
+        staging.get("archive")
+        if isinstance(staging, Mapping)
+        else None
+    )
+    if metadata is None:
+        return
+    if not isinstance(metadata, Mapping) or set(metadata) != {
+        "run_id",
+        "path",
+        "closing_head",
+        "legacy_recovered_head",
+        "legacy_approval",
+        "post_close_validation",
+        "dispense_targets",
+        "dispense_reason",
+        "rendered_sha256",
+    }:
+        raise _archive_refusal("forge: archive refused — malformed archive chain metadata", chain=state)
+    relative = str(metadata["path"])
+    if relative != f".forge/history/runs/{metadata['run_id']}.md":
+        raise _archive_refusal("forge: archive refused — unsafe archive candidate path", chain=state)
+    if _validated_commitment_path(
+        "archive.candidate",
+        relative,
+        repository=ctx.repo.root,
+        direct_parent=ctx.repo.root / ".forge" / "history" / "runs",
+        require_file=True,
+    ) is None:
+        raise _archive_refusal(
+            "forge: archive refused — unsafe archive candidate path",
+            chain=state,
+        )
+    if ctx.repo.git(["cat-file", "-e", f"HEAD:{relative}"], check=False).returncode == 0:
+        raise _archive_refusal("forge: archive refused — archive already exists in HEAD", chain=state)
+    rendered = _render_archive_bytes(ctx, metadata)
+    try:
+        candidate = _read_archive_candidate(
+            ctx.repo.root, str(metadata["run_id"])
+        )
+    except OSError as exc:
+        raise _archive_refusal(f"forge: archive refused — {exc}", chain=state) from exc
+    if candidate != rendered or sha256_bytes(rendered) != metadata["rendered_sha256"]:
+        raise Refusal(
+            V2ReasonCode.ARCHIVE_RERENDER_MISMATCH,
+            "forge: archive refused — rerendered bytes differ from candidate",
+            expected=str(metadata["rendered_sha256"]),
+            observed=sha256_bytes(candidate),
+            remediation=f"restart archive commit after {phase} mismatch",
+            chain=state,
+        )
+    if require_staged and not _archive_close_tree_clean(
+        ctx.repo, relative, before_staging=False
+    ):
+        raise _archive_contamination_refusal(chain=state)
+
+
+def _archive_metadata(state: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    staging = state.get("staging")
+    metadata = staging.get("archive") if isinstance(staging, Mapping) else None
+    return metadata if isinstance(metadata, Mapping) else None
 
 
 def _env_fingerprint(
@@ -3005,18 +7182,38 @@ def _success(
     *,
     evidence_refs: Iterable[str] = (),
 ) -> Outcome:
+    revision9 = bool(
+        isinstance(state, Mapping)
+        and (
+            state.get("run_binding") is not None
+            or isinstance(state.get("staging"), Mapping)
+            and state.get("staging", {}).get("archive") is not None
+        )
+    )
     return Outcome(
         ok=True,
-        reason_code=ReasonCode.OK,
+        reason_code=V2ReasonCode.OK if revision9 else ReasonCode.OK,
         message=message,
         chain_id=str(state["chain_id"]) if state else None,
         state=str(state["state"]) if state else None,
         next_required_step=next_step,
         evidence_refs=tuple(item for item in evidence_refs if item),
+        schema=REVISION9_OUTPUT_SCHEMA if revision9 else OUTPUT_SCHEMA,
     )
 
 
-def _issue_authorization(state: MutableMapping[str, Any]) -> None:
+def _issue_authorization(
+    state: MutableMapping[str, Any], ctx: CommandContext | None = None
+) -> None:
+    if _archive_metadata(state) is not None:
+        if ctx is None:
+            raise FrozenError(
+                "archive authorization lacks its rerender context",
+                chain_id=str(state.get("chain_id") or "") or None,
+                state=str(state.get("state") or "") or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        _archive_recheck(ctx, state, "authorization")
     issued = utc_now()
     state["authorization"] = {
         "token": secrets.token_hex(16),
@@ -3200,13 +7397,98 @@ def _run_halt(ctx: CommandContext, state: Mapping[str, Any] | None = None) -> No
         )
 
 
+def _peek_chain_state(store: ChainStore, chain_id: str) -> dict[str, Any] | None:
+    """Read only enough immutable identity to choose the outer journal lock."""
+
+    try:
+        raw = store._read_root_bytes(store.state_path(chain_id).name)
+        return validate_state(json.loads(raw), chain_id)
+    except (FileNotFoundError, OSError, UnicodeError, ValueError, FrozenError):
+        try:
+            with store.event_lock(chain_id):
+                events = store._events_unlocked(chain_id)
+                return copy.deepcopy(events[-1]["payload"]["state"])
+        except (FileNotFoundError, OSError, ValueError, FrozenError):
+            return None
+
+
+def _peek_selected_chain(
+    engine: "Engine", *, include_terminal: bool
+) -> dict[str, Any] | None:
+    selected_id = engine.ctx.options.chain_id
+    if selected_id is not None:
+        return _peek_chain_state(engine.ctx.store, selected_id)
+    candidates: list[dict[str, Any]] = []
+    for chain_id in engine.ctx.store.list_ids():
+        state = _peek_chain_state(engine.ctx.store, chain_id)
+        if (
+            isinstance(state, dict)
+            and state.get("staging", {}).get("worktree_root")
+            == str(engine.ctx.repo.root)
+        ):
+            candidates.append(state)
+    live = [state for state in candidates if state.get("state") not in TERMINAL_STATES]
+    choices = live or (candidates if include_terminal else [])
+    if not choices:
+        return None
+    return max(choices, key=lambda item: str(item.get("created_at", "")))
+
+
+def _command_run_lock_id(engine: "Engine", method_name: str) -> str | None:
+    include_terminal = method_name in {"status", "abort"}
+    selected = _peek_selected_chain(engine, include_terminal=include_terminal)
+    binding = selected.get("run_binding") if isinstance(selected, dict) else None
+    if isinstance(binding, Mapping) and isinstance(binding.get("run_id"), str):
+        return str(binding["run_id"])
+    if method_name == "start" and engine.ctx.options.run_id is not None:
+        return engine.ctx.options.run_id
+    return None
+
+
 def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[..., Outcome]:
-    """Hold the worktree command lock across load, controls, and persistence."""
+    """Hold journal-outer then worktree serialization across each command."""
 
     @functools.wraps(method)
     def wrapped(self: "Engine", *args: Any, **kwargs: Any) -> Outcome:
-        with self.ctx.store.admission_lock(self.ctx.repo.root):
-            return method(self, *args, **kwargs)
+        for _attempt in range(8):
+            run_id = _command_run_lock_id(self, method.__name__)
+            if run_id is None:
+                with self.ctx.store.admission_lock(self.ctx.repo.root):
+                    # A bound chain may have appeared between the identity
+                    # peek and the worktree lock.  Retry with its journal lock
+                    # outermost instead of acquiring in the reverse order.
+                    if _command_run_lock_id(self, method.__name__) is not None:
+                        continue
+                    return method(self, *args, **kwargs)
+            register_coordination_seams()
+            batch, _builders, journal = _coordination_modules()
+            run_dir = (
+                self.ctx.store.common_root
+                / ".codex-orchestrator"
+                / "runs"
+                / run_id
+            )
+            try:
+                retry = False
+                with batch.batch_lock(run_dir, create=False):
+                    with self.ctx.store.admission_lock(self.ctx.repo.root):
+                        if _command_run_lock_id(self, method.__name__) != run_id:
+                            retry = True
+                        else:
+                            return method(self, *args, **kwargs)
+                if retry:
+                    continue
+            except journal.CoordinationRefusal as exc:
+                raise _coordination_refusal(exc) from exc
+        raise FrozenError(
+            "chain identity did not stabilize for journal-outer serialization",
+            chain_id=self.ctx.options.chain_id,
+            schema=(
+                REVISION9_OUTPUT_SCHEMA
+                if self.ctx.options.revision9_face
+                else OUTPUT_SCHEMA
+            ),
+        )
 
     return wrapped
 
@@ -3214,6 +7496,147 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
 class Engine:
     def __init__(self, ctx: CommandContext) -> None:
         self.ctx = ctx
+
+    def journal_batch_recover(self) -> Outcome:
+        register_coordination_seams()
+        batch, _builders, journal = _coordination_modules()
+        run_id = self.ctx.options.run_id
+        if run_id is None:
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: journal operation refused — explicit --run-id is required",
+                remediation="rerun with the exact --repo and --run-id",
+            )
+        try:
+            recovered = batch.recover_batch(self.ctx.repo.root, run_id)
+        except journal.CoordinationRefusal as exc:
+            raise _coordination_refusal(exc) from exc
+        return Outcome(
+            ok=True,
+            reason_code=V2ReasonCode.OK,
+            message=f"journal batch recovered for {run_id}",
+            next_required_step="none — journal batch recovered",
+            evidence_refs=(),
+            schema=REVISION9_OUTPUT_SCHEMA,
+            observed=str(recovered.receipt.get("batch_sha256")),
+        )
+
+    def journal_ingest_chain(
+        self,
+        *,
+        task: str,
+        state_file: str,
+        events_file: str,
+        outcome_map: str,
+        closing_head: str,
+        task_status: str,
+        idempotency_key: str,
+    ) -> Outcome:
+        register_coordination_seams()
+        batch, builders, journal = _coordination_modules()
+        run_id = self.ctx.options.run_id
+        if run_id is None:
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: journal operation refused — explicit --run-id is required",
+                remediation="rerun with the exact --repo and --run-id",
+        )
+        try:
+            key = batch.validate_idempotency_key(idempotency_key)
+            (
+                canonical_repository,
+                run_dir,
+                source_data,
+                captured,
+                digests,
+            ) = _read_ingest_sources(
+                self.ctx.repo.root,
+                run_id,
+                state_file=state_file,
+                events_file=events_file,
+                outcome_map=outcome_map,
+            )
+            verifier_inputs: dict[str, object] = {
+                "task": task,
+                # FR-019 request identity retains the caller spellings.  The
+                # verifier derives and reads only the content-addressed copies.
+                "state_file": state_file,
+                "events_file": events_file,
+                "outcome_map": outcome_map,
+                "state_file_sha256": digests["state_file"],
+                "events_file_sha256": digests["events_file"],
+                "outcome_map_sha256": digests["outcome_map"],
+                "closing_head": closing_head,
+                "task_status": task_status,
+            }
+            # Keep proof-derived ID allocation and the builder's receipt/intent
+            # decision on one stable journal snapshot.  The task-03 lock is
+            # deliberately re-entrant for this verifier-to-builder handoff.
+            with batch.batch_lock(run_dir, create=False):
+                ingested = batch.lookup_existing_batch(
+                    canonical_repository,
+                    run_id,
+                    idempotency_key=key,
+                    verb="journal ingest-chain",
+                    inputs=verifier_inputs,
+                )
+                if ingested is None:
+                    _install_ingest_sources(
+                        canonical_repository,
+                        run_dir,
+                        source_data,
+                        digests,
+                    )
+                    records, completed = _verify_and_build_ingest_records(
+                        self.ctx.repo.root, run_id, verifier_inputs
+                    )
+                    if completed != INGEST_PROOF_ORDER:
+                        raise journal.CoordinationRefusal(
+                            builders.INGEST_PROOF_INVALID
+                        )
+                    ingested = builders.ingest_chain_records(
+                        self.ctx.repo.root,
+                        run_id,
+                        idempotency_key=idempotency_key,
+                        task=task,
+                        state_file=state_file,
+                        events_file=events_file,
+                        outcome_map=outcome_map,
+                        state_sha256=digests["state_file"],
+                        events_sha256=digests["events_file"],
+                        outcome_map_sha256=digests["outcome_map"],
+                        closing_head=closing_head,
+                        task_status=task_status,
+                        records=records,
+                    )
+        except journal.CoordinationRefusal as exc:
+            raise _coordination_refusal(exc) from exc
+        landing = next(
+            (
+                record
+                for record in ingested.records
+                if record.get("outcome") == "chain-landing"
+            ),
+            None,
+        )
+        chain_id = None
+        if isinstance(landing, dict) and isinstance(landing.get("binding"), dict):
+            source = landing["binding"].get("source_record")
+            if isinstance(source, dict) and isinstance(source.get("chain_id"), str):
+                chain_id = source["chain_id"]
+        return Outcome(
+            ok=True,
+            reason_code=V2ReasonCode.OK,
+            message=(
+                f"terminal chain evidence ingested for {task}"
+                + (" (idempotent replay)" if ingested.repeated else "")
+            ),
+            chain_id=chain_id,
+            state="closed",
+            next_required_step="none — terminal task evidence ingested",
+            evidence_refs=tuple(captured.values()),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
 
     def _chains_for_worktree(self) -> list[dict[str, Any]]:
         chains: list[dict[str, Any]] = []
@@ -3226,6 +7649,8 @@ class Engine:
     def select(self, *, include_terminal: bool = True) -> dict[str, Any]:
         if self.ctx.options.chain_id:
             state = self.ctx.store.load(self.ctx.options.chain_id)
+            if state.get("journal_outbox") is not None:
+                state = self.ctx.store.recover_pending_outbox(state)
             if state["staging"].get("worktree_root") != str(self.ctx.repo.root):
                 raise Refusal(
                     ReasonCode.CANDIDATE_STALE,
@@ -3247,7 +7672,10 @@ class Engine:
                 observed="none",
                 remediation="forge commit start --paths <path>...",
             )
-        return max(candidates, key=lambda item: str(item["created_at"]))
+        selected = max(candidates, key=lambda item: str(item["created_at"]))
+        if selected.get("journal_outbox") is not None:
+            selected = self.ctx.store.recover_pending_outbox(selected)
+        return selected
 
     def _live_chain(self) -> dict[str, Any] | None:
         for state in self._chains_for_worktree():
@@ -3288,6 +7716,16 @@ class Engine:
     ) -> None:
         if mutating:
             _run_halt(self.ctx, state)
+        if _archive_metadata(state) is not None and verb not in {
+            "status",
+            "commit abort",
+        }:
+            # Archive chains are immutable single-path candidates.  Recheck
+            # before generic candidate adoption or any other state mutation,
+            # so an edited renderer input/index cannot erase archive mode.
+            _archive_recheck(self.ctx, state, "transition")
+        if state.get("run_binding") is not None:
+            _validate_bound_chain_state(state)
         if state["state"] == "committing" and not allow_committing:
             raise Refusal(
                 ReasonCode.STATE_PRECONDITION,
@@ -3497,7 +7935,18 @@ class Engine:
         return "none — chain closed"
 
     @_serialize_worktree_command
-    def start(self, paths: Sequence[str], declared_tier: str | None) -> Outcome:
+    def start(
+        self,
+        paths: Sequence[str],
+        declared_tier: str | None,
+        *,
+        task: str | None = None,
+        archive_run_id: str | None = None,
+        legacy_recovered_head: str | None = None,
+        legacy_approval: str | None = None,
+        dispense_targets: Sequence[str] = (),
+        dispense_reason: str | None = None,
+    ) -> Outcome:
         _run_halt(self.ctx)
         with self.ctx.store.admission_lock(self.ctx.repo.root):
             live = self._live_chain()
@@ -3524,6 +7973,8 @@ class Engine:
             staged = self.ctx.repo.staged_paths()
             if staged:
                 names = ", ".join(staged)
+                if archive_run_id is not None:
+                    raise _archive_contamination_refusal()
                 raise Refusal(
                     ReasonCode.DIRTY_INDEX,
                     f"pre-existing staged content belongs to no chain: {names}",
@@ -3531,7 +7982,18 @@ class Engine:
                     observed=names,
                     remediation="unstage the named paths, then rerun commit start",
                 )
-            normalized = self.ctx.repo.normalize_paths(paths)
+            if archive_run_id is not None:
+                normalized, archive_metadata = _prepare_archive_candidate(
+                    self.ctx,
+                    archive_run_id,
+                    legacy_recovered_head=legacy_recovered_head,
+                    legacy_approval=legacy_approval,
+                    dispense_targets=dispense_targets,
+                    dispense_reason=dispense_reason,
+                )
+            else:
+                normalized = self.ctx.repo.normalize_paths(paths)
+                archive_metadata = None
             try:
                 head, raw = self.ctx.repo.policy()
                 policy = parse_policy(head, raw)
@@ -3544,22 +8006,43 @@ class Engine:
                     remediation="commit a valid forge-project.md or use the separate bootstrap flow",
                 ) from exc
             self.ctx.policy = policy
+            run_binding = None
+            if self.ctx.options.run_id is not None and task is not None:
+                run_binding = _prove_run_task_binding(
+                    self.ctx,
+                    self.ctx.options.run_id,
+                    task,
+                    normalized,
+                    policy,
+                )
             for _attempt in range(32):
                 chain_id = chain_id_now()
                 if not self.ctx.store.state_path(chain_id).exists() and not self.ctx.store.events_path(chain_id).exists():
                     break
             else:
                 raise FrozenError("unable to allocate a collision-free chain identifier")
-            state = _new_state(chain_id, self.ctx.repo, head, policy, normalized, declared_tier)
+            state = _new_state(
+                chain_id,
+                self.ctx.repo,
+                head,
+                policy,
+                normalized,
+                declared_tier,
+                run_binding,
+            )
             self.ctx.store.create(state, "chain_started", {"paths": normalized})
             _old, candidate = _stage_paths(
                 self.ctx, state, normalized, clear_old=False
             )
+            if archive_metadata is not None:
+                state["staging"]["archive"] = archive_metadata
             self.ctx.store.persist(
                 state,
                 "candidate_staged",
                 {"candidate": candidate, "paths": normalized},
             )
+            if archive_metadata is not None:
+                _archive_recheck(self.ctx, state, "start")
         try:
             _run_classification(self.ctx, state)
         except Exception:
@@ -3614,6 +8097,15 @@ class Engine:
             "commit restage",
             check_candidate=False,
         )
+        if _archive_metadata(state) is not None:
+            raise Refusal(
+                V2ReasonCode.BINDING_INVALID,
+                "forge: archive refused — archive-only chain cannot be restaged",
+                expected="the immutable archive-only staged candidate",
+                observed="commit restage",
+                remediation=_forge_command(state, "commit abort --reason archive-restart"),
+                chain=state,
+            )
         if state["state"] not in {"revising", "classifying", "verifying", "reviewing", "awaiting_approval", "authorized"}:
             self._wrong_state(state, "a live pre-commit state", "commit restage")
         if int(state["review"].get("iteration", 0)) >= 8:
@@ -3691,6 +8183,15 @@ class Engine:
             allow_head_moved=True,
             check_candidate=False,
         )
+        if _archive_metadata(state) is not None:
+            raise Refusal(
+                V2ReasonCode.BINDING_INVALID,
+                "forge: archive refused — archive-only chain cannot be rebased",
+                expected="the original archive closing-HEAD and renderer inputs",
+                observed="commit rebase",
+                remediation=_forge_command(state, "commit abort --reason archive-restart"),
+                chain=state,
+            )
         if state["state"] in TERMINAL_STATES:
             self._wrong_state(state, "a live pre-commit state", "commit rebase")
         current_head = self.ctx.repo.head()
@@ -3899,6 +8400,15 @@ class Engine:
                 expected=pending,
                 observed=gate_id,
                 remediation=_forge_command(state, f"gate run {pending}"),
+                chain=state,
+            )
+        if gate_id == "changelog" and _archive_metadata(state) is not None:
+            raise Refusal(
+                V2ReasonCode.BINDING_INVALID,
+                "forge: archive refused — archive-only index cannot admit a mutating gate",
+                expected="no staged path except the deterministic run archive",
+                observed="configured changelog mutation",
+                remediation=_forge_command(state, "commit abort --reason archive-policy"),
                 chain=state,
             )
         if gate_id == "assertion-sensor":
@@ -4214,7 +8724,7 @@ class Engine:
                     chain=state,
                     evidence_refs=[record["transcript"]],
                 )
-            _issue_authorization(state)
+            _issue_authorization(state, self.ctx)
             self.ctx.store.persist(
                 state,
                 "authorized",
@@ -4241,7 +8751,7 @@ class Engine:
                         "candidate": state["candidate"]["sha256"],
                     }
                 else:
-                    _issue_authorization(state)
+                    _issue_authorization(state, self.ctx)
                 event = "retained_review_reauthorized"
             else:
                 _transition_state(state, "reviewing")
@@ -4736,7 +9246,7 @@ class Engine:
                 "candidate": state["candidate"]["sha256"],
             }
         else:
-            _issue_authorization(state)
+            _issue_authorization(state, self.ctx)
         self.ctx.store.persist(
             state,
             "review_passed",
@@ -5140,7 +9650,7 @@ class Engine:
                 "transcript": qualification["transcript"],
             },
         }
-        _issue_authorization(state)
+        _issue_authorization(state, self.ctx)
         self.ctx.store.persist(
             state, "operator_approved", {"candidate": candidate, "directed_by": "operator"}
         )
@@ -5210,7 +9720,7 @@ class Engine:
                     "candidate": state["candidate"]["sha256"],
                 }
             else:
-                _issue_authorization(state)
+                _issue_authorization(state, self.ctx)
         self.ctx.store.persist(
             state,
             "operator_skip",
@@ -5293,6 +9803,7 @@ class Engine:
                 return primary
             if state["state"] != "authorized":
                 self._wrong_state(state, "authorized", "commit finalize")
+            _archive_recheck(self.ctx, state, "commit")
             current_head = self.ctx.repo.head()
             if current_head != state["repo_head"]:
                 self._record_head_moved(state, current_head)
@@ -5360,6 +9871,7 @@ class Engine:
                     chain_id=str(state["chain_id"]),
                     state=str(state["state"]),
                 )
+            _archive_recheck(self.ctx, state, "commit")
             pre_head = self.ctx.repo.head()
             _transition_state(state, "committing")
             state["commit_result"] = {
@@ -5379,6 +9891,10 @@ class Engine:
                     "pre_head": pre_head,
                 },
             )
+            # This is the last observation before Git receives commit
+            # authority.  A failure leaves the durable intent recoverable and
+            # performs no commit side effect.
+            _archive_recheck(self.ctx, state, "commit")
             commit = self.ctx.repo.git(
                 ["commit", "--cleanup=verbatim", "-m", message], check=False
             )
@@ -5521,6 +10037,9 @@ class Engine:
             and SHA256_RE.fullmatch(expected_message_digest) is not None
             and committed_message_digest == expected_message_digest
         ):
+            landing_already_recorded = (
+                state["commit_result"].get("commit_sha") == current
+            )
             state["authorization"]["consumed"] = True
             if not state["authorization"].get("consumed_at"):
                 state["authorization"]["consumed_at"] = iso_z()
@@ -5536,11 +10055,19 @@ class Engine:
             )
             state["repo_head"] = current
             _transition_state(state, "closed")
-            self.ctx.store.persist(
-                state,
-                "commit_close_recovered",
-                {"commit_sha": current, "candidate": candidate},
-            )
+            if landing_already_recorded:
+                # ``commit_produced`` already carried and receipted the sole
+                # landing decision.  The remaining crash window closes with
+                # the ordinary non-consequential event only.
+                self.ctx.store.persist(
+                    state, "chain_closed", {"commit_sha": current}
+                )
+            else:
+                self.ctx.store.persist(
+                    state,
+                    "commit_close_recovered",
+                    {"commit_sha": current, "candidate": candidate},
+                )
             if release_lock:
                 self._release_lock(session_pid)
             self._emit_decision(state, "gate_commit", "")

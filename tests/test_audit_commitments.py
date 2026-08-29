@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -9,8 +11,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts" / "forge"))
+
+import commitment_paths  # noqa: E402
+
 AUDIT = ROOT / "scripts" / "forge" / "audit-commitments.py"
 FIXTURE = ROOT / "tests" / "replay" / "archive-audit"
 EXPECTED = (
@@ -78,6 +85,54 @@ class AuditCommitmentsTests(unittest.TestCase):
         transform(records)
         self.write_records(records)
         return records
+
+    def load_audit_module(self, suffix: str):
+        name = f"audit_commitments_{suffix}"
+        spec = importlib.util.spec_from_file_location(name, AUDIT)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        self.addCleanup(sys.modules.pop, name, None)
+        spec.loader.exec_module(module)
+        return module
+
+    def records_with_lines(self) -> list[dict[str, object]]:
+        records = self.records()
+        for line, record in enumerate(records, start=1):
+            record["_line"] = line
+        return records
+
+    def install_captured_landing(self) -> tuple[str, str, str]:
+        captured: list[str] = []
+        payloads = (b'{"state":true}\n', b'{"event":true}\n', b'{"task":true}\n')
+        for name, payload in zip(
+            commitment_paths.CAPTURED_PACKAGE_NAMES,
+            payloads,
+            strict=True,
+        ):
+            digest = hashlib.sha256(payload).hexdigest()
+            relative = f"captured/sha256/{digest}/{name}"
+            target = self.run_dir / relative
+            target.parent.mkdir(parents=True)
+            target.write_bytes(payload)
+            captured.append(relative)
+
+        def add_landing(records: list[dict[str, object]]) -> None:
+            records.insert(
+                -1,
+                {
+                    "type": "decision",
+                    "id": "decision-ingest-landing",
+                    "task": "task-07",
+                    "resolution": "Captured chain landing",
+                    "outcome": "chain-landing",
+                    "basis": list(captured),
+                    "binding": {"schema": "forge-gate-binding/1"},
+                },
+            )
+
+        self.mutate(add_landing)
+        return captured[0], captured[1], captured[2]
 
     def git(self, *arguments: str, cwd: Path | None = None) -> None:
         subprocess.run(
@@ -376,6 +431,311 @@ class AuditCommitmentsTests(unittest.TestCase):
             b"within run or repository: findings/missing.md "
             b"(decision decision-01 basis[0])\n",
         )
+
+    def test_missing_direct_and_evidence_surfaces_are_audited(self) -> None:
+        cases = (
+            (
+                "execution.prompt",
+                {
+                    "type": "execution",
+                    "execution": "execution-audit",
+                    "task": "task-07",
+                    "prompt": "missing/prompt.md",
+                },
+                "missing/prompt.md",
+                "execution execution-audit prompt",
+            ),
+            (
+                "execution.events",
+                {
+                    "type": "execution",
+                    "execution": "execution-audit",
+                    "task": "task-07",
+                    "events": "missing/events.jsonl",
+                },
+                "missing/events.jsonl",
+                "execution execution-audit events",
+            ),
+            (
+                "execution.handoff",
+                {
+                    "type": "execution",
+                    "execution": "execution-audit",
+                    "task": "task-07",
+                    "handoff": "missing/execution-handoff.md",
+                },
+                "missing/execution-handoff.md",
+                "execution execution-audit handoff",
+            ),
+            (
+                "execution_result.handoff",
+                {
+                    "type": "execution_result",
+                    "execution": "execution-audit",
+                    "task": "task-07",
+                    "handoff": "missing/result-handoff.md",
+                },
+                "missing/result-handoff.md",
+                "execution_result execution-audit handoff",
+            ),
+            (
+                "verification.evidence",
+                None,
+                "missing/evidence.txt",
+                "verification verification-01 evidence[0]",
+            ),
+        )
+        for surface, inserted, path, source in cases:
+            with self.subTest(surface=surface):
+                self.setUp_fixture_again()
+
+                def change(records: list[dict[str, object]]) -> None:
+                    if inserted is None:
+                        records[4]["evidence"] = [path]
+                    else:
+                        records.insert(-1, dict(inserted))
+
+                self.mutate(change)
+                self.assert_failure(
+                    self.invoke(),
+                    5,
+                    (
+                        "forge: commitment audit failed — cited path does not exist "
+                        f"within run or repository: {path} ({source})\n"
+                    ).encode("utf-8"),
+                )
+
+    def test_anchored_symlink_escape_does_not_fall_through_to_repository(self) -> None:
+        outside = self.base / "outside-anchor"
+        outside.mkdir()
+        (outside / "proof.md").write_text("outside\n", encoding="utf-8")
+        (self.run_dir / "anchored").symlink_to(outside, target_is_directory=True)
+        safe = self.repo / "anchored"
+        safe.mkdir()
+        (safe / "proof.md").write_text("repository\n", encoding="utf-8")
+
+        self.mutate(
+            lambda records: records[3].__setitem__(
+                "basis", ["anchored/proof.md"]
+            )
+        )
+
+        self.assert_failure(
+            self.invoke(),
+            5,
+            b"forge: commitment audit failed \xe2\x80\x94 cited path does not exist "
+            b"within run or repository: anchored/proof.md "
+            b"(decision decision-01 basis[0])\n",
+        )
+
+    def test_legacy_missing_tolerance_preserves_surface_distinctions(self) -> None:
+        tolerated = (
+            ("execution", "prompt", "missing/prompt.md"),
+            ("execution", "events", "missing/events.jsonl"),
+            ("verification", "evidence", ["missing/evidence.txt"]),
+        )
+        for kind, field, value in tolerated:
+            with self.subTest(tolerated=field):
+                self.setUp_fixture_again()
+
+                def change(records: list[dict[str, object]]) -> None:
+                    record: dict[str, object] = {
+                        "type": kind,
+                        "task": "task-07",
+                        "id": f"legacy-{field}",
+                        "execution": f"execution-{field}",
+                        field: value,
+                    }
+                    records.insert(-1, record)
+                    records.insert(-1, self.legacy_declaration())
+
+                self.mutate(change)
+                result = self.invoke()
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn(b"## Legacy Citations\n", result.stdout)
+
+        for kind in ("execution", "execution_result"):
+            with self.subTest(hard=f"{kind}.handoff"):
+                self.setUp_fixture_again()
+
+                def change_handoff(records: list[dict[str, object]]) -> None:
+                    records.insert(
+                        -1,
+                        {
+                            "type": kind,
+                            "task": "task-07",
+                            "execution": f"execution-{kind}",
+                            "handoff": "missing/handoff.md",
+                        },
+                    )
+                    records.insert(-1, self.legacy_declaration())
+
+                self.mutate(change_handoff)
+                result = self.invoke()
+                self.assertEqual(5, result.returncode)
+                self.assertIn(b"missing/handoff.md", result.stderr)
+
+    def test_captured_landing_survives_disappearing_ingest_sources(self) -> None:
+        sources = self.repo / "ingest-sources"
+        sources.mkdir()
+        for name in commitment_paths.CAPTURED_PACKAGE_NAMES:
+            (sources / name).write_text("ephemeral source\n", encoding="utf-8")
+        self.install_captured_landing()
+        shutil.rmtree(sources)
+
+        result = self.invoke()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(EXPECTED, result.stdout)
+
+    def test_captured_landing_content_digest_is_audited(self) -> None:
+        state_path, _events_path, _outcome_path = self.install_captured_landing()
+        (self.run_dir / state_path).write_bytes(b"tampered\n")
+
+        self.assert_failure(
+            self.invoke(),
+            5,
+            (
+                "forge: commitment audit failed — cited path does not exist "
+                f"within run or repository: {state_path} "
+                "(decision decision-ingest-landing basis[0])\n"
+            ).encode("utf-8"),
+        )
+
+    def test_captured_landing_requires_exact_ordered_run_relative_grammar(self) -> None:
+        captured = list(self.install_captured_landing())
+
+        def reorder(records: list[dict[str, object]]) -> None:
+            landing = next(
+                record
+                for record in records
+                if record.get("id") == "decision-ingest-landing"
+            )
+            landing["basis"] = [captured[1], captured[0], captured[2]]
+
+        self.mutate(reorder)
+        result = self.invoke()
+        self.assertEqual(5, result.returncode)
+        self.assertIn(b"ingest.captured_package", result.stderr)
+
+    def test_activated_receipt_is_required_and_safe_legacy_may_omit(self) -> None:
+        legacy = self.invoke()
+        self.assertEqual(0, legacy.returncode, legacy.stderr)
+
+        def activate(records: list[dict[str, object]]) -> None:
+            records[0]["writer_contract"] = "forge-journal-binding/1"
+
+        self.mutate(activate)
+        (self.run_dir / ".journal-batch.lock").write_bytes(b"")
+        (self.run_dir / ".journal-batch-receipts.jsonl").write_bytes(b"receipt\n")
+        activated = self.invoke()
+        self.assertEqual(0, activated.returncode, activated.stderr)
+        self.assertEqual(EXPECTED, activated.stdout)
+
+    def test_pending_intent_is_refused_by_the_locked_reader(self) -> None:
+        (self.run_dir / ".journal-batch.lock").write_bytes(b"")
+        (self.run_dir / ".journal-batch.intent").write_bytes(b"pending\n")
+
+        self.assert_failure(
+            self.invoke(),
+            2,
+            b"forge: commitment audit failed \xe2\x80\x94 journal invalid: forge: "
+            b"journal read refused \xe2\x80\x94 pending or changed batch transaction\n",
+        )
+
+    def test_archive_candidate_absence_is_normal_but_unsafe_presence_fails(
+        self,
+    ) -> None:
+        absent = self.invoke()
+        self.assertEqual(0, absent.returncode, absent.stderr)
+
+        archive_parent = self.repo / ".forge/history/runs"
+        archive_parent.mkdir(parents=True)
+        target = self.repo / "archive-target.md"
+        target.write_text("unsafe alias\n", encoding="utf-8")
+        candidate = archive_parent / "archive-audit.md"
+        candidate.symlink_to(target)
+
+        self.assert_failure(
+            self.invoke(),
+            5,
+            b"forge: commitment audit failed \xe2\x80\x94 cited path does not exist "
+            b"within run or repository: .forge/history/runs/archive-audit.md "
+            b"(archive.candidate)\n",
+        )
+
+    def test_non_record_audit_projection_is_load_bearing_in_memory(self) -> None:
+        module = self.load_audit_module("surface_projection")
+
+        def assert_projection_control(
+            label: str,
+            prepare,
+            *,
+            activated: bool = False,
+        ) -> None:
+            self.setUp_fixture_again()
+            prepare()
+            records = self.records_with_lines()
+            start = records[0]
+            if activated:
+                start["writer_contract"] = "forge-journal-binding/1"
+            with self.assertRaises(module.Failure) as intact:
+                module.audit_projected_surfaces(
+                    records,
+                    start,
+                    repository=self.repo,
+                    run_dir=self.run_dir,
+                )
+            self.assertEqual(5, intact.exception.exit_code)
+            disabled = tuple(
+                surface
+                for surface in commitment_paths.COMMITMENT_PATH_SURFACES
+                if surface.label != label
+            )
+            with mock.patch.object(
+                commitment_paths,
+                "COMMITMENT_PATH_SURFACES",
+                disabled,
+            ):
+                module.audit_projected_surfaces(
+                    records,
+                    start,
+                    repository=self.repo,
+                    run_dir=self.run_dir,
+                )
+
+        def bad_capture() -> None:
+            state_path, _events_path, _outcome_path = self.install_captured_landing()
+            (self.run_dir / state_path).write_bytes(b"digest mismatch\n")
+
+        def missing_receipt() -> None:
+            return None
+
+        def unsafe_intent() -> None:
+            (self.run_dir / ".journal-batch.intent").symlink_to(
+                self.run_dir / "plan.md"
+            )
+
+        def unsafe_archive() -> None:
+            parent = self.repo / ".forge/history/runs"
+            parent.mkdir(parents=True, exist_ok=True)
+            candidate = parent / "archive-audit.md"
+            candidate.unlink(missing_ok=True)
+            candidate.symlink_to(self.repo / "docs/repo-basis.md")
+
+        cases = (
+            ("ingest.captured_package", bad_capture, False),
+            ("batch.receipt", missing_receipt, True),
+            ("batch.intent", unsafe_intent, False),
+            ("archive.candidate", unsafe_archive, False),
+        )
+        for label, prepare, activated in cases:
+            with self.subTest(label=label):
+                assert_projection_control(
+                    label,
+                    prepare,
+                    activated=activated,
+                )
 
     def legacy_declaration(self) -> dict[str, object]:
         return {

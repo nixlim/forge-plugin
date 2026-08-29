@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+import base64
+import binascii
 import datetime as dt
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -12,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -22,7 +26,12 @@ FORGE_SCRIPTS = Path(__file__).resolve().parents[1] / "forge"
 if str(FORGE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(FORGE_SCRIPTS))
 
-from commitment_paths import path_tokens  # noqa: E402
+from commitment_paths import (  # noqa: E402
+    iter_record_citations,
+    path_tokens,
+    resolve_contained_path,
+    surface_path_is_contained,
+)
 
 JOURNAL_ENTRY_TYPES = {
     "run_started",
@@ -57,21 +66,89 @@ LEGACY_COMPATIBILITY_LEGS = frozenset(
         "missing-execution-result",
         "empty-events",
         "failed-gate-recheck",
+        "duplicate-execution-result",
+        "duplicate-decision-id",
+        "unknown-gate-criterion",
+        "missing-evidence-file",
     }
 )
 LEGACY_EXECUTION_STATUS_MAP = {
     "handoff-ready": "complete",
     "pass": "complete",
     "block": "blocked",
+    "completed": "complete",
 }
+
+
+# forge: modified from upstream — Revision-9 structured journal bindings
+WRITER_CONTRACT = "forge-journal-binding/1"
+BINDING_SCHEMA = "forge-gate-binding/1"
+BINDING_CANDIDATE_KINDS = frozenset(
+    {"staged-diff-sha256", "git-commit", "git-range"}
+)
+BINDING_REVIEW_VERDICTS = frozenset({"PASS", "BLOCK"})
+BINDING_REVIEW_ROLES = frozenset({"review-cheap", "review-final"})
+CHAIN_DECISION_OUTCOMES = frozenset(
+    {"chain-approval", "chain-skip", "chain-landing"}
+)
+BINDING_CORRELATION_CONTROLS = frozenset({"journal-only"})
+HEX_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+CHAIN_ID_PATTERN = re.compile(r"c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}")
+DUPLICATE_CHAIN_BINDING = (
+    "forge: journal builder refused — chain binding is already journaled"
+)
+
+
+# forge: modified from upstream — Revision-9 idempotent journal batches
+BATCH_LOCK_NAME = ".journal-batch.lock"
+BATCH_INTENT_NAME = ".journal-batch.intent"
+BATCH_RECEIPTS_NAME = ".journal-batch-receipts.jsonl"
+BATCH_REQUEST_SCHEMA = "forge-journal-builder-request/1"
+BATCH_INTENT_SCHEMA = "forge-journal-batch-intent/1"
+BATCH_RECEIPT_SCHEMA = "forge-journal-batch-receipt/1"
+BATCH_KEY_REFUSAL = (
+    "forge: journal batch refused — idempotency key must be 64 lowercase hex"
+)
+BATCH_KEY_CONFLICT = (
+    "forge: journal batch refused — idempotency key already names different content"
+)
+BATCH_PENDING = "forge: journal batch refused — another intent is pending"
+BATCH_DIVERGED = (
+    "forge: journal batch recovery refused — journal diverged from intent"
+)
+JOURNAL_READ_TRANSACTION_REFUSAL = (
+    "forge: journal read refused — pending or changed batch transaction"
+)
+# The specification's binding-review MINOR left this spelling open.  Keep the
+# shared engine refusal singular so the chain CLI can map it consistently.
+JOURNAL_RECEIPT_MISMATCH = (
+    "forge: journal receipt refused — receipt does not match pending outbox"
+)
+BATCH_TRANSACTION_CONTROLS = frozenset(
+    {"reader-lock", "intent", "journal-suffix", "receipt"}
+)
+_BATCH_LOCK_STATE = threading.local()
+
+
+def _held_batch_locks() -> set[str]:
+    held = getattr(_BATCH_LOCK_STATE, "held", None)
+    if held is None:
+        held = set()
+        _BATCH_LOCK_STATE.held = held
+    return held
+
+
+def _mark_batch_lock(run_dir: Path, *, held: bool) -> None:
+    key = os.path.abspath(os.fspath(run_dir))
+    locks = _held_batch_locks()
+    if held:
+        locks.add(key)
+    else:
+        locks.discard(key)
 
 
 # forge: modified from upstream — refuse out-of-root citations before journal writes
 CITATION_ROOT_ENFORCEMENT_LEGS = frozenset({"append-time"})
-CITATION_ROOT_DIRECT_FIELDS = {
-    "execution": ("prompt", "events", "handoff"),
-    "execution_result": ("handoff",),
-}
 
 
 # forge: modified from upstream — FR-018 operator-directed closed-run dispensation
@@ -151,6 +228,24 @@ class FileObservation:
 class ExactFile:
     payload: bytes
     observation: FileObservation
+
+
+_OPEN_BATCH_AUTHORITY = object()
+_OPEN_OWNER_SWAP_NAME = ".run-open.owner.previous"
+
+
+@dataclass(frozen=True)
+class _ValidatedOpenBatch:
+    """Opaque proof that one activated opening matches its batch sidecars."""
+
+    authority: object
+    run_id: str
+    idempotency_key: str
+    request_sha256: str
+    opening_payload: bytes
+    intent_payload: bytes
+    receipt_payload: bytes
+    staging_name: str
 
 
 @dataclass(frozen=True)
@@ -470,82 +565,15 @@ def _validate_citation_targets(
 def _record_citations(record: dict[str, object]) -> Iterator[tuple[str, str]]:
     """Yield the exact FR-017 citation inventory and operator-facing field names."""
 
-    kind = record.get("type")
-    for field in CITATION_ROOT_DIRECT_FIELDS.get(str(kind), ()):
-        value = record.get(field)
-        if isinstance(value, str) and value:
-            yield f"{kind}.{field}", value
-    if kind == "verification":
-        evidence = record.get("evidence")
-        if isinstance(evidence, list):
-            for index, value in enumerate(evidence):
-                if isinstance(value, str) and value:
-                    yield f"verification.evidence[{index}]", value
-        observation = record.get("observation")
-        if isinstance(observation, str):
-            for token in path_tokens(observation, context="observation"):
-                yield f"verification.observation token {token}", token
-    elif kind == "decision":
-        basis = record.get("basis")
-        if isinstance(basis, list):
-            for index, value in enumerate(basis):
-                if not isinstance(value, str):
-                    continue
-                for token in path_tokens(value, context="basis"):
-                    yield f"decision.basis[{index}]", token
-
-
-def _path_uses_symlink(root: Path, relative: Path) -> bool:
-    """Return whether an existing component below ``root`` is a symlink."""
-
-    candidate = root
-    for part in relative.parts:
-        if part in {"", "."}:
-            continue
-        candidate = candidate.parent if part == ".." else candidate / part
-        try:
-            if candidate.is_symlink():
-                return True
-        except OSError:
-            return False
-    return False
+    for citation in iter_record_citations(record):
+        yield citation.label, citation.value
 
 
 def _citation_is_contained(repo_root: Path, run_dir: Path, citation: str) -> bool:
-    """Apply ordered resolve-then-contain semantics without requiring existence."""
+    """Compatibility wrapper for the shared ordered containment predicate."""
 
-    try:
-        relative = Path(citation)
-        if relative.is_absolute():
-            return False
-        repository = repo_root.expanduser().resolve(strict=True)
-        run = run_dir.expanduser().resolve(strict=False)
-        roots = (run, repository) if run != repository else (run,)
-        fallback = False
-        anchored = False
-        for root in roots:
-            candidate = root / relative
-            resolved = candidate.resolve(strict=False)
-            try:
-                resolved.relative_to(root)
-                contained = True
-            except ValueError:
-                contained = False
-
-            # Append time proves containment only. Existence remains the later
-            # validator/audit concern: a missing in-root target is accepted.
-            # Existing targets or symlink components only select the same
-            # root-specific resolution that the audit will inspect later.
-            rooted = candidate.exists() or candidate.is_symlink()
-            symlinked = _path_uses_symlink(root, relative)
-            if rooted or symlinked:
-                anchored = True
-                if contained:
-                    return True
-            fallback = fallback or contained
-        return fallback if not anchored else False
-    except (OSError, RuntimeError, ValueError):
-        return False
+    selected = resolve_contained_path(citation, (run_dir, repo_root))
+    return selected is not None and selected.contained
 
 
 def _validate_append_citations(
@@ -559,20 +587,25 @@ def _validate_append_citations(
 
     if "append-time" not in CITATION_ROOT_ENFORCEMENT_LEGS or not isinstance(record, dict):
         return
-    citations = tuple(_record_citations(record))
+    citations = tuple(iter_record_citations(record))
     if not citations:
         return
     if repo_root is None:
         if state_root is None:
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         repo_root = _recorded_repository_root(run_dir, state_root)
-    for field, citation in citations:
-        if not _safe_diagnostic_text(citation):
+    for citation in citations:
+        if not _safe_diagnostic_text(citation.value):
             raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
-        if not _citation_is_contained(repo_root, run_dir, citation):
+        if not surface_path_is_contained(
+            citation.surface,
+            citation.value,
+            repository=repo_root,
+            run_dir=run_dir,
+        ):
             raise CoordinationRefusal(
                 "forge: journal append refused — record cites path outside run or "
-                f"repository: {field}: {citation}"
+                f"repository: {citation.label}: {citation.value}"
             )
 
 
@@ -644,6 +677,155 @@ def _journal_line(record: dict[str, object]) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    """Return the DM-013 canonical JSON preimage (without a trailing LF)."""
+
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _writer_contract_active(records: tuple[dict[str, object], ...] | list[dict[str, object]]) -> bool:
+    return bool(
+        records
+        and records[0].get("type") == "run_started"
+        and records[0].get("writer_contract") == WRITER_CONTRACT
+    )
+
+
+def _binding_shape_valid(
+    value: object,
+    *,
+    record: dict[str, object] | None = None,
+) -> bool:
+    """Validate the complete generation-free DM-001 binding using journal data only."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "source_record",
+        "candidate",
+        "review",
+        "binding_id",
+    }:
+        return False
+    if value.get("schema") != BINDING_SCHEMA:
+        return False
+
+    source = value.get("source_record")
+    if (
+        not isinstance(source, dict)
+        or set(source) != {"chain_id", "event_digest"}
+        or not isinstance(source.get("chain_id"), str)
+        or CHAIN_ID_PATTERN.fullmatch(str(source["chain_id"])) is None
+        or not isinstance(source.get("event_digest"), str)
+        or HEX_SHA256_PATTERN.fullmatch(str(source["event_digest"])) is None
+    ):
+        return False
+
+    candidate = value.get("candidate")
+    if not isinstance(candidate, dict) or set(candidate) != {"kind", "value"}:
+        return False
+    candidate_kind = candidate.get("kind")
+    candidate_value = candidate.get("value")
+    if candidate_kind not in BINDING_CANDIDATE_KINDS:
+        return False
+    if candidate_kind == "staged-diff-sha256":
+        if (
+            not isinstance(candidate_value, str)
+            or HEX_SHA256_PATTERN.fullmatch(candidate_value) is None
+        ):
+            return False
+    elif candidate_kind == "git-commit":
+        if (
+            not isinstance(candidate_value, str)
+            or GIT_OBJECT_ID_PATTERN.fullmatch(candidate_value) is None
+        ):
+            return False
+    elif (
+        not isinstance(candidate_value, dict)
+        or set(candidate_value) != {"base", "head"}
+        or any(
+            not isinstance(candidate_value.get(name), str)
+            or GIT_OBJECT_ID_PATTERN.fullmatch(str(candidate_value[name])) is None
+            for name in ("base", "head")
+        )
+    ):
+        return False
+
+    review = value.get("review")
+    if review is not None:
+        if not isinstance(review, dict) or set(review) != {
+            "verdict",
+            "iteration",
+            "reviewer_role",
+            "package_digest",
+        }:
+            return False
+        iteration = review.get("iteration")
+        if (
+            review.get("verdict") not in BINDING_REVIEW_VERDICTS
+            or type(iteration) is not int
+            or int(iteration) <= 0
+            or review.get("reviewer_role") not in BINDING_REVIEW_ROLES
+            or not isinstance(review.get("package_digest"), str)
+            or HEX_SHA256_PATTERN.fullmatch(str(review["package_digest"])) is None
+        ):
+            return False
+
+    preimage = {
+        "schema": value["schema"],
+        "source_record": source,
+        "candidate": candidate,
+        "review": review,
+    }
+    binding_id = value.get("binding_id")
+    if (
+        not isinstance(binding_id, str)
+        or HEX_SHA256_PATTERN.fullmatch(binding_id) is None
+        or binding_id != _sha256(_canonical_json_bytes(preimage))
+    ):
+        return False
+
+    if record is None:
+        return True
+    if record.get("type") == "verification":
+        criterion = record.get("criterion")
+        result = record.get("result")
+        if criterion == GATE_3_CRITERION:
+            if (
+                not isinstance(review, dict)
+                or review.get("reviewer_role") != "review-final"
+                or (review.get("verdict") == "PASS" and result != "passed")
+                or (review.get("verdict") == "BLOCK" and result != "failed")
+            ):
+                return False
+        elif isinstance(criterion, str) and criterion.startswith(
+            ("gate-1: ", "gate-2: ")
+        ):
+            if review is not None:
+                return False
+    elif record.get("type") == "decision":
+        outcome = record.get("outcome")
+        if outcome in CHAIN_DECISION_OUTCOMES and outcome == "chain-landing" and review is not None:
+            return False
+    return True
+
+
+def _validate_binding_field(record: dict[str, object], kind: str) -> None:
+    if not _binding_shape_valid(record.get("binding"), record=record):
+        _invalid_record_field(
+            kind, "binding", f"must be a valid {BINDING_SCHEMA} object"
+        )
 
 
 def _journal_payload(record: dict[str, object]) -> bytes:
@@ -1053,6 +1235,7 @@ def _validate_proposed_record(
     repo_root: Path,
     scope: tuple[str, ...],
     prior_records: tuple[dict[str, object], ...] = (),
+    _defer_binding: bool = False,
 ) -> dict[str, object]:
     """Validate one FR-019 new-write candidate without mutating coordination state."""
 
@@ -1061,6 +1244,7 @@ def _validate_proposed_record(
         return candidate
 
     kind = str(candidate["type"])
+    activated = _writer_contract_active(prior_records)
     if "recorded_at" not in candidate:
         _invalid_record_field(kind, "recorded_at", "is required")
     recorded_at = candidate.get("recorded_at")
@@ -1106,6 +1290,14 @@ def _validate_proposed_record(
             successor_of = candidate.get("successor_of")
             if not _valid_run_id(successor_of):
                 _invalid_record_field(kind, "successor_of", "must be a valid run ID")
+        if "writer_contract" in candidate:
+            writer_contract = candidate.get("writer_contract")
+            if not isinstance(writer_contract, str):
+                _invalid_record_field(kind, "writer_contract", "must be a string")
+            if writer_contract != WRITER_CONTRACT:
+                _invalid_record_field(
+                    kind, "writer_contract", f"must be exactly {WRITER_CONTRACT}"
+                )
         return candidate
 
     if kind == "task":
@@ -1115,6 +1307,23 @@ def _validate_proposed_record(
             _invalid_record_field(
                 kind, "status", "must be one of active, complete, blocked, failed"
             )
+        if activated and status in TERMINAL_TASK_STATUSES:
+            for forbidden in (
+                "generation_id",
+                "generation",
+                "generation_number",
+                "generation_digest",
+                "supersession",
+                "supersedes",
+                "superseded_by",
+                "binding_summary",
+            ):
+                if forbidden in candidate:
+                    _invalid_record_field(
+                        kind,
+                        forbidden,
+                        f"is not permitted by {WRITER_CONTRACT}",
+                    )
         effective_goal = _task_inherited_field(candidate, prior_records, "goal")
         if effective_goal is _MISSING:
             _invalid_record_field(kind, "goal", "is required")
@@ -1206,6 +1415,16 @@ def _validate_proposed_record(
                 "must be one of passed, failed, inconclusive, skipped",
             )
         _string_array(candidate, kind, "evidence", required=False)
+        criterion = candidate.get("criterion")
+        is_gate = isinstance(criterion, str) and criterion.startswith(
+            GATE_VERIFICATION_PREFIXES
+        )
+        if "binding" in candidate:
+            _validate_binding_field(candidate, kind)
+        elif activated and is_gate and not _defer_binding:
+            _invalid_record_field(
+                kind, "binding", f"is required by {WRITER_CONTRACT}"
+            )
         return candidate
 
     if kind == "decision":
@@ -1215,6 +1434,19 @@ def _validate_proposed_record(
             if field in candidate and not isinstance(candidate.get(field), str):
                 _invalid_record_field(kind, field, "must be a string")
         _string_array(candidate, kind, "basis", required=False)
+        if "binding" in candidate:
+            _validate_binding_field(candidate, kind)
+            if activated and candidate.get("outcome") not in CHAIN_DECISION_OUTCOMES:
+                _invalid_record_field(
+                    kind,
+                    "outcome",
+                    "must be one of chain-approval, chain-skip, chain-landing",
+                )
+        if activated and candidate.get("outcome") in CHAIN_DECISION_OUTCOMES:
+            if "binding" not in candidate and not _defer_binding:
+                _invalid_record_field(
+                    kind, "binding", f"is required by {WRITER_CONTRACT}"
+                )
         if decision_id == "forge-run-retired" or resolution == RETIREMENT_RESOLUTION:
             if decision_id != "forge-run-retired":
                 _invalid_record_field(kind, "id", "must be forge-run-retired")
@@ -1319,6 +1551,171 @@ def _matches_observation(
     value: os.stat_result, observation: FileObservation
 ) -> bool:
     return _file_observation(value) == observation
+
+
+def _batch_regular_stat_valid(value: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(value.st_mode)
+        and not stat.S_ISLNK(value.st_mode)
+        and value.st_nlink == 1
+        and value.st_uid == os.geteuid()
+    )
+
+
+def _strict_batch_open_flags(
+    *,
+    writable: bool = False,
+    append: bool = False,
+    refusal: str = BATCH_DIVERGED,
+) -> int:
+    """Return flags which cannot block on, or follow, a substituted node."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise CoordinationRefusal(refusal)
+    flags = os.O_RDWR if writable else os.O_RDONLY
+    if append:
+        flags |= os.O_APPEND
+    return flags | nofollow | nonblock | getattr(os, "O_CLOEXEC", 0)
+
+
+def _strict_batch_directory_open_flags(*, refusal: str) -> int:
+    """Return a no-follow, nonblocking directory-only open mode."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or nonblock is None or directory is None:
+        raise CoordinationRefusal(refusal)
+    return (
+        os.O_RDONLY
+        | nofollow
+        | nonblock
+        | directory
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+
+
+def _batch_directory_stat_valid(value: os.stat_result) -> bool:
+    return (
+        stat.S_ISDIR(value.st_mode)
+        and not stat.S_ISLNK(value.st_mode)
+        and value.st_nlink > 0
+        and value.st_uid == os.geteuid()
+    )
+
+
+def _open_strict_batch_directory(
+    path: Path, *, refusal: str
+) -> tuple[int, FileObservation]:
+    before = os.lstat(path)
+    if not _batch_directory_stat_valid(before):
+        raise CoordinationRefusal(refusal)
+    observation = _file_observation(before)
+    descriptor = os.open(path, _strict_batch_directory_open_flags(refusal=refusal))
+    try:
+        opened = os.fstat(descriptor)
+        rebound = os.lstat(path)
+        if (
+            not _batch_directory_stat_valid(opened)
+            or not _batch_directory_stat_valid(rebound)
+            or not _matches_observation(opened, observation)
+            or not _matches_observation(rebound, observation)
+        ):
+            raise CoordinationRefusal(refusal)
+        return descriptor, observation
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_strict_batch_child_directory(
+    parent_descriptor: int,
+    name: str,
+    *,
+    refusal: str,
+) -> tuple[int, FileObservation]:
+    before = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if not _batch_directory_stat_valid(before):
+        raise CoordinationRefusal(refusal)
+    observation = _file_observation(before)
+    descriptor = os.open(
+        name,
+        _strict_batch_directory_open_flags(refusal=refusal),
+        dir_fd=parent_descriptor,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (
+            not _batch_directory_stat_valid(opened)
+            or not _batch_directory_stat_valid(rebound)
+            or not _matches_observation(opened, observation)
+            or not _matches_observation(rebound, observation)
+        ):
+            raise CoordinationRefusal(refusal)
+        return descriptor, observation
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _strict_batch_stat_matches(
+    value: os.stat_result, observation: FileObservation
+) -> bool:
+    return _batch_regular_stat_valid(value) and _matches_observation(
+        value, observation
+    )
+
+
+def _strict_batch_named_observation(
+    directory_descriptor: int,
+    name: str,
+    *,
+    refusal: str,
+) -> tuple[os.stat_result, FileObservation]:
+    value = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    if not _batch_regular_stat_valid(value):
+        raise CoordinationRefusal(refusal)
+    return value, _file_observation(value)
+
+
+def _read_strict_batch_file(
+    directory_descriptor: int,
+    name: str,
+    *,
+    refusal: str,
+) -> tuple[bytes, FileObservation]:
+    before, observation = _strict_batch_named_observation(
+        directory_descriptor, name, refusal=refusal
+    )
+    descriptor = os.open(
+        name,
+        _strict_batch_open_flags(refusal=refusal),
+        dir_fd=directory_descriptor,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if not _strict_batch_stat_matches(opened, observation):
+            raise CoordinationRefusal(refusal)
+        raw = _read_descriptor(descriptor)
+        after = os.fstat(descriptor)
+        rebound = os.stat(
+            name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        if (
+            not _strict_batch_stat_matches(after, observation)
+            or not _strict_batch_stat_matches(rebound, observation)
+            or opened.st_size != before.st_size
+            or after.st_size != before.st_size
+            or rebound.st_size != before.st_size
+            or len(raw) != before.st_size
+        ):
+            raise CoordinationRefusal(refusal)
+        return raw, observation
+    finally:
+        os.close(descriptor)
 
 
 def _directory_open_flags() -> int:
@@ -2071,7 +2468,9 @@ def _validate_new_run_claim(state_root: Path, claim: NewRunClaim) -> None:
         if set(os.listdir(run_descriptor)) != expected_names:
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         for name, expected_observation, expected_payload in claim.files:
-            raw, observed = _read_bound_regular(run_descriptor, name)
+            raw, observed = _read_strict_batch_file(
+                run_descriptor, name, refusal=REGISTRY_UNAVAILABLE
+            )
             if observed != expected_observation or raw != expected_payload:
                 raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         rebound_run = os.stat(
@@ -2291,6 +2690,48 @@ def _move_name_noreplace_at(
         )
     else:
         raise OSError(errno.ENOTSUP, "atomic no-replace move unavailable")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _move_name_noreplace_between_at(
+    source_descriptor: int,
+    source_name: str,
+    destination_descriptor: int,
+    destination_name: str,
+) -> None:
+    """Atomically publish a name across two directories without replacement."""
+
+    library = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(source_name)
+    destination = os.fsencode(destination_name)
+    if sys.platform.startswith("linux"):
+        move = getattr(library, "renameat2", None)
+        flag = 1  # RENAME_NOREPLACE
+    elif sys.platform == "darwin":
+        move = getattr(library, "renameatx_np", None)
+        flag = 0x00000004  # RENAME_EXCL
+    else:
+        move = None
+        flag = 0
+    if move is None:
+        raise OSError(errno.ENOTSUP, "atomic no-replace move unavailable")
+    move.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    move.restype = ctypes.c_int
+    result = move(
+        source_descriptor,
+        source,
+        destination_descriptor,
+        destination,
+        flag,
+    )
     if result != 0:
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
@@ -3248,11 +3689,16 @@ def _write_exclusive_at(
 ) -> FileObservation:
     descriptor: int | None = None
     try:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        nonblock = getattr(os, "O_NONBLOCK", None)
+        if nofollow is None or nonblock is None:
+            raise OSError(errno.ENOTSUP, "safe exclusive file open unavailable")
         flags = (
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
-            | getattr(os, "O_NOFOLLOW", 0)
+            | nofollow
+            | nonblock
             | getattr(os, "O_CLOEXEC", 0)
         )
         descriptor = os.open(name, flags, 0o600, dir_fd=directory_descriptor)
@@ -3267,9 +3713,10 @@ def _write_exclusive_at(
         rebound = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
         observation = _file_observation(opened)
         if (
-            not stat.S_ISREG(opened.st_mode)
-            or stat.S_ISLNK(opened.st_mode)
-            or not _matches_observation(rebound, observation)
+            not _strict_batch_stat_matches(opened, observation)
+            or not _strict_batch_stat_matches(rebound, observation)
+            or opened.st_size != len(payload)
+            or rebound.st_size != len(payload)
         ):
             raise OSError(errno.EAGAIN, "exclusive file identity changed")
         return observation
@@ -3282,7 +3729,11 @@ def _write_exclusive_at(
                     dir_fd=directory_descriptor,
                     follow_symlinks=False,
                 )
-                if _file_observation(opened) == _file_observation(rebound):
+                observation = _file_observation(opened)
+                if (
+                    _strict_batch_stat_matches(opened, observation)
+                    and _strict_batch_stat_matches(rebound, observation)
+                ):
                     os.unlink(name, dir_fd=directory_descriptor)
             except OSError:
                 pass
@@ -3379,7 +3830,11 @@ def _cleanup_claimed_run(
         return False
     try:
         for file_name, (observation, payload) in created.items():
-            raw, rebound = _read_bound_regular(directory_descriptor, file_name)
+            raw, rebound = _read_strict_batch_file(
+                directory_descriptor,
+                file_name,
+                refusal=JOURNAL_ROLLBACK_FAILED,
+            )
             if rebound != observation or raw != payload:
                 restore()
                 return False
@@ -3401,7 +3856,7 @@ def _cleanup_claimed_run(
             return False
         os.rmdir(quarantine, dir_fd=parent_descriptor)
         return True
-    except OSError:
+    except (OSError, CoordinationRefusal):
         restore()
         return False
 
@@ -3985,7 +4440,9 @@ def _validate_locked_journal_path(locked: LockedJournal) -> None:
 
 
 @contextmanager
-def _locked_journal(state: RunState) -> Iterator[LockedJournal]:
+def _locked_journal(
+    state: RunState, *, _expected_prefix: bytes | None = None
+) -> Iterator[LockedJournal]:
     run_descriptor: int | None = None
     journal_descriptor: int | None = None
     stream: object | None = None
@@ -4042,7 +4499,10 @@ def _locked_journal(state: RunState) -> Iterator[LockedJournal]:
         ):
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         raw = _read_descriptor(stream.fileno())  # type: ignore[attr-defined]
-        if tuple(_parse_raw_records(raw)) != state.records:
+        if _expected_prefix is None:
+            if tuple(_parse_raw_records(raw)) != state.records:
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        elif not raw.startswith(_expected_prefix):
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
         yield LockedJournal(stream, run_descriptor, state)
     except CoordinationRefusal:
@@ -4205,6 +4665,10 @@ def append_owned_record(journal: Path, record: object) -> None:
             locked=registry_lock,
         )
         state = _target_state(view, run_id, "journal append")
+        if _writer_contract_active(state.records):
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
         repository = _recorded_repository_root(
             state.run_dir, state_root, records=state.records
         )
@@ -4259,6 +4723,648 @@ def append_owned_record(journal: Path, record: object) -> None:
                     raise
 
 
+def _decode_open_batch_bytes(value: object, *, refusal: str) -> bytes:
+    if not isinstance(value, str) or "=" in value:
+        raise CoordinationRefusal(refusal)
+    try:
+        encoded = value.encode("ascii")
+        decoded = base64.b64decode(
+            encoded + b"=" * (-len(encoded) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeError, ValueError, binascii.Error) as exc:
+        raise CoordinationRefusal(refusal) from exc
+    if base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
+        raise CoordinationRefusal(refusal)
+    return decoded
+
+
+def _canonical_batch_object(payload: bytes, *, refusal: str) -> dict[str, object]:
+    try:
+        value = json.loads(payload.decode("utf-8"))
+        canonical = _canonical_json_bytes(value) + b"\n"
+    except (TypeError, UnicodeError, ValueError, RecursionError) as exc:
+        raise CoordinationRefusal(refusal) from exc
+    if not isinstance(value, dict) or payload != canonical:
+        raise CoordinationRefusal(refusal)
+    return value
+
+
+def _validated_open_batch_payloads(
+    run_id: str,
+    intent_payload: bytes,
+    receipt_payload: bytes,
+    *,
+    opening_payload: bytes | None,
+    refusal: str,
+) -> tuple[dict[str, object], str, str]:
+    intent = _canonical_batch_object(intent_payload, refusal=refusal)
+    receipt = _canonical_batch_object(receipt_payload, refusal=refusal)
+    intent_keys = {
+        "schema",
+        "idempotency_key",
+        "request_sha256",
+        "base_size",
+        "base_sha256",
+        "record_count",
+        "batch_bytes",
+        "batch_sha256",
+        "receipt_base_size",
+        "receipt_base_sha256",
+        "receipt_bytes",
+    }
+    receipt_keys = {
+        "schema",
+        "idempotency_key",
+        "request_sha256",
+        "base_size",
+        "batch_sha256",
+        "record_count",
+        "journal_size",
+        "journal_sha256",
+        "recorded_at",
+    }
+    sha_fields = (
+        "idempotency_key",
+        "request_sha256",
+        "base_sha256",
+        "batch_sha256",
+        "receipt_base_sha256",
+    )
+    if (
+        set(intent) != intent_keys
+        or intent.get("schema") != BATCH_INTENT_SCHEMA
+        or any(
+            not isinstance(intent.get(name), str)
+            or HEX_SHA256_PATTERN.fullmatch(str(intent[name])) is None
+            for name in sha_fields
+        )
+        or type(intent.get("base_size")) is not int
+        or intent.get("base_size") != 0
+        or intent.get("base_sha256") != _sha256(b"")
+        or type(intent.get("record_count")) is not int
+        or intent.get("record_count") != 1
+        or type(intent.get("receipt_base_size")) is not int
+        or intent.get("receipt_base_size") != 0
+        or intent.get("receipt_base_sha256") != _sha256(b"")
+    ):
+        raise CoordinationRefusal(refusal)
+    batch_payload = _decode_open_batch_bytes(
+        intent.get("batch_bytes"), refusal=refusal
+    )
+    carried_receipt = _decode_open_batch_bytes(
+        intent.get("receipt_bytes"), refusal=refusal
+    )
+    try:
+        records = _parse_raw_records(batch_payload)
+    except CoordinationRefusal as exc:
+        raise CoordinationRefusal(refusal) from exc
+    if (
+        len(records) != 1
+        or _journal_line(records[0]) != batch_payload
+        or (opening_payload is not None and batch_payload != opening_payload)
+        or _sha256(batch_payload) != intent.get("batch_sha256")
+        or carried_receipt != receipt_payload
+    ):
+        raise CoordinationRefusal(refusal)
+    opening = records[0]
+    if (
+        opening.get("type") != "run_started"
+        or opening.get("run_id") != run_id
+        or opening.get("writer_contract") != WRITER_CONTRACT
+    ):
+        raise CoordinationRefusal(refusal)
+    if (
+        set(receipt) != receipt_keys
+        or receipt.get("schema") != BATCH_RECEIPT_SCHEMA
+        or any(
+            not isinstance(receipt.get(name), str)
+            or HEX_SHA256_PATTERN.fullmatch(str(receipt[name])) is None
+            for name in (
+                "idempotency_key",
+                "request_sha256",
+                "batch_sha256",
+                "journal_sha256",
+            )
+        )
+        or receipt.get("idempotency_key") != intent["idempotency_key"]
+        or receipt.get("request_sha256") != intent["request_sha256"]
+        or type(receipt.get("base_size")) is not int
+        or receipt.get("base_size") != 0
+        or receipt.get("batch_sha256") != intent["batch_sha256"]
+        or type(receipt.get("record_count")) is not int
+        or receipt.get("record_count") != 1
+        or type(receipt.get("journal_size")) is not int
+        or receipt.get("journal_size") != len(batch_payload)
+        or receipt.get("journal_sha256") != _sha256(batch_payload)
+        or not isinstance(receipt.get("recorded_at"), str)
+        or not _valid_utc(str(receipt["recorded_at"]))
+    ):
+        raise CoordinationRefusal(refusal)
+    return opening, str(intent["idempotency_key"]), str(intent["request_sha256"])
+
+
+def _open_batch_staging_name(run_id: str, idempotency_key: str) -> str:
+    if not _valid_run_id(run_id) or HEX_SHA256_PATTERN.fullmatch(idempotency_key) is None:
+        raise CoordinationRefusal(BATCH_KEY_REFUSAL)
+    run_digest = _sha256(run_id.encode("utf-8"))[:32]
+    return f".run-open.{run_digest}.{idempotency_key}.staging"
+
+
+def _recoverable_open_batch(
+    repo: Path,
+    run_id: str,
+    *,
+    idempotency_key: str,
+    request_sha256: str,
+) -> tuple[dict[str, object], _ValidatedOpenBatch] | None:
+    """Return an exact hidden run-open transaction without mutating it."""
+
+    run_id = _operation_run_id("new run", run_id)
+    if HEX_SHA256_PATTERN.fullmatch(idempotency_key) is None:
+        raise CoordinationRefusal(BATCH_KEY_REFUSAL)
+    if HEX_SHA256_PATTERN.fullmatch(request_sha256) is None:
+        raise CoordinationRefusal(BATCH_DIVERGED)
+    _, state_root = _resolve_repository(repo, "new run")
+    coordination_root = state_root / ".codex-orchestrator"
+    parent_descriptor: int | None = None
+    stage_descriptor: int | None = None
+    lock_descriptor: int | None = None
+    try:
+        try:
+            parent_descriptor, _ = _open_strict_batch_directory(
+                coordination_root, refusal=BATCH_DIVERGED
+            )
+        except FileNotFoundError:
+            return None
+        staging_name = _open_batch_staging_name(run_id, idempotency_key)
+        try:
+            stage_descriptor, stage_observation = (
+                _open_strict_batch_child_directory(
+                    parent_descriptor,
+                    staging_name,
+                    refusal=BATCH_DIVERGED,
+                )
+            )
+        except FileNotFoundError:
+            return None
+        names = set(os.listdir(stage_descriptor))
+        allowed_names = {
+            BATCH_LOCK_NAME,
+            BATCH_RECEIPTS_NAME,
+            BATCH_INTENT_NAME,
+            _OPEN_OWNER_SWAP_NAME,
+            "owner",
+            "journal.jsonl",
+        }
+        if names - allowed_names:
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        if not names:
+            return None
+        if BATCH_LOCK_NAME not in names:
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        lock_payload, lock_observation = _read_strict_batch_file(
+            stage_descriptor, BATCH_LOCK_NAME, refusal=BATCH_DIVERGED
+        )
+        if lock_payload:
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        lock_descriptor = os.open(
+            BATCH_LOCK_NAME,
+            _strict_batch_open_flags(refusal=BATCH_DIVERGED),
+            dir_fd=stage_descriptor,
+        )
+        if not _strict_batch_stat_matches(
+            os.fstat(lock_descriptor), lock_observation
+        ):
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        fcntl.flock(lock_descriptor, fcntl.LOCK_SH)
+        rebound_stage = os.stat(
+            staging_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not _batch_directory_stat_valid(rebound_stage)
+            or not _matches_observation(rebound_stage, stage_observation)
+            or not _strict_batch_stat_matches(
+                os.fstat(lock_descriptor), lock_observation
+            )
+        ):
+            raise CoordinationRefusal(BATCH_DIVERGED)
+
+        observed_payloads: dict[str, tuple[bytes, FileObservation]] = {}
+
+        def optional(name: str) -> bytes | None:
+            try:
+                payload, observation = _read_strict_batch_file(
+                    stage_descriptor, name, refusal=BATCH_DIVERGED
+                )
+            except FileNotFoundError:
+                return None
+            observed_payloads[name] = (payload, observation)
+            return payload
+
+        owner_payload = optional("owner")
+        owner_swap_payload = optional(_OPEN_OWNER_SWAP_NAME)
+        if owner_payload is not None and _parse_owner_bytes(owner_payload) is None:
+            # A partial pre-intent owner is not yet a transaction. Once any
+            # transaction artifact exists, however, it is unsafe divergence.
+            if BATCH_INTENT_NAME in names or "journal.jsonl" in names:
+                raise CoordinationRefusal(BATCH_DIVERGED)
+        if (
+            owner_swap_payload is not None
+            and _parse_owner_bytes(owner_swap_payload) is None
+        ):
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        intent_payload = optional(BATCH_INTENT_NAME)
+        journal_payload = optional("journal.jsonl")
+        receipt_payload = optional(BATCH_RECEIPTS_NAME)
+        if intent_payload is not None:
+            try:
+                opening, carried_receipt, key, request = (
+                    _stored_open_batch_from_intent(
+                        run_id, intent_payload, refusal=BATCH_DIVERGED
+                    )
+                )
+            except CoordinationRefusal:
+                if journal_payload is None and not receipt_payload:
+                    return None
+                raise
+            if key != idempotency_key or request != request_sha256:
+                raise CoordinationRefusal(BATCH_KEY_CONFLICT)
+            opening_payload = _journal_line(opening)
+            if (
+                journal_payload is not None
+                and not opening_payload.startswith(journal_payload)
+            ) or (
+                receipt_payload is not None
+                and not carried_receipt.startswith(receipt_payload)
+            ) or (
+                bool(receipt_payload) and journal_payload != opening_payload
+            ):
+                raise CoordinationRefusal(BATCH_DIVERGED)
+        elif journal_payload is not None or receipt_payload:
+            if journal_payload is None or not receipt_payload:
+                raise CoordinationRefusal(BATCH_DIVERGED)
+            opening, key, request = _complete_open_stage_artifacts(
+                run_id,
+                journal_payload,
+                receipt_payload,
+                refusal=BATCH_DIVERGED,
+            )
+            if key != idempotency_key or request != request_sha256:
+                raise CoordinationRefusal(BATCH_KEY_CONFLICT)
+            opening_payload = journal_payload
+            carried_receipt = receipt_payload
+            intent_payload = _synthetic_open_intent_payload(
+                opening_payload, carried_receipt, refusal=BATCH_DIVERGED
+            )
+        else:
+            return None
+        final_stage = os.stat(
+            staging_name,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not _batch_directory_stat_valid(final_stage)
+            or not _matches_observation(final_stage, stage_observation)
+            or not _strict_batch_stat_matches(
+                os.fstat(lock_descriptor), lock_observation
+            )
+        ):
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        if set(os.listdir(stage_descriptor)) != names:
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        for name, expected in observed_payloads.items():
+            if (
+                _read_strict_batch_file(
+                    stage_descriptor, name, refusal=BATCH_DIVERGED
+                )
+                != expected
+            ):
+                raise CoordinationRefusal(BATCH_DIVERGED)
+        if _read_strict_batch_file(
+            stage_descriptor, BATCH_LOCK_NAME, refusal=BATCH_DIVERGED
+        ) != (b"", lock_observation):
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        capability = _ValidatedOpenBatch(
+            _OPEN_BATCH_AUTHORITY,
+            run_id,
+            idempotency_key,
+            request_sha256,
+            opening_payload,
+            intent_payload,
+            carried_receipt,
+            staging_name,
+        )
+        return dict(opening), capability
+    except CoordinationRefusal:
+        raise
+    except OSError as exc:
+        raise CoordinationRefusal(BATCH_DIVERGED) from exc
+    finally:
+        if lock_descriptor is not None:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_descriptor)
+        if stage_descriptor is not None:
+            os.close(stage_descriptor)
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+
+
+def _validated_open_batch(
+    run_id: str,
+    opening: dict[str, object],
+    intent_payload: bytes,
+    receipt_payload: bytes,
+) -> _ValidatedOpenBatch:
+    """Issue the private capability consumed by activated ``open_run``."""
+
+    validated_run_id = _operation_run_id("new run", run_id)
+    opening_payload = _journal_payload(opening)
+    _, idempotency_key, request_sha256 = _validated_open_batch_payloads(
+        validated_run_id,
+        intent_payload,
+        receipt_payload,
+        opening_payload=opening_payload,
+        refusal=INVALID_JOURNAL_RECORD,
+    )
+    return _ValidatedOpenBatch(
+        _OPEN_BATCH_AUTHORITY,
+        validated_run_id,
+        idempotency_key,
+        request_sha256,
+        opening_payload,
+        intent_payload,
+        receipt_payload,
+        _open_batch_staging_name(validated_run_id, idempotency_key),
+    )
+
+
+def _stored_open_batch_from_intent(
+    run_id: str, intent_payload: bytes, *, refusal: str
+) -> tuple[dict[str, object], bytes, str, str]:
+    intent = _canonical_batch_object(intent_payload, refusal=refusal)
+    receipt_payload = _decode_open_batch_bytes(
+        intent.get("receipt_bytes"), refusal=refusal
+    )
+    opening, key, request_sha256 = _validated_open_batch_payloads(
+        run_id,
+        intent_payload,
+        receipt_payload,
+        opening_payload=None,
+        refusal=refusal,
+    )
+    return opening, receipt_payload, key, request_sha256
+
+
+def _synthetic_open_intent_payload(
+    opening_payload: bytes,
+    receipt_payload: bytes,
+    *,
+    refusal: str,
+) -> bytes:
+    receipt = _canonical_batch_object(receipt_payload, refusal=refusal)
+    key = receipt.get("idempotency_key")
+    request_sha256 = receipt.get("request_sha256")
+    if not isinstance(key, str) or not isinstance(request_sha256, str):
+        raise CoordinationRefusal(refusal)
+    synthetic_intent = {
+        "schema": BATCH_INTENT_SCHEMA,
+        "idempotency_key": key,
+        "request_sha256": request_sha256,
+        "base_size": 0,
+        "base_sha256": _sha256(b""),
+        "record_count": 1,
+        "batch_bytes": base64.urlsafe_b64encode(opening_payload)
+        .rstrip(b"=")
+        .decode("ascii"),
+        "batch_sha256": _sha256(opening_payload),
+        "receipt_base_size": 0,
+        "receipt_base_sha256": _sha256(b""),
+        "receipt_bytes": base64.urlsafe_b64encode(receipt_payload)
+        .rstrip(b"=")
+        .decode("ascii"),
+    }
+    return _canonical_json_bytes(synthetic_intent) + b"\n"
+
+
+def _complete_open_stage_artifacts(
+    run_id: str,
+    opening_payload: bytes,
+    receipt_payload: bytes,
+    *,
+    refusal: str,
+) -> tuple[dict[str, object], str, str]:
+    intent_payload = _synthetic_open_intent_payload(
+        opening_payload, receipt_payload, refusal=refusal
+    )
+    return _validated_open_batch_payloads(
+        run_id,
+        intent_payload,
+        receipt_payload,
+        opening_payload=opening_payload,
+        refusal=refusal,
+    )
+
+
+def _ensure_open_stage_file(
+    directory_descriptor: int,
+    name: str,
+    intended: bytes,
+    *,
+    allow_prefix: bool,
+) -> tuple[FileObservation, bytes]:
+    try:
+        current, observation = _read_strict_batch_file(
+            directory_descriptor, name, refusal=BATCH_DIVERGED
+        )
+    except FileNotFoundError:
+        try:
+            observation = _write_exclusive_at(
+                directory_descriptor, name, intended
+            )
+        except FileExistsError as exc:
+            raise CoordinationRefusal(BATCH_DIVERGED) from exc
+        current, rebound = _read_strict_batch_file(
+            directory_descriptor, name, refusal=BATCH_DIVERGED
+        )
+        if rebound != observation or current != intended:
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        os.fsync(directory_descriptor)
+        return observation, current
+    if current == intended:
+        return observation, current
+    if not allow_prefix or not intended.startswith(current):
+        raise CoordinationRefusal(BATCH_DIVERGED)
+    descriptor = os.open(
+        name,
+        _strict_batch_open_flags(
+            writable=True, append=True, refusal=BATCH_DIVERGED
+        ),
+        dir_fd=directory_descriptor,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        rebound = os.stat(
+            name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        if (
+            not _strict_batch_stat_matches(opened, observation)
+            or not _strict_batch_stat_matches(rebound, observation)
+            or opened.st_size != len(current)
+        ):
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        remaining = memoryview(intended)[len(current) :]
+        while remaining:
+            written = os.write(descriptor, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "short staged batch write")
+            remaining = remaining[written:]
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        rebound = os.stat(
+            name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        if (
+            not _strict_batch_stat_matches(after, observation)
+            or not _strict_batch_stat_matches(rebound, observation)
+            or after.st_size != len(intended)
+            or _read_descriptor(descriptor) != intended
+        ):
+            raise CoordinationRefusal(BATCH_DIVERGED)
+    finally:
+        os.close(descriptor)
+    return observation, intended
+
+
+def _unlink_open_stage_file(
+    directory_descriptor: int,
+    name: str,
+    expected: FileObservation,
+) -> None:
+    _, rebound = _strict_batch_named_observation(
+        directory_descriptor, name, refusal=BATCH_DIVERGED
+    )
+    if rebound != expected:
+        raise CoordinationRefusal(BATCH_DIVERGED)
+    os.unlink(name, dir_fd=directory_descriptor)
+    os.fsync(directory_descriptor)
+
+
+def _open_stage_owner(
+    directory_descriptor: int, name: str
+) -> tuple[bytes, FileObservation, Owner] | None:
+    try:
+        payload, observation = _read_strict_batch_file(
+            directory_descriptor, name, refusal=BATCH_DIVERGED
+        )
+    except FileNotFoundError:
+        return None
+    owner = _parse_owner_bytes(payload)
+    if owner is None:
+        raise CoordinationRefusal(BATCH_DIVERGED)
+    return payload, observation, owner
+
+
+def _stage_owner_is_current(owner: Owner, current: Owner) -> bool:
+    return owner.host == current.host and owner.pid == current.pid
+
+
+def _require_stale_stage_owner(run_id: str, owner: Owner, current: Owner) -> None:
+    if owner.host != current.host or _pid_is_live(owner.pid) is not False:
+        raise _owner_refusal(run_id, owner)
+
+
+def _claim_open_stage_owner(
+    directory_descriptor: int, run_id: str, current: Owner
+) -> tuple[FileObservation, bytes]:
+    """Adopt a staged owner only after its batch transaction is authenticated."""
+
+    owner_file = _open_stage_owner(directory_descriptor, "owner")
+    swap_file = _open_stage_owner(
+        directory_descriptor, _OPEN_OWNER_SWAP_NAME
+    )
+    if swap_file is not None:
+        if owner_file is None:
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        _, _, owner = owner_file
+        _, swap_observation, swap_owner = swap_file
+        if _stage_owner_is_current(swap_owner, current) and not _stage_owner_is_current(
+            owner, current
+        ):
+            _exchange_names_at(
+                directory_descriptor, "owner", _OPEN_OWNER_SWAP_NAME
+            )
+            owner_file, swap_file = swap_file, owner_file
+        elif not _stage_owner_is_current(owner, current):
+            _require_stale_stage_owner(run_id, owner, current)
+            _require_stale_stage_owner(run_id, swap_owner, current)
+        _, swap_observation = _read_strict_batch_file(
+            directory_descriptor,
+            _OPEN_OWNER_SWAP_NAME,
+            refusal=BATCH_DIVERGED,
+        )
+        _unlink_open_stage_file(
+            directory_descriptor, _OPEN_OWNER_SWAP_NAME, swap_observation
+        )
+        owner_file = _open_stage_owner(directory_descriptor, "owner")
+
+    intended = _owner_bytes(current)
+    if owner_file is None:
+        observation = _write_exclusive_at(
+            directory_descriptor, "owner", intended
+        )
+        payload, rebound = _read_strict_batch_file(
+            directory_descriptor, "owner", refusal=BATCH_DIVERGED
+        )
+        if payload != intended or rebound != observation:
+            raise CoordinationRefusal(BATCH_DIVERGED)
+        os.fsync(directory_descriptor)
+        return observation, intended
+
+    prior_payload, prior_observation, prior_owner = owner_file
+    if _stage_owner_is_current(prior_owner, current):
+        return prior_observation, prior_payload
+    _require_stale_stage_owner(run_id, prior_owner, current)
+    candidate_observation = _write_exclusive_at(
+        directory_descriptor, _OPEN_OWNER_SWAP_NAME, intended
+    )
+    os.fsync(directory_descriptor)
+    exchange_failure: BaseException | None = None
+    try:
+        _exchange_names_at(
+            directory_descriptor, "owner", _OPEN_OWNER_SWAP_NAME
+        )
+    except BaseException as exc:
+        exchange_failure = exc
+    canonical = _open_stage_owner(directory_descriptor, "owner")
+    displaced = _open_stage_owner(
+        directory_descriptor, _OPEN_OWNER_SWAP_NAME
+    )
+    if (
+        canonical is None
+        or displaced is None
+        or canonical[0] != intended
+        or canonical[1] != candidate_observation
+        or displaced[0] != prior_payload
+        or displaced[1] != prior_observation
+    ):
+        if exchange_failure is not None:
+            raise CoordinationRefusal(BATCH_DIVERGED) from exchange_failure
+        raise CoordinationRefusal(BATCH_DIVERGED)
+    os.fsync(directory_descriptor)
+    _unlink_open_stage_file(
+        directory_descriptor, _OPEN_OWNER_SWAP_NAME, displaced[1]
+    )
+    return canonical[1], canonical[0]
+
+
 def open_run(
     repo: Path,
     run_id: str,
@@ -4266,9 +5372,44 @@ def open_run(
     record: object,
     *,
     successor_of: str | None = None,
+    _typed: bool = False,
+    _batch_intent: bytes | None = None,
+    _batch_receipt: bytes | None = None,
+    _batch: _ValidatedOpenBatch | None = None,
 ) -> Path:
     candidate = _validate_record_envelope(record)
+    activated_candidate = candidate.get("writer_contract") == WRITER_CONTRACT
+    if _batch_intent is not None or _batch_receipt is not None:
+        raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
+    if activated_candidate and (
+        not isinstance(_batch, _ValidatedOpenBatch)
+        or _batch.authority is not _OPEN_BATCH_AUTHORITY
+    ):
+        raise CoordinationRefusal(
+            "forge: journal append refused — activated writer requires typed batch"
+        )
+    if not activated_candidate and _batch is not None:
+        raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
     run_id = _operation_run_id("new run", run_id)
+    if _batch is not None:
+        _, validated_key, validated_request = _validated_open_batch_payloads(
+            run_id,
+            _batch.intent_payload,
+            _batch.receipt_payload,
+            opening_payload=_batch.opening_payload,
+            refusal=INVALID_JOURNAL_RECORD,
+        )
+        if (
+            _batch.run_id != run_id
+            or _batch.opening_payload != _journal_payload(candidate)
+            or _batch.idempotency_key != validated_key
+            or _batch.request_sha256 != validated_request
+            or _batch.staging_name
+            != _open_batch_staging_name(run_id, validated_key)
+        ):
+            raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
+    batch_intent = _batch.intent_payload if _batch is not None else None
+    batch_receipt = _batch.receipt_payload if _batch is not None else None
     repository, state_root = _resolve_repository(repo, "new run")
     scope = _operation_scope("new run", scope_values)
     target = state_root / ".codex-orchestrator/runs" / run_id
@@ -4367,10 +5508,24 @@ def open_run(
         target_descriptor: int | None = None
         target_observation: FileObservation | None = None
         runs_root_observation: FileObservation | None = None
+        batch_lock_descriptor: int | None = None
         created: dict[str, tuple[FileObservation, bytes]] = {}
         runs_parent_descriptor: int | None = None
+        runs_parent_observation: FileObservation | None = None
+        staging_name: str | None = None
+        target_published = False
+        stage_preexisting = False
+        transaction_durable = False
+        activated_open = opening.get("writer_contract") == WRITER_CONTRACT
         try:
-            runs_parent_descriptor, _ = _open_bound_directory(runs_root.parent)
+            if activated_open:
+                runs_parent_descriptor, runs_parent_observation = _open_strict_batch_directory(
+                    runs_root.parent, refusal=BATCH_DIVERGED
+                )
+            else:
+                runs_parent_descriptor, runs_parent_observation = _open_bound_directory(
+                    runs_root.parent
+                )
             if view.runs_root_observation is None:
                 try:
                     os.mkdir("runs", 0o700, dir_fd=runs_parent_descriptor)
@@ -4381,9 +5536,16 @@ def open_run(
                 dir_fd=runs_parent_descriptor,
                 follow_symlinks=False,
             )
-            runs_descriptor, runs_root_observation = _open_bound_child_directory(
-                runs_parent_descriptor, "runs", root_stat
-            )
+            if activated_open:
+                runs_descriptor, runs_root_observation = (
+                    _open_strict_batch_child_directory(
+                        runs_parent_descriptor, "runs", refusal=BATCH_DIVERGED
+                    )
+                )
+            else:
+                runs_descriptor, runs_root_observation = _open_bound_child_directory(
+                    runs_parent_descriptor, "runs", root_stat
+                )
             if (
                 view.runs_root_observation is not None
                 and runs_root_observation != view.runs_root_observation
@@ -4393,21 +5555,436 @@ def open_run(
             if runs_descriptor is not None:
                 os.close(runs_descriptor)
                 runs_descriptor = None
-            raise
-        except OSError as exc:
-            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
-        finally:
             if runs_parent_descriptor is not None:
                 os.close(runs_parent_descriptor)
+                runs_parent_descriptor = None
+            raise
+        except OSError as exc:
+            if runs_descriptor is not None:
+                os.close(runs_descriptor)
+                runs_descriptor = None
+            if runs_parent_descriptor is not None:
+                os.close(runs_parent_descriptor)
+                runs_parent_descriptor = None
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
         try:
-            os.mkdir(run_id, 0o700, dir_fd=runs_descriptor)
+            assert runs_descriptor is not None
+            assert runs_parent_descriptor is not None
+            if activated_open:
+                assert _batch is not None
+                staging_name = _batch.staging_name
+                try:
+                    os.mkdir(staging_name, 0o700, dir_fd=runs_parent_descriptor)
+                except FileExistsError:
+                    # The deterministic key-bound stage is the recovery anchor
+                    # for process death before canonical run publication.
+                    stage_preexisting = True
+                target_descriptor, target_observation = (
+                    _open_strict_batch_child_directory(
+                        runs_parent_descriptor,
+                        staging_name,
+                        refusal=BATCH_DIVERGED,
+                    )
+                )
+            else:
+                # Preserve the Revision-8 late same-ID race classification for
+                # legacy callers. Activated opens use staged publication below.
+                os.mkdir(run_id, 0o700, dir_fd=runs_descriptor)
+                target_stat = os.stat(
+                    run_id,
+                    dir_fd=runs_descriptor,
+                    follow_symlinks=False,
+                )
+                target_descriptor, target_observation = (
+                    _open_bound_child_directory(
+                        runs_descriptor, run_id, target_stat
+                    )
+                )
+                target_published = True
+            if activated_open:
+                assert _batch is not None
+                names = set(os.listdir(target_descriptor))
+                allowed_names = {
+                    BATCH_LOCK_NAME,
+                    BATCH_RECEIPTS_NAME,
+                    BATCH_INTENT_NAME,
+                    _OPEN_OWNER_SWAP_NAME,
+                    "owner",
+                    "journal.jsonl",
+                }
+                if names - allowed_names or (
+                    BATCH_LOCK_NAME not in names and names
+                ):
+                    raise CoordinationRefusal(BATCH_DIVERGED)
+                lock_observation, _ = _ensure_open_stage_file(
+                    target_descriptor,
+                    BATCH_LOCK_NAME,
+                    b"",
+                    allow_prefix=False,
+                )
+                created[BATCH_LOCK_NAME] = (lock_observation, b"")
+                batch_lock_descriptor = os.open(
+                    BATCH_LOCK_NAME,
+                    _strict_batch_open_flags(
+                        writable=True, refusal=BATCH_DIVERGED
+                    ),
+                    dir_fd=target_descriptor,
+                )
+                if not _strict_batch_stat_matches(
+                    os.fstat(batch_lock_descriptor), lock_observation
+                ):
+                    raise CoordinationRefusal(BATCH_DIVERGED)
+                fcntl.flock(batch_lock_descriptor, fcntl.LOCK_EX)
+                rebound_lock = os.stat(
+                    BATCH_LOCK_NAME,
+                    dir_fd=target_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not _strict_batch_stat_matches(
+                        os.fstat(batch_lock_descriptor), lock_observation
+                    )
+                    or not _strict_batch_stat_matches(
+                        rebound_lock, lock_observation
+                    )
+                ):
+                    raise CoordinationRefusal(BATCH_DIVERGED)
+
+                try:
+                    ledger_payload, ledger_observation = _read_strict_batch_file(
+                        target_descriptor,
+                        BATCH_RECEIPTS_NAME,
+                        refusal=BATCH_DIVERGED,
+                    )
+                except FileNotFoundError:
+                    ledger_observation, ledger_payload = _ensure_open_stage_file(
+                        target_descriptor,
+                        BATCH_RECEIPTS_NAME,
+                        b"",
+                        allow_prefix=False,
+                    )
+                try:
+                    stored_intent, intent_observation = _read_strict_batch_file(
+                        target_descriptor,
+                        BATCH_INTENT_NAME,
+                        refusal=BATCH_DIVERGED,
+                    )
+                except FileNotFoundError:
+                    stored_intent = None
+                    intent_observation = None
+                try:
+                    stored_journal, _ = _read_strict_batch_file(
+                        target_descriptor,
+                        "journal.jsonl",
+                        refusal=BATCH_DIVERGED,
+                    )
+                except FileNotFoundError:
+                    stored_journal = None
+
+                if stored_intent is not None:
+                    try:
+                        (
+                            stored_opening,
+                            stored_receipt,
+                            stored_key,
+                            stored_request,
+                        ) = _stored_open_batch_from_intent(
+                            run_id, stored_intent, refusal=BATCH_DIVERGED
+                        )
+                    except CoordinationRefusal:
+                        if stored_journal is not None or ledger_payload:
+                            raise
+                        assert intent_observation is not None
+                        _unlink_open_stage_file(
+                            target_descriptor,
+                            BATCH_INTENT_NAME,
+                            intent_observation,
+                        )
+                        stored_intent = None
+                    else:
+                        if (
+                            stored_key != _batch.idempotency_key
+                            or stored_request != _batch.request_sha256
+                        ):
+                            raise CoordinationRefusal(BATCH_KEY_CONFLICT)
+                        opening = stored_opening
+                        opening_payload = _journal_line(opening)
+                        batch_intent = stored_intent
+                        batch_receipt = stored_receipt
+                        if ledger_payload and stored_journal != opening_payload:
+                            raise CoordinationRefusal(BATCH_DIVERGED)
+                        transaction_durable = True
+
+                if stored_intent is None and stored_journal is not None:
+                    if not ledger_payload:
+                        raise CoordinationRefusal(BATCH_DIVERGED)
+                    stored_opening, stored_key, stored_request = (
+                        _complete_open_stage_artifacts(
+                            run_id,
+                            stored_journal,
+                            ledger_payload,
+                            refusal=BATCH_DIVERGED,
+                        )
+                    )
+                    if (
+                        stored_key != _batch.idempotency_key
+                        or stored_request != _batch.request_sha256
+                    ):
+                        raise CoordinationRefusal(BATCH_KEY_CONFLICT)
+                    opening = stored_opening
+                    opening_payload = stored_journal
+                    batch_intent = None
+                    batch_receipt = ledger_payload
+                    transaction_durable = True
+                elif stored_intent is None:
+                    if ledger_payload:
+                        raise CoordinationRefusal(BATCH_DIVERGED)
+                    batch_intent = _batch.intent_payload
+                    batch_receipt = _batch.receipt_payload
+                    intent_observation, batch_intent = _ensure_open_stage_file(
+                        target_descriptor,
+                        BATCH_INTENT_NAME,
+                        batch_intent,
+                        allow_prefix=True,
+                    )
+                    transaction_durable = True
+
+                stored_successor = opening.get("successor_of", _MISSING)
+                if (
+                    opening.get("scope") != list(scope)
+                    or opening.get("repo") != str(repository)
+                    or (
+                        successor_of is None
+                        and stored_successor is not _MISSING
+                    )
+                    or (
+                        successor_of is not None
+                        and stored_successor != successor_of
+                    )
+                ):
+                    raise CoordinationRefusal(BATCH_DIVERGED)
+                _validate_append_citations(repository, target, opening)
+                _validate_citation_targets(opening, [])
+                _validate_proposed_record(
+                    opening,
+                    run_id=run_id,
+                    repo_root=repository,
+                    scope=scope,
+                )
+
+                owner_observation, owner_payload = _claim_open_stage_owner(
+                    target_descriptor, run_id, current
+                )
+                created["owner"] = (owner_observation, owner_payload)
+
+                journal_observation, opening_payload = _ensure_open_stage_file(
+                    target_descriptor,
+                    "journal.jsonl",
+                    opening_payload,
+                    allow_prefix=True,
+                )
+                created["journal.jsonl"] = (
+                    journal_observation,
+                    opening_payload,
+                )
+                assert batch_receipt is not None
+                ledger_observation, ledger_payload = _ensure_open_stage_file(
+                    target_descriptor,
+                    BATCH_RECEIPTS_NAME,
+                    batch_receipt,
+                    allow_prefix=True,
+                )
+                if ledger_payload != batch_receipt:
+                    raise CoordinationRefusal(BATCH_DIVERGED)
+                created[BATCH_RECEIPTS_NAME] = (
+                    ledger_observation,
+                    batch_receipt,
+                )
+
+                if batch_intent is not None:
+                    intent_payload, intent_observation = _read_strict_batch_file(
+                        target_descriptor,
+                        BATCH_INTENT_NAME,
+                        refusal=BATCH_DIVERGED,
+                    )
+                    if intent_payload != batch_intent:
+                        raise CoordinationRefusal(BATCH_DIVERGED)
+                    for name, expected, expected_payload in (
+                        (BATCH_LOCK_NAME, lock_observation, b""),
+                        ("journal.jsonl", journal_observation, opening_payload),
+                        (
+                            BATCH_RECEIPTS_NAME,
+                            ledger_observation,
+                            batch_receipt,
+                        ),
+                    ):
+                        current_payload, current_observation = _read_strict_batch_file(
+                            target_descriptor,
+                            name,
+                            refusal=BATCH_DIVERGED,
+                        )
+                        if (
+                            current_observation != expected
+                            or current_payload != expected_payload
+                        ):
+                            raise CoordinationRefusal(BATCH_DIVERGED)
+                    if not _strict_batch_stat_matches(
+                        os.fstat(batch_lock_descriptor), lock_observation
+                    ):
+                        raise CoordinationRefusal(BATCH_DIVERGED)
+                    _unlink_open_stage_file(
+                        target_descriptor,
+                        BATCH_INTENT_NAME,
+                        intent_observation,
+                    )
+                created.pop(BATCH_INTENT_NAME, None)
+            else:
+                owner_payload = _owner_bytes(current)
+                created["owner"] = (
+                    _write_exclusive_at(
+                        target_descriptor, "owner", owner_payload
+                    ),
+                    owner_payload,
+                )
+                created["journal.jsonl"] = (
+                    _write_exclusive_at(
+                        target_descriptor, "journal.jsonl", opening_payload
+                    ),
+                    opening_payload,
+                )
+            os.fsync(target_descriptor)
+            if activated_open:
+                assert staging_name is not None
+                assert runs_parent_observation is not None
+                staged_rebound = os.stat(
+                    staging_name,
+                    dir_fd=runs_parent_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not _batch_directory_stat_valid(staged_rebound)
+                    or not _matches_observation(staged_rebound, target_observation)
+                    or not _batch_directory_stat_valid(
+                        os.fstat(target_descriptor)
+                    )
+                    or not _matches_observation(
+                        os.fstat(target_descriptor), target_observation
+                    )
+                    or not _batch_directory_stat_valid(
+                        os.fstat(runs_parent_descriptor)
+                    )
+                    or not _matches_observation(
+                        os.fstat(runs_parent_descriptor),
+                        runs_parent_observation,
+                    )
+                    or not _batch_directory_stat_valid(os.fstat(runs_descriptor))
+                    or not _matches_observation(
+                        os.fstat(runs_descriptor), runs_root_observation
+                    )
+                    or set(os.listdir(target_descriptor)) != set(created)
+                ):
+                    raise CoordinationRefusal(BATCH_DIVERGED)
+                for name, (expected_observation, expected_payload) in created.items():
+                    payload, observation = _read_strict_batch_file(
+                        target_descriptor, name, refusal=BATCH_DIVERGED
+                    )
+                    if (
+                        observation != expected_observation
+                        or payload != expected_payload
+                    ):
+                        raise CoordinationRefusal(BATCH_DIVERGED)
+                if not _strict_batch_stat_matches(
+                    os.fstat(batch_lock_descriptor), lock_observation
+                ):
+                    raise CoordinationRefusal(BATCH_DIVERGED)
+                _move_name_noreplace_between_at(
+                    runs_parent_descriptor,
+                    staging_name,
+                    runs_descriptor,
+                    run_id,
+                )
+                target_published = True
+            os.fsync(runs_descriptor)
+            os.fsync(runs_parent_descriptor)
+            rebound_target = os.stat(
+                run_id, dir_fd=runs_descriptor, follow_symlinks=False
+            )
+            if (
+                (
+                    activated_open
+                    and (
+                        not _batch_directory_stat_valid(rebound_target)
+                        or not _batch_directory_stat_valid(
+                            os.fstat(target_descriptor)
+                        )
+                    )
+                )
+                or not _matches_observation(rebound_target, target_observation)
+                or not _matches_observation(
+                    os.fstat(target_descriptor), target_observation
+                )
+            ):
+                raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        except CoordinationRefusal:
+            if batch_lock_descriptor is not None:
+                try:
+                    fcntl.flock(batch_lock_descriptor, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                os.close(batch_lock_descriptor)
+                batch_lock_descriptor = None
+            if target_descriptor is not None:
+                os.close(target_descriptor)
+                target_descriptor = None
+            if runs_descriptor is not None:
+                os.close(runs_descriptor)
+                runs_descriptor = None
+            if runs_parent_descriptor is not None:
+                os.close(runs_parent_descriptor)
+                runs_parent_descriptor = None
+            raise
         except FileExistsError as exc:
             classification = _classify_late_run_target(
                 runs_descriptor, run_id
             )
+            preserve_stage = bool(
+                activated_open
+                and not target_published
+                and (stage_preexisting or transaction_durable)
+            )
+            cleanup_succeeded = bool(
+                preserve_stage
+                or target_descriptor is None
+                or (
+                    target_observation is not None
+                    and (runs_descriptor if target_published else runs_parent_descriptor)
+                    is not None
+                    and (run_id if target_published else staging_name) is not None
+                    and _cleanup_claimed_run(
+                        runs_descriptor
+                        if target_published
+                        else runs_parent_descriptor,
+                        run_id if target_published else staging_name,
+                        target_descriptor,
+                        target_observation,
+                        created,
+                    )
+                )
+            )
+            if not cleanup_succeeded:
+                raise CoordinationRefusal(JOURNAL_ROLLBACK_FAILED) from exc
+            if batch_lock_descriptor is not None:
+                os.close(batch_lock_descriptor)
+                batch_lock_descriptor = None
+            if target_descriptor is not None:
+                os.close(target_descriptor)
+                target_descriptor = None
             if runs_descriptor is not None:
                 os.close(runs_descriptor)
                 runs_descriptor = None
+            if runs_parent_descriptor is not None:
+                os.close(runs_parent_descriptor)
+                runs_parent_descriptor = None
             if classification == "empty":
                 raise CoordinationRefusal(
                     f"forge: new run refused — run {run_id} directory exists "
@@ -4420,33 +5997,49 @@ def open_run(
                 ) from exc
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
         except OSError as exc:
+            preserve_stage = bool(
+                activated_open
+                and not target_published
+                and (stage_preexisting or transaction_durable)
+            )
+            cleanup_succeeded = bool(
+                preserve_stage
+                or target_descriptor is None
+                or (
+                    target_observation is not None
+                    and (runs_descriptor if target_published else runs_parent_descriptor)
+                    is not None
+                    and (run_id if target_published else staging_name) is not None
+                    and _cleanup_claimed_run(
+                        runs_descriptor
+                        if target_published
+                        else runs_parent_descriptor,
+                        run_id if target_published else staging_name,
+                        target_descriptor,
+                        target_observation,
+                        created,
+                    )
+                )
+            )
+            if target_descriptor is not None and not cleanup_succeeded:
+                raise CoordinationRefusal(JOURNAL_ROLLBACK_FAILED) from exc
+            if batch_lock_descriptor is not None:
+                os.close(batch_lock_descriptor)
+                batch_lock_descriptor = None
+            if target_descriptor is not None:
+                os.close(target_descriptor)
+                target_descriptor = None
             if runs_descriptor is not None:
                 os.close(runs_descriptor)
                 runs_descriptor = None
+            if runs_parent_descriptor is not None:
+                os.close(runs_parent_descriptor)
+                runs_parent_descriptor = None
             raise CoordinationRefusal(
                 "forge: journal append refused — journal write failed"
             ) from exc
         try:
             assert runs_descriptor is not None
-            target_stat = os.stat(
-                run_id, dir_fd=runs_descriptor, follow_symlinks=False
-            )
-            target_descriptor, target_observation = _open_bound_child_directory(
-                runs_descriptor, run_id, target_stat
-            )
-            if os.listdir(target_descriptor):
-                raise OSError(errno.EEXIST, "claimed run directory is not empty")
-            owner_payload = _owner_bytes(current)
-            created["owner"] = (
-                _write_exclusive_at(target_descriptor, "owner", owner_payload),
-                owner_payload,
-            )
-            created["journal.jsonl"] = (
-                _write_exclusive_at(
-                    target_descriptor, "journal.jsonl", opening_payload
-                ),
-                opening_payload,
-            )
             assert runs_root_observation is not None
             assert target_observation is not None
             claim = NewRunClaim(
@@ -4476,6 +6069,18 @@ def open_run(
             # safer than manufacturing a known journal/registry mismatch.
             raise
         except BaseException as exc:
+            if (
+                target_published
+                and batch_receipt is not None
+                and BATCH_INTENT_NAME not in created
+                and created.get(BATCH_RECEIPTS_NAME, (None, None))[1]
+                == batch_receipt
+            ):
+                # The durable receipt is authoritative.  Keep the complete
+                # run so an identical retry can reconcile registry step 10.
+                if isinstance(exc, CoordinationRefusal):
+                    raise
+                raise CoordinationRefusal(REGISTRY_UPDATE_FAILED) from exc
             cleanup_succeeded = bool(
                 target_descriptor is not None
                 and target_observation is not None
@@ -4499,6 +6104,15 @@ def open_run(
             )
             raise CoordinationRefusal(diagnostic) from exc
         finally:
+            if batch_lock_descriptor is not None:
+                try:
+                    fcntl.flock(batch_lock_descriptor, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                try:
+                    os.close(batch_lock_descriptor)
+                except OSError:
+                    pass
             if target_descriptor is not None:
                 try:
                     os.close(target_descriptor)
@@ -4509,10 +6123,21 @@ def open_run(
                     os.close(runs_descriptor)
                 except OSError:
                     pass
+            if runs_parent_descriptor is not None:
+                try:
+                    os.close(runs_parent_descriptor)
+                except OSError:
+                    pass
         return target
 
 
-def append_run_record(repo: Path, run_id: str, record: object) -> None:
+def append_run_record(
+    repo: Path,
+    run_id: str,
+    record: object,
+    *,
+    _typed: bool = False,
+) -> None:
     candidate = _validate_record_envelope(record)
     run_id = _operation_run_id("journal append", run_id)
     _, state_root = _resolve_repository(repo, "journal append")
@@ -4527,6 +6152,10 @@ def append_run_record(repo: Path, run_id: str, record: object) -> None:
             locked=registry_lock,
         )
         state = _target_state(view, run_id, "journal append")
+        if _writer_contract_active(state.records):
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
         repository = _recorded_repository_root(
             state.run_dir, state_root, records=state.records
         )
@@ -4602,6 +6231,10 @@ def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
             locked=registry_lock,
         )
         state = _target_state(view, run_id, "run readmit")
+        if _writer_contract_active(state.records):
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
         with _locked_journal(state) as locked:
             prior = state.records
             _validate_append_citations(repository, state.run_dir, record)
@@ -4664,7 +6297,13 @@ def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
                     _rollback_registry_failure(locked, offset, exc)
 
 
-def close_run(repo: Path, run_id: str, record: object) -> None:
+def close_run(
+    repo: Path,
+    run_id: str,
+    record: object,
+    *,
+    _typed: bool = False,
+) -> None:
     candidate = _validate_record_envelope(record)
     run_id = _operation_run_id("run close", run_id)
     repository, state_root = _resolve_repository(repo, "run close")
@@ -4688,6 +6327,10 @@ def close_run(repo: Path, run_id: str, record: object) -> None:
             "run close",
             allow_reserving_retired_close=True,
         )
+        if _writer_contract_active(state.records):
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
         with _locked_journal(state) as locked:
             prior = state.records
             _validate_append_citations(repository, state.run_dir, candidate)
@@ -4762,6 +6405,10 @@ def retire_run(repo: Path, run_id: str) -> None:
             locked=registry_lock,
         )
         state = _target_state(view, run_id, "run retire")
+        if _writer_contract_active(state.records):
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
         if state.pre_coordination:
             # Retirement exists so a successor can reuse an admitted scope; a
             # pre-coordination run has none, and its retired state (scope-less,
@@ -4822,39 +6469,271 @@ def retire_run(repo: Path, run_id: str) -> None:
                     _rollback_registry_failure(locked, offset, exc)
 
 
+def _name_exists_at(directory_descriptor: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _optional_strict_batch_observation(
+    directory_descriptor: int, name: str
+) -> FileObservation | None:
+    try:
+        _, observation = _strict_batch_named_observation(
+            directory_descriptor,
+            name,
+            refusal=JOURNAL_READ_TRANSACTION_REFUSAL,
+        )
+    except FileNotFoundError:
+        return None
+    return observation
+
+
+def _revalidate_optional_batch_observation(
+    directory_descriptor: int,
+    name: str,
+    expected: FileObservation | None,
+) -> None:
+    current = _optional_strict_batch_observation(directory_descriptor, name)
+    if current != expected:
+        raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+
+
+def _read_journal_descriptor_snapshot(
+    run_descriptor: int, journal_name: str
+) -> bytes:
+    before, observation = _strict_batch_named_observation(
+        run_descriptor,
+        journal_name,
+        refusal=JOURNAL_READ_TRANSACTION_REFUSAL,
+    )
+    descriptor = os.open(
+        journal_name,
+        _strict_batch_open_flags(refusal=JOURNAL_READ_TRANSACTION_REFUSAL),
+        dir_fd=run_descriptor,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if not _strict_batch_stat_matches(opened, observation):
+            raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+        expected_size = opened.st_size
+        raw = _read_descriptor(descriptor)
+        after = os.fstat(descriptor)
+        rebound = os.stat(
+            journal_name, dir_fd=run_descriptor, follow_symlinks=False
+        )
+        if (
+            not _strict_batch_stat_matches(after, observation)
+            or not _strict_batch_stat_matches(rebound, observation)
+            or before.st_size != expected_size
+            or after.st_size != expected_size
+            or rebound.st_size != expected_size
+            or len(raw) != expected_size
+        ):
+            raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _snapshot_activates_writer(raw: bytes) -> bool:
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            opening = json.loads(line.decode("utf-8"))
+        except (UnicodeError, ValueError, RecursionError):
+            return False
+        return bool(
+            isinstance(opening, dict)
+            and opening.get("type") == "run_started"
+            and opening.get("writer_contract") == WRITER_CONTRACT
+        )
+    return False
+
+
+def _stable_journal_read(path: Path) -> bytes:
+    """Read under the Revision-9 sidecar protocol without ever repairing state."""
+
+    run_descriptor: int | None = None
+    lock_descriptor: int | None = None
+    try:
+        run_descriptor, _ = _open_strict_batch_directory(
+            path.parent, refusal=JOURNAL_READ_TRANSACTION_REFUSAL
+        )
+        if os.path.abspath(os.fspath(path.parent)) in _held_batch_locks():
+            lock_observation = _optional_strict_batch_observation(
+                run_descriptor, BATCH_LOCK_NAME
+            )
+            if lock_observation is None:
+                raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+            if _name_exists_at(run_descriptor, BATCH_INTENT_NAME):
+                raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+            ledger_observation = _optional_strict_batch_observation(
+                run_descriptor, BATCH_RECEIPTS_NAME
+            )
+            raw = _read_journal_descriptor_snapshot(run_descriptor, path.name)
+            if (
+                _name_exists_at(run_descriptor, BATCH_INTENT_NAME)
+                or (
+                    _snapshot_activates_writer(raw)
+                    and ledger_observation is None
+                )
+            ):
+                raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+            _revalidate_optional_batch_observation(
+                run_descriptor, BATCH_RECEIPTS_NAME, ledger_observation
+            )
+            _revalidate_optional_batch_observation(
+                run_descriptor, BATCH_LOCK_NAME, lock_observation
+            )
+            return raw
+        try:
+            lock_before = os.stat(
+                BATCH_LOCK_NAME,
+                dir_fd=run_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            # Binding-review MINOR resolution: historical runs remain readable
+            # without reader-side mutation.  A double absence check plus the
+            # journal identity/size fence detects a concurrently appearing
+            # stable lock or intent and discards that snapshot.
+            if _name_exists_at(
+                run_descriptor, BATCH_INTENT_NAME
+            ) or _name_exists_at(run_descriptor, BATCH_RECEIPTS_NAME):
+                raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+            raw = _read_journal_descriptor_snapshot(run_descriptor, path.name)
+            if _name_exists_at(
+                run_descriptor, BATCH_LOCK_NAME
+            ) or _name_exists_at(
+                run_descriptor, BATCH_INTENT_NAME
+            ) or _name_exists_at(run_descriptor, BATCH_RECEIPTS_NAME):
+                raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+            if _snapshot_activates_writer(raw):
+                raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+            return raw
+
+        if not _batch_regular_stat_valid(lock_before):
+            raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+        lock_descriptor = os.open(
+            BATCH_LOCK_NAME,
+            _strict_batch_open_flags(
+                refusal=JOURNAL_READ_TRANSACTION_REFUSAL
+            ),
+            dir_fd=run_descriptor,
+        )
+        opened_lock = os.fstat(lock_descriptor)
+        lock_observation = _file_observation(lock_before)
+        if not _strict_batch_stat_matches(opened_lock, lock_observation):
+            raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+        fcntl.flock(lock_descriptor, fcntl.LOCK_SH)
+        rebound_lock = os.stat(
+            BATCH_LOCK_NAME,
+            dir_fd=run_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not _strict_batch_stat_matches(rebound_lock, lock_observation)
+            or not _strict_batch_stat_matches(
+                os.fstat(lock_descriptor), lock_observation
+            )
+            or _name_exists_at(run_descriptor, BATCH_INTENT_NAME)
+        ):
+            raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+        ledger_observation = _optional_strict_batch_observation(
+            run_descriptor, BATCH_RECEIPTS_NAME
+        )
+        raw = _read_journal_descriptor_snapshot(run_descriptor, path.name)
+        final_lock = os.stat(
+            BATCH_LOCK_NAME,
+            dir_fd=run_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not _strict_batch_stat_matches(final_lock, lock_observation)
+            or not _strict_batch_stat_matches(
+                os.fstat(lock_descriptor), lock_observation
+            )
+            or _name_exists_at(run_descriptor, BATCH_INTENT_NAME)
+            or (
+                _snapshot_activates_writer(raw)
+                and ledger_observation is None
+            )
+        ):
+            raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL)
+        _revalidate_optional_batch_observation(
+            run_descriptor, BATCH_RECEIPTS_NAME, ledger_observation
+        )
+        return raw
+    finally:
+        if lock_descriptor is not None:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_descriptor)
+        if run_descriptor is not None:
+            os.close(run_descriptor)
+
+
+def _decode_journal_snapshot(
+    raw: bytes, *, allow_partial_final_line: bool
+) -> tuple[list[dict[str, object]], list[str]]:
+    records: list[dict[str, object]] = []
+    issues: list[str] = []
+    for line_number, raw_line in enumerate(raw.splitlines(keepends=True), start=1):
+        terminated = raw_line.endswith(b"\n")
+        try:
+            line = raw_line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            if allow_partial_final_line and not terminated:
+                break
+            issues.append(f"could not read journal: {exc}")
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            if allow_partial_final_line and not terminated:
+                break
+            issues.append(f"line {line_number}: invalid JSON: {exc.msg}")
+            continue
+        if not isinstance(value, dict):
+            issues.append(f"line {line_number}: journal entry must be an object")
+            continue
+        value["_line"] = line_number
+        records.append(value)
+    return records, issues
+
+
 def read_journal(
     path: Path, *, allow_partial_final_line: bool = False
 ) -> tuple[list[dict[str, object]], list[str]]:
     records: list[dict[str, object]] = []
     issues: list[str] = []
     try:
-        if not path.exists():
-            return records, [f"missing journal: {path}"]
-        with path.open("rb") as handle:
-            for line_number, raw_line in enumerate(handle, start=1):
-                terminated = raw_line.endswith(b"\n")
-                try:
-                    line = raw_line.decode("utf-8")
-                except UnicodeDecodeError as exc:
-                    if allow_partial_final_line and not terminated:
-                        break
-                    issues.append(f"could not read journal: {exc}")
-                    continue
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    value = json.loads(stripped)
-                except json.JSONDecodeError as exc:
-                    if allow_partial_final_line and not terminated:
-                        break
-                    issues.append(f"line {line_number}: invalid JSON: {exc.msg}")
-                    continue
-                if not isinstance(value, dict):
-                    issues.append(f"line {line_number}: journal entry must be an object")
-                    continue
-                value["_line"] = line_number
-                records.append(value)
+        if "reader-lock" not in BATCH_TRANSACTION_CONTROLS:
+            try:
+                os.lstat(path)
+            except FileNotFoundError:
+                return records, [f"missing journal: {path}"]
+            raw = path.read_bytes()
+        else:
+            raw = _stable_journal_read(path)
+        return _decode_journal_snapshot(
+            raw, allow_partial_final_line=allow_partial_final_line
+        )
+    except CoordinationRefusal as exc:
+        if str(exc) == JOURNAL_READ_TRANSACTION_REFUSAL:
+            return [], [JOURNAL_READ_TRANSACTION_REFUSAL]
+        issues.append(f"could not read journal: {exc}")
+    except FileNotFoundError:
+        return records, [f"missing journal: {path}"]
     except (OSError, RuntimeError, ValueError) as exc:
         issues.append(f"could not read journal: {exc}")
     return records, issues
@@ -4871,6 +6750,21 @@ def execution_key(record: dict[str, object]) -> tuple[str, str] | None:
     if isinstance(agent, str) and agent and isinstance(execution, str) and execution:
         return agent, execution
     return None
+
+
+def _authoritative_execution_results(
+    records: list[dict[str, object]],
+) -> dict[tuple[str, str], dict[str, object]]:
+    """Return first-result lifecycle authority for every execution key."""
+
+    authoritative: dict[tuple[str, str], dict[str, object]] = {}
+    for record in records:
+        if record.get("type") != "execution_result":
+            continue
+        key = execution_key(record)
+        if key is not None and key not in authoritative:
+            authoritative[key] = record
+    return authoritative
 
 
 def display_execution(key: tuple[str, str]) -> str:
@@ -4930,9 +6824,33 @@ def _legacy_warning(record: dict[str, object], detail: str) -> str:
     return f"{record_line(record)}: legacy compatibility {detail}"
 
 
+def _citation_correction_target_ids(
+    records: list[dict[str, object]],
+) -> set[str]:
+    targets: set[str] = set()
+    for record in records:
+        try:
+            lines = _citation_correction_lines(record)
+        except CoordinationRefusal:
+            continue
+        for line in lines or ():
+            matched = CITATION_DECISION_CORRECTION.fullmatch(line)
+            if matched is None:
+                matched = CITATION_VERIFICATION_CORRECTION.fullmatch(line)
+            if matched is not None:
+                targets.add(matched.group("id"))
+    return targets
+
+
 def _declared_path_is_missing(run_dir: Path, value: str) -> bool:
     try:
-        return not resolve_run_path(run_dir, value).exists()
+        spelled = Path(value).expanduser()
+        if not spelled.is_absolute():
+            spelled = run_dir / spelled
+        os.lstat(spelled)
+        return False
+    except FileNotFoundError:
+        return True
     except (OSError, RuntimeError, ValueError):
         return False
 
@@ -4982,12 +6900,192 @@ def check_declared_file(
             )
 
 
+def _binding_chain_and_candidate(
+    record: dict[str, object],
+) -> tuple[str, bytes, str] | None:
+    binding = record.get("binding")
+    if not _binding_shape_valid(binding, record=record):
+        return None
+    assert isinstance(binding, dict)
+    source = binding["source_record"]
+    assert isinstance(source, dict)
+    binding_id = binding["binding_id"]
+    assert isinstance(binding_id, str)
+    return (
+        str(source["chain_id"]),
+        _canonical_json_bytes(binding["candidate"]),
+        binding_id,
+    )
+
+
+def _check_binding_correlation(
+    records: list[dict[str, object]],
+    issues: list[str],
+    authoritative_results: dict[
+        tuple[str, str], dict[str, object]
+    ] | None = None,
+) -> None:
+    """Apply activated FR-021 correlation without consulting chain state."""
+
+    if (
+        "journal-only" not in BINDING_CORRELATION_CONTROLS
+        or not _writer_contract_active(records)
+        or not any(
+            record.get("type") == "run_closed"
+            and record.get("judgment") == "passed"
+            for record in records
+        )
+    ):
+        return
+
+    gates = [
+        record
+        for record in records
+        if record.get("type") == "verification"
+        and record.get("result") == "passed"
+        and isinstance(record.get("criterion"), str)
+        and (
+            str(record["criterion"]).startswith(("gate-1: ", "gate-2: "))
+            or record.get("criterion") == GATE_3_CRITERION
+        )
+    ]
+    for gate in gates:
+        if _binding_chain_and_candidate(gate) is None:
+            issues.append(
+                f"activated gate verification {gate.get('id')!r} has no valid "
+                f"{BINDING_SCHEMA} binding"
+            )
+            return
+
+    if authoritative_results is None:
+        authoritative_results = _authoritative_execution_results(records)
+    terminal_results = {
+        key: record
+        for key, record in authoritative_results.items()
+        if record.get("status") in TERMINAL_EXECUTION_STATUSES
+    }
+    last_mutating_result_by_task: dict[str, int] = {}
+    for execution in records:
+        if execution.get("type") != "execution" or execution.get("role") == "review":
+            continue
+        task = execution.get("task")
+        key = execution_key(execution)
+        result = terminal_results.get(key) if key is not None else None
+        if not isinstance(task, str) or result is None:
+            continue
+        line = int(result.get("_line", 0))
+        last_mutating_result_by_task[task] = max(
+            line, last_mutating_result_by_task.get(task, 0)
+        )
+
+    bound_records = [
+        record
+        for record in records
+        if record.get("type") in {"verification", "decision"}
+        and _binding_chain_and_candidate(record) is not None
+    ]
+    for record in bound_records:
+        task = record.get("task")
+        if not isinstance(task, str):
+            continue
+        last_result = last_mutating_result_by_task.get(task, 0)
+        if int(record.get("_line", 0)) <= last_result:
+            bound = _binding_chain_and_candidate(record)
+            assert bound is not None
+            issues.append(
+                f"binding {bound[2]!r} precedes the last mutating execution for "
+                f"task {task!r}"
+            )
+            return
+
+    tasks = {
+        task
+        for record in records
+        if isinstance((task := record.get("task")), str)
+    }
+    for task in sorted(tasks, key=_byte_key):
+        task_gates = [record for record in gates if record.get("task") == task]
+        landings = [
+            record
+            for record in records
+            if record.get("type") == "decision"
+            and record.get("task") == task
+            and record.get("outcome") == "chain-landing"
+            and _binding_chain_and_candidate(record) is not None
+        ]
+        landing_keys = {
+            (bound[0], bound[1])
+            for record in landings
+            if (bound := _binding_chain_and_candidate(record)) is not None
+        }
+        for gate in task_gates:
+            bound = _binding_chain_and_candidate(gate)
+            assert bound is not None
+            if (bound[0], bound[1]) not in landing_keys:
+                issues.append(
+                    f"task {task!r} has inconsistent bound candidate across gate "
+                    "and landing records"
+                )
+                return
+        for decision in records:
+            if (
+                decision.get("type") != "decision"
+                or decision.get("task") != task
+                or decision.get("outcome") not in {"chain-approval", "chain-skip"}
+            ):
+                continue
+            bound = _binding_chain_and_candidate(decision)
+            if bound is None or (bound[0], bound[1]) not in landing_keys:
+                issues.append(
+                    f"task {task!r} has inconsistent bound candidate across gate "
+                    "and landing records"
+                )
+                return
+        for landing in landings:
+            bound = _binding_chain_and_candidate(landing)
+            assert bound is not None
+            matching = [
+                gate
+                for gate in task_gates
+                if (gate_bound := _binding_chain_and_candidate(gate)) is not None
+                and gate_bound[:2] == bound[:2]
+            ]
+            criteria = [str(gate.get("criterion")) for gate in matching]
+            if not (
+                any(value.startswith("gate-1: ") for value in criteria)
+                and any(value.startswith("gate-2: ") for value in criteria)
+                and GATE_3_CRITERION in criteria
+            ):
+                issues.append(
+                    f"task {task!r} has inconsistent bound candidate across gate "
+                    "and landing records"
+                )
+                return
+
+            landing_line = int(landing.get("_line", 0))
+            terminal_task_lines = [
+                int(record.get("_line", 0))
+                for record in records
+                if record.get("type") == "task"
+                and record.get("id") == task
+                and record.get("status") in TERMINAL_TASK_STATUSES
+            ]
+            if any(line <= landing_line for line in terminal_task_lines):
+                issues.append(
+                    f"terminal task {task!r} precedes a bound chain landing decision"
+                )
+                return
+
+
 # forge: modified from upstream — add opt-in checks over the existing journal schema
 def check_gate_profile(
     records: list[dict[str, object]],
     issues: list[str],
     warnings: list[str],
     declaration_line: int | None,
+    authoritative_results: dict[
+        tuple[str, str], dict[str, object]
+    ] | None = None,
 ) -> None:
     verifications = [record for record in records if record.get("type") == "verification"]
     passed_close = any(
@@ -4999,6 +7097,8 @@ def check_gate_profile(
         for record in records
         if record.get("type") == "execution" and record.get("role") != "review"
     ]
+    if authoritative_results is None:
+        authoritative_results = _authoritative_execution_results(records)
 
     if passed_close and mutating_executions:
         mutating_keys = {
@@ -5010,14 +7110,13 @@ def check_gate_profile(
         # normalized a tolerated pre-declaration legacy status to its terminal
         # mapping, so a mapped result both counts as terminal and anchors the
         # last-result line here without any further tolerance.
-        terminal_results = [
-            record
-            for record in records
-            if record.get("type") == "execution_result"
+        terminal_results = {
+            key: record
+            for key, record in authoritative_results.items()
+            if key in mutating_keys
             and record.get("status") in TERMINAL_EXECUTION_STATUSES
-            and execution_key(record) in mutating_keys
-        ]
-        terminal_result_keys = {execution_key(record) for record in terminal_results}
+        }
+        terminal_result_keys = set(terminal_results)
         # The baseline checks already tolerate a pre-declaration execution
         # with no terminal result (missing-execution-result leg) and emit its
         # warning there; the veto honors the same tolerance, or a legacy
@@ -5031,7 +7130,7 @@ def check_gate_profile(
             for record in mutating_executions
         )
         terminal_result_lines = [
-            int(record.get("_line", 0)) for record in terminal_results
+            int(record.get("_line", 0)) for record in terminal_results.values()
         ]
         last_mutating_result_line = max(terminal_result_lines, default=0)
         required_gates = (
@@ -5062,13 +7161,27 @@ def check_gate_profile(
                     f"'{gate_name}' verification after the last mutating execution"
                 )
 
+    _check_binding_correlation(
+        records, issues, authoritative_results=authoritative_results
+    )
+
     for index, verification in enumerate(verifications):
         criterion = verification.get("criterion")
         if not isinstance(criterion, str):
             continue
         known_gate = criterion.startswith(GATE_VERIFICATION_PREFIXES)
         if criterion.startswith("gate-") and not known_gate:
-            issues.append(f"unknown gate criterion: {criterion}")
+            if _legacy_allows(
+                "unknown-gate-criterion", declaration_line, verification
+            ):
+                warnings.append(
+                    _legacy_warning(
+                        verification,
+                        f"tolerated unknown gate criterion: {criterion}",
+                    )
+                )
+            else:
+                issues.append(f"unknown gate criterion: {criterion}")
         if verification.get("result") != "failed" or not known_gate:
             continue
         has_passing_recheck = any(
@@ -5116,6 +7229,16 @@ def validate_run(
             payload["profile"] = "gates"
         return payload
     records, issues = read_journal(run_dir / "journal.jsonl")
+    if issues == [JOURNAL_READ_TRANSACTION_REFUSAL]:
+        payload = {
+            "ok": False,
+            "issues": issues,
+            "warnings": warnings,
+            "non_passing_verifications": non_passing,
+        }
+        if gates:
+            payload["profile"] = "gates"
+        return payload
 
     declaration = _legacy_compatibility_declaration(records)
     declaration_line_value = declaration.get("_line") if declaration is not None else None
@@ -5279,12 +7402,25 @@ def validate_run(
     execution_results: dict[tuple[str, str], dict[str, object]] = {}
     seen_ids: dict[str, set[str]] = {"verification": set(), "decision": set()}
     verification_occurrences: dict[str, list[dict[str, object]]] = {}
+    decision_occurrences: dict[str, list[dict[str, object]]] = {}
+    execution_result_occurrences: dict[
+        tuple[str, str], list[dict[str, object]]
+    ] = {}
     for record in known_records:
-        if record.get("type") != "verification":
-            continue
-        record_id = record.get("id")
-        if isinstance(record_id, str) and record_id:
-            verification_occurrences.setdefault(record_id, []).append(record)
+        kind = record.get("type")
+        if kind in {"verification", "decision"}:
+            record_id = record.get("id")
+            if isinstance(record_id, str) and record_id:
+                occurrences = (
+                    verification_occurrences
+                    if kind == "verification"
+                    else decision_occurrences
+                )
+                occurrences.setdefault(record_id, []).append(record)
+        elif kind == "execution_result":
+            key = execution_key(record)
+            if key is not None:
+                execution_result_occurrences.setdefault(key, []).append(record)
     compatible_duplicate_verifications = {
         record_id
         for record_id, occurrences in verification_occurrences.items()
@@ -5294,6 +7430,27 @@ def validate_run(
         )
     }
     warned_duplicate_verifications: set[str] = set()
+    correction_target_ids = _citation_correction_target_ids(raw_known_records)
+    compatible_duplicate_decisions = {
+        record_id
+        for record_id, occurrences in decision_occurrences.items()
+        if record_id != LEGACY_COMPATIBILITY_DECLARATION_ID
+        and record_id not in correction_target_ids
+        and len(occurrences) > 1
+        and _legacy_allows(
+            "duplicate-decision-id", declaration_line, *occurrences
+        )
+    }
+    warned_duplicate_decisions: set[str] = set()
+    compatible_duplicate_execution_results = {
+        key
+        for key, occurrences in execution_result_occurrences.items()
+        if len(occurrences) > 1
+        and _legacy_allows(
+            "duplicate-execution-result", declaration_line, *occurrences
+        )
+    }
+    execution_results = _authoritative_execution_results(known_records)
 
     for record in known_records:
         kind = record.get("type")
@@ -5318,6 +7475,27 @@ def validate_run(
                                 )
                             )
                             warned_duplicate_verifications.add(record_id)
+                    elif (
+                        kind == "decision"
+                        and record_id in compatible_duplicate_decisions
+                    ):
+                        occurrences = decision_occurrences[record_id]
+                        if (
+                            record_id not in warned_duplicate_decisions
+                            and record is occurrences[-1]
+                        ):
+                            occurrence_lines = ", ".join(
+                                str(occurrence["_line"])
+                                for occurrence in occurrences
+                            )
+                            warnings.append(
+                                _legacy_warning(
+                                    record,
+                                    f"tolerated duplicate decision id {record_id}; "
+                                    f"occurrences at lines {occurrence_lines}",
+                                )
+                            )
+                            warned_duplicate_decisions.add(record_id)
                     else:
                         issues.append(
                             f"{record_line(record)}: duplicate {kind} id {record_id}"
@@ -5356,13 +7534,22 @@ def validate_run(
                 issues.append(
                     f"{record_line(record)}: execution_result must identify agent and execution"
                 )
-            elif key in execution_results:
-                issues.append(
-                    f"{record_line(record)}: duplicate execution_result for "
-                    f"{display_execution(key)}"
-                )
-            else:
-                execution_results[key] = record
+            elif execution_results.get(key) is not record:
+                if key in compatible_duplicate_execution_results:
+                    first = execution_result_occurrences[key][0]
+                    warnings.append(
+                        _legacy_warning(
+                            record,
+                            f"tolerated duplicate execution_result for "
+                            f"{display_execution(key)}; first occurrence at line "
+                            f"{first['_line']} remains authoritative",
+                        )
+                    )
+                else:
+                    issues.append(
+                        f"{record_line(record)}: duplicate execution_result for "
+                        f"{display_execution(key)}"
+                    )
         elif kind == "verification":
             result = record.get("result")
             if not isinstance(result, str) or result not in VERIFICATION_RESULTS:
@@ -5394,10 +7581,20 @@ def validate_run(
                             f"{record_line(record)}: evidence[{index}] must name a file: {value!r}"
                         )
                     elif not declared_file_exists(run_dir, value):
-                        issues.append(
-                            f"{record_line(record)}: referenced evidence[{index}] "
-                            f"file does not exist: {value}"
-                        )
+                        if _legacy_allows(
+                            "missing-evidence-file", declaration_line, record
+                        ) and _declared_path_is_missing(run_dir, value):
+                            warnings.append(
+                                _legacy_warning(
+                                    record,
+                                    f"tolerated missing evidence[{index}] file: {value}",
+                                )
+                            )
+                        else:
+                            issues.append(
+                                f"{record_line(record)}: referenced evidence[{index}] "
+                                f"file does not exist: {value}"
+                            )
 
     for key, execution in executions.items():
         result = execution_results.get(key)
@@ -5486,7 +7683,13 @@ def validate_run(
 
     # forge: modified from upstream — layer gate issues after all baseline checks
     if gates:
-        check_gate_profile(known_records, issues, warnings, declaration_line)
+        check_gate_profile(
+            known_records,
+            issues,
+            warnings,
+            declaration_line,
+            authoritative_results=execution_results,
+        )
 
     payload = {
         "ok": not issues,

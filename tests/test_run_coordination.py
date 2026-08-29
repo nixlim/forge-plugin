@@ -955,6 +955,52 @@ class RunCoordinationTests(unittest.TestCase):
                 )
                 self.assertEqual(self.coordination_bytes(run_id), before)
 
+    def test_anchored_symlink_escape_cannot_fall_through_to_repository(self) -> None:
+        """FR-017: the shared ordered root selection anchors at the run spelling."""
+
+        run_id = "run-anchored-citation"
+        self.assertEqual(self.open(run_id, "src/**").returncode, 0)
+        run_dir = self.journal_path(run_id).parent
+        outside = Path(self.temporary.name) / "anchored-outside"
+        outside.mkdir()
+        (outside / "proof.txt").write_text("outside\n", encoding="utf-8")
+        (run_dir / "anchored").symlink_to(outside, target_is_directory=True)
+        safe = self.repo / "anchored"
+        safe.mkdir()
+        (safe / "proof.txt").write_text("repository\n", encoding="utf-8")
+        citation = "anchored/proof.txt"
+        self.assertFalse(
+            journal._citation_is_contained(self.repo, run_dir, citation)
+        )
+        before = self.coordination_bytes(run_id)
+
+        refused = self.command(
+            "journal-append",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            run_id,
+            "--record-json",
+            str(
+                self.record(
+                    "anchored-citation.json",
+                    {
+                        "type": "decision",
+                        "id": "decision-anchored",
+                        "basis": [citation],
+                    },
+                )
+            ),
+        )
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(
+            refused.stderr,
+            "forge: journal append refused — record cites path outside run or "
+            f"repository: decision.basis[0]: {citation}\n",
+        )
+        self.assertEqual(self.coordination_bytes(run_id), before)
+
     def test_non_path_basis_and_observation_are_accepted(self) -> None:
         """FR-017: record IDs and prose are not promoted to path citations."""
         run_id = "run-prose"

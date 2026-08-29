@@ -1,0 +1,28 @@
+{
+  "artifacts": [
+    {
+      "path": ".forge/evals/tasks/fr223-reason-code-enum-v3.md",
+      "sha256": "12abec841b0728625ea8df5dcc31e744182436cbfae551537f24278f5d7157d3"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-reason-code-enum-v3.result",
+      "sha256": "09a6c264d3c4abdcb411b1659573ef239dad5df6f71760e7f44d8b36d73bf387"
+    },
+    {
+      "path": "system/fr223/reason-codes-v3.json",
+      "sha256": "13256ac9c9003205510866bc1fb295d11906dd6747b2ea2b94fb9733d6f5864e"
+    }
+  ],
+  "clauses": [
+    {
+      "artifacts": [
+        ".forge/evals/tasks/fr223-reason-code-enum-v3.md",
+        ".forge/evals/tasks/fr223-reason-code-enum-v3.result",
+        "system/fr223/reason-codes-v3.json"
+      ],
+      "clause": "reason-code-enum-v3",
+      "statement": "The fr223-reason-codes/3 corpus carries the complete sorted 53-member forge-cli/2 union (41 v2 rows byte-identical plus the twelve Revision-9 additions); the v3 enum eval baseline BLOCK was recorded from a fresh review-cheap execution over the fixture scenario with the oracle section withheld. Fixture-family immutability applies from this baseline; changes require another additive generation."
+    }
+  ],
+  "schema": "fr223-archive-fidelity-manifest/3"
+}

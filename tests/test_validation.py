@@ -895,6 +895,52 @@ class ValidationTests(unittest.TestCase):
             _, payload = self.run_validation_cli(run_dir)
             self.assert_all_gates_vetoed(payload)
 
+    def test_tolerated_duplicate_result_after_valid_gates_keeps_first_authority(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, baseline = self.make_run(Path(tmp))
+            first_result = copy.deepcopy(baseline[3])
+            duplicate_result = copy.deepcopy(first_result)
+            write_journal(
+                run_dir,
+                [
+                    *copy.deepcopy(baseline[:3]),
+                    first_result,
+                    *self.gate_passing_verifications(),
+                    duplicate_result,
+                    self.legacy_declaration(),
+                    {"type": "run_closed", "judgment": "passed"},
+                ],
+            )
+
+            compatible = validate_run(run_dir, gates=True)
+            with mock.patch.object(
+                journal,
+                "LEGACY_COMPATIBILITY_LEGS",
+                journal.LEGACY_COMPATIBILITY_LEGS
+                - {"duplicate-execution-result"},
+            ):
+                strict = validate_run(run_dir, gates=True)
+
+        self.assertTrue(compatible["ok"], compatible)
+        self.assertEqual(compatible["issues"], [])
+        self.assertTrue(
+            any(
+                "first occurrence at line 4 remains authoritative" in warning
+                for warning in compatible["warnings"]
+            ),
+            compatible["warnings"],
+        )
+        self.assertFalse(strict["ok"])
+        self.assertEqual(
+            strict["issues"],
+            [
+                "line 8: duplicate execution_result for "
+                "codex-impl-01/execution-01"
+            ],
+        )
+
     def test_post_declaration_unterminated_mutation_still_vetoes_gates(self) -> None:
         # Cutover: an unterminated mutating execution recorded at or after the
         # declaration gets no tolerance, so it keeps vetoing every gate.
@@ -1029,7 +1075,10 @@ class ValidationTests(unittest.TestCase):
             records.append(self.legacy_declaration())
             write_journal(run_dir, records)
             missing_evidence = validate_run(run_dir)
-        self.assertFalse(missing_evidence["ok"])
+        # Revision 9 (FR-016 leg e): a pre-declaration record naming a missing
+        # evidence file is tolerated as a warning under an active declaration,
+        # including the normalized singleton-string form.
+        self.assertTrue(missing_evidence["ok"], missing_evidence["issues"])
         self.assertEqual(
             sum(
                 "legacy compatibility declaration active" in warning
@@ -1037,9 +1086,18 @@ class ValidationTests(unittest.TestCase):
             ),
             1,
         )
-        self.assertEqual(len(missing_evidence["warnings"]), 2)
-        self.assertTrue(
-            any("referenced evidence[0] file does not exist" in issue for issue in missing_evidence["issues"])
+        self.assertEqual(
+            sum(
+                "tolerated missing evidence[0] file: evidence/missing.txt" in warning
+                for warning in missing_evidence["warnings"]
+            ),
+            1,
+        )
+        self.assertFalse(
+            any(
+                "referenced evidence[0] file does not exist" in issue
+                for issue in missing_evidence["issues"]
+            )
         )
 
     def test_legacy_task_mismatch_never_conceals_an_unknown_task(self) -> None:
