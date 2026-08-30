@@ -593,6 +593,7 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
                 at="2026-01-01T12:00:02Z",
             )
         self.assertEqual(stale.exception.reason_code.value, "state-precondition")
+        self.assertEqual(stale.exception.chain, current)
         self.assertEqual(state_path.read_bytes(), final_projection)
 
     def test_status_and_all_shared_review_verbs_route_to_dormant_merge_family(self) -> None:
@@ -929,6 +930,26 @@ class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                     "tests",
                 ],
             }
+            before_rejected_append = store.events_path(self.chain_id).read_bytes()
+            with mock.patch.object(
+                builders, "_binding_is_current", return_value=False
+            ), self.assertRaises(CLI.FrozenError) as rejected:
+                self.transition(
+                    store,
+                    state,
+                    "gate_recorded",
+                    {"delta": {"steps": {"gate-1": [gate]}}},
+                    generation_digest=generation_digest,
+                    second=5,
+                )
+            self.assertEqual(
+                rejected.exception.message,
+                "new merge journal binding is not current",
+            )
+            self.assertEqual(
+                store.events_path(self.chain_id).read_bytes(),
+                before_rejected_append,
+            )
             run_dir = (
                 self.repo / ".codex-orchestrator" / "runs" / self.run_id
             )
@@ -1091,41 +1112,6 @@ class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                     ),
                     recovered,
                 )
-
-            assertion_gate = {
-                "result": "passed",
-                "generation_digest": generation_digest,
-                "criterion": "gate-2: assertion-quality sensor",
-                "command_argv": [
-                    "python3",
-                    "scripts/forge/check-test-quality.py",
-                ],
-            }
-            before_rejected_append = store.events_path(self.chain_id).read_bytes()
-            with mock.patch.object(
-                builders, "_binding_is_current", return_value=False
-            ), self.assertRaises(CLI.FrozenError):
-                self.transition(
-                    store,
-                    recovered,
-                    "gate_recorded",
-                    {
-                        "delta": {
-                            "state": "reviewing",
-                            "steps": {
-                                **copy.deepcopy(recovered["steps"]),
-                                "assertion-sensor": assertion_gate,
-                            },
-                        }
-                    },
-                    generation_digest=generation_digest,
-                    second=6,
-                )
-            self.assertEqual(
-                store.events_path(self.chain_id).read_bytes(),
-                before_rejected_append,
-            )
-
 
 if __name__ == "__main__":
     unittest.main()

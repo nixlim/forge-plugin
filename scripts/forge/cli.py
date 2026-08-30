@@ -430,6 +430,16 @@ _REQUIRED_MERGE_STORE_CONTROLS = frozenset(
     }
 )
 MERGE_STORE_CONTROLS = _REQUIRED_MERGE_STORE_CONTROLS
+_REQUIRED_MERGE_ADAPTER_CONTROLS = frozenset(
+    {
+        "admission-and-generation",
+        "halt",
+        "ordered-gate-suite",
+        "mandatory-review-final",
+        "run-relative-evidence",
+    }
+)
+MERGE_ADAPTER_CONTROLS = _REQUIRED_MERGE_ADAPTER_CONTROLS
 _REQUIRED_ARCHIVE_RECHECK_CONTROLS = frozenset(
     {"start", "authorization", "commit"}
 )
@@ -1273,6 +1283,64 @@ def _capture_ingest_blob(
     return capture_relative
 
 
+def _capture_run_evidence(
+    repository: Path,
+    run_dir: Path,
+    data: bytes,
+) -> str:
+    """Capture arbitrary evidence through the existing run-package grammar.
+
+    The shared commitment-path inventory deliberately admits only three
+    direct-child names.  Evidence therefore uses the neutral ``events.jsonl``
+    member under its own content digest rather than inventing a second capture
+    namespace or citing the mutable chain-artifact location.
+    """
+
+    _require_merge_adapter_control("run-relative-evidence")
+    return _capture_ingest_blob(
+        repository,
+        run_dir,
+        digest=sha256_bytes(data),
+        name="events.jsonl",
+        data=data,
+    )
+
+
+def _capture_ingest_record_evidence(
+    repository: Path,
+    run_dir: Path,
+    record: MutableMapping[str, object],
+) -> None:
+    """Replace repository citations with immutable run-relative captures."""
+
+    evidence = record.get("evidence")
+    if not isinstance(evidence, list):
+        return
+    captured: list[str] = []
+    for citation in evidence:
+        if not isinstance(citation, str):
+            _batch, builders, journal = _coordination_modules()
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        parsed = _parsed_run_captured_path(citation, run_dir.name)
+        if parsed is not None:
+            _read_ingest_input(
+                repository,
+                citation,
+                "ingest.captured_package",
+                run_dir=run_dir,
+                expected_capture_name=parsed.name,
+            )
+            captured.append(citation)
+            continue
+        data = _read_ingest_input(
+            repository,
+            citation,
+            "ingest.record_evidence",
+        )
+        captured.append(_capture_run_evidence(repository, run_dir, data))
+    record["evidence"] = captured
+
+
 def _read_ingest_sources(
     repository: Path,
     run_id: str,
@@ -1715,9 +1783,12 @@ def _merge_ingest_record_templates(
         review = builders._review_binding_for_state(current)
         if (
             isinstance(review, dict)
-            and review.get("verdict") == "PASS"
+            and review.get("verdict") in {"PASS", "BLOCK"}
             and review.get("reviewer_role") == "review-final"
         ):
+            review_result = (
+                "passed" if review["verdict"] == "PASS" else "failed"
+            )
             review_state = current.get("review")
             verdict = (
                 review_state.get("verdict")
@@ -1737,9 +1808,10 @@ def _merge_ingest_record_templates(
                         "criterion": journal.GATE_3_CRITERION,
                         "method": "independent review-final",
                         "check": "validated merge review-final verdict transport",
-                        "result": "passed",
+                        "result": review_result,
                         "observation": (
-                            "Forge CLI recorded merge review-final verdict PASS"
+                            "Forge CLI recorded merge review-final verdict "
+                            f"{review['verdict']}"
                         ),
                         "evidence": (
                             [verdict_path]
@@ -2315,6 +2387,11 @@ def _verify_and_build_merge_ingest_records(
                 event_state,
                 str(event["digest"]),
                 review_for_binding,
+            )
+            _capture_ingest_record_evidence(
+                canonical_repository,
+                run_dir,
+                record,
             )
             if record.get("outcome") == "chain-landing":
                 record["basis"] = list(captured_citations)
@@ -4085,6 +4162,17 @@ def _require_merge_store_control(name: str) -> None:
     ):
         raise FrozenError(
             f"merge storage control is unavailable: {name}",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+
+def _require_merge_adapter_control(name: str) -> None:
+    if (
+        name not in _REQUIRED_MERGE_ADAPTER_CONTROLS
+        or name not in MERGE_ADAPTER_CONTROLS
+    ):
+        raise FrozenError(
+            f"merge adapter control is unavailable: {name}",
             schema=REVISION9_OUTPUT_SCHEMA,
         )
 
@@ -7125,6 +7213,7 @@ class MergeChainStore(_ChainStoragePrimitives):
                         replay.tail_sequence,
                         replay.tail_digest,
                         family="merge",
+                        refusal_chain=replay.state,
                     )
                     if canonical_bytes(snapshot) != canonical_bytes(replay.state):
                         raise FrozenError(
@@ -7222,6 +7311,7 @@ class MergeChainStore(_ChainStoragePrimitives):
                     replay.tail_sequence,
                     replay.tail_digest,
                     family="merge",
+                    refusal_chain=replay.state,
                 )
                 pending = replay.state.get("journal_outbox")
                 if not isinstance(pending, dict) or (
@@ -12391,17 +12481,42 @@ def _verify_operator_harness(
     return record
 
 
-def _run_halt(ctx: CommandContext, state: Mapping[str, Any] | None = None) -> None:
-    argv = ["bash", str(ctx.helper("check-halt.sh")), "commit"]
-    process = run_bounded(
-        argv,
-        cwd=ctx.repo.root,
-        timeout=30.0,
-        verbose=ctx.options.verbose,
-    )
+def _run_halt(
+    ctx: CommandContext,
+    state: Mapping[str, Any] | None = None,
+    *,
+    scope: str = "commit",
+    cwd: Path | None = None,
+) -> None:
+    argv = ["bash", str(ctx.helper("check-halt.sh")), scope]
+    try:
+        process = run_bounded(
+            argv,
+            cwd=cwd or ctx.repo.root,
+            timeout=30.0,
+            verbose=ctx.options.verbose,
+        )
+    except OSError as exc:
+        raise Refusal(
+            (
+                V2ReasonCode.HALT_ENGAGED
+                if scope == "merge"
+                else ReasonCode.HALT_ENGAGED
+            ),
+            "operator halt check refused state mutation",
+            expected="check-halt.sh exit 0",
+            observed=str(exc),
+            remediation="operator must inspect and clear the applicable AGENT_HALT sentinel",
+            next_required_step=_forge_command(state, "status"),
+            chain=state,
+        ) from exc
     if process.returncode != 0 or process.timed_out or process.output_limit:
         raise Refusal(
-            ReasonCode.HALT_ENGAGED,
+            (
+                V2ReasonCode.HALT_ENGAGED
+                if scope == "merge"
+                else ReasonCode.HALT_ENGAGED
+            ),
             "operator halt check refused state mutation",
             expected="check-halt.sh exit 0",
             observed=process.output.decode("utf-8", "replace").strip() or f"exit {process.returncode}",
@@ -12505,6 +12620,1167 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
     return wrapped
 
 
+@dataclasses.dataclass(frozen=True)
+class MergeRunTaskSnapshot:
+    """Immutable journal values captured before a run-bound merge fetch."""
+
+    binding: dict[str, str]
+    task_files: tuple[str, ...]
+    admitted_scope: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class MergeAdmission:
+    """Read-only FR-231 admission tuple; no chain or Git history is mutated."""
+
+    repository: Path
+    worktree: Path
+    worktree_identity: dict[str, str]
+    branch: str
+    target: dict[str, str]
+    candidate_head: str
+    policy: Policy
+    declared_tier: str | None
+    run_task: MergeRunTaskSnapshot | None
+    status_output_digest: str
+
+
+@dataclasses.dataclass(frozen=True)
+class MergeScopeResult:
+    argv: tuple[str, ...]
+    command_digest: str
+    environment_digest: str
+    output_digest: str
+    changed_paths: tuple[str, ...]
+    out_of_scope_paths: tuple[str, ...]
+    result: str
+
+
+@dataclasses.dataclass(frozen=True)
+class MergeCandidateGeneration:
+    candidate: dict[str, Any]
+    tier: dict[str, Any]
+    classification: dict[str, Any]
+    changed_paths: tuple[str, ...]
+    scope: MergeScopeResult | None
+
+
+def _merge_refusal(
+    reason: V2ReasonCode,
+    message: str,
+    *,
+    expected: str | None = None,
+    observed: str | None = None,
+    remediation: str | None = None,
+    chain: Mapping[str, Any] | None = None,
+    evidence_refs: Sequence[str] = (),
+) -> Refusal:
+    return Refusal(
+        reason,
+        message,
+        expected=expected,
+        observed=observed,
+        remediation=remediation,
+        chain=chain,
+        evidence_refs=evidence_refs,
+        schema=REVISION9_OUTPUT_SCHEMA,
+    )
+
+
+def _parse_plugin_manifest(raw: bytes) -> str:
+    """Return the committed plugin-schema default branch, or fail closed."""
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("committed .forge-manifest is not UTF-8") from exc
+    if not text.endswith("\n") or "\r" in text or "\x00" in text:
+        raise ValueError("committed .forge-manifest has malformed line encoding")
+    lines = text.splitlines()
+    if len(lines) < 6:
+        raise ValueError("committed .forge-manifest is incomplete")
+    fixed_names = (
+        "forge_version",
+        "plugin_ref",
+        "installed",
+        "project_name",
+        "default_branch",
+        "init_completed",
+    )
+    fixed: dict[str, str] = {}
+    for index, name in enumerate(fixed_names):
+        prefix = f"{name}: "
+        if not lines[index].startswith(prefix):
+            raise ValueError("committed .forge-manifest is not plugin schema")
+        value = lines[index][len(prefix) :]
+        if not value:
+            raise ValueError("committed .forge-manifest has an empty fixed field")
+        fixed[name] = value
+    remainder = lines[len(fixed_names) :]
+    history_rows = [
+        row for row in remainder if row.startswith("history_mutation_mode:")
+    ]
+    if history_rows:
+        if (
+            len(history_rows) != 1
+            or remainder[0] != history_rows[0]
+            or history_rows[0]
+            not in {
+                "history_mutation_mode: legacy-v1",
+                "history_mutation_mode: forge-verbs-v1",
+            }
+        ):
+            raise ValueError("committed .forge-manifest activation field is invalid")
+        remainder = remainder[1:]
+    if (
+        fixed["forge_version"] != "1"
+        or fixed["init_completed"] != "true"
+        or remainder != [f"region: {name}" for name in REGION_ORDER]
+    ):
+        raise ValueError("committed .forge-manifest is not an initialized plugin schema")
+    default_branch = fixed["default_branch"]
+    if (
+        not default_branch
+        or default_branch.startswith("-")
+        or any(character in default_branch for character in "\r\n\x00")
+    ):
+        raise ValueError("committed .forge-manifest default branch is invalid")
+    return default_branch
+
+
+def _absolute_git_path(repository: Repository, argument: str) -> Path:
+    for argv in (
+        ["rev-parse", "--path-format=absolute", argument],
+        ["rev-parse", argument],
+    ):
+        process = repository.git(argv, check=False)
+        rendered = os.fsdecode(process.stdout.rstrip(b"\n"))
+        if (
+            process.returncode != 0
+            or not rendered
+            or "\n" in rendered
+            or "\r" in rendered
+        ):
+            continue
+        candidate = Path(rendered)
+        if not candidate.is_absolute():
+            candidate = repository.root / candidate
+        try:
+            return candidate.resolve(strict=True)
+        except OSError:
+            continue
+    raise OSError(f"Git did not resolve {argument}")
+
+
+def _registered_worktrees(repository: Repository) -> tuple[dict[str, str], ...]:
+    process = repository.git(["worktree", "list", "--porcelain", "-z"])
+    records: list[dict[str, str]] = []
+    for block in process.stdout.split(b"\0\0"):
+        if not block:
+            continue
+        record: dict[str, str] = {}
+        for raw_field in block.split(b"\0"):
+            if not raw_field:
+                continue
+            try:
+                field = raw_field.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise OSError("Git worktree inventory is not UTF-8") from exc
+            name, separator, value = field.partition(" ")
+            if not separator or name in record:
+                raise OSError("Git worktree inventory is malformed")
+            record[name] = value
+        if "worktree" not in record or "HEAD" not in record:
+            raise OSError("Git worktree inventory is incomplete")
+        records.append(record)
+    return tuple(records)
+
+
+def _merge_worktree_status(
+    repository: Repository, git_dir: Path, *, verb: str = "merge start"
+) -> bytes:
+    status = repository.git(
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        check=False,
+    )
+    if status.returncode != 0:
+        raise OSError(
+            status.stderr.decode("utf-8", "replace").strip()
+            or "git status failed"
+        )
+    operation_markers = (
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+    )
+    if status.stdout or any((git_dir / marker).exists() for marker in operation_markers):
+        raise _merge_refusal(
+            V2ReasonCode.DIRTY_WORKTREE,
+            f"forge: {verb} refused — source worktree is not clean",
+            expected="zero status bytes and no in-progress Git operation",
+            observed=(
+                status.stdout.decode("utf-8", "replace")
+                or "in-progress Git operation"
+            ),
+            remediation="restore the source worktree to exact clean status",
+        )
+    return status.stdout
+
+
+def _prove_merge_run_task_binding(
+    repository: Path,
+    common_root: Path,
+    run_id: str,
+    task_id: str,
+    policy_digest: str,
+) -> MergeRunTaskSnapshot:
+    batch, _builders, journal = _coordination_modules()
+    run_dir = common_root / ".codex-orchestrator" / "runs" / run_id
+    try:
+        with batch.batch_lock(run_dir, create=False):
+            run_state = journal._scan_run(run_dir)
+            opening = run_state.records[0] if run_state.records else None
+            if (
+                run_state.disposition != "open"
+                or not isinstance(opening, dict)
+                or Path(str(opening.get("repo", ""))).resolve(strict=True)
+                != repository
+            ):
+                raise ValueError("run is not open for the merge repository")
+            tasks = [
+                record
+                for record in run_state.records
+                if record.get("type") == "task" and record.get("id") == task_id
+            ]
+            if not tasks or tasks[-1].get("status") != "active":
+                raise ValueError("task is not active")
+            files = tasks[-1].get("files")
+            scope = run_state.scope
+            if (
+                not isinstance(files, list)
+                or not files
+                or not all(isinstance(value, str) and value for value in files)
+                or not isinstance(scope, tuple)
+                or not scope
+                or not all(isinstance(value, str) and value for value in scope)
+            ):
+                raise ValueError("task files or admitted scope are malformed")
+    except (OSError, RuntimeError, ValueError, journal.CoordinationRefusal) as exc:
+        raise _merge_refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: merge start refused — run/task binding is invalid",
+            expected="matching repository, active task, immutable scope, and committed policy",
+            observed=str(exc),
+            remediation="inspect the named run/task and retry the exact paired start",
+        ) from exc
+    return MergeRunTaskSnapshot(
+        binding={
+            "run_id": run_id,
+            "task_id": task_id,
+            "repository": str(repository),
+            "policy_digest": policy_digest,
+        },
+        task_files=tuple(sorted(set(files), key=lambda value: value.encode("utf-8"))),
+        admitted_scope=tuple(
+            sorted(set(scope), key=lambda value: value.encode("utf-8"))
+        ),
+    )
+
+
+def prepare_merge_admission(
+    ctx: CommandContext,
+    worktree: str,
+    declared_tier: str | None,
+    *,
+    task: str | None = None,
+) -> MergeAdmission:
+    """Prove the read-only half of FR-231 without activating merge routing."""
+
+    _require_merge_adapter_control("admission-and-generation")
+    _require_merge_adapter_control("halt")
+    _run_halt(ctx, scope="merge")
+    if declared_tier is not None and declared_tier not in TIER_RANK:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — declared tier is invalid",
+            expected="fast, standard, hard, or no declaration",
+            observed=str(declared_tier),
+        )
+    if (ctx.options.run_id is None) != (task is None):
+        raise _merge_refusal(
+            V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
+            "forge: merge start refused — --run-id and --task must be supplied together",
+            expected="both binding flags or neither binding flag",
+            observed=f"run_id={ctx.options.run_id!r}, task={task!r}",
+            remediation="retry start with the exact paired --run-id and --task",
+        )
+    supplied = Path(worktree)
+    lexical = Path(os.path.abspath(os.fspath(supplied)))
+    if not lexical.exists():
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_MISSING,
+            "forge: merge start refused — worktree path does not exist",
+            expected="an existing registered linked worktree",
+            observed=str(lexical),
+        )
+    try:
+        canonical = lexical.resolve(strict=True)
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — worktree path is invalid",
+            observed=str(exc),
+        ) from exc
+    if canonical != lexical:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — worktree path has an ambiguous symlink spelling",
+            expected=str(canonical),
+            observed=str(lexical),
+        )
+
+    main = Repository(ctx.repo.common_root())
+    main_head = main.head()
+    manifest_process = main.git(
+        ["show", f"{main_head}:.forge-manifest"], check=False
+    )
+    if manifest_process.returncode != 0:
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            "forge: merge start refused — committed target manifest is unreadable",
+            expected=f"git show {main_head}:.forge-manifest",
+            observed=manifest_process.stderr.decode("utf-8", "replace").strip(),
+        )
+    try:
+        default_branch = _parse_plugin_manifest(manifest_process.stdout)
+    except ValueError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            "forge: merge start refused — committed target manifest is invalid",
+            expected="the committed initialized plugin-schema .forge-manifest",
+            observed=str(exc),
+        ) from exc
+    destination_ref = f"refs/heads/{default_branch}"
+    if main.git(["check-ref-format", destination_ref], check=False).returncode != 0:
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            "forge: merge start refused — manifest default branch is not a valid ref",
+            observed=default_branch,
+        )
+
+    try:
+        inventory = _registered_worktrees(main)
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — registered worktree inventory is invalid",
+            observed=str(exc),
+        ) from exc
+    matches = []
+    for entry in inventory:
+        try:
+            registered = Path(entry["worktree"]).resolve(strict=True)
+        except OSError:
+            continue
+        if registered == canonical:
+            matches.append(entry)
+    main_path = Path(inventory[0]["worktree"]).resolve(strict=True) if inventory else main.root
+    if len(matches) != 1 or canonical == main_path:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — source is not one registered non-main worktree",
+            expected="exactly one registered linked worktree entry",
+            observed=str(canonical),
+        )
+    entry = matches[0]
+    branch = entry.get("branch")
+    if (
+        not isinstance(branch, str)
+        or not branch.startswith("refs/heads/")
+        or branch == destination_ref
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — source worktree branch is not an eligible local branch",
+            expected=f"a local non-{destination_ref} branch",
+            observed=str(branch or "detached"),
+        )
+    candidate = Repository(canonical)
+    if candidate.git(["show-ref", "--verify", branch], check=False).returncode != 0:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — source branch is not local",
+            observed=branch,
+        )
+    candidate_head = candidate.head()
+    if candidate_head != entry.get("HEAD"):
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — registered worktree HEAD changed during admission",
+            expected=str(entry.get("HEAD")),
+            observed=candidate_head,
+        )
+    try:
+        git_dir = _absolute_git_path(candidate, "--git-dir")
+        common_dir = _absolute_git_path(candidate, "--git-common-dir")
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — worktree Git identity is invalid",
+            observed=str(exc),
+        ) from exc
+    if common_dir != main.git_common_dir():
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            "forge: merge start refused — worktree has a foreign Git common directory",
+            expected=str(main.git_common_dir()),
+            observed=str(common_dir),
+        )
+    if candidate.git(["remote", "get-url", "origin"], check=False).returncode != 0:
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            "forge: merge start refused — fixed origin target is unavailable",
+            expected="configured remote origin",
+            observed=str(canonical),
+        )
+    status = _merge_worktree_status(candidate, git_dir)
+    try:
+        policy_commit, policy_raw = candidate.policy(candidate_head)
+        policy = parse_policy(policy_commit, policy_raw)
+    except (OSError, PolicyError, UnicodeError) as exc:
+        raise _merge_refusal(
+            V2ReasonCode.POLICY_UNREADABLE,
+            f"forge: merge start refused — committed candidate policy is unreadable: {exc}",
+            expected=f"valid {candidate_head}:forge-project.md",
+            observed=str(exc),
+        ) from exc
+    run_task = None
+    if ctx.options.run_id is not None and task is not None:
+        run_task = _prove_merge_run_task_binding(
+            main.root,
+            ctx.store.common_root,
+            ctx.options.run_id,
+            task,
+            policy.digest,
+        )
+    return MergeAdmission(
+        repository=main.root,
+        worktree=candidate.root,
+        worktree_identity={
+            "path": str(candidate.root),
+            "git_dir": str(git_dir),
+            "common_dir": str(common_dir),
+        },
+        branch=branch,
+        target={
+            "remote": "origin",
+            "destination_ref": destination_ref,
+            "manifest_commit": main_head,
+        },
+        candidate_head=candidate_head,
+        policy=policy,
+        declared_tier=declared_tier,
+        run_task=run_task,
+        status_output_digest=sha256_bytes(status),
+    )
+
+
+_MERGE_SCOPE_UNSET = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+        "GIT_PREFIX",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_DIFF_OPTS",
+        "GIT_SHALLOW_FILE",
+        "GIT_GRAFT_FILE",
+    }
+)
+_MERGE_SCOPE_OVERLAY = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_NO_REPLACE_OBJECTS": "1",
+    "GIT_NO_LAZY_FETCH": "1",
+    "GIT_PAGER": "cat",
+    "PAGER": "cat",
+}
+
+
+def _merge_scope_environment() -> dict[str, str]:
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("GIT_CONFIG_") and name not in _MERGE_SCOPE_UNSET
+    }
+    environment.update(_MERGE_SCOPE_OVERLAY)
+    return environment
+
+
+def _merge_scope_argv(worktree: Path, remote_tip: str, candidate_head: str) -> list[str]:
+    return [
+        "git",
+        "--no-pager",
+        "--no-replace-objects",
+        "-c",
+        "core.quotePath=false",
+        "-c",
+        "color.ui=false",
+        "-c",
+        "diff.renames=copies",
+        "-c",
+        "diff.renameLimit=0",
+        "-c",
+        "diff.algorithm=myers",
+        "-C",
+        str(worktree),
+        "diff",
+        "--no-color",
+        "-O/dev/null",
+        "--name-status",
+        "-z",
+        "--find-renames=50%",
+        "--find-copies=50%",
+        "--find-copies-harder",
+        "-l0",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=none",
+        "--diff-filter=ACDMRTUXB",
+        f"{remote_tip}...{candidate_head}",
+        "--",
+    ]
+
+
+def _parse_merge_scope_output(raw: bytes) -> tuple[str, ...]:
+    if raw and not raw.endswith(b"\0"):
+        raise ValueError("scope output is not NUL terminated")
+    fields = raw.split(b"\0")[:-1] if raw else []
+    paths: list[str] = []
+    index = 0
+    _batch, _builders, journal = _coordination_modules()
+    while index < len(fields):
+        try:
+            status = fields[index].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError("scope status is not ASCII") from exc
+        index += 1
+        path_count = 1
+        if re.fullmatch(r"[RC][0-9]{1,3}", status):
+            score = int(status[1:])
+            if score > 100:
+                raise ValueError("scope rename/copy score is invalid")
+            path_count = 2
+        elif re.fullmatch(r"[ADMTUXB]", status) is None:
+            raise ValueError("scope status is invalid")
+        if index + path_count > len(fields):
+            raise ValueError("scope status lacks its path field")
+        for raw_path in fields[index : index + path_count]:
+            try:
+                path = raw_path.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError("scope path is not UTF-8") from exc
+            if not journal._valid_scope_item(path):
+                raise ValueError("scope path is not a canonical repository path")
+            paths.append(path)
+        index += path_count
+    return tuple(sorted(set(paths), key=lambda value: value.encode("utf-8")))
+
+
+def _derive_merge_scope(
+    admission: MergeAdmission,
+    remote_tip: str,
+) -> MergeScopeResult | None:
+    snapshot = admission.run_task
+    if snapshot is None:
+        return None
+    argv = _merge_scope_argv(
+        admission.worktree, remote_tip, admission.candidate_head
+    )
+    environment = _merge_scope_environment()
+    try:
+        process = run_bounded(
+            argv,
+            cwd=admission.worktree,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+        )
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: merge start refused — run/task scope derivation is invalid",
+            expected="the exact fixed-object scope child to launch",
+            observed=str(exc),
+        ) from exc
+    if (
+        process.returncode != 0
+        or process.timed_out
+        or process.output_limit
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: merge start refused — run/task scope derivation is invalid",
+            expected="complete exit 0 scope derivation within the fixed bounds",
+            observed=(
+                f"exit={process.returncode}, timeout={process.timed_out}, "
+                f"output_limit={process.output_limit}"
+            ),
+        )
+    try:
+        changed_paths = _parse_merge_scope_output(process.output)
+    except ValueError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: merge start refused — run/task scope derivation is invalid",
+            expected="the exact NUL-delimited name-status grammar",
+            observed=str(exc),
+        ) from exc
+    _batch, _builders, journal = _coordination_modules()
+    out_of_scope = tuple(
+        path
+        for path in changed_paths
+        if not any(
+            journal.pathspec_contained(path, pattern)
+            for pattern in snapshot.task_files
+        )
+        or not any(
+            journal.pathspec_contained(path, pattern)
+            for pattern in snapshot.admitted_scope
+        )
+    )
+    environment_contract = {
+        "unset_prefixes": ["GIT_CONFIG_"],
+        "unset_names": sorted(_MERGE_SCOPE_UNSET),
+        "overlay": dict(sorted(_MERGE_SCOPE_OVERLAY.items())),
+    }
+    return MergeScopeResult(
+        argv=tuple(argv),
+        command_digest=sha256_bytes(canonical_bytes(argv)),
+        environment_digest=sha256_bytes(canonical_bytes(environment_contract)),
+        output_digest=process.output_digest,
+        changed_paths=changed_paths,
+        out_of_scope_paths=out_of_scope,
+        result="exceeded" if out_of_scope else "contained",
+    )
+
+
+def bind_merge_candidate_generation(
+    ctx: CommandContext,
+    admission: MergeAdmission,
+    remote_tip: str,
+    *,
+    generation: int = 1,
+) -> MergeCandidateGeneration:
+    """Bind one fixed fetched base to the exact DM-014 generation tuple."""
+
+    _require_merge_adapter_control("admission-and-generation")
+    if COMMIT_RE.fullmatch(remote_tip) is None or generation <= 0:
+        raise _merge_refusal(
+            V2ReasonCode.FETCH_FAILED,
+            "forge: merge start refused — fetched target tip is invalid",
+            expected="a full fixed Git object ID and positive generation",
+            observed=remote_tip,
+        )
+    candidate_repo = Repository(admission.worktree)
+    resolved_tip = candidate_repo.git(
+        ["rev-parse", "--verify", f"{remote_tip}^{{commit}}"], check=False
+    )
+    if (
+        resolved_tip.returncode != 0
+        or resolved_tip.stdout.decode("ascii", "replace").strip() != remote_tip
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.FETCH_FAILED,
+            "forge: merge start refused — fetched target tip is invalid",
+            expected="a locally available full fixed commit object ID",
+            observed=remote_tip,
+        )
+    if candidate_repo.head() != admission.candidate_head:
+        raise _merge_refusal(
+            V2ReasonCode.CANDIDATE_STALE,
+            "forge: merge start refused — candidate HEAD changed after admission",
+            expected=admission.candidate_head,
+            observed=candidate_repo.head(),
+        )
+    _merge_worktree_status(
+        candidate_repo, Path(admission.worktree_identity["git_dir"])
+    )
+    diff = candidate_repo.git(
+        ["diff", f"{remote_tip}...{admission.candidate_head}"]
+    ).stdout
+    generation_preimage: dict[str, Any] = {
+        "remote": "origin",
+        "destination_ref": admission.target["destination_ref"],
+        "remote_tip": remote_tip,
+        "candidate_head": admission.candidate_head,
+        "diff_sha256": sha256_bytes(diff),
+        "policy_commit": admission.candidate_head,
+        "policy_digest": admission.policy.digest,
+        "worktree_identity": copy.deepcopy(admission.worktree_identity),
+        "generation": generation,
+    }
+    candidate = {
+        **generation_preimage,
+        "generation_digest": sha256_bytes(canonical_bytes(generation_preimage)),
+    }
+    # FR-231 requires the run-bound scope proof before classification.  The
+    # lifecycle adapter invokes this function immediately after its fenced
+    # fixed-tip fetch; this pure adapter must not reverse those two judgments.
+    scope = _derive_merge_scope(admission, remote_tip)
+    if scope is not None:
+        changed_paths = scope.changed_paths
+    else:
+        names = candidate_repo.git(
+            [
+                "diff",
+                "--name-only",
+                "-z",
+                "--diff-filter=ACDMRTUXB",
+                f"{remote_tip}...{admission.candidate_head}",
+                "--",
+            ]
+        ).stdout
+        try:
+            changed_paths = tuple(
+                sorted(
+                    {
+                        value.decode("utf-8")
+                        for value in names.split(b"\0")
+                        if value
+                    },
+                    key=lambda value: value.encode("utf-8"),
+                )
+            )
+        except UnicodeDecodeError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.WORKTREE_INVALID,
+                "forge: merge start refused — candidate paths are not UTF-8",
+                observed=str(exc),
+            ) from exc
+    argv = [
+        sys.executable,
+        str(ctx.helper("risk_tier.py")),
+        "--repo",
+        str(admission.worktree),
+        "--policy-sha",
+        admission.candidate_head,
+        "--range",
+        f"{remote_tip}...{admission.candidate_head}",
+    ]
+    if admission.declared_tier is not None:
+        argv.extend(["--declared-tier", admission.declared_tier])
+    try:
+        process = run_bounded(
+            argv,
+            cwd=admission.worktree,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=ctx.options.verbose,
+        )
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: merge start refused — risk-tier classification did not pass",
+            expected="risk_tier.py --range to launch within the fixed bounds",
+            observed=str(exc),
+        ) from exc
+    if (
+        process.returncode != 0
+        or process.timed_out
+        or process.output_limit
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: merge start refused — risk-tier classification did not pass",
+            expected="risk_tier.py --range exit 0 within the fixed bounds",
+            observed=f"exit={process.returncode}",
+        )
+    try:
+        evidence = json.loads(process.output)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise _merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: merge start refused — risk-tier classification is malformed",
+            observed=str(exc),
+        ) from exc
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("policy_sha") != admission.candidate_head
+        or evidence.get("derived_tier") not in TIER_RANK
+        or evidence.get("effective_tier") not in TIER_RANK
+        or not isinstance(evidence.get("paths"), list)
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: merge start refused — risk-tier evidence is not candidate-bound",
+            expected=admission.candidate_head,
+            observed=str(evidence),
+        )
+    categories: set[str] = set()
+    control = False
+    classified_paths: list[str] = []
+    for path_evidence in evidence["paths"]:
+        if (
+            not isinstance(path_evidence, dict)
+            or not isinstance(path_evidence.get("path"), str)
+            or not isinstance(path_evidence.get("categories"), list)
+            or not all(
+                isinstance(value, str) and value
+                for value in path_evidence["categories"]
+            )
+            or path_evidence.get("tier") not in TIER_RANK
+            or type(path_evidence.get("control_floor")) is not bool
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: merge start refused — risk-tier evidence is not candidate-bound",
+                expected="one complete classifier row for every exact changed path",
+                observed=str(path_evidence),
+            )
+        classified_paths.append(str(path_evidence["path"]))
+        categories.update(
+            str(value)
+            for value in path_evidence["categories"]
+        )
+        control = control or bool(path_evidence.get("control_floor"))
+    if (
+        len(classified_paths) != len(set(classified_paths))
+        or tuple(
+            sorted(classified_paths, key=lambda value: value.encode("utf-8"))
+        )
+        != changed_paths
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: merge start refused — risk-tier evidence is not candidate-bound",
+            expected=str(changed_paths),
+            observed=str(classified_paths),
+        )
+    return MergeCandidateGeneration(
+        candidate=candidate,
+        tier={"control": control, "categories": sorted(categories)},
+        classification=copy.deepcopy(evidence),
+        changed_paths=changed_paths,
+        scope=scope,
+    )
+
+
+def _merge_run_directory(state: Mapping[str, Any]) -> tuple[Path, Path] | None:
+    binding = state.get("run_binding")
+    if not isinstance(binding, Mapping):
+        return None
+    repository = Path(str(binding["repository"]))
+    return (
+        repository,
+        repository
+        / ".codex-orchestrator"
+        / "runs"
+        / str(binding["run_id"]),
+    )
+
+
+def _write_merge_artifact(
+    ctx: CommandContext,
+    state: Mapping[str, Any],
+    relative: str,
+    data: bytes,
+    *,
+    master_package: bool = False,
+) -> str:
+    bound = _merge_run_directory(state)
+    if bound is None:
+        return _write_artifact(ctx, state, relative, data, exclusive=True)
+    repository, run_dir = bound
+    _require_merge_adapter_control("run-relative-evidence")
+    return _capture_ingest_blob(
+        repository,
+        run_dir,
+        digest=sha256_bytes(data),
+        name="state.json" if master_package else "events.jsonl",
+        data=data,
+    )
+
+
+def _read_merge_artifact(
+    ctx: CommandContext,
+    state: Mapping[str, Any],
+    relative: str,
+    expected_digest: str,
+    label: str,
+) -> bytes:
+    bound = _merge_run_directory(state)
+    parsed = (
+        _parsed_run_captured_path(relative, str(state["run_binding"]["run_id"]))
+        if bound is not None
+        else None
+    )
+    if bound is None or parsed is None:
+        return _read_bound_artifact(
+            ctx, state, relative, expected_digest, label
+        )
+    repository, run_dir = bound
+    data = _read_ingest_input(
+        repository,
+        relative,
+        "ingest.captured_package",
+        run_dir=run_dir,
+        expected_capture_name=parsed.name,
+    )
+    if sha256_bytes(data) != expected_digest:
+        raise _merge_refusal(
+            V2ReasonCode.REVIEW_VERDICT_INVALID,
+            f"{label} artifact changed after review request",
+            expected=expected_digest,
+            observed=sha256_bytes(data),
+            chain=state,
+            evidence_refs=[relative],
+        )
+    return data
+
+
+def _observe_current_merge_candidate(
+    ctx: CommandContext,
+    state: Mapping[str, Any],
+    *,
+    verb: str,
+) -> tuple[Repository, Policy, tuple[str, ...]]:
+    """Recompute every FR-233 post-executable generation member."""
+
+    _require_merge_adapter_control("admission-and-generation")
+    candidate = state.get("candidate")
+    worktree = state.get("worktree")
+    target = state.get("target")
+    policy_source = state.get("policy_source")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (candidate, worktree, target, policy_source)
+    ):
+        raise FrozenError(
+            "merge candidate tuple is unavailable",
+            chain_id=str(state.get("chain_id") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    assert isinstance(candidate, Mapping)
+    assert isinstance(worktree, Mapping)
+    assert isinstance(target, Mapping)
+    assert isinstance(policy_source, Mapping)
+    path = Path(str(worktree.get("path", "")))
+    if not path.exists():
+        raise _merge_refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            f"forge: {verb} refused — recorded worktree is missing",
+            expected=str(path),
+            observed="foreign-git-state",
+            remediation=f"forge status --chain-id {state['chain_id']}",
+            chain=state,
+        )
+    repository = Repository(path)
+    try:
+        git_dir = _absolute_git_path(repository, "--git-dir")
+        common_dir = _absolute_git_path(repository, "--git-common-dir")
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — recorded worktree identity is invalid",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    observed_identity = {
+        "path": str(repository.root),
+        "git_dir": str(git_dir),
+        "common_dir": str(common_dir),
+    }
+    expected_identity = {
+        name: str(worktree.get(name, ""))
+        for name in ("path", "git_dir", "common_dir")
+    }
+    if observed_identity != expected_identity:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — recorded worktree identity changed",
+            expected=canonical_bytes(expected_identity).decode("utf-8"),
+            observed=canonical_bytes(observed_identity).decode("utf-8"),
+            chain=state,
+        )
+    _merge_worktree_status(repository, git_dir, verb=verb)
+    current_head = repository.head()
+    expected_head = str(candidate.get("candidate_head", ""))
+    if current_head != expected_head:
+        raise _merge_refusal(
+            V2ReasonCode.CANDIDATE_STALE,
+            f"forge: {verb} refused — candidate HEAD is stale",
+            expected=expected_head,
+            observed=current_head,
+            remediation=f"forge merge refresh --chain-id {state['chain_id']}",
+            chain=state,
+        )
+
+    main = Repository(Path(str(state["repository"])))
+    manifest_commit = main.head()
+    manifest = main.git(
+        ["show", f"{manifest_commit}:.forge-manifest"], check=False
+    )
+    try:
+        default_branch = (
+            _parse_plugin_manifest(manifest.stdout)
+            if manifest.returncode == 0
+            else ""
+        )
+    except ValueError:
+        default_branch = ""
+    observed_target = {
+        "remote": "origin",
+        "destination_ref": f"refs/heads/{default_branch}",
+        "manifest_commit": manifest_commit,
+    }
+    if observed_target != dict(target):
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            f"forge: {verb} refused — fixed merge target changed",
+            expected=canonical_bytes(dict(target)).decode("utf-8"),
+            observed=canonical_bytes(observed_target).decode("utf-8"),
+            chain=state,
+        )
+    try:
+        policy_commit, policy_raw = repository.policy(current_head)
+        policy = parse_policy(policy_commit, policy_raw)
+    except (OSError, PolicyError, UnicodeError) as exc:
+        raise _merge_refusal(
+            V2ReasonCode.POLICY_UNREADABLE,
+            f"forge: {verb} refused — committed candidate policy is unreadable: {exc}",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    if (
+        policy.sha != policy_source.get("commit")
+        or policy.digest != policy_source.get("digest")
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.CANDIDATE_STALE,
+            f"forge: {verb} refused — committed candidate policy changed",
+            expected=str(policy_source.get("digest")),
+            observed=policy.digest,
+            chain=state,
+        )
+    remote_tip = str(candidate.get("remote_tip", ""))
+    diff = repository.git(
+        ["diff", f"{remote_tip}...{current_head}"], check=False
+    )
+    if diff.returncode != 0:
+        raise _merge_refusal(
+            V2ReasonCode.CANDIDATE_STALE,
+            f"forge: {verb} refused — fixed candidate range is unavailable",
+            observed=diff.stderr.decode("utf-8", "replace").strip(),
+            chain=state,
+        )
+    observed_preimage = {
+        "remote": "origin",
+        "destination_ref": str(target["destination_ref"]),
+        "remote_tip": remote_tip,
+        "candidate_head": current_head,
+        "diff_sha256": sha256_bytes(diff.stdout),
+        "policy_commit": policy.sha,
+        "policy_digest": policy.digest,
+        "worktree_identity": observed_identity,
+        "generation": candidate.get("generation"),
+    }
+    observed_candidate = {
+        **observed_preimage,
+        "generation_digest": sha256_bytes(canonical_bytes(observed_preimage)),
+    }
+    if observed_candidate != dict(candidate):
+        raise _merge_refusal(
+            V2ReasonCode.CANDIDATE_STALE,
+            f"forge: {verb} refused — merge generation tuple is stale",
+            expected=str(candidate.get("generation_digest")),
+            observed=observed_candidate["generation_digest"],
+            remediation=f"forge merge refresh --chain-id {state['chain_id']}",
+            chain=state,
+        )
+    names = repository.git(
+        [
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=ACDMRTUXB",
+            f"{remote_tip}...{current_head}",
+            "--",
+        ]
+    ).stdout
+    try:
+        changed_paths = tuple(
+            sorted(
+                {item.decode("utf-8") for item in names.split(b"\0") if item},
+                key=lambda value: value.encode("utf-8"),
+            )
+        )
+    except UnicodeDecodeError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — candidate paths are not UTF-8",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    return repository, policy, changed_paths
+
+
+def _merge_gate_suite(
+    state: Mapping[str, Any], policy: Policy
+) -> tuple[str, ...]:
+    _require_merge_adapter_control("ordered-gate-suite")
+    tier = state.get("tier")
+    categories = tier.get("categories", []) if isinstance(tier, Mapping) else []
+    return (
+        "gate-1",
+        *(
+            f"stack:{category}"
+            for category in sorted(
+                {str(value) for value in categories},
+                key=lambda value: value.encode("utf-8"),
+            )
+        ),
+        *(
+            f"invariant:{row['row_number']}"
+            for row in sorted(
+                policy.invariants,
+                key=lambda value: int(value["row_number"]),
+            )
+            if row["enforcement"] == "merge"
+        ),
+        "assertion-sensor",
+    )
+
+
+def _merge_gate_current(
+    state: Mapping[str, Any], step_id: str
+) -> bool:
+    candidate = state.get("candidate")
+    steps = state.get("steps")
+    if not isinstance(candidate, Mapping) or not isinstance(steps, Mapping):
+        return False
+    return (
+        _merge_current_gate_facts(
+            step_id,
+            steps.get(step_id),
+            str(candidate.get("generation_digest", "")),
+        )
+        is not None
+    )
+
+
 class MergeEngine:
     """Dormant merge-family target for explicit shared CLI verbs."""
 
@@ -12522,6 +13798,14 @@ class MergeEngine:
         return self.ctx.store
 
     def _load(self) -> dict[str, Any]:
+        if self.ctx.options.run_id is not None:
+            raise _merge_refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: merge transition refused — later verbs inherit the immutable run/task binding",
+                expected="no --run-id or --task after merge start",
+                observed=self.ctx.options.run_id,
+                remediation="retry with only the recorded --chain-id",
+            )
         chain_id = self.ctx.options.chain_id
         if chain_id is None:
             raise Refusal(
@@ -12534,6 +13818,52 @@ class MergeEngine:
         if state.get("journal_outbox") is not None:
             state = self.store.recover_pending_outbox(chain_id)
         return state
+
+    def _halt(self, state: Mapping[str, Any]) -> None:
+        _require_merge_adapter_control("halt")
+        worktree = state.get("worktree")
+        candidate_root = (
+            Path(str(worktree["path"]))
+            if isinstance(worktree, Mapping)
+            and isinstance(worktree.get("path"), str)
+            else self.ctx.repo.root
+        )
+        _run_halt(
+            self.ctx,
+            state,
+            scope="merge",
+            cwd=candidate_root,
+        )
+
+    def start(
+        self,
+        worktree: str,
+        declared_tier: str | None = None,
+        *,
+        task: str | None = None,
+    ) -> MergeAdmission:
+        """Expose dormant read-only admission without creating a chain."""
+
+        return prepare_merge_admission(
+            self.ctx,
+            worktree,
+            declared_tier,
+            task=task,
+        )
+
+    def bind_candidate(
+        self,
+        admission: MergeAdmission,
+        remote_tip: str,
+        *,
+        generation: int = 1,
+    ) -> MergeCandidateGeneration:
+        return bind_merge_candidate_generation(
+            self.ctx,
+            admission,
+            remote_tip,
+            generation=generation,
+        )
 
     def status(self) -> Outcome:
         state = self._load()
@@ -12549,31 +13879,806 @@ class MergeEngine:
             next_step,
         )
 
-    def _dormant_review(self, verb: str) -> Outcome:
-        state = self._load()
-        raise Refusal(
-            ReasonCode.STATE_PRECONDITION,
-            f"forge: {verb} refused — merge review adapter is dormant",
-            expected="the later phase-3 merge review adapter activation",
-            observed="event-family routing is active; merge review mutation is dormant",
+    @staticmethod
+    def _wrong_state(
+        state: Mapping[str, Any], expected: str, verb: str
+    ) -> None:
+        raise _merge_refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            f"forge: {verb} refused — merge transition is not admitted",
+            expected=expected,
+            observed=str(state.get("state")),
             remediation=f"forge status --chain-id {state['chain_id']}",
             chain=state,
-            schema=REVISION9_OUTPUT_SCHEMA,
         )
 
+    def _resolve_gate(
+        self,
+        state: Mapping[str, Any],
+        policy: Policy,
+        changed_paths: Sequence[str],
+        gate_id: str,
+    ) -> tuple[list[str], list[str], dict[str, Any]]:
+        if gate_id == "gate-1":
+            return (
+                ["bash", "-c", policy.gate1, "forge", *changed_paths],
+                [],
+                {"kind": "gate-1"},
+            )
+        if gate_id.startswith("stack:"):
+            category = gate_id.partition(":")[2]
+            if category not in state.get("tier", {}).get("categories", []):
+                self._wrong_state(state, "an applicable stack category", f"merge gate run {gate_id}")
+            return (
+                ["bash", "-c", policy.stack_commands[0], "forge", *changed_paths],
+                list(policy.stack_commands[1:]),
+                {"kind": "stack", "category": category},
+            )
+        if gate_id.startswith("invariant:"):
+            suffix = gate_id.partition(":")[2]
+            if re.fullmatch(r"[1-9][0-9]*", suffix) is None:
+                self._wrong_state(state, "a canonical merge invariant ID", f"merge gate run {gate_id}")
+            row_number = int(suffix)
+            rows = [
+                row
+                for row in policy.invariants
+                if row["row_number"] == row_number
+                and row["enforcement"] == "merge"
+            ]
+            if len(rows) != 1:
+                self._wrong_state(state, "a configured merge invariant", f"merge gate run {gate_id}")
+            row = rows[0]
+            return (
+                ["bash", "-c", str(row["command"]), "forge", *changed_paths],
+                [],
+                {
+                    "kind": "invariant",
+                    "invariant": row["invariant"],
+                    "row_number": row_number,
+                },
+            )
+        if gate_id == "assertion-sensor":
+            test_paths = [
+                path
+                for path in changed_paths
+                if (
+                    "tests/" in path.replace("\\", "/")
+                    or Path(path).name.lower().startswith("test_")
+                    or Path(path).name.lower().endswith("_test.py")
+                    or ".test." in Path(path).name.lower()
+                    or ".spec." in Path(path).name.lower()
+                )
+            ]
+            return (
+                [
+                    sys.executable,
+                    str(self.ctx.helper("check-test-quality.py")),
+                    "--",
+                    *test_paths,
+                ],
+                [],
+                {"kind": "assertion-sensor", "test_paths": test_paths},
+            )
+        self._wrong_state(state, "the next canonical merge gate ID", f"merge gate run {gate_id}")
+        raise AssertionError("unreachable")
+
+    def _run_scoped_mutation(
+        self,
+        state: Mapping[str, Any],
+        repository: Repository,
+    ) -> dict[str, Any]:
+        candidate = state["candidate"]
+        argv = [
+            sys.executable,
+            str(self.ctx.helper("run-scoped-mutation.py")),
+            "--base",
+            str(candidate["remote_tip"]),
+            "--head",
+            str(candidate["candidate_head"]),
+        ]
+        bound = _merge_run_directory(state)
+        if bound is not None:
+            _repository, run_dir = bound
+            argv.extend(
+                [
+                    "--journal",
+                    str(run_dir / "journal.jsonl"),
+                    "--task",
+                    str(state["run_binding"]["task_id"]),
+                ]
+            )
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        try:
+            process = run_bounded(
+                argv,
+                cwd=repository.root,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+        except OSError as exc:
+            output = canonical_bytes(
+                {
+                    "type": "mutation_evidence",
+                    "criterion": "mutation: policy",
+                    "result": "inconclusive",
+                    "check": "scoped mutation runner",
+                    "observation": (
+                        "tool=mutation-testing runner; scope=policy; "
+                        f"outcome=unavailable; diagnostic={exc}"
+                    ),
+                }
+            ) + b"\n"
+            process = ProcessResult(
+                argv=argv,
+                returncode=127,
+                duration_seconds=0.0,
+                output=output,
+                output_digest=sha256_bytes(output),
+            )
+        _observe_current_merge_candidate(
+            self.ctx, state, verb="merge scoped mutation"
+        )
+        transcript = _write_merge_artifact(
+            self.ctx,
+            state,
+            f"evidence/scoped-mutation-{candidate['generation']}.log",
+            process.output,
+        )
+        return {
+            "criterion": "mutation: scoped",
+            "result": (
+                "passed"
+                if process.returncode == 0
+                and not process.timed_out
+                and not process.output_limit
+                else "inconclusive"
+            ),
+            "command_argv": list(argv),
+            "exit_code": process.returncode,
+            "duration_seconds": round(process.duration_seconds, 6),
+            "stdout_stderr_digest": process.output_digest,
+            "timed_out": process.timed_out,
+            "output_limit": process.output_limit,
+            "transcript": transcript,
+        }
+
+    def _record_gate_result(
+        self,
+        state: dict[str, Any],
+        suite: Sequence[str],
+        gate_id: str,
+        argv: Sequence[str],
+        process: ProcessResult,
+        details: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        candidate = state["candidate"]
+        existing = state.get("steps", {}).get(gate_id)
+        runs = copy.deepcopy(existing) if isinstance(existing, list) else []
+        run_number = len(runs) + 1
+        transcript = _write_merge_artifact(
+            self.ctx,
+            state,
+            f"evidence/{re.sub(r'[^A-Za-z0-9_.-]+', '-', gate_id)}-{run_number:02d}.log",
+            process.output,
+        )
+        passed = (
+            process.returncode == 0
+            and not process.timed_out
+            and not process.output_limit
+        )
+        fact = {
+            "result": "passed" if passed else "failed",
+            "generation_digest": candidate["generation_digest"],
+            "criterion": (
+                f"gate-1: {gate_id}"
+                if gate_id == "gate-1"
+                else f"gate-2: {gate_id}"
+            ),
+            "command_argv": list(argv),
+            "exit_code": process.returncode,
+            "duration_seconds": round(process.duration_seconds, 6),
+            "stdout_stderr_digest": process.output_digest,
+            "timed_out": process.timed_out,
+            "output_limit": process.output_limit,
+            "transcript": transcript,
+            **copy.deepcopy(dict(details)),
+        }
+        runs.append(fact)
+        steps = copy.deepcopy(state["steps"])
+        steps[gate_id] = runs
+        projected = copy.deepcopy(state)
+        projected["steps"] = steps
+        delta: dict[str, Any] = {"steps": steps}
+        if passed and all(
+            _merge_gate_current(projected, required) for required in suite
+        ):
+            delta["state"] = "reviewing"
+        return self.store.transition(
+            state,
+            "gate_recorded",
+            {"delta": delta},
+            generation_digest=str(candidate["generation_digest"]),
+            at=iso_z(),
+        )
+
+    def gate_run(self, gate_id: str) -> Outcome:
+        _require_merge_adapter_control("ordered-gate-suite")
+        state = self._load()
+        self._halt(state)
+        if state["state"] != "verifying":
+            self._wrong_state(state, "verifying", f"merge gate run {gate_id}")
+        repository, policy, changed_paths = _observe_current_merge_candidate(
+            self.ctx, state, verb=f"merge gate run {gate_id}"
+        )
+        suite = _merge_gate_suite(state, policy)
+        next_gate = next(
+            (name for name in suite if not _merge_gate_current(state, name)),
+            None,
+        )
+        if gate_id != next_gate:
+            self._wrong_state(
+                state,
+                f"next incomplete gate {next_gate or 'none'}",
+                f"merge gate run {gate_id}",
+            )
+        argv, remaining, details = self._resolve_gate(
+            state, policy, changed_paths, gate_id
+        )
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        batch_id = (
+            secrets.token_hex(8)
+            if details.get("kind") == "stack"
+            else None
+        )
+        cells = [argv, *(
+            ["bash", "-c", cell, "forge", *changed_paths]
+            for cell in remaining
+        )]
+        evidence_refs: list[str] = []
+        for cell_index, cell_argv in enumerate(cells, 1):
+            if gate_id == "assertion-sensor" and not details["test_paths"]:
+                output = b"forge: no touched test files - assertion sensor not applicable\n"
+                process = ProcessResult(
+                    argv=list(cell_argv),
+                    returncode=0,
+                    duration_seconds=0.0,
+                    output=output,
+                    output_digest=sha256_bytes(output),
+                )
+                cell_details = {**details, "not_applicable": True}
+            else:
+                try:
+                    process = run_bounded(
+                        cell_argv,
+                        cwd=repository.root,
+                        env=environment,
+                        timeout=COMMAND_TIMEOUT_SECONDS,
+                        cap=OUTPUT_CAP_BYTES,
+                        verbose=self.ctx.options.verbose,
+                    )
+                except OSError as exc:
+                    output = f"forge: merge gate launch failed: {exc}\n".encode(
+                        "utf-8", "replace"
+                    )
+                    process = ProcessResult(
+                        argv=list(cell_argv),
+                        returncode=127,
+                        duration_seconds=0.0,
+                        output=output,
+                        output_digest=sha256_bytes(output),
+                    )
+                cell_details = dict(details)
+            _observe_current_merge_candidate(
+                self.ctx, state, verb=f"merge gate run {gate_id}"
+            )
+            if batch_id is not None:
+                cell_details.update(
+                    {
+                        "batch_id": batch_id,
+                        "cell_index": cell_index,
+                        "cell_count": len(cells),
+                    }
+                )
+            if gate_id == "gate-1" and (
+                process.returncode == 0
+                and not process.timed_out
+                and not process.output_limit
+            ):
+                cell_details["scoped_mutation"] = self._run_scoped_mutation(
+                    state, repository
+                )
+            state = self._record_gate_result(
+                state,
+                suite,
+                gate_id,
+                cell_argv,
+                process,
+                cell_details,
+            )
+            current_fact = state["steps"][gate_id][-1]
+            evidence_refs.append(str(current_fact["transcript"]))
+            if current_fact["result"] != "passed":
+                if details.get("kind") == "invariant":
+                    diagnostic = (
+                        f"forge: invariant timed out (merge): {details['invariant']}"
+                        if process.timed_out
+                        else f"forge: invariant failed (merge): {details['invariant']}"
+                    )
+                else:
+                    diagnostic = f"forge: merge gate failed — {gate_id}"
+                raise _merge_refusal(
+                    V2ReasonCode.MERGE_GATE_FAILED,
+                    diagnostic,
+                    expected="exit 0 within 1200 seconds and 65536 output bytes",
+                    observed=(
+                        f"exit={process.returncode}, timeout={process.timed_out}, "
+                        f"output_limit={process.output_limit}"
+                    ),
+                    remediation=f"forge merge gate run {gate_id} --chain-id {state['chain_id']}",
+                    chain=state,
+                    evidence_refs=evidence_refs,
+                )
+        return _success(
+            state,
+            f"merge gate {gate_id} passed",
+            (
+                f"forge review request --chain-id {state['chain_id']}"
+                if state["state"] == "reviewing"
+                else f"forge merge verify --chain-id {state['chain_id']}"
+            ),
+            evidence_refs=evidence_refs,
+        )
+
+    def verify(self) -> Outcome:
+        _require_merge_adapter_control("ordered-gate-suite")
+        state = self._load()
+        repository, policy, _changed_paths = _observe_current_merge_candidate(
+            self.ctx, state, verb="merge verify"
+        )
+        del repository
+        suite = _merge_gate_suite(state, policy)
+        if state["state"] == "reviewing" and all(
+            _merge_gate_current(state, gate_id) for gate_id in suite
+        ):
+            return _success(
+                state,
+                "merge mechanical verification already complete; no-op",
+                f"forge review request --chain-id {state['chain_id']}",
+            )
+        if state["state"] != "verifying":
+            self._wrong_state(state, "verifying", "merge verify")
+        while state["state"] == "verifying":
+            next_gate = next(
+                (name for name in suite if not _merge_gate_current(state, name)),
+                None,
+            )
+            if next_gate is None:
+                raise FrozenError(
+                    "complete merge gate tuple did not enter reviewing",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            self.gate_run(next_gate)
+            state = self._load()
+        return _success(
+            state,
+            "all required merge mechanical gates are complete",
+            f"forge review request --chain-id {state['chain_id']}",
+        )
+
+    def _review_package(
+        self,
+        state: Mapping[str, Any],
+        repository: Repository,
+        policy: Policy,
+        changed_paths: Sequence[str],
+    ) -> tuple[bytes, list[str], dict[str, list[str]]]:
+        _require_merge_adapter_control("mandatory-review-final")
+        profiles_by_path = {
+            path: Engine._profiles_for_path(path) for path in changed_paths
+        }
+        profiles = sorted(
+            {
+                profile
+                for selected in profiles_by_path.values()
+                for profile in selected
+            }
+        )
+        constitution_path = self.ctx.plugin_root() / "rules" / "review-constitution.md"
+        role_path = self.ctx.plugin_root() / "agents" / "review-final.md"
+        try:
+            constitution = constitution_path.read_bytes()
+            role = role_path.read_bytes()
+        except OSError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                f"forge: review refused — reviewer doctrine is unavailable: {exc}",
+                observed=str(exc),
+                chain=state,
+            ) from exc
+        gotchas_result = repository.git(
+            ["show", f"{policy.sha}:.forge/history/gotchas.md"], check=False
+        )
+        gotchas = gotchas_result.stdout if gotchas_result.returncode == 0 else b""
+        candidate = state["candidate"]
+        header = (
+            "FORGE MERGE REVIEW MASTER PACKAGE v1\n"
+            f"candidate: {candidate['candidate_head']}\n"
+            f"generation: {candidate['generation_digest']}\n"
+            f"base: {candidate['remote_tip']}\n"
+            f"target: {canonical_bytes(state['target']).decode('utf-8')}\n"
+            "reviewer: review-final\n"
+            f"profiles: {','.join(profiles)}\n"
+            f"profile-map: {canonical_bytes(profiles_by_path).decode('utf-8')}\n"
+        ).encode("utf-8")
+        control = (
+            b"\n--- BEGIN CONTROLLING REVIEW POLICY ---\n"
+            + role
+            + b"\n--- review constitution ---\n"
+            + constitution
+            + (
+                "\n--- committed agent-project-context ---\n"
+                f"{policy.regions['agent-project-context']}"
+                "\n--- committed review-prompt-project-focus ---\n"
+                f"{policy.regions['review-prompt-project-focus']}"
+                "\n--- committed project-triggers ---\n"
+                f"{policy.regions['project-triggers']}"
+                "\n--- committed completeness-project-items ---\n"
+                f"{policy.regions['completeness-project-items']}"
+                "\n--- committed gotchas ---\n"
+            ).encode("utf-8")
+            + gotchas
+            + b"\n--- END CONTROLLING REVIEW POLICY ---\n"
+        )
+        mutation_evidence = [
+            fact.get("scoped_mutation")
+            for facts in state.get("steps", {}).values()
+            if isinstance(facts, list)
+            for fact in facts
+            if isinstance(fact, dict) and isinstance(fact.get("scoped_mutation"), dict)
+        ]
+        diff = repository.git(
+            [
+                "diff",
+                f"{candidate['remote_tip']}...{candidate['candidate_head']}",
+            ]
+        ).stdout
+        package = (
+            header
+            + control
+            + b"\n--- BEGIN ADVISORY MUTATION EVIDENCE ---\n"
+            + canonical_bytes(mutation_evidence)
+            + b"\n--- END ADVISORY MUTATION EVIDENCE ---\n"
+            + b"\n--- BEGIN UNTRUSTED CANDIDATE DIFF ---\n"
+            + diff
+            + b"\n--- END UNTRUSTED CANDIDATE DIFF ---\n"
+        )
+        return package, profiles, profiles_by_path
+
     def review_request(self) -> Outcome:
-        return self._dormant_review("review request")
+        _require_merge_adapter_control("mandatory-review-final")
+        state = self._load()
+        self._halt(state)
+        if state["state"] != "reviewing":
+            self._wrong_state(state, "reviewing", "review request")
+        repository, policy, changed_paths = _observe_current_merge_candidate(
+            self.ctx, state, verb="review request"
+        )
+        suite = _merge_gate_suite(state, policy)
+        if not all(_merge_gate_current(state, gate_id) for gate_id in suite):
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: review request refused — merge mechanical evidence is incomplete",
+                expected="every current-generation merge gate PASS",
+                chain=state,
+            )
+        review = state.get("review")
+        if not isinstance(review, dict) or "request" in review:
+            self._wrong_state(state, "no outstanding review request", "review request")
+        prior_iteration = int(review.get("iteration", 0))
+        if prior_iteration >= 8:
+            raise _merge_refusal(
+                V2ReasonCode.ITERATION_CAP,
+                "review iteration cap of 8 reached; no further merge review is admitted",
+                expected="PASS before iteration 8",
+                observed=str(prior_iteration),
+                chain=state,
+            )
+        package, profiles, profile_map = self._review_package(
+            state, repository, policy, changed_paths
+        )
+        iteration = prior_iteration + 1
+        package_digest = sha256_bytes(package)
+        package_ref = _write_merge_artifact(
+            self.ctx,
+            state,
+            f"review/iteration-{iteration:02d}/master-package.txt",
+            package,
+            master_package=True,
+        )
+        if len(package) > OUTPUT_CAP_BYTES:
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: review refused — reviewer cannot inspect the complete authoritative package",
+                expected="one reviewer inspecting every master-package byte through verified bounded windows",
+                observed=f"master bytes={len(package)}; bounded-window adapter not active",
+                remediation="escalate for the bounded-window review transport adapter",
+                chain=state,
+                evidence_refs=[package_ref],
+            )
+        request = {
+            "candidate": state["candidate"]["candidate_head"],
+            "package": package_ref,
+            "package_digest": package_digest,
+            "reviewer": "review-final",
+            "iteration": iteration,
+            "requested_at": iso_z(),
+            "generation_digest": state["candidate"]["generation_digest"],
+            "target": copy.deepcopy(state["target"]),
+            "profiles": profiles,
+            "profile_map": profile_map,
+            "byte_length": len(package),
+            "invocation": (
+                "spawn one review-final with master package "
+                f"{package_ref} candidate {state['candidate']['candidate_head']} "
+                f"generation {state['candidate']['generation_digest']} "
+                f"target {state['target']['destination_ref']} digest {package_digest}"
+            ),
+        }
+        current = self.store.transition(
+            state,
+            "review_requested",
+            {"delta": {"review": {"iteration": iteration, "request": request}}},
+            generation_digest=str(state["candidate"]["generation_digest"]),
+            at=iso_z(),
+        )
+        return _success(
+            current,
+            (
+                f"review-final package={package_ref} digest={package_digest}; "
+                f"invocation={request['invocation']}"
+            ),
+            f"forge review attach --verdict-file <path> --chain-id {state['chain_id']}",
+            evidence_refs=[package_ref],
+        )
 
     def review_collect(self) -> Outcome:
-        return self._dormant_review("review collect")
+        state = self._load()
+        if state["state"] != "reviewing":
+            self._wrong_state(state, "reviewing", "review collect")
+        raise _merge_refusal(
+            V2ReasonCode.SKIP_NOT_PERMITTED,
+            "forge: review collect refused — merge review-final cannot be skipped or replaced",
+            expected="review attach for the mandatory review-final package",
+            remediation=f"forge review attach --verdict-file <path> --chain-id {state['chain_id']}",
+            chain=state,
+        )
 
-    def review_attach(self, _verdict_file: str) -> Outcome:
-        return self._dormant_review("review attach")
+    def review_attach(self, verdict_file: str) -> Outcome:
+        _require_merge_adapter_control("mandatory-review-final")
+        state = self._load()
+        self._halt(state)
+        if state["state"] != "reviewing":
+            self._wrong_state(state, "reviewing", "review attach")
+        _repository, _policy, changed_paths = _observe_current_merge_candidate(
+            self.ctx, state, verb="review attach"
+        )
+        review = state.get("review")
+        request = review.get("request") if isinstance(review, dict) else None
+        if (
+            not isinstance(request, dict)
+            or request.get("reviewer") != "review-final"
+        ):
+            self._wrong_state(state, "a current review-final request", "review attach")
+        _read_merge_artifact(
+            self.ctx,
+            state,
+            str(request["package"]),
+            str(request["package_digest"]),
+            "review master package",
+        )
+        source = Path(verdict_file)
+        if not source.is_absolute():
+            source = Path.cwd() / source
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                source,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+            )
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+                raise OSError("verdict is not an owner-controlled regular file")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, OUTPUT_CAP_BYTES + 1 - total)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > OUTPUT_CAP_BYTES:
+                    raise OSError(f"verdict exceeds {OUTPUT_CAP_BYTES} bytes")
+            data = b"".join(chunks)
+        except OSError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.REVIEW_VERDICT_INVALID,
+                f"review-final verdict is unreadable: {exc}",
+                observed=str(source),
+                chain=state,
+            ) from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        try:
+            verdict = Engine._parse_verdict(
+                data,
+                str(state["candidate"]["candidate_head"]),
+                str(request["package_digest"]),
+            )
+        except ValueError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.REVIEW_VERDICT_INVALID,
+                f"review-final verdict is invalid: {exc}",
+                expected="VERDICT plus exact candidate and master-package citations",
+                observed=str(exc),
+                chain=state,
+            ) from exc
+        verdict_ref = _write_merge_artifact(
+            self.ctx,
+            state,
+            f"review/iteration-{review['iteration']:02d}/verdict.txt",
+            data,
+        )
+        verdict.update(
+            {
+                "reviewer_role": "review-final",
+                "iteration": review["iteration"],
+                "recorded_at": iso_z(),
+                "verdict_path": verdict_ref,
+            }
+        )
+        current_review = {**copy.deepcopy(review), "verdict": verdict}
+        delta: dict[str, Any] = {"review": current_review}
+        if verdict["verdict"] == "BLOCK":
+            delta["state"] = "revising"
+            if int(review["iteration"]) == 8:
+                current_review["residual_risk"] = {
+                    "at": iso_z(),
+                    "reason": "review iteration cap reached",
+                    "findings": copy.deepcopy(verdict["findings"]),
+                }
+        else:
+            control_paths = list(changed_paths) if state["tier"]["control"] else []
+            delta["authorization"] = {
+                "candidate_head": state["candidate"]["candidate_head"],
+                "generation_digest": state["candidate"]["generation_digest"],
+                "diff_summary": (
+                    f"{len(changed_paths)} changed path(s); "
+                    f"diff_sha256={state['candidate']['diff_sha256']}"
+                ),
+                "control_paths": control_paths,
+                "review_verdict": "PASS",
+                "recorded_at": iso_z(),
+            }
+            delta["state"] = (
+                "awaiting_approval"
+                if state["tier"]["control"]
+                else "authorized"
+            )
+        current = self.store.transition(
+            state,
+            "review_attached",
+            {"delta": delta},
+            generation_digest=str(state["candidate"]["generation_digest"]),
+            at=iso_z(),
+        )
+        return _success(
+            current,
+            f"merge review {verdict['verdict']} recorded",
+            f"forge status --chain-id {state['chain_id']}",
+            evidence_refs=[verdict_ref],
+        )
 
     def review_disposition(
-        self, _finding: int, _severity: str, _resolution: str
+        self, finding: int, severity: str, resolution: str
     ) -> Outcome:
-        return self._dormant_review("review disposition")
+        _require_merge_adapter_control("mandatory-review-final")
+        state = self._load()
+        self._halt(state)
+        if state["state"] not in {"reviewing", "revising"}:
+            self._wrong_state(state, "reviewing or revising", "review disposition")
+        review = state.get("review")
+        verdict = review.get("verdict") if isinstance(review, dict) else None
+        findings = verdict.get("findings") if isinstance(verdict, dict) else None
+        if (
+            not isinstance(findings, list)
+            or finding < 1
+            or finding > len(findings)
+        ):
+            self._wrong_state(state, "an attached finding number", "review disposition")
+        selected = findings[finding - 1]
+        expected_severity = (
+            str(selected.get("severity")) if isinstance(selected, dict) else ""
+        )
+        if severity != expected_severity:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: review disposition refused — severity does not match the finding",
+                expected=expected_severity,
+                observed=severity,
+                chain=state,
+            )
+        if not isinstance(resolution, str) or not resolution.strip():
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: review disposition refused — resolution must be nonempty",
+                observed=resolution,
+                chain=state,
+            )
+        above_minor = severity in {"CRITICAL", "MAJOR"}
+        slot_occupied = review.get("operator_cosign_required") is True
+        if slot_occupied:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: review disposition refused — above-MINOR disposition already awaits operator co-sign",
+                expected=(
+                    "zero outstanding above-MINOR dispositions"
+                    if above_minor
+                    else "the pending above-MINOR co-sign to be cleared before this MINOR disposition"
+                ),
+                observed="one outstanding above-MINOR disposition",
+                chain=state,
+            )
+        dispositions = copy.deepcopy(review.get("dispositions", []))
+        if not isinstance(dispositions, list):
+            raise FrozenError(
+                "merge review dispositions are malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        dispositions.append(
+            {
+                "finding": finding,
+                "severity": severity,
+                "resolution": resolution.strip(),
+                "candidate": state["candidate"]["candidate_head"],
+                "generation_digest": state["candidate"]["generation_digest"],
+                "recorded_at": iso_z(),
+            }
+        )
+        current_review = {
+            **copy.deepcopy(review),
+            "dispositions": dispositions,
+            "operator_cosign_required": above_minor,
+        }
+        current = self.store.transition(
+            state,
+            "review_disposition",
+            {"delta": {"review": current_review}},
+            generation_digest=str(state["candidate"]["generation_digest"]),
+            at=iso_z(),
+        )
+        if above_minor:
+            raise _merge_refusal(
+                V2ReasonCode.APPROVAL_REQUIRED,
+                "above-MINOR disposition is parked pending operator co-sign",
+                expected="merge approve for the sole outstanding disposition",
+                observed=severity,
+                chain=current,
+            )
+        return _success(
+            current,
+            f"merge finding {finding} disposition recorded",
+            f"forge status --chain-id {state['chain_id']}",
+        )
 
 
 class Engine:
