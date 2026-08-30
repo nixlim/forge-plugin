@@ -25,6 +25,7 @@ import re
 import secrets
 import selectors
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -201,7 +202,127 @@ INACTIVE_SECONDS = 24 * 60 * 60
 TOKEN_TTL_SECONDS = 30 * 60
 COMMAND_TIMEOUT_SECONDS = 1200.0
 OUTPUT_CAP_BYTES = 65536
+FENCED_CHILD_ACK_TIMEOUT_SECONDS = 1.0
+FENCED_CHILD_DRAIN_SECONDS = 0.1
+FENCED_CHILD_DRAIN_CAP_BYTES = OUTPUT_CAP_BYTES + 1
+FENCED_CHILD_STOP_GRACE_SECONDS = 0.25
+FENCED_CHILD_REAP_SECONDS = 0.5
 ZERO_DIGEST = "0" * 64
+COMMON_LOCK_TIMEOUT_SECONDS = 300.0
+COMMON_LOCK_POLL_SECONDS = 0.05
+COMMON_LOCK_RECORD_CAP_BYTES = 16384
+COMMON_LOCK_INTENT_NAME = "agent-rebase.lock.intent"
+COMMON_LOCK_DIRECTORY_NAME = "agent-rebase.lockdir"
+COMMON_LOCK_OWNER_NAME = "owner.json"
+COMMON_LOCK_FLOCK_NAME = "agent-rebase.lock"
+COMMON_LOCK_RECOVERY_NAME = "agent-rebase.recover"
+COMMON_LOCK_INFLIGHT_NAME = "agent-rebase.inflight"
+COMMON_LOCK_OWNER_KINDS = frozenset({"merge", "push", "phase5"})
+COMMON_LOCK_OPERATIONS = frozenset(
+    {
+        "start",
+        "refresh",
+        "finalize",
+        "recover",
+        "cleanup",
+        "abort",
+        "push",
+        "phase5-scan",
+    }
+)
+COMMON_LOCK_FENCE_OPERATIONS = frozenset(
+    {
+        "gate",
+        "fetch",
+        "tip-resolution",
+        "remote-observation",
+        "attribution-observation",
+        "rebase",
+        "continue",
+        "abort",
+        "push",
+        "containment",
+        "worktree-remove",
+        "branch-delete",
+    }
+)
+COMMON_LOCK_RECOVERY_KINDS = frozenset(
+    {"fallback-owner", "fallback-owner-and-fence", "flock-held-dead-fence"}
+)
+_COMMON_LOCK_OWNER_KEYS = frozenset(
+    {
+        "schema",
+        "owner_kind",
+        "chain_id",
+        "host",
+        "pid",
+        "nonce",
+        "operation",
+        "started_at",
+    }
+)
+_COMMON_LOCK_FENCE_KEYS = frozenset(
+    {
+        "schema",
+        "owner_kind",
+        "chain_id",
+        "operation",
+        "host",
+        "pid",
+        "pgid",
+        "started_at",
+        "intent_digest",
+        "nonce",
+    }
+)
+_COMMON_LOCK_RECOVERY_KEYS = frozenset(
+    {
+        "schema",
+        "recovery_kind",
+        "host",
+        "pid",
+        "nonce",
+        "started_at",
+        "stale_owner_inode",
+        "stale_owner_digest",
+        "stale_owner_host",
+        "stale_owner_pid",
+        "stale_owner_kind",
+        "stale_owner_chain_id",
+        "inflight_inode",
+        "inflight_digest",
+        "inflight_host",
+        "inflight_pgid",
+        "inflight_owner_kind",
+        "inflight_chain_id",
+        "owner_dead_at",
+        "group_dead_at",
+    }
+)
+_CHAIN_LEASE_KEYS = frozenset(
+    {"chain_id", "host", "nonce", "pid", "session", "started_at"}
+)
+_REQUIRED_COMMON_LOCK_CONTROLS = frozenset(
+    {
+        "canonical-records",
+        "no-replace-publication",
+        "portable-before-flock",
+        "single-deadline",
+        "three-topology-recovery",
+        "immutable-recovery-reservation",
+        "death-proof-revalidation",
+        "reverse-release-order",
+        "release-identity-revalidation",
+        "fence-start-pipe",
+        "fence-intent-revalidation",
+        "fence-result-before-release",
+        "process-group-termination",
+        "bounded-output",
+        "chain-lease-hardlink",
+        "chain-lease-write-revalidation",
+    }
+)
+COMMON_LOCK_CONTROLS = _REQUIRED_COMMON_LOCK_CONTROLS
 CHAIN_ID_RE = re.compile(r"^c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
@@ -3380,6 +3501,39 @@ class Repository:
 
         return common_worktree_root(self.root)
 
+    def git_common_dir(self) -> Path:
+        """Resolve the canonical Git common directory for portable locking."""
+
+        for arguments, require_absolute in (
+            (["rev-parse", "--path-format=absolute", "--git-common-dir"], True),
+            (["rev-parse", "--git-common-dir"], False),
+        ):
+            result = self.git(arguments, check=False)
+            rendered = os.fsdecode(result.stdout.rstrip(b"\n"))
+            if (
+                result.returncode != 0
+                or not rendered
+                or "\n" in rendered
+                or "\r" in rendered
+            ):
+                continue
+            candidate = Path(rendered)
+            if require_absolute and not candidate.is_absolute():
+                continue
+            if not candidate.is_absolute():
+                candidate = self.root / candidate
+            try:
+                canonical = candidate.resolve(strict=True)
+            except OSError:
+                continue
+            if canonical.is_dir():
+                return canonical
+        raise FrozenError(
+            "Git common directory is unavailable for portable locking",
+            observed=str(self.root),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
     def policy(self, sha: str | None = None) -> tuple[str, bytes]:
         resolved = sha or self.head()
         result = self.git(["show", f"{resolved}:forge-project.md"], check=False)
@@ -4242,6 +4396,19 @@ def build_parser() -> ContractArgumentParser:
     )
     ingest.add_argument("--idempotency-key", required=True)
     journal_commands.add_parser("batch-recover")
+
+    common_lock = commands.add_parser("common-lock")
+    common_lock_commands = common_lock.add_subparsers(
+        dest="common_lock_command", required=True
+    )
+    common_lock_hold = common_lock_commands.add_parser("hold")
+    common_lock_hold.add_argument(
+        "--owner-kind", choices=tuple(sorted(COMMON_LOCK_OWNER_KINDS)), required=True
+    )
+    common_lock_hold.add_argument(
+        "--operation", choices=tuple(sorted(COMMON_LOCK_OPERATIONS)), required=True
+    )
+    common_lock_hold.add_argument("--ready-fd", type=int, required=True)
     return parser
 
 
@@ -4320,6 +4487,14 @@ def _validate_revision9_cross_options(
 
 
 def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
+    if args.command == "common-lock" and args.common_lock_command == "hold":
+        return hold_common_lock(
+            engine.ctx.repo,
+            owner_kind=args.owner_kind,
+            chain_id=engine.ctx.options.chain_id,
+            operation=args.operation,
+            ready_fd=args.ready_fd,
+        )
     if args.command == "status":
         return engine.status()
     if args.command == "verify":
@@ -4453,12 +4628,35 @@ def render(outcome: Outcome, *, as_json: bool) -> None:
     sys.stdout.write(f"next required step: {outcome.next_required_step}\n")
 
 
+def _raw_top_level_command(argv: Sequence[str]) -> str | None:
+    """Find the command without consuming verb-owned option values."""
+
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        if argument in {"--json", "--verbose"}:
+            index += 1
+            continue
+        if argument in {"--chain-id", "--repo", "--run-id"}:
+            index += 2
+            continue
+        if any(
+            argument.startswith(f"{name}=")
+            for name in ("--chain-id", "--repo", "--run-id")
+        ):
+            index += 1
+            continue
+        return argument
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     options = CLIOptions(
         json="--json" in raw_argv,
         verbose="--verbose" in raw_argv,
         original_argv=tuple(raw_argv),
+        revision9_face=_raw_top_level_command(raw_argv) == "common-lock",
     )
     try:
         options, command_argv = _extract_global_options(raw_argv)
@@ -4468,6 +4666,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         options.revision9_face = bool(
             options.run_id is not None
             or "journal" in command_argv
+            or bool(command_argv and command_argv[0] == "common-lock")
             or any(
                 token == name or token.startswith(f"{name}=")
                 for token in command_argv
@@ -4483,7 +4682,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         args = build_parser().parse_args(command_argv)
         options.revision9_face = options.revision9_face or bool(
-            args.command == "journal"
+            args.command in {"journal", "common-lock"}
             or (
                 args.command == "commit"
                 and args.commit_command == "start"
@@ -5732,6 +5931,3357 @@ class ChainStore:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+
+def _require_common_lock_control(name: str) -> None:
+    if name not in _REQUIRED_COMMON_LOCK_CONTROLS:
+        raise ValueError(f"unknown common-lock control: {name}")
+    if name not in COMMON_LOCK_CONTROLS:
+        raise FrozenError(
+            f"FR-235/FR-236 common-lock control is unavailable: {name}",
+            observed=name,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+
+class CommonLockBoundaryCrash(BaseException):
+    """Test/embedding seam that models a process disappearing at a boundary.
+
+    The lock implementation deliberately does not catch this ``BaseException``.
+    A caller using it must do so only in an expendable process, because the
+    canonical artifacts and any child are intentionally abandoned exactly as
+    they would be after a crash.
+    """
+
+
+@dataclasses.dataclass(frozen=True)
+class PublishedLockRecord:
+    path: str
+    device: int
+    inode: int
+    digest: str
+    record: dict[str, Any]
+    mode: int
+    links: int
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "device": self.device,
+            "inode": self.inode,
+            "digest": self.digest,
+            "record": copy.deepcopy(self.record),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class CommonLockInspection:
+    topology: str
+    outer: PublishedLockRecord | None = None
+    inner: PublishedLockRecord | None = None
+    detail: str | None = None
+    artifacts: dict[str, Any] | None = None
+
+    @property
+    def recoverable(self) -> bool:
+        return self.topology in {
+            "complete",
+            "outer-only",
+            "outer-empty-directory",
+        }
+
+    def evidence(self, common_dir: Path) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "common_dir": str(common_dir),
+            "topology": self.topology,
+            "detail": self.detail,
+        }
+        if self.outer is not None:
+            result["owner"] = self.outer.evidence()
+        if self.inner is not None:
+            result["inner"] = self.inner.evidence()
+        if self.artifacts is not None:
+            result["artifacts"] = copy.deepcopy(self.artifacts)
+        return result
+
+
+class CommonLockUnavailable(Refusal):
+    """The exact envelope-only FR-235 acquisition refusal."""
+
+    def __init__(self, evidence: Mapping[str, Any]) -> None:
+        rendered = canonical_bytes(dict(evidence)).decode("utf-8")
+        super().__init__(
+            V2ReasonCode.REBASE_LOCK_UNAVAILABLE,
+            "forge: common rebase lock unavailable",
+            expected=(
+                "complete mandatory portable ownership and any secondary flock "
+                "within the shared 300-second deadline"
+            ),
+            observed=rendered,
+            remediation=(
+                "inspect the reported immutable owner, reservation, and fence; "
+                "do not remove or replace them automatically"
+            ),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+        self.evidence = copy.deepcopy(dict(evidence))
+
+
+class CommonLockReleaseFailure(Refusal):
+    """Release-only failure after the caller's primary truth is durable."""
+
+    def __init__(self, evidence: Mapping[str, Any]) -> None:
+        rendered = canonical_bytes(dict(evidence)).decode("utf-8")
+        super().__init__(
+            V2ReasonCode.LOCK_RELEASE_FAILED,
+            "forge: common rebase lock release failed",
+            expected="reverse-order release of the exact acquired lock identity",
+            observed=rendered,
+            remediation="retry only release recovery for the recorded lock identity",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+        self.evidence = copy.deepcopy(dict(evidence))
+
+
+class ChainLeaseUnavailable(Refusal):
+    """Fail-closed per-chain serialization refusal."""
+
+    def __init__(self, chain_id: str, evidence: Mapping[str, Any]) -> None:
+        rendered = canonical_bytes(dict(evidence)).decode("utf-8")
+        super().__init__(
+            V2ReasonCode.STATE_PRECONDITION,
+            "forge: merge chain lease unavailable",
+            expected=f"exclusive current lease for {chain_id}",
+            observed=rendered,
+            remediation=f"forge status --chain-id {chain_id}",
+            next_required_step=f"forge status --chain-id {chain_id}",
+            chain={"chain_id": chain_id, "state": "unknown"},
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+        self.evidence = copy.deepcopy(dict(evidence))
+
+
+class FencedChildSurvived(RuntimeError):
+    """A fenced process group remains live or cannot be proved gone."""
+
+    def __init__(self, result: "FencedProcessResult") -> None:
+        super().__init__("fenced process group survived termination")
+        self.result = result
+
+
+def _valid_utc_second(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return iso_z(parse_time(value)) == value
+    except (TypeError, ValueError):
+        return False
+
+
+def _valid_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _valid_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _valid_host(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and 0 < len(value.encode("utf-8")) <= 255
+        and "\x00" not in value
+    )
+
+
+def _valid_nonce(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) is not None
+
+
+def _validate_owner_record(value: Any) -> dict[str, Any]:
+    _require_common_lock_control("canonical-records")
+    if not isinstance(value, dict) or set(value) != _COMMON_LOCK_OWNER_KEYS:
+        raise ValueError("common-lock owner has an invalid key set")
+    kind = value.get("owner_kind")
+    operation = value.get("operation")
+    chain_id = value.get("chain_id")
+    if kind not in COMMON_LOCK_OWNER_KINDS:
+        raise ValueError("common-lock owner kind is invalid")
+    if operation not in COMMON_LOCK_OPERATIONS:
+        raise ValueError("common-lock operation is invalid")
+    if kind == "merge":
+        if not isinstance(chain_id, str) or not CHAIN_ID_RE.fullmatch(chain_id):
+            raise ValueError("merge common-lock owner lacks a valid chain")
+        if operation not in {"start", "refresh", "finalize", "recover", "cleanup", "abort"}:
+            raise ValueError("merge common-lock operation is invalid")
+    elif chain_id is not None:
+        raise ValueError("non-merge common-lock owner carries a chain")
+    if kind == "push" and operation != "push":
+        raise ValueError("push common-lock owner operation is invalid")
+    if kind == "phase5" and operation != "phase5-scan":
+        raise ValueError("phase5 common-lock owner operation is invalid")
+    if (
+        value.get("schema") != "forge-rebase-lock/1"
+        or not _valid_host(value.get("host"))
+        or not _valid_positive_int(value.get("pid"))
+        or not _valid_nonce(value.get("nonce"))
+        or not _valid_utc_second(value.get("started_at"))
+    ):
+        raise ValueError("common-lock owner fields are invalid")
+    return copy.deepcopy(value)
+
+
+def _validate_fence_record(value: Any) -> dict[str, Any]:
+    _require_common_lock_control("canonical-records")
+    if not isinstance(value, dict) or set(value) != _COMMON_LOCK_FENCE_KEYS:
+        raise ValueError("in-flight fence has an invalid key set")
+    kind = value.get("owner_kind")
+    chain_id = value.get("chain_id")
+    operation = value.get("operation")
+    if kind not in {"merge", "push"} or operation not in COMMON_LOCK_FENCE_OPERATIONS:
+        raise ValueError("in-flight fence kind or operation is invalid")
+    if kind == "merge":
+        if not isinstance(chain_id, str) or not CHAIN_ID_RE.fullmatch(chain_id):
+            raise ValueError("merge in-flight fence lacks a valid chain")
+    elif chain_id is not None:
+        raise ValueError("push in-flight fence carries a chain")
+    if operation == "attribution-observation" and kind != "push":
+        raise ValueError("attribution observation is not standalone push")
+    if (
+        value.get("schema") != "forge-rebase-inflight/1"
+        or not _valid_host(value.get("host"))
+        or not _valid_positive_int(value.get("pid"))
+        or not _valid_positive_int(value.get("pgid"))
+        or not SHA256_RE.fullmatch(str(value.get("intent_digest") or ""))
+        or not _valid_nonce(value.get("nonce"))
+        or not _valid_utc_second(value.get("started_at"))
+    ):
+        raise ValueError("in-flight fence fields are invalid")
+    return copy.deepcopy(value)
+
+
+def _valid_nullable_chain(kind: Any, chain_id: Any, *, allow_phase5: bool) -> bool:
+    if kind == "merge":
+        return isinstance(chain_id, str) and CHAIN_ID_RE.fullmatch(chain_id) is not None
+    allowed = {"push", "phase5"} if allow_phase5 else {"push"}
+    return kind in allowed and chain_id is None
+
+
+def _validate_recovery_record(value: Any) -> dict[str, Any]:
+    _require_common_lock_control("canonical-records")
+    if not isinstance(value, dict) or set(value) != _COMMON_LOCK_RECOVERY_KEYS:
+        raise ValueError("recovery reservation has an invalid key set")
+    kind = value.get("recovery_kind")
+    if (
+        value.get("schema") != "forge-rebase-recovery/1"
+        or kind not in COMMON_LOCK_RECOVERY_KINDS
+        or not _valid_host(value.get("host"))
+        or not _valid_positive_int(value.get("pid"))
+        or not _valid_nonce(value.get("nonce"))
+        or not _valid_utc_second(value.get("started_at"))
+    ):
+        raise ValueError("recovery reservation identity is invalid")
+    stale_fields = (
+        "stale_owner_inode",
+        "stale_owner_digest",
+        "stale_owner_host",
+        "stale_owner_pid",
+        "stale_owner_kind",
+        "stale_owner_chain_id",
+        "owner_dead_at",
+    )
+    inflight_fields = (
+        "inflight_inode",
+        "inflight_digest",
+        "inflight_host",
+        "inflight_pgid",
+        "inflight_owner_kind",
+        "inflight_chain_id",
+        "group_dead_at",
+    )
+    if kind.startswith("fallback-"):
+        if (
+            not _valid_nonnegative_int(value.get("stale_owner_inode"))
+            or not SHA256_RE.fullmatch(str(value.get("stale_owner_digest") or ""))
+            or not _valid_host(value.get("stale_owner_host"))
+            or not _valid_positive_int(value.get("stale_owner_pid"))
+            or not _valid_nullable_chain(
+                value.get("stale_owner_kind"),
+                value.get("stale_owner_chain_id"),
+                allow_phase5=True,
+            )
+            or not _valid_utc_second(value.get("owner_dead_at"))
+        ):
+            raise ValueError("fallback reservation stale-owner fields are invalid")
+    elif any(value.get(field) is not None for field in stale_fields):
+        raise ValueError("flock-held reservation carries stale-owner fields")
+    if kind == "fallback-owner":
+        if any(value.get(field) is not None for field in inflight_fields):
+            raise ValueError("owner-only reservation carries in-flight fields")
+    else:
+        if (
+            not _valid_nonnegative_int(value.get("inflight_inode"))
+            or not SHA256_RE.fullmatch(str(value.get("inflight_digest") or ""))
+            or not _valid_host(value.get("inflight_host"))
+            or not _valid_positive_int(value.get("inflight_pgid"))
+            or not _valid_nullable_chain(
+                value.get("inflight_owner_kind"),
+                value.get("inflight_chain_id"),
+                allow_phase5=False,
+            )
+            or not _valid_utc_second(value.get("group_dead_at"))
+        ):
+            raise ValueError("fence reservation in-flight fields are invalid")
+    return copy.deepcopy(value)
+
+
+def _validate_chain_lease_record(value: Any) -> dict[str, Any]:
+    _require_common_lock_control("canonical-records")
+    if not isinstance(value, dict) or set(value) != _CHAIN_LEASE_KEYS:
+        raise ValueError("chain lease has an invalid key set")
+    if (
+        not isinstance(value.get("chain_id"), str)
+        or CHAIN_ID_RE.fullmatch(value["chain_id"]) is None
+        or not _valid_host(value.get("host"))
+        or not _valid_positive_int(value.get("pid"))
+        or not _valid_nonce(value.get("nonce"))
+        or not isinstance(value.get("session"), str)
+        or not value["session"]
+        or "\x00" in value["session"]
+        or not _valid_utc_second(value.get("started_at"))
+    ):
+        raise ValueError("chain lease fields are invalid")
+    return copy.deepcopy(value)
+
+
+def _write_all(descriptor: int, value: bytes) -> None:
+    position = 0
+    while position < len(value):
+        written = os.write(descriptor, value[position:])
+        if written <= 0:
+            raise OSError("short write")
+        position += written
+
+
+def _read_owned_record_at(
+    parent: int,
+    name: str,
+    absolute_path: Path,
+    validator: Callable[[Any], dict[str, Any]],
+    *,
+    cap: int = COMMON_LOCK_RECORD_CAP_BYTES,
+) -> PublishedLockRecord:
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    descriptor = os.open(
+        name,
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0),
+        dir_fd=parent,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise OSError("record is not the same owner-controlled mode-0600 regular file")
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            chunk = os.read(descriptor, min(4096, cap + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > cap:
+                raise OSError("record exceeds its byte cap")
+        raw = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    try:
+        decoded = raw.decode("utf-8", "strict")
+        parsed = json.loads(decoded)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise OSError("record is not strict UTF-8 JSON") from exc
+    record = validator(parsed)
+    if canonical_bytes(record) != raw:
+        raise OSError("record is not DM-013 canonical bytes")
+    return PublishedLockRecord(
+        path=str(absolute_path),
+        device=before.st_dev,
+        inode=before.st_ino,
+        digest=sha256_bytes(raw),
+        record=record,
+        mode=stat.S_IMODE(before.st_mode),
+        links=before.st_nlink,
+    )
+
+
+def _same_published_record(
+    left: PublishedLockRecord, right: PublishedLockRecord
+) -> bool:
+    return (
+        left.device == right.device
+        and left.inode == right.inode
+        and left.digest == right.digest
+        and left.record == right.record
+    )
+
+
+def _open_owned_directory(path: Path) -> tuple[Path, int]:
+    canonical = Path(os.path.realpath(path))
+    descriptor = os.open(
+        canonical,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        ChainStore._owned_directory(descriptor, str(canonical))
+        return canonical, descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open_lock_directory(common: int, common_dir: Path) -> int:
+    descriptor = os.open(
+        COMMON_LOCK_DIRECTORY_NAME,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        dir_fd=common,
+    )
+    opened = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or opened.st_uid != os.geteuid()
+        or stat.S_IMODE(opened.st_mode) != 0o700
+    ):
+        os.close(descriptor)
+        raise OSError(f"{common_dir / COMMON_LOCK_DIRECTORY_NAME} is not mode-0700 owner-controlled")
+    return descriptor
+
+
+def _inspect_common_lock_fd(common: int, common_dir: Path) -> CommonLockInspection:
+    try:
+        outer = _read_owned_record_at(
+            common,
+            COMMON_LOCK_INTENT_NAME,
+            common_dir / COMMON_LOCK_INTENT_NAME,
+            _validate_owner_record,
+        )
+    except FileNotFoundError:
+        outer = None
+    except (OSError, ValueError) as exc:
+        return CommonLockInspection(
+            "unprovable",
+            detail=f"outer intent: {exc}",
+            artifacts={
+                "outer": _opaque_path_evidence_at(
+                    common,
+                    COMMON_LOCK_INTENT_NAME,
+                    common_dir / COMMON_LOCK_INTENT_NAME,
+                )
+            },
+        )
+    try:
+        lockdir = _open_lock_directory(common, common_dir)
+    except FileNotFoundError:
+        if outer is None:
+            return CommonLockInspection("free")
+        return CommonLockInspection("outer-only", outer=outer)
+    except OSError as exc:
+        return CommonLockInspection(
+            "unprovable",
+            outer=outer,
+            detail=f"lock directory: {exc}",
+            artifacts={
+                "lockdir": _opaque_path_evidence_at(
+                    common,
+                    COMMON_LOCK_DIRECTORY_NAME,
+                    common_dir / COMMON_LOCK_DIRECTORY_NAME,
+                )
+            },
+        )
+    try:
+        entries = sorted(os.listdir(lockdir), key=os.fsencode)
+        if outer is None:
+            return CommonLockInspection(
+                "unprovable",
+                detail="lock directory exists without an outer intent",
+                artifacts={
+                    "lockdir": _opaque_path_evidence_at(
+                        common,
+                        COMMON_LOCK_DIRECTORY_NAME,
+                        common_dir / COMMON_LOCK_DIRECTORY_NAME,
+                    )
+                },
+            )
+        if not entries:
+            return CommonLockInspection("outer-empty-directory", outer=outer)
+        if entries != [COMMON_LOCK_OWNER_NAME]:
+            return CommonLockInspection(
+                "unprovable",
+                outer=outer,
+                detail="lock directory has a missing or extra entry",
+                artifacts={"lockdir_entries": entries},
+            )
+        try:
+            inner = _read_owned_record_at(
+                lockdir,
+                COMMON_LOCK_OWNER_NAME,
+                common_dir / COMMON_LOCK_DIRECTORY_NAME / COMMON_LOCK_OWNER_NAME,
+                _validate_owner_record,
+            )
+        except (OSError, ValueError) as exc:
+            return CommonLockInspection(
+                "unprovable",
+                outer=outer,
+                detail=f"inner owner: {exc}",
+                artifacts={
+                    "inner": _opaque_path_evidence_at(
+                        lockdir,
+                        COMMON_LOCK_OWNER_NAME,
+                        common_dir
+                        / COMMON_LOCK_DIRECTORY_NAME
+                        / COMMON_LOCK_OWNER_NAME,
+                    )
+                },
+            )
+        if not _same_published_record(outer, inner):
+            return CommonLockInspection(
+                "unprovable",
+                outer=outer,
+                inner=inner,
+                detail="outer and inner owners do not share one inode and digest",
+            )
+        return CommonLockInspection("complete", outer=outer, inner=inner)
+    finally:
+        os.close(lockdir)
+
+
+def inspect_common_lock(common_dir: Path) -> CommonLockInspection:
+    """Return the strict FR-235 portable topology without changing it."""
+
+    _require_common_lock_control("three-topology-recovery")
+    canonical, descriptor = _open_owned_directory(common_dir)
+    try:
+        return _inspect_common_lock_fd(descriptor, canonical)
+    finally:
+        os.close(descriptor)
+
+
+class _PublicationCleanupFailure(OSError):
+    """A failed publication left an attempt-owned name unproved or undurable."""
+
+
+def _create_private_record_at(
+    parent: int,
+    parent_path: Path,
+    prefix: str,
+    record: Mapping[str, Any],
+    *,
+    boundary: Callable[[str], None] | None,
+    stage: str,
+) -> tuple[str, PublishedLockRecord]:
+    encoded = canonical_bytes(dict(record))
+    temporary = f".{prefix}.{secrets.token_hex(16)}.tmp"
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+        dir_fd=parent,
+    )
+    opened: os.stat_result | None = None
+    descriptor_open = True
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+            raise OSError("private record is not owner-controlled and regular")
+        os.fchmod(descriptor, 0o600)
+        _write_all(descriptor, encoded)
+        os.fsync(descriptor)
+        opened = os.fstat(descriptor)
+        os.close(descriptor)
+        descriptor_open = False
+    except BaseException as write_error:
+        cleanup_errors: list[str] = []
+        try:
+            expected = opened if opened is not None else os.fstat(descriptor)
+            current = os.stat(temporary, dir_fd=parent, follow_symlinks=False)
+            if (
+                current.st_dev != expected.st_dev
+                or current.st_ino != expected.st_ino
+                or not stat.S_ISREG(current.st_mode)
+            ):
+                raise OSError("private record temporary name changed inode")
+            os.unlink(temporary, dir_fd=parent)
+            os.fsync(parent)
+        except FileNotFoundError:
+            pass
+        except BaseException as exc:
+            cleanup_errors.append(f"temporary: {exc}")
+        if descriptor_open:
+            try:
+                os.close(descriptor)
+                descriptor_open = False
+            except OSError as exc:
+                cleanup_errors.append(f"descriptor: {exc}")
+        if cleanup_errors:
+            raise _PublicationCleanupFailure(
+                "private record cleanup could not prove durable removal: "
+                + "; ".join(cleanup_errors)
+            ) from write_error
+        raise
+    published = PublishedLockRecord(
+        path=str(parent_path / temporary),
+        device=opened.st_dev,
+        inode=opened.st_ino,
+        digest=sha256_bytes(encoded),
+        record=copy.deepcopy(dict(record)),
+        mode=0o600,
+        links=opened.st_nlink,
+    )
+    if boundary is not None:
+        boundary(stage)
+    return temporary, published
+
+
+def _publish_no_replace_link(
+    source_parent: int,
+    source: str,
+    destination_parent: int,
+    destination: str,
+) -> None:
+    _require_common_lock_control("no-replace-publication")
+    os.link(
+        source,
+        destination,
+        src_dir_fd=source_parent,
+        dst_dir_fd=destination_parent,
+        follow_symlinks=False,
+    )
+
+
+def _revalidate_record_at(
+    parent: int,
+    name: str,
+    absolute_path: Path,
+    expected: PublishedLockRecord,
+    validator: Callable[[Any], dict[str, Any]],
+) -> PublishedLockRecord:
+    current = _read_owned_record_at(parent, name, absolute_path, validator)
+    if not _same_published_record(current, expected):
+        raise OSError(f"{absolute_path} no longer names the recorded inode/digest")
+    return current
+
+
+def _unlink_revalidated_record_at(
+    parent: int,
+    name: str,
+    absolute_path: Path,
+    expected: PublishedLockRecord,
+    validator: Callable[[Any], dict[str, Any]],
+) -> None:
+    _require_common_lock_control("release-identity-revalidation")
+    _revalidate_record_at(parent, name, absolute_path, expected, validator)
+    os.unlink(name, dir_fd=parent)
+
+
+def _record_at_if_present(
+    parent: int,
+    name: str,
+    absolute_path: Path,
+    validator: Callable[[Any], dict[str, Any]],
+) -> PublishedLockRecord | None:
+    try:
+        return _read_owned_record_at(parent, name, absolute_path, validator)
+    except FileNotFoundError:
+        return None
+
+
+def _process_probe(pid: int) -> str:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "dead"
+    except PermissionError:
+        return "unprovable"
+    except OSError as exc:
+        return "dead" if exc.errno == errno.ESRCH else "unprovable"
+    return "live"
+
+
+def _group_probe(pgid: int) -> str:
+    try:
+        os.kill(-pgid, 0)
+    except ProcessLookupError:
+        return "dead"
+    except PermissionError:
+        return "unprovable"
+    except OSError as exc:
+        return "dead" if exc.errno == errno.ESRCH else "unprovable"
+    return "live"
+
+
+def _sleep_with_deadline(
+    deadline: float,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> bool:
+    remaining = deadline - clock()
+    if remaining <= 0:
+        return False
+    sleeper(min(COMMON_LOCK_POLL_SECONDS, remaining))
+    return clock() < deadline
+
+
+def _require_deadline_open(
+    deadline: float, clock: Callable[[], float], operation: str
+) -> None:
+    _require_common_lock_control("single-deadline")
+    if clock() >= deadline:
+        raise TimeoutError(f"{operation} exhausted the shared common-lock deadline")
+
+
+def _opaque_path_evidence_at(parent: int, name: str, path: Path) -> dict[str, Any]:
+    try:
+        observed = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return {"path": str(path), "exists": False}
+    result: dict[str, Any] = {
+        "path": str(path),
+        "exists": True,
+        "device": observed.st_dev,
+        "inode": observed.st_ino,
+        "mode": stat.S_IMODE(observed.st_mode),
+        "type": stat.S_IFMT(observed.st_mode),
+    }
+    if stat.S_ISREG(observed.st_mode):
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=parent,
+            )
+            try:
+                raw = os.read(descriptor, COMMON_LOCK_RECORD_CAP_BYTES + 1)
+            finally:
+                os.close(descriptor)
+            result["digest"] = sha256_bytes(raw)
+            result["bytes"] = len(raw)
+        except OSError as exc:
+            result["read_error"] = str(exc)
+    return result
+
+
+@dataclasses.dataclass(frozen=True)
+class RecoveryReservation:
+    common_dir: Path
+    identity: PublishedLockRecord
+
+    @property
+    def record(self) -> dict[str, Any]:
+        return copy.deepcopy(self.identity.record)
+
+    def matches_chain(self, chain_id: str) -> bool:
+        record = self.identity.record
+        return chain_id in {
+            record.get("stale_owner_chain_id"),
+            record.get("inflight_chain_id"),
+        }
+
+
+def _new_owner_record(
+    owner_kind: str,
+    chain_id: str | None,
+    operation: str,
+    *,
+    host: str,
+    pid: int,
+    now: Callable[[], dt.datetime],
+) -> dict[str, Any]:
+    return _validate_owner_record(
+        {
+            "schema": "forge-rebase-lock/1",
+            "owner_kind": owner_kind,
+            "chain_id": chain_id,
+            "host": host,
+            "pid": pid,
+            "nonce": secrets.token_hex(16),
+            "operation": operation,
+            "started_at": iso_z(now()),
+        }
+    )
+
+
+def _fence_matches_owner(
+    fence: PublishedLockRecord, owner: PublishedLockRecord
+) -> bool:
+    return (
+        fence.record.get("owner_kind") == owner.record.get("owner_kind")
+        and fence.record.get("chain_id") == owner.record.get("chain_id")
+    )
+
+
+def _publish_portable_owner(
+    common: int,
+    common_dir: Path,
+    record: Mapping[str, Any],
+    boundary: Callable[[str], None] | None,
+) -> PublishedLockRecord:
+    _require_common_lock_control("portable-before-flock")
+    temporary, temporary_identity = _create_private_record_at(
+        common,
+        common_dir,
+        "agent-rebase.lock.intent",
+        record,
+        boundary=boundary,
+        stage="owner-temp-fsynced",
+    )
+    published = False
+    outer: PublishedLockRecord | None = None
+    lockdir = -1
+    try:
+        _publish_no_replace_link(
+            common, temporary, common, COMMON_LOCK_INTENT_NAME
+        )
+        published = True
+        os.fsync(common)
+        outer = _read_owned_record_at(
+            common,
+            COMMON_LOCK_INTENT_NAME,
+            common_dir / COMMON_LOCK_INTENT_NAME,
+            _validate_owner_record,
+        )
+        if not _same_published_record(outer, temporary_identity):
+            raise OSError("published intent differs from its private inode")
+        if boundary is not None:
+            boundary("owner-intent-published")
+        _unlink_revalidated_record_at(
+            common,
+            temporary,
+            common_dir / temporary,
+            temporary_identity,
+            _validate_owner_record,
+        )
+        os.fsync(common)
+        if boundary is not None:
+            boundary("owner-temp-unlinked")
+        os.mkdir(COMMON_LOCK_DIRECTORY_NAME, 0o700, dir_fd=common)
+        lockdir = _open_lock_directory(common, common_dir)
+        os.fchmod(lockdir, 0o700)
+        if boundary is not None:
+            boundary("owner-lockdir-created")
+        _publish_no_replace_link(
+            common,
+            COMMON_LOCK_INTENT_NAME,
+            lockdir,
+            COMMON_LOCK_OWNER_NAME,
+        )
+        if boundary is not None:
+            boundary("owner-inner-linked")
+        os.fsync(lockdir)
+        os.fsync(common)
+        if boundary is not None:
+            boundary("owner-portable-fsynced")
+        inspection = _inspect_common_lock_fd(common, common_dir)
+        if (
+            inspection.topology != "complete"
+            or inspection.outer is None
+            or not _same_published_record(inspection.outer, outer)
+        ):
+            raise OSError("portable ownership did not validate as one complete pair")
+        return inspection.outer
+    except BaseException as exc:
+        if isinstance(exc, CommonLockBoundaryCrash):
+            raise
+        try:
+            os.unlink(temporary, dir_fd=common)
+            os.fsync(common)
+        except (FileNotFoundError, OSError):
+            pass
+        if published and outer is not None:
+            try:
+                _release_portable_identity(
+                    common,
+                    common_dir,
+                    outer,
+                    boundary=None,
+                    prefix="failed-acquisition",
+                    complete_partial=False,
+                )
+            except (OSError, ValueError):
+                pass
+        raise
+    finally:
+        if lockdir >= 0:
+            os.close(lockdir)
+
+
+def _release_portable_identity(
+    common: int,
+    common_dir: Path,
+    outer: PublishedLockRecord,
+    *,
+    boundary: Callable[[str], None] | None,
+    prefix: str,
+    complete_partial: bool,
+) -> None:
+    _require_common_lock_control("reverse-release-order")
+    inspection = _inspect_common_lock_fd(common, common_dir)
+    if inspection.topology == "free":
+        os.fsync(common)
+        return
+    if (
+        not inspection.recoverable
+        or inspection.outer is None
+        or not _same_published_record(inspection.outer, outer)
+    ):
+        raise OSError("portable owner topology or identity changed before release")
+    if complete_partial and inspection.topology != "complete":
+        if inspection.topology == "outer-only":
+            os.mkdir(COMMON_LOCK_DIRECTORY_NAME, 0o700, dir_fd=common)
+            lockdir = _open_lock_directory(common, common_dir)
+            os.fchmod(lockdir, 0o700)
+            if boundary is not None:
+                boundary(f"{prefix}-lockdir-completed")
+        else:
+            lockdir = _open_lock_directory(common, common_dir)
+        try:
+            _revalidate_record_at(
+                common,
+                COMMON_LOCK_INTENT_NAME,
+                common_dir / COMMON_LOCK_INTENT_NAME,
+                outer,
+                _validate_owner_record,
+            )
+            _publish_no_replace_link(
+                common,
+                COMMON_LOCK_INTENT_NAME,
+                lockdir,
+                COMMON_LOCK_OWNER_NAME,
+            )
+            os.fsync(lockdir)
+            os.fsync(common)
+            if boundary is not None:
+                boundary(f"{prefix}-inner-completed")
+        finally:
+            os.close(lockdir)
+        inspection = _inspect_common_lock_fd(common, common_dir)
+    if inspection.topology == "complete":
+        lockdir = _open_lock_directory(common, common_dir)
+        try:
+            inner = _read_owned_record_at(
+                lockdir,
+                COMMON_LOCK_OWNER_NAME,
+                common_dir / COMMON_LOCK_DIRECTORY_NAME / COMMON_LOCK_OWNER_NAME,
+                _validate_owner_record,
+            )
+            if not _same_published_record(inner, outer):
+                raise OSError("inner owner identity changed before release")
+            _unlink_revalidated_record_at(
+                lockdir,
+                COMMON_LOCK_OWNER_NAME,
+                common_dir / COMMON_LOCK_DIRECTORY_NAME / COMMON_LOCK_OWNER_NAME,
+                inner,
+                _validate_owner_record,
+            )
+            if boundary is not None:
+                boundary(f"{prefix}-inner-unlinked")
+            os.fsync(lockdir)
+            if boundary is not None:
+                boundary(f"{prefix}-inner-fsynced")
+        finally:
+            os.close(lockdir)
+        os.rmdir(COMMON_LOCK_DIRECTORY_NAME, dir_fd=common)
+        if boundary is not None:
+            boundary(f"{prefix}-lockdir-removed")
+        os.fsync(common)
+        if boundary is not None:
+            boundary(f"{prefix}-parent-fsynced")
+    elif inspection.topology == "outer-empty-directory":
+        lockdir = _open_lock_directory(common, common_dir)
+        try:
+            if os.listdir(lockdir):
+                raise OSError("lock directory ceased to be empty")
+            os.fsync(lockdir)
+        finally:
+            os.close(lockdir)
+        os.rmdir(COMMON_LOCK_DIRECTORY_NAME, dir_fd=common)
+        if boundary is not None:
+            boundary(f"{prefix}-lockdir-removed")
+        os.fsync(common)
+        if boundary is not None:
+            boundary(f"{prefix}-parent-fsynced")
+    elif inspection.topology == "outer-only":
+        # This topology is also the crash window after rmdir but before its
+        # parent fsync.  Always establish that durability boundary again
+        # before the identifying outer intent can be removed.
+        os.fsync(common)
+        if boundary is not None:
+            boundary(f"{prefix}-parent-fsynced")
+    else:
+        raise OSError("portable owner is not releasable")
+    _unlink_revalidated_record_at(
+        common,
+        COMMON_LOCK_INTENT_NAME,
+        common_dir / COMMON_LOCK_INTENT_NAME,
+        outer,
+        _validate_owner_record,
+    )
+    if boundary is not None:
+        boundary(f"{prefix}-intent-unlinked")
+    os.fsync(common)
+    if boundary is not None:
+        boundary(f"{prefix}-final-fsynced")
+
+
+def _publish_recovery_reservation(
+    common: int,
+    common_dir: Path,
+    record: Mapping[str, Any],
+    boundary: Callable[[str], None] | None,
+) -> RecoveryReservation | None:
+    _require_common_lock_control("immutable-recovery-reservation")
+    temporary, temporary_identity = _create_private_record_at(
+        common,
+        common_dir,
+        "agent-rebase.recover",
+        record,
+        boundary=boundary,
+        stage="recovery-temp-fsynced",
+    )
+    try:
+        try:
+            _publish_no_replace_link(
+                common, temporary, common, COMMON_LOCK_RECOVERY_NAME
+            )
+        except FileExistsError:
+            _unlink_revalidated_record_at(
+                common,
+                temporary,
+                common_dir / temporary,
+                temporary_identity,
+                _validate_recovery_record,
+            )
+            os.fsync(common)
+            return None
+        os.fsync(common)
+        canonical = _read_owned_record_at(
+            common,
+            COMMON_LOCK_RECOVERY_NAME,
+            common_dir / COMMON_LOCK_RECOVERY_NAME,
+            _validate_recovery_record,
+        )
+        if not _same_published_record(canonical, temporary_identity):
+            raise OSError("recovery reservation publication changed identity")
+        if boundary is not None:
+            boundary("recovery-reservation-published")
+        _unlink_revalidated_record_at(
+            common,
+            temporary,
+            common_dir / temporary,
+            temporary_identity,
+            _validate_recovery_record,
+        )
+        os.fsync(common)
+        if boundary is not None:
+            boundary("recovery-temp-unlinked")
+        return RecoveryReservation(common_dir, canonical)
+    except BaseException as exc:
+        if isinstance(exc, CommonLockBoundaryCrash):
+            raise
+        try:
+            os.unlink(temporary, dir_fd=common)
+            os.fsync(common)
+        except (FileNotFoundError, OSError):
+            pass
+        # A published canonical reservation is immutable even when a later
+        # step fails.  Never roll it back here.
+        raise
+
+
+def _reservation_evidence(common: int, common_dir: Path) -> dict[str, Any] | None:
+    try:
+        reservation = _read_owned_record_at(
+            common,
+            COMMON_LOCK_RECOVERY_NAME,
+            common_dir / COMMON_LOCK_RECOVERY_NAME,
+            _validate_recovery_record,
+        )
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        return {
+            "reservation": _opaque_path_evidence_at(
+                common,
+                COMMON_LOCK_RECOVERY_NAME,
+                common_dir / COMMON_LOCK_RECOVERY_NAME,
+            ),
+            "detail": f"immutable reservation is malformed or unreadable: {exc}",
+        }
+    return {"reservation": reservation.evidence()}
+
+
+def _clear_owned_reservation(
+    common: int,
+    common_dir: Path,
+    reservation: RecoveryReservation,
+    boundary: Callable[[str], None] | None,
+) -> None:
+    _require_common_lock_control("immutable-recovery-reservation")
+    _unlink_revalidated_record_at(
+        common,
+        COMMON_LOCK_RECOVERY_NAME,
+        common_dir / COMMON_LOCK_RECOVERY_NAME,
+        reservation.identity,
+        _validate_recovery_record,
+    )
+    os.fsync(common)
+    if boundary is not None:
+        boundary("recovery-reservation-cleared")
+
+
+def _recovery_record(
+    recovery_kind: str,
+    *,
+    stale_owner: PublishedLockRecord | None,
+    inflight: PublishedLockRecord | None,
+    host: str,
+    pid: int,
+    now: Callable[[], dt.datetime],
+) -> dict[str, Any]:
+    stamp = iso_z(now())
+    stale = stale_owner.record if stale_owner is not None else {}
+    fence = inflight.record if inflight is not None else {}
+    return _validate_recovery_record(
+        {
+            "schema": "forge-rebase-recovery/1",
+            "recovery_kind": recovery_kind,
+            "host": host,
+            "pid": pid,
+            "nonce": secrets.token_hex(16),
+            "started_at": stamp,
+            "stale_owner_inode": stale_owner.inode if stale_owner is not None else None,
+            "stale_owner_digest": stale_owner.digest if stale_owner is not None else None,
+            "stale_owner_host": stale.get("host"),
+            "stale_owner_pid": stale.get("pid"),
+            "stale_owner_kind": stale.get("owner_kind"),
+            "stale_owner_chain_id": stale.get("chain_id"),
+            "inflight_inode": inflight.inode if inflight is not None else None,
+            "inflight_digest": inflight.digest if inflight is not None else None,
+            "inflight_host": fence.get("host"),
+            "inflight_pgid": fence.get("pgid"),
+            "inflight_owner_kind": fence.get("owner_kind"),
+            "inflight_chain_id": fence.get("chain_id"),
+            "owner_dead_at": stamp if stale_owner is not None else None,
+            "group_dead_at": stamp if inflight is not None else None,
+        }
+    )
+
+
+def _fence_death_proof(
+    fence: PublishedLockRecord,
+    *,
+    group_dead_at: str,
+) -> dict[str, Any]:
+    return {
+        "schema": "forge-rebase-fence-death/1",
+        "operation": fence.record["operation"],
+        "intent_digest": fence.record["intent_digest"],
+        "fence_digest": fence.digest,
+        "host": fence.record["host"],
+        "pgid": fence.record["pgid"],
+        "group_dead_at": group_dead_at,
+    }
+
+
+def _require_recovery_proof_recorder(
+    owner_kinds: Sequence[str],
+    recorder: Callable[[dict[str, Any]], Any] | None,
+    *,
+    no_transaction_record: bool,
+) -> None:
+    _require_common_lock_control("death-proof-revalidation")
+    if (
+        recorder is None
+        and not no_transaction_record
+        and any(kind in {"merge", "push"} for kind in owner_kinds)
+    ):
+        raise OSError(
+            "common-lock recovery recorder is required before proof-dependent unlink"
+        )
+
+
+def _persist_recovery_proof(
+    proof: Mapping[str, Any],
+    recorder: Callable[[dict[str, Any]], Any] | None,
+    *,
+    owner_kinds: Sequence[str],
+    no_transaction_record: bool,
+    proof_already_persisted: bool = False,
+) -> None:
+    _require_recovery_proof_recorder(
+        owner_kinds,
+        recorder,
+        no_transaction_record=no_transaction_record,
+    )
+    if proof_already_persisted or recorder is None:
+        return
+    recorder(copy.deepcopy(dict(proof)))
+
+
+class CommonRebaseLock:
+    """One long-lived FR-235 portable owner and optional secondary flock."""
+
+    def __init__(
+        self,
+        *,
+        common_dir: Path,
+        common_descriptor: int,
+        owner: PublishedLockRecord,
+        flock_descriptor: int | None,
+        flock_impl: Callable[[int, int], Any],
+        boundary: Callable[[str], None] | None,
+        deadline: float,
+        clock: Callable[[], float],
+        sleeper: Callable[[float], None],
+        pid_probe: Callable[[int], str],
+        group_probe: Callable[[int], str],
+        recovery_recorder: Callable[[dict[str, Any]], Any] | None,
+        no_transaction_record: bool,
+    ) -> None:
+        self.common_dir = common_dir
+        self._common = common_descriptor
+        self.owner = owner
+        self._flock = flock_descriptor
+        self._flock_impl = flock_impl
+        self._boundary = boundary
+        self.deadline = deadline
+        self._clock = clock
+        self._sleeper = sleeper
+        self._pid_probe = pid_probe
+        self._group_probe = group_probe
+        self._recovery_recorder = recovery_recorder
+        self._no_transaction_record = no_transaction_record
+        self._flock_released = flock_descriptor is None
+        self._released = False
+        self._release_pending = False
+        self._unresolved_fence: PublishedLockRecord | None = None
+
+    @property
+    def record(self) -> dict[str, Any]:
+        return copy.deepcopy(self.owner.record)
+
+    @property
+    def digest(self) -> str:
+        return self.owner.digest
+
+    @property
+    def released(self) -> bool:
+        return self._released
+
+    def _emit_boundary(self, stage: str) -> None:
+        if self._boundary is not None:
+            self._boundary(stage)
+
+    def assert_held(self, *, allow_fence: bool = False) -> None:
+        if self._released or self._common < 0:
+            raise OSError("common rebase lock is already released")
+        if self._release_pending:
+            raise OSError("common rebase lock admits release recovery only")
+        inspection = _inspect_common_lock_fd(self._common, self.common_dir)
+        if (
+            inspection.topology != "complete"
+            or inspection.outer is None
+            or not _same_published_record(inspection.outer, self.owner)
+        ):
+            raise OSError("common rebase lock portable identity changed")
+        if not self._flock_released and self._flock is None:
+            raise OSError("common rebase lock lost its secondary flock descriptor")
+        if _reservation_evidence(self._common, self.common_dir) is not None:
+            raise OSError("common rebase lock has an unresolved recovery reservation")
+        fence = _record_at_if_present(
+            self._common,
+            COMMON_LOCK_INFLIGHT_NAME,
+            self.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+            _validate_fence_record,
+        )
+        if fence is not None and not allow_fence:
+            raise OSError("common rebase lock has an unresolved in-flight fence")
+
+    def recover_owned_fence(
+        self,
+        fence: PublishedLockRecord,
+        *,
+        persist_proof: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> None:
+        """Release only a recorded, proven-dead fence under this owner."""
+
+        release_was_pending = self._release_pending
+        if release_was_pending:
+            # This method is itself the sole admitted release-recovery step.
+            self._release_pending = False
+        try:
+            self.assert_held(allow_fence=True)
+        finally:
+            self._release_pending = release_was_pending
+        current = _revalidate_record_at(
+            self._common,
+            COMMON_LOCK_INFLIGHT_NAME,
+            self.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+            fence,
+            _validate_fence_record,
+        )
+        if current.record.get("host") != self.owner.record.get("host"):
+            raise OSError("in-flight fence host is not local")
+        if not _fence_matches_owner(current, self.owner):
+            raise OSError("in-flight fence does not belong to this common-lock owner")
+        if self._group_probe(int(current.record["pgid"])) != "dead":
+            raise OSError("in-flight process group is live or unprovable")
+        proof = _fence_death_proof(current, group_dead_at=iso_z())
+        recorder = (
+            persist_proof
+            if persist_proof is not None
+            else self._recovery_recorder
+        )
+        _persist_recovery_proof(
+            proof,
+            recorder,
+            owner_kinds=(str(current.record["owner_kind"]),),
+            no_transaction_record=self._no_transaction_record,
+        )
+        if self._group_probe(int(current.record["pgid"])) != "dead":
+            raise OSError("in-flight process group death could not be re-proved")
+        _unlink_revalidated_record_at(
+            self._common,
+            COMMON_LOCK_INFLIGHT_NAME,
+            self.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+            current,
+            _validate_fence_record,
+        )
+        os.fsync(self._common)
+        self._unresolved_fence = None
+        self._emit_boundary("fence-recovered")
+
+    def release(self) -> None:
+        if self._released:
+            return
+        evidence = {
+            "intent_path": str(self.common_dir / COMMON_LOCK_INTENT_NAME),
+            "inode": self.owner.inode,
+            "digest": self.owner.digest,
+        }
+        try:
+            if self._unresolved_fence is not None:
+                raise OSError("an unresolved fenced process permits only fence recovery")
+            fence = _record_at_if_present(
+                self._common,
+                COMMON_LOCK_INFLIGHT_NAME,
+                self.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+                _validate_fence_record,
+            )
+            if fence is not None:
+                raise OSError("in-flight fence remains at common-lock release")
+            _require_common_lock_control("reverse-release-order")
+            if not self._flock_released:
+                assert self._flock is not None
+                self._flock_impl(self._flock, fcntl.LOCK_UN)
+                os.close(self._flock)
+                self._flock = None
+                self._flock_released = True
+                self._emit_boundary("release-flock")
+            _release_portable_identity(
+                self._common,
+                self.common_dir,
+                self.owner,
+                boundary=self._boundary,
+                prefix="release",
+                complete_partial=False,
+            )
+            self._released = True
+            self._release_pending = False
+            os.close(self._common)
+            self._common = -1
+        except BaseException as exc:
+            if isinstance(exc, CommonLockBoundaryCrash):
+                raise
+            self._release_pending = True
+            evidence["error"] = str(exc)
+            evidence["flock_released"] = self._flock_released
+            raise CommonLockReleaseFailure(evidence) from exc
+
+    def retry_release(self) -> None:
+        """Retry only the recorded reverse-order release after a failure."""
+
+        if not self._release_pending:
+            self.release()
+            return
+        self._release_pending = False
+        self.release()
+
+    def __enter__(self) -> "CommonRebaseLock":
+        self.assert_held()
+        return self
+
+    def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
+        self.release()
+
+
+def _acquire_secondary_flock(
+    common: int,
+    common_dir: Path,
+    owner_record: Mapping[str, Any],
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+    flock_impl: Callable[[int, int], Any],
+    boundary: Callable[[str], None] | None,
+) -> int:
+    descriptor = os.open(
+        COMMON_LOCK_FLOCK_NAME,
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+        dir_fd=common,
+    )
+    acquired = False
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+            raise OSError("secondary flock path is not owner-controlled and regular")
+        os.fchmod(descriptor, 0o600)
+        while True:
+            try:
+                flock_impl(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                _require_deadline_open(deadline, clock, "secondary flock acquisition")
+                break
+            except (BlockingIOError, InterruptedError) as exc:
+                if isinstance(exc, BlockingIOError) and exc.errno not in {
+                    None,
+                    errno.EACCES,
+                    errno.EAGAIN,
+                }:
+                    raise
+                if not _sleep_with_deadline(deadline, clock, sleeper):
+                    raise TimeoutError("secondary flock exhausted the shared deadline")
+        if boundary is not None:
+            boundary("flock-acquired")
+        encoded = canonical_bytes(dict(owner_record))
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.ftruncate(descriptor, 0)
+        _write_all(descriptor, encoded)
+        os.fsync(descriptor)
+        if boundary is not None:
+            boundary("flock-record-fsynced")
+        return descriptor
+    except BaseException:
+        if acquired:
+            try:
+                flock_impl(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        os.close(descriptor)
+        raise
+
+
+def _read_fence_for_recovery(
+    common: int, common_dir: Path
+) -> tuple[PublishedLockRecord | None, str | None, dict[str, Any] | None]:
+    try:
+        return (
+            _record_at_if_present(
+                common,
+                COMMON_LOCK_INFLIGHT_NAME,
+                common_dir / COMMON_LOCK_INFLIGHT_NAME,
+                _validate_fence_record,
+            ),
+            None,
+            None,
+        )
+    except (OSError, ValueError) as exc:
+        return (
+            None,
+            str(exc),
+            {
+                "fence": _opaque_path_evidence_at(
+                    common,
+                    COMMON_LOCK_INFLIGHT_NAME,
+                    common_dir / COMMON_LOCK_INFLIGHT_NAME,
+                )
+            },
+        )
+
+
+def _recover_stale_portable_owner(
+    common: int,
+    common_dir: Path,
+    stale: PublishedLockRecord,
+    inflight: PublishedLockRecord | None,
+    reservation: RecoveryReservation,
+    *,
+    pid_probe: Callable[[int], str],
+    group_probe: Callable[[int], str],
+    deadline: float,
+    clock: Callable[[], float],
+    boundary: Callable[[str], None] | None,
+    recovery_recorder: Callable[[dict[str, Any]], Any] | None,
+    no_transaction_record: bool,
+) -> None:
+    _require_common_lock_control("death-proof-revalidation")
+    canonical_reservation = _revalidate_record_at(
+        common,
+        COMMON_LOCK_RECOVERY_NAME,
+        common_dir / COMMON_LOCK_RECOVERY_NAME,
+        reservation.identity,
+        _validate_recovery_record,
+    )
+    inspection = _inspect_common_lock_fd(common, common_dir)
+    if (
+        not inspection.recoverable
+        or inspection.outer is None
+        or not _same_published_record(inspection.outer, stale)
+    ):
+        raise OSError("stale portable owner changed after reservation")
+    if pid_probe(int(stale.record["pid"])) != "dead":
+        raise OSError("stale portable owner death could not be re-proved")
+    _require_deadline_open(deadline, clock, "stale-owner death proof")
+    proof = copy.deepcopy(canonical_reservation.record)
+    current_inflight: PublishedLockRecord | None = None
+    if inflight is not None:
+        current_inflight = _revalidate_record_at(
+            common,
+            COMMON_LOCK_INFLIGHT_NAME,
+            common_dir / COMMON_LOCK_INFLIGHT_NAME,
+            inflight,
+            _validate_fence_record,
+        )
+        if group_probe(int(current_inflight.record["pgid"])) != "dead":
+            raise OSError("in-flight group death could not be re-proved")
+        _require_deadline_open(deadline, clock, "in-flight group death proof")
+    _persist_recovery_proof(
+        proof,
+        recovery_recorder,
+        owner_kinds=(str(stale.record["owner_kind"]),),
+        no_transaction_record=no_transaction_record,
+    )
+    if current_inflight is not None:
+        _persist_recovery_proof(
+            _fence_death_proof(
+                current_inflight,
+                group_dead_at=str(canonical_reservation.record["group_dead_at"]),
+            ),
+            recovery_recorder,
+            owner_kinds=(str(current_inflight.record["owner_kind"]),),
+            no_transaction_record=no_transaction_record,
+        )
+    if pid_probe(int(stale.record["pid"])) != "dead":
+        raise OSError("stale portable owner PID became live or unprovable")
+    _require_deadline_open(deadline, clock, "stale-owner release")
+    _release_portable_identity(
+        common,
+        common_dir,
+        stale,
+        boundary=boundary,
+        prefix="recovery-release",
+        complete_partial=True,
+    )
+    if boundary is not None:
+        boundary("recovery-stale-owner-released")
+
+
+def _clear_reserved_fence(
+    common: int,
+    common_dir: Path,
+    reservation: RecoveryReservation,
+    *,
+    group_probe: Callable[[int], str],
+    deadline: float,
+    clock: Callable[[], float],
+    boundary: Callable[[str], None] | None,
+    recovery_recorder: Callable[[dict[str, Any]], Any] | None,
+    no_transaction_record: bool,
+    proof_already_persisted: bool = False,
+) -> None:
+    _require_common_lock_control("death-proof-revalidation")
+    record = reservation.identity.record
+    if record.get("inflight_inode") is None:
+        return
+    _revalidate_record_at(
+        common,
+        COMMON_LOCK_RECOVERY_NAME,
+        common_dir / COMMON_LOCK_RECOVERY_NAME,
+        reservation.identity,
+        _validate_recovery_record,
+    )
+    fence = _read_owned_record_at(
+        common,
+        COMMON_LOCK_INFLIGHT_NAME,
+        common_dir / COMMON_LOCK_INFLIGHT_NAME,
+        _validate_fence_record,
+    )
+    if (
+        fence.inode != record["inflight_inode"]
+        or fence.digest != record["inflight_digest"]
+        or fence.record.get("host") != record["inflight_host"]
+        or fence.record.get("pgid") != record["inflight_pgid"]
+    ):
+        raise OSError("in-flight fence changed after recovery reservation")
+    if group_probe(int(fence.record["pgid"])) != "dead":
+        raise OSError("in-flight group death could not be re-proved")
+    _require_deadline_open(deadline, clock, "in-flight group death proof")
+    if proof_already_persisted:
+        _persist_recovery_proof(
+            record,
+            recovery_recorder,
+            owner_kinds=(str(fence.record["owner_kind"]),),
+            no_transaction_record=no_transaction_record,
+            proof_already_persisted=True,
+        )
+    else:
+        _persist_recovery_proof(
+            record,
+            recovery_recorder,
+            owner_kinds=(str(fence.record["owner_kind"]),),
+            no_transaction_record=no_transaction_record,
+        )
+        _persist_recovery_proof(
+            _fence_death_proof(
+                fence,
+                group_dead_at=str(record["group_dead_at"]),
+            ),
+            recovery_recorder,
+            owner_kinds=(str(fence.record["owner_kind"]),),
+            no_transaction_record=no_transaction_record,
+        )
+    if group_probe(int(fence.record["pgid"])) != "dead":
+        raise OSError("in-flight group became live or unprovable")
+    _require_deadline_open(deadline, clock, "in-flight fence release")
+    _unlink_revalidated_record_at(
+        common,
+        COMMON_LOCK_INFLIGHT_NAME,
+        common_dir / COMMON_LOCK_INFLIGHT_NAME,
+        fence,
+        _validate_fence_record,
+    )
+    os.fsync(common)
+    if boundary is not None:
+        boundary("recovery-fence-cleared")
+
+
+def acquire_common_lock(
+    common_dir: Path,
+    *,
+    owner_kind: str,
+    chain_id: str | None,
+    operation: str,
+    timeout: float = COMMON_LOCK_TIMEOUT_SECONDS,
+    use_flock: bool | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    now: Callable[[], dt.datetime] = utc_now,
+    host: str | None = None,
+    pid: int | None = None,
+    pid_probe: Callable[[int], str] = _process_probe,
+    group_probe: Callable[[int], str] = _group_probe,
+    flock_impl: Callable[[int, int], Any] = fcntl.flock,
+    admission_recheck: Callable[[], bool] | None = None,
+    recovery_recorder: Callable[[dict[str, Any]], Any] | None = None,
+    no_transaction_record: bool = False,
+    boundary: Callable[[str], None] | None = None,
+) -> CommonRebaseLock:
+    """Acquire the universal FR-235 common lock under one monotonic budget."""
+
+    _require_common_lock_control("single-deadline")
+    _require_common_lock_control("portable-before-flock")
+    if not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError("common-lock timeout must be positive")
+    if recovery_recorder is not None and not callable(recovery_recorder):
+        raise ValueError("common-lock recovery recorder must be callable")
+    if not isinstance(no_transaction_record, bool):
+        raise ValueError("common-lock no-transaction opt-out must be boolean")
+    local_host = host or socket.gethostname()
+    claimant_pid = pid or os.getpid()
+    owner_record = _new_owner_record(
+        owner_kind,
+        chain_id,
+        operation,
+        host=local_host,
+        pid=claimant_pid,
+        now=now,
+    )
+    if recovery_recorder is not None and no_transaction_record:
+        raise ValueError(
+            "common-lock recovery recorder conflicts with no-transaction opt-out"
+        )
+    if owner_kind in {"merge", "push"}:
+        try:
+            _require_recovery_proof_recorder(
+                (owner_kind,),
+                recovery_recorder,
+                no_transaction_record=no_transaction_record,
+            )
+        except OSError as exc:
+            raise ValueError(str(exc)) from exc
+    flock_enabled = hasattr(fcntl, "flock") if use_flock is None else use_flock
+    canonical, common = _open_owned_directory(common_dir)
+    deadline = clock() + float(timeout)
+    last_evidence: dict[str, Any] = {"common_dir": str(canonical)}
+    reservation: RecoveryReservation | None = None
+    portable: PublishedLockRecord | None = None
+    flock_descriptor: int | None = None
+    try:
+        while True:
+            if clock() >= deadline:
+                raise CommonLockUnavailable(last_evidence)
+            existing_reservation = _reservation_evidence(common, canonical)
+            if existing_reservation is not None and reservation is None:
+                last_evidence = {
+                    "common_dir": str(canonical),
+                    **existing_reservation,
+                }
+                if not _sleep_with_deadline(deadline, clock, sleeper):
+                    raise CommonLockUnavailable(last_evidence)
+                continue
+            inspection = _inspect_common_lock_fd(common, canonical)
+            last_evidence = inspection.evidence(canonical)
+            if inspection.topology == "free":
+                try:
+                    _require_deadline_open(
+                        deadline, clock, "portable owner publication"
+                    )
+                    portable = _publish_portable_owner(
+                        common, canonical, owner_record, boundary
+                    )
+                except FileExistsError:
+                    portable = None
+                    if not _sleep_with_deadline(deadline, clock, sleeper):
+                        raise CommonLockUnavailable(last_evidence)
+                    continue
+                except (OSError, ValueError) as exc:
+                    portable = None
+                    last_evidence = {
+                        **last_evidence,
+                        "mechanism": "no-replace hard-link publication",
+                        "error": str(exc),
+                    }
+                    if reservation is not None or not _sleep_with_deadline(
+                        deadline, clock, sleeper
+                    ):
+                        raise CommonLockUnavailable(last_evidence)
+                    continue
+            elif reservation is None and inspection.recoverable and inspection.outer is not None:
+                stale = inspection.outer
+                if stale.record.get("host") != local_host:
+                    last_evidence["detail"] = "portable owner host is foreign"
+                elif pid_probe(int(stale.record["pid"])) != "dead":
+                    last_evidence["detail"] = "portable owner PID is live or unprovable"
+                else:
+                    fence, fence_error, fence_evidence = _read_fence_for_recovery(
+                        common, canonical
+                    )
+                    recovery_kind = "fallback-owner"
+                    if fence_error is not None:
+                        last_evidence["detail"] = f"in-flight fence is unprovable: {fence_error}"
+                        if fence_evidence is not None:
+                            last_evidence.update(fence_evidence)
+                    elif fence is not None:
+                        if (
+                            not _fence_matches_owner(fence, stale)
+                            or fence.record.get("host") != local_host
+                            or group_probe(int(fence.record["pgid"])) != "dead"
+                        ):
+                            last_evidence["detail"] = "in-flight fence is live, foreign, mismatched, or unprovable"
+                        else:
+                            recovery_kind = "fallback-owner-and-fence"
+                    if fence_error is None and (
+                        fence is None or recovery_kind == "fallback-owner-and-fence"
+                    ):
+                        _require_deadline_open(
+                            deadline, clock, "stale-owner and fence proof"
+                        )
+                        _require_recovery_proof_recorder(
+                            (
+                                str(stale.record["owner_kind"]),
+                                *(
+                                    (str(fence.record["owner_kind"]),)
+                                    if fence is not None
+                                    else ()
+                                ),
+                            ),
+                            recovery_recorder,
+                            no_transaction_record=no_transaction_record,
+                        )
+                        record = _recovery_record(
+                            recovery_kind,
+                            stale_owner=stale,
+                            inflight=fence,
+                            host=local_host,
+                            pid=claimant_pid,
+                            now=now,
+                        )
+                        reservation = _publish_recovery_reservation(
+                            common, canonical, record, boundary
+                        )
+                        if reservation is not None:
+                            _require_deadline_open(
+                                deadline, clock, "recovery reservation publication"
+                            )
+                            _recover_stale_portable_owner(
+                                common,
+                                canonical,
+                                stale,
+                                fence,
+                                reservation,
+                                pid_probe=pid_probe,
+                                group_probe=group_probe,
+                                deadline=deadline,
+                                clock=clock,
+                                boundary=boundary,
+                                recovery_recorder=recovery_recorder,
+                                no_transaction_record=no_transaction_record,
+                            )
+                            continue
+            if portable is None:
+                if not _sleep_with_deadline(deadline, clock, sleeper):
+                    raise CommonLockUnavailable(last_evidence)
+                continue
+            try:
+                if flock_enabled:
+                    flock_descriptor = _acquire_secondary_flock(
+                        common,
+                        canonical,
+                        owner_record,
+                        deadline=deadline,
+                        clock=clock,
+                        sleeper=sleeper,
+                        flock_impl=flock_impl,
+                        boundary=boundary,
+                    )
+                _require_deadline_open(
+                    deadline, clock, "in-flight admission inspection"
+                )
+                fence, fence_error, fence_evidence = _read_fence_for_recovery(
+                    common, canonical
+                )
+                if fence_error is not None:
+                    raise OSError(
+                        canonical_bytes(
+                            {
+                                "detail": f"in-flight fence is unprovable: {fence_error}",
+                                **(fence_evidence or {}),
+                            }
+                        ).decode("utf-8")
+                    )
+                if fence is not None:
+                    if reservation is not None:
+                        _clear_reserved_fence(
+                            common,
+                            canonical,
+                            reservation,
+                            group_probe=group_probe,
+                            deadline=deadline,
+                            clock=clock,
+                            boundary=boundary,
+                            recovery_recorder=recovery_recorder,
+                            no_transaction_record=no_transaction_record,
+                            proof_already_persisted=str(
+                                reservation.identity.record.get("recovery_kind")
+                            ).startswith("fallback-"),
+                        )
+                    elif (
+                        flock_enabled
+                        and flock_descriptor is not None
+                        and _fence_matches_owner(fence, portable)
+                        and fence.record.get("host") == local_host
+                        and group_probe(int(fence.record["pgid"])) == "dead"
+                    ):
+                        _require_deadline_open(
+                            deadline, clock, "dead-fence recovery proof"
+                        )
+                        record = _recovery_record(
+                            "flock-held-dead-fence",
+                            stale_owner=None,
+                            inflight=fence,
+                            host=local_host,
+                            pid=claimant_pid,
+                            now=now,
+                        )
+                        _require_recovery_proof_recorder(
+                            (str(fence.record["owner_kind"]),),
+                            recovery_recorder,
+                            no_transaction_record=no_transaction_record,
+                        )
+                        reservation = _publish_recovery_reservation(
+                            common, canonical, record, boundary
+                        )
+                        if reservation is None:
+                            raise OSError("another recovery reservation won publication")
+                        _clear_reserved_fence(
+                            common,
+                            canonical,
+                            reservation,
+                            group_probe=group_probe,
+                            deadline=deadline,
+                            clock=clock,
+                            boundary=boundary,
+                            recovery_recorder=recovery_recorder,
+                            no_transaction_record=no_transaction_record,
+                        )
+                    else:
+                        raise OSError("in-flight fence is live, mismatched, or unrecoverable")
+                if reservation is not None:
+                    _require_deadline_open(
+                        deadline, clock, "recovery reservation release"
+                    )
+                    _clear_owned_reservation(common, canonical, reservation, boundary)
+                    reservation = None
+                if admission_recheck is not None and not admission_recheck():
+                    raise OSError("locked admission recheck did not pass")
+                if clock() >= deadline:
+                    raise TimeoutError("locked admission recheck exhausted the shared deadline")
+                return CommonRebaseLock(
+                    common_dir=canonical,
+                    common_descriptor=common,
+                    owner=portable,
+                    flock_descriptor=flock_descriptor,
+                    flock_impl=flock_impl,
+                    boundary=boundary,
+                    deadline=deadline,
+                    clock=clock,
+                    sleeper=sleeper,
+                    pid_probe=pid_probe,
+                    group_probe=group_probe,
+                    recovery_recorder=recovery_recorder,
+                    no_transaction_record=no_transaction_record,
+                )
+            except BaseException as exc:
+                if isinstance(exc, (CommonLockBoundaryCrash, CommonLockUnavailable)):
+                    raise
+                last_evidence = {
+                    "common_dir": str(canonical),
+                    "owner": portable.evidence(),
+                    "error": str(exc),
+                }
+                if reservation is not None:
+                    raise CommonLockUnavailable(last_evidence) from exc
+                if flock_descriptor is not None:
+                    try:
+                        flock_impl(flock_descriptor, fcntl.LOCK_UN)
+                    finally:
+                        os.close(flock_descriptor)
+                    flock_descriptor = None
+                try:
+                    _release_portable_identity(
+                        common,
+                        canonical,
+                        portable,
+                        boundary=None,
+                        prefix="failed-acquisition",
+                        complete_partial=False,
+                    )
+                except (OSError, ValueError) as release_error:
+                    last_evidence["release_error"] = str(release_error)
+                    raise CommonLockUnavailable(last_evidence) from release_error
+                portable = None
+                if not _sleep_with_deadline(deadline, clock, sleeper):
+                    raise CommonLockUnavailable(last_evidence) from exc
+    except BaseException as exc:
+        if flock_descriptor is not None:
+            try:
+                flock_impl(flock_descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(flock_descriptor)
+        os.close(common)
+        if isinstance(exc, TimeoutError):
+            raise CommonLockUnavailable(
+                {**last_evidence, "error": str(exc)}
+            ) from exc
+        raise
+
+
+class ChainLease:
+    """FR-237 hard-link lease with mandatory pre-write ABA checks."""
+
+    def __init__(
+        self,
+        *,
+        chains_dir: Path,
+        directory_descriptor: int,
+        identity: PublishedLockRecord,
+        boundary: Callable[[str], None] | None,
+    ) -> None:
+        self.chains_dir = chains_dir
+        self._directory = directory_descriptor
+        self.identity = identity
+        self._boundary = boundary
+        self._released = False
+
+    @property
+    def record(self) -> dict[str, Any]:
+        return copy.deepcopy(self.identity.record)
+
+    @property
+    def chain_id(self) -> str:
+        return str(self.identity.record["chain_id"])
+
+    @property
+    def path(self) -> Path:
+        return self.chains_dir / f"{self.chain_id}.lock"
+
+    def _revalidate(self, operation: str) -> None:
+        _require_common_lock_control("chain-lease-write-revalidation")
+        if self._released or self._directory < 0:
+            raise OSError("chain lease is already released")
+        _revalidate_record_at(
+            self._directory,
+            self.path.name,
+            self.path,
+            self.identity,
+            _validate_chain_lease_record,
+        )
+        if self._boundary is not None:
+            self._boundary(f"chain-lease-before-{operation}")
+
+    def before_event_append(self) -> None:
+        self._revalidate("append")
+
+    def before_state_replace(self) -> None:
+        self._revalidate("state-replace")
+
+    def protected_append(self, writer: Callable[[], Any]) -> Any:
+        self.before_event_append()
+        return writer()
+
+    def protected_state_replace(self, writer: Callable[[], Any]) -> Any:
+        self.before_state_replace()
+        return writer()
+
+    def release(self) -> None:
+        if self._released:
+            return
+        _require_common_lock_control("chain-lease-write-revalidation")
+        try:
+            _unlink_revalidated_record_at(
+                self._directory,
+                self.path.name,
+                self.path,
+                self.identity,
+                _validate_chain_lease_record,
+            )
+            if self._boundary is not None:
+                self._boundary("chain-lease-unlinked")
+            os.fsync(self._directory)
+            if self._boundary is not None:
+                self._boundary("chain-lease-parent-fsynced")
+            self._released = True
+            os.close(self._directory)
+            self._directory = -1
+        except BaseException:
+            raise
+
+    def __enter__(self) -> "ChainLease":
+        self._revalidate("use")
+        return self
+
+    def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
+        self.release()
+
+
+def _lease_exclusion_is_current(
+    exclusion: CommonRebaseLock | RecoveryReservation | None,
+    chain_id: str,
+) -> bool:
+    if isinstance(exclusion, CommonRebaseLock):
+        try:
+            exclusion.assert_held(allow_fence=True)
+        except OSError:
+            return False
+        owner = exclusion.owner.record
+        return owner.get("owner_kind") == "merge" and owner.get("chain_id") == chain_id
+    if isinstance(exclusion, RecoveryReservation):
+        if not exclusion.matches_chain(chain_id):
+            return False
+        canonical, common = _open_owned_directory(exclusion.common_dir)
+        try:
+            _revalidate_record_at(
+                common,
+                COMMON_LOCK_RECOVERY_NAME,
+                canonical / COMMON_LOCK_RECOVERY_NAME,
+                exclusion.identity,
+                _validate_recovery_record,
+            )
+            return True
+        except (OSError, ValueError):
+            return False
+        finally:
+            os.close(common)
+    return False
+
+
+def acquire_chain_lease(
+    chains_dir: Path,
+    *,
+    chain_id: str,
+    session: str,
+    timeout: float = COMMON_LOCK_TIMEOUT_SECONDS,
+    exclusion: CommonRebaseLock | RecoveryReservation | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    now: Callable[[], dt.datetime] = utc_now,
+    host: str | None = None,
+    pid: int | None = None,
+    pid_probe: Callable[[int], str] = _process_probe,
+    boundary: Callable[[str], None] | None = None,
+) -> ChainLease:
+    """Acquire one FR-237 lease, reclaiming only under repository exclusion."""
+
+    _require_common_lock_control("chain-lease-hardlink")
+    _require_common_lock_control("single-deadline")
+    if not CHAIN_ID_RE.fullmatch(chain_id):
+        raise ValueError("invalid chain identifier for lease")
+    if not isinstance(session, str) or not session or "\x00" in session:
+        raise ValueError("chain lease session must be nonempty and NUL-free")
+    if not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError("chain lease timeout must be positive")
+    canonical, directory = _open_owned_directory(chains_dir)
+    local_host = host or socket.gethostname()
+    claimant_pid = pid or os.getpid()
+    record = _validate_chain_lease_record(
+        {
+            "chain_id": chain_id,
+            "host": local_host,
+            "nonce": secrets.token_hex(16),
+            "pid": claimant_pid,
+            "session": session,
+            "started_at": iso_z(now()),
+        }
+    )
+    path = canonical / f"{chain_id}.lock"
+    deadline = clock() + float(timeout)
+    last_evidence: dict[str, Any] = {"path": str(path)}
+    try:
+        while True:
+            if clock() >= deadline:
+                raise ChainLeaseUnavailable(chain_id, last_evidence)
+            existing: PublishedLockRecord | None
+            try:
+                existing = _record_at_if_present(
+                    directory, path.name, path, _validate_chain_lease_record
+                )
+            except (OSError, ValueError) as exc:
+                existing = None
+                last_evidence = {
+                    "lease": _opaque_path_evidence_at(directory, path.name, path),
+                    "detail": f"lease is malformed or unreadable: {exc}",
+                }
+                if not _sleep_with_deadline(deadline, clock, sleeper):
+                    raise ChainLeaseUnavailable(chain_id, last_evidence)
+                continue
+            if existing is not None:
+                last_evidence = {"lease": existing.evidence()}
+                stale = (
+                    existing.record.get("host") == local_host
+                    and pid_probe(int(existing.record["pid"])) == "dead"
+                )
+                if stale and _lease_exclusion_is_current(exclusion, chain_id):
+                    _require_common_lock_control("death-proof-revalidation")
+                    if pid_probe(int(existing.record["pid"])) != "dead":
+                        last_evidence["detail"] = "lease PID death could not be re-proved"
+                    else:
+                        _unlink_revalidated_record_at(
+                            directory,
+                            path.name,
+                            path,
+                            existing,
+                            _validate_chain_lease_record,
+                        )
+                        os.fsync(directory)
+                        if boundary is not None:
+                            boundary("chain-lease-stale-reclaimed")
+                        continue
+                else:
+                    last_evidence["detail"] = (
+                        "lease owner is live/foreign/unprovable or repository exclusion is absent"
+                    )
+                if not _sleep_with_deadline(deadline, clock, sleeper):
+                    raise ChainLeaseUnavailable(chain_id, last_evidence)
+                continue
+            temporary, temporary_identity = _create_private_record_at(
+                directory,
+                canonical,
+                f"{chain_id}.lock",
+                record,
+                boundary=boundary,
+                stage="chain-lease-temp-fsynced",
+            )
+            try:
+                try:
+                    _publish_no_replace_link(
+                        directory, temporary, directory, path.name
+                    )
+                except FileExistsError:
+                    _unlink_revalidated_record_at(
+                        directory,
+                        temporary,
+                        canonical / temporary,
+                        temporary_identity,
+                        _validate_chain_lease_record,
+                    )
+                    os.fsync(directory)
+                    if not _sleep_with_deadline(deadline, clock, sleeper):
+                        raise ChainLeaseUnavailable(chain_id, last_evidence)
+                    continue
+                os.fsync(directory)
+                canonical_identity = _read_owned_record_at(
+                    directory,
+                    path.name,
+                    path,
+                    _validate_chain_lease_record,
+                )
+                if not _same_published_record(canonical_identity, temporary_identity):
+                    raise OSError("published chain lease changed inode or digest")
+                if boundary is not None:
+                    boundary("chain-lease-published")
+                _unlink_revalidated_record_at(
+                    directory,
+                    temporary,
+                    canonical / temporary,
+                    temporary_identity,
+                    _validate_chain_lease_record,
+                )
+                os.fsync(directory)
+                if boundary is not None:
+                    boundary("chain-lease-temp-unlinked")
+                return ChainLease(
+                    chains_dir=canonical,
+                    directory_descriptor=directory,
+                    identity=canonical_identity,
+                    boundary=boundary,
+                )
+            except BaseException as exc:
+                if isinstance(exc, (CommonLockBoundaryCrash, ChainLeaseUnavailable)):
+                    raise
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                    os.fsync(directory)
+                except (FileNotFoundError, OSError):
+                    pass
+                raise
+    except BaseException:
+        os.close(directory)
+        raise
+
+
+@dataclasses.dataclass(frozen=True)
+class FencedProcessResult:
+    argv: list[str]
+    returncode: int | None
+    duration_seconds: float
+    output: bytes
+    output_digest: str
+    timed_out: bool
+    output_limit: bool
+    launch_failed: bool
+    group_survived: bool
+    authorized: bool
+    fence_digest: str
+    fence_inode: int
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "argv": list(self.argv),
+            "returncode": self.returncode,
+            "duration_seconds": self.duration_seconds,
+            "output_digest": self.output_digest,
+            "timed_out": self.timed_out,
+            "output_limit": self.output_limit,
+            "launch_failed": self.launch_failed,
+            "group_survived": self.group_survived,
+            "authorized": self.authorized,
+            "fence_digest": self.fence_digest,
+            "fence_inode": self.fence_inode,
+        }
+
+
+def merge_gate_intent_digest(
+    *,
+    chain_id: str,
+    epoch_intent_digest: str,
+    seal_event_digest: str,
+    generation_digest: str,
+    policy_digest: str,
+    suite_digest: str,
+    cursor: int,
+    kind: str,
+    gate_id: str,
+    authorizing_event_digest: str,
+) -> str:
+    """Return Revision-10's exact cursor-selected gate-intent digest."""
+
+    _require_common_lock_control("fence-intent-revalidation")
+    if not CHAIN_ID_RE.fullmatch(chain_id):
+        raise ValueError("gate intent chain identifier is invalid")
+    digests = (
+        epoch_intent_digest,
+        seal_event_digest,
+        generation_digest,
+        policy_digest,
+        suite_digest,
+        authorizing_event_digest,
+    )
+    if any(SHA256_RE.fullmatch(value) is None for value in digests):
+        raise ValueError("gate intent contains a malformed digest")
+    if not _valid_nonnegative_int(cursor):
+        raise ValueError("gate intent cursor is invalid")
+    if kind not in {"gate", "scoped-mutation"}:
+        raise ValueError("gate intent kind is invalid")
+    if not isinstance(gate_id, str) or not gate_id:
+        raise ValueError("gate intent id is invalid")
+    if kind == "scoped-mutation" and gate_id != "scoped-mutation":
+        raise ValueError("scoped-mutation gate intent id is invalid")
+    if cursor == 0 and authorizing_event_digest != seal_event_digest:
+        raise ValueError("cursor-zero gate intent is not authorized by its seal")
+    preimage = {
+        "schema": "forge-merge-gate-intent/1",
+        "chain_id": chain_id,
+        "epoch_intent_digest": epoch_intent_digest,
+        "seal_event_digest": seal_event_digest,
+        "generation_digest": generation_digest,
+        "policy_digest": policy_digest,
+        "suite_digest": suite_digest,
+        "cursor": cursor,
+        "kind": kind,
+        "id": gate_id,
+        "authorizing_event_digest": authorizing_event_digest,
+    }
+    return sha256_bytes(canonical_bytes(preimage))
+
+
+@dataclasses.dataclass
+class _BlockedFenceChild:
+    pid: int
+    pgid: int
+    start_descriptor: int
+    output_descriptor: int
+    exec_error_descriptor: int
+
+
+def _pipe_cloexec() -> tuple[int, int]:
+    if hasattr(os, "pipe2"):
+        return os.pipe2(getattr(os, "O_CLOEXEC", 0))
+    readers, writers = os.pipe()
+    try:
+        os.set_inheritable(readers, False)
+        os.set_inheritable(writers, False)
+    except BaseException:
+        os.close(readers)
+        os.close(writers)
+        raise
+    return readers, writers
+
+
+def _read_child_ack(
+    descriptor: int,
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> tuple[int, int]:
+    os.set_blocking(descriptor, False)
+    raw = bytearray()
+    while len(raw) <= 128:
+        try:
+            chunk = os.read(descriptor, 128 - len(raw))
+        except BlockingIOError:
+            chunk = None
+        if chunk == b"":
+            break
+        if chunk:
+            raw.extend(chunk)
+            if raw.endswith(b"\n"):
+                break
+        if not _sleep_with_deadline(deadline, clock, sleeper):
+            raise TimeoutError("blocked child did not acknowledge its process group")
+    try:
+        decoded = raw.decode("ascii", "strict").rstrip("\n")
+        pid_text, pgid_text = decoded.split(":", 1)
+        pid = int(pid_text)
+        pgid = int(pgid_text)
+    except (UnicodeError, ValueError) as exc:
+        raise OSError("blocked child process-group acknowledgement is malformed") from exc
+    if not _valid_positive_int(pid) or not _valid_positive_int(pgid):
+        raise OSError("blocked child acknowledged an invalid PID/PGID")
+    return pid, pgid
+
+
+def _spawn_blocked_fence_child(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str] | None,
+    deadline: float,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> _BlockedFenceChild:
+    if not argv or not all(isinstance(item, str) and "\x00" not in item for item in argv):
+        raise ValueError("fenced child argv must be a nonempty NUL-free string vector")
+    descriptors: list[int] = []
+    try:
+        for _index in range(4):
+            descriptors.extend(_pipe_cloexec())
+    except BaseException:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+    (
+        start_read,
+        start_write,
+        ack_read,
+        ack_write,
+        output_read,
+        output_write,
+        error_read,
+        error_write,
+    ) = descriptors
+    try:
+        pid = os.fork()
+    except BaseException:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+    if pid == 0:  # pragma: no cover - assertions observe the parent-visible protocol
+        try:
+            os.close(start_write)
+            os.close(ack_read)
+            os.close(output_read)
+            os.close(error_read)
+            os.setsid()
+            child_pid = os.getpid()
+            child_pgid = os.getpgrp()
+            os.write(ack_write, f"{child_pid}:{child_pgid}\n".encode("ascii"))
+            os.close(ack_write)
+            start = os.read(start_read, 1)
+            os.close(start_read)
+            if start != b"\x01":
+                os._exit(125)
+            os.chdir(cwd)
+            null_input = os.open(os.devnull, os.O_RDONLY)
+            os.dup2(null_input, 0)
+            os.close(null_input)
+            os.dup2(output_write, 1)
+            os.dup2(output_write, 2)
+            os.close(output_write)
+            execution_env = dict(os.environ if env is None else env)
+            os.execvpe(argv[0], list(argv), execution_env)
+        except BaseException as exc:
+            try:
+                error = f"{type(exc).__name__}:{getattr(exc, 'errno', '')}".encode(
+                    "ascii", "replace"
+                )
+                os.write(error_write, error[:256])
+            except BaseException:
+                pass
+            os._exit(127)
+    parent_open = set(descriptors)
+    spawn_error: BaseException | None = None
+    result: _BlockedFenceChild | None = None
+    try:
+        for descriptor in (start_read, ack_write, output_write, error_write):
+            os.close(descriptor)
+            parent_open.discard(descriptor)
+        acknowledged_pid, acknowledged_pgid = _read_child_ack(
+            ack_read, deadline=deadline, clock=clock, sleeper=sleeper
+        )
+        if acknowledged_pid != pid or acknowledged_pgid != pid:
+            raise OSError("child did not establish the expected isolated process group")
+        try:
+            if os.getpgid(pid) != acknowledged_pgid:
+                raise OSError("child process-group identity changed before fencing")
+        except ProcessLookupError as exc:
+            raise OSError("blocked child exited before fencing") from exc
+        result = _BlockedFenceChild(
+            pid=pid,
+            pgid=acknowledged_pgid,
+            start_descriptor=start_write,
+            output_descriptor=output_read,
+            exec_error_descriptor=error_read,
+        )
+        os.close(ack_read)
+        parent_open.discard(ack_read)
+    except BaseException as exc:
+        spawn_error = exc
+    if spawn_error is not None:
+        descriptor_errors: list[str] = []
+        for descriptor in descriptors:
+            if descriptor not in parent_open:
+                continue
+            try:
+                os.close(descriptor)
+                parent_open.discard(descriptor)
+            except OSError:
+                descriptor_errors.append(str(descriptor))
+        reaped = False
+        try:
+            reaped = _wait_for_child_exit(
+                pid,
+                deadline=clock() + FENCED_CHILD_STOP_GRACE_SECONDS,
+                clock=clock,
+                sleeper=sleeper,
+            )
+            if not reaped:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                reaped = _wait_for_child_exit(
+                    pid,
+                    deadline=clock() + FENCED_CHILD_REAP_SECONDS,
+                    clock=clock,
+                    sleeper=sleeper,
+                )
+        except BaseException:
+            reaped = False
+        if not reaped:
+            raise ChildProcessError(
+                "blocked child could not be reaped after acknowledgement failure"
+            ) from spawn_error
+        if descriptor_errors or parent_open:
+            raise ChildProcessError(
+                "blocked child descriptor cleanup could not be proved"
+            ) from spawn_error
+        raise spawn_error
+    assert result is not None
+    return result
+
+
+def _waitpid_nohang(pid: int) -> tuple[bool, int | None]:
+    try:
+        observed, status_value = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return True, None
+    if observed == 0:
+        return False, None
+    return True, os.waitstatus_to_exitcode(status_value)
+
+
+def _wait_for_child_exit(
+    pid: int,
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> bool:
+    while True:
+        reaped, _returncode = _waitpid_nohang(pid)
+        if reaped:
+            return True
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False
+        sleeper(min(0.01, remaining))
+
+
+def _terminate_fenced_group(
+    child: _BlockedFenceChild,
+    *,
+    signal_group: Callable[[int, int], Any],
+    group_probe: Callable[[int], str],
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> tuple[int | None, bool]:
+    _require_common_lock_control("process-group-termination")
+    returncode: int | None = None
+    reaped = False
+    try:
+        signal_group(child.pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    term_deadline = clock() + 0.25
+    while clock() < term_deadline:
+        if not reaped:
+            reaped, observed = _waitpid_nohang(child.pid)
+            if reaped:
+                returncode = observed
+        if group_probe(child.pgid) == "dead":
+            return returncode, False
+        sleeper(min(0.01, max(0.0, term_deadline - clock())))
+    try:
+        signal_group(child.pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    kill_deadline = clock() + 0.5
+    while clock() < kill_deadline:
+        if not reaped:
+            reaped, observed = _waitpid_nohang(child.pid)
+            if reaped:
+                returncode = observed
+        if group_probe(child.pgid) == "dead":
+            return returncode, False
+        sleeper(min(0.01, max(0.0, kill_deadline - clock())))
+    if not reaped:
+        reaped, observed = _waitpid_nohang(child.pid)
+        if reaped:
+            returncode = observed
+    return returncode, group_probe(child.pgid) != "dead"
+
+
+def _stop_unstarted_child(
+    child: _BlockedFenceChild,
+    *,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> bool:
+    try:
+        os.close(child.start_descriptor)
+    except OSError:
+        pass
+    try:
+        if _wait_for_child_exit(
+            child.pid,
+            deadline=clock() + FENCED_CHILD_STOP_GRACE_SECONDS,
+            clock=clock,
+            sleeper=sleeper,
+        ):
+            return True
+        try:
+            os.killpg(child.pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return _wait_for_child_exit(
+            child.pid,
+            deadline=clock() + FENCED_CHILD_REAP_SECONDS,
+            clock=clock,
+            sleeper=sleeper,
+        )
+    finally:
+        for descriptor in (child.output_descriptor, child.exec_error_descriptor):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _publish_fence(
+    lock: CommonRebaseLock,
+    record: Mapping[str, Any],
+) -> PublishedLockRecord:
+    temporary, temporary_identity = _create_private_record_at(
+        lock._common,
+        lock.common_dir,
+        "agent-rebase.inflight",
+        record,
+        boundary=lock._boundary,
+        stage="fence-temp-fsynced",
+    )
+    link_created = False
+    try:
+        _publish_no_replace_link(
+            lock._common,
+            temporary,
+            lock._common,
+            COMMON_LOCK_INFLIGHT_NAME,
+        )
+        link_created = True
+        os.fsync(lock._common)
+        observed = _read_owned_record_at(
+            lock._common,
+            COMMON_LOCK_INFLIGHT_NAME,
+            lock.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+            _validate_fence_record,
+        )
+        if not _same_published_record(observed, temporary_identity):
+            raise OSError("published fence changed inode or digest")
+        lock._emit_boundary("fence-published")
+        _unlink_revalidated_record_at(
+            lock._common,
+            temporary,
+            lock.common_dir / temporary,
+            temporary_identity,
+            _validate_fence_record,
+        )
+        os.fsync(lock._common)
+        lock._emit_boundary("fence-temp-unlinked")
+        return observed
+    except BaseException as exc:
+        if isinstance(exc, CommonLockBoundaryCrash):
+            raise
+        cleanup_errors: list[str] = []
+        removed_name = False
+        if link_created:
+            try:
+                _unlink_revalidated_record_at(
+                    lock._common,
+                    COMMON_LOCK_INFLIGHT_NAME,
+                    lock.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+                    temporary_identity,
+                    _validate_fence_record,
+                )
+                removed_name = True
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError) as cleanup_error:
+                cleanup_errors.append(f"canonical: {cleanup_error}")
+        try:
+            _unlink_revalidated_record_at(
+                lock._common,
+                temporary,
+                lock.common_dir / temporary,
+                temporary_identity,
+                _validate_fence_record,
+            )
+            removed_name = True
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as cleanup_error:
+            cleanup_errors.append(f"temporary: {cleanup_error}")
+        if removed_name:
+            try:
+                os.fsync(lock._common)
+            except OSError as cleanup_error:
+                cleanup_errors.append(f"directory fsync: {cleanup_error}")
+        if cleanup_errors:
+            raise _PublicationCleanupFailure(
+                "fence publication cleanup could not prove durable removal: "
+                + "; ".join(cleanup_errors)
+            ) from exc
+        raise
+
+
+def _collect_fenced_child(
+    child: _BlockedFenceChild,
+    *,
+    argv: Sequence[str],
+    started: float,
+    timeout: float,
+    cap: int,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+    group_probe: Callable[[int], str],
+    signal_group: Callable[[int, int], Any],
+    verbose: bool,
+) -> tuple[int | None, bytes, str, bool, bool, bool, bool]:
+    _require_common_lock_control("bounded-output")
+    os.set_blocking(child.output_descriptor, False)
+    os.set_blocking(child.exec_error_descriptor, False)
+    selector = selectors.DefaultSelector()
+    selector.register(child.output_descriptor, selectors.EVENT_READ)
+    kept = bytearray()
+    digest = hashlib.sha256()
+    total = 0
+    timed_out = False
+    output_limit = False
+    returncode: int | None = None
+    reaped = False
+    output_eof = False
+    terminated = False
+    group_survived = False
+    drain_deadline: float | None = None
+    drain_bytes = 0
+
+    def begin_bounded_drain() -> None:
+        nonlocal drain_deadline
+        if drain_deadline is None:
+            drain_deadline = clock() + FENCED_CHILD_DRAIN_SECONDS
+
+    try:
+        while True:
+            if not reaped:
+                reaped, observed = _waitpid_nohang(child.pid)
+                if reaped:
+                    returncode = observed
+            if not terminated and clock() - started >= timeout:
+                timed_out = True
+                returncode, group_survived = _terminate_fenced_group(
+                    child,
+                    signal_group=signal_group,
+                    group_probe=group_probe,
+                    clock=clock,
+                    sleeper=sleeper,
+                )
+                reaped = returncode is not None
+                terminated = True
+                begin_bounded_drain()
+            elif reaped and not terminated:
+                if group_probe(child.pgid) != "dead":
+                    terminated_returncode, group_survived = _terminate_fenced_group(
+                        child,
+                        signal_group=signal_group,
+                        group_probe=group_probe,
+                        clock=clock,
+                        sleeper=sleeper,
+                    )
+                    if terminated_returncode is not None:
+                        returncode = terminated_returncode
+                terminated = True
+                begin_bounded_drain()
+
+            select_timeout = 0.02
+            if drain_deadline is not None:
+                remaining_time = drain_deadline - clock()
+                if remaining_time <= 0:
+                    break
+                select_timeout = min(select_timeout, remaining_time)
+            events = selector.select(select_timeout)
+            drain_exhausted = False
+            for _key, _mask in events:
+                if drain_deadline is not None:
+                    if clock() >= drain_deadline:
+                        drain_exhausted = True
+                        break
+                    remaining_bytes = FENCED_CHILD_DRAIN_CAP_BYTES - drain_bytes
+                    if remaining_bytes <= 0:
+                        drain_exhausted = True
+                        break
+                    read_size = min(8192, remaining_bytes)
+                else:
+                    # Cross the configured cap by at most one byte so a
+                    # continuously ready writer cannot monopolize this loop
+                    # before termination begins.
+                    read_size = min(8192, max(1, cap + 1 - total))
+                try:
+                    part = os.read(child.output_descriptor, read_size)
+                except BlockingIOError:
+                    continue
+                if not part:
+                    output_eof = True
+                    break
+                digest.update(part)
+                total += len(part)
+                if drain_deadline is not None:
+                    drain_bytes += len(part)
+                if len(kept) < cap:
+                    kept.extend(part[: cap - len(kept)])
+                # Never let a post-termination survivor block this parent on
+                # diagnostic relay; the retained transcript/digest stay bound.
+                if verbose and drain_deadline is None:
+                    sys.stderr.write(part.decode("utf-8", "replace"))
+                    sys.stderr.flush()
+                if total > cap:
+                    output_limit = True
+            if output_limit and not terminated:
+                returncode, group_survived = _terminate_fenced_group(
+                    child,
+                    signal_group=signal_group,
+                    group_probe=group_probe,
+                    clock=clock,
+                    sleeper=sleeper,
+                )
+                reaped = returncode is not None
+                terminated = True
+                begin_bounded_drain()
+            if terminated:
+                assert drain_deadline is not None
+                if (
+                    output_eof
+                    or not events
+                    or drain_exhausted
+                    or drain_bytes >= FENCED_CHILD_DRAIN_CAP_BYTES
+                    or clock() >= drain_deadline
+                ):
+                    break
+        if not reaped:
+            observed_reaped, observed = _waitpid_nohang(child.pid)
+            if observed_reaped:
+                returncode = observed
+                reaped = True
+        if not group_survived:
+            group_survived = group_probe(child.pgid) != "dead"
+        try:
+            launch_bytes = os.read(child.exec_error_descriptor, 257)
+        except BlockingIOError:
+            launch_bytes = b""
+        launch_failed = bool(launch_bytes)
+        return (
+            returncode,
+            bytes(kept),
+            digest.hexdigest(),
+            timed_out,
+            output_limit,
+            launch_failed,
+            group_survived,
+        )
+    finally:
+        selector.close()
+        os.close(child.output_descriptor)
+        os.close(child.exec_error_descriptor)
+
+
+def run_fenced_command(
+    lock: CommonRebaseLock,
+    *,
+    operation: str,
+    intent_digest: str,
+    intent_validator: Callable[[], bool],
+    argv: Sequence[str],
+    cwd: Path,
+    persist_result: Callable[[FencedProcessResult], Any],
+    env: Mapping[str, str] | None = None,
+    timeout: float = COMMAND_TIMEOUT_SECONDS,
+    cap: int = OUTPUT_CAP_BYTES,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    group_probe: Callable[[int], str] | None = None,
+    signal_group: Callable[[int, int], Any] = os.killpg,
+    verbose: bool = False,
+) -> FencedProcessResult:
+    """Authorize exactly one child through FR-236's durable start-pipe fence."""
+
+    _require_common_lock_control("fence-start-pipe")
+    _require_common_lock_control("fence-intent-revalidation")
+    _require_common_lock_control("fence-result-before-release")
+    if operation not in COMMON_LOCK_FENCE_OPERATIONS:
+        raise ValueError("invalid fenced operation")
+    if operation == "attribution-observation" and lock.owner.record["owner_kind"] != "push":
+        raise ValueError("attribution observation requires standalone push ownership")
+    if lock.owner.record["owner_kind"] not in {"merge", "push"}:
+        raise ValueError("phase5 ownership cannot publish an FR-236 fence")
+    if not SHA256_RE.fullmatch(intent_digest):
+        raise ValueError("fenced intent digest must be a lowercase SHA-256")
+    if not callable(intent_validator) or not callable(persist_result):
+        raise ValueError("fenced command requires intent and result persistence callbacks")
+    if (
+        not isinstance(timeout, (int, float))
+        or timeout <= 0
+        or cap <= 0
+        or cap > OUTPUT_CAP_BYTES
+    ):
+        raise ValueError(
+            "fenced timeout must be positive and output cap must be within the fixed maximum"
+        )
+    lock.assert_held()
+    if not intent_validator():
+        raise CommonLockUnavailable(
+            {
+                "common_dir": str(lock.common_dir),
+                "detail": "durable operation intent did not validate before child fork",
+            }
+        )
+    probe = group_probe or lock._group_probe
+    child: _BlockedFenceChild | None = None
+    fence: PublishedLockRecord | None = None
+    authorized = False
+    fence_ack_window = min(
+        max(float(timeout), FENCED_CHILD_ACK_TIMEOUT_SECONDS),
+        COMMON_LOCK_TIMEOUT_SECONDS,
+    )
+    publication_deadline = lock._clock() + COMMON_LOCK_TIMEOUT_SECONDS
+    fence_ack_deadline = min(
+        publication_deadline,
+        lock._clock() + fence_ack_window,
+    )
+    try:
+        while True:
+            try:
+                child = _spawn_blocked_fence_child(
+                    argv,
+                    cwd=Path(cwd),
+                    env=env,
+                    deadline=fence_ack_deadline,
+                    clock=lock._clock,
+                    sleeper=lock._sleeper,
+                )
+            except ChildProcessError as exc:
+                raise CommonLockUnavailable(
+                    {
+                        "common_dir": str(lock.common_dir),
+                        "detail": "blocked child could not be reaped after acknowledgement failure",
+                        "error": str(exc),
+                    }
+                ) from exc
+            except OSError as exc:
+                if not _sleep_with_deadline(
+                    publication_deadline, lock._clock, lock._sleeper
+                ):
+                    raise CommonLockUnavailable(
+                        {
+                            "common_dir": str(lock.common_dir),
+                            "detail": "blocked-child acknowledgement exhausted the fence-publication retry deadline",
+                            "error": str(exc),
+                        }
+                    ) from exc
+                fence_ack_deadline = min(
+                    publication_deadline,
+                    lock._clock() + fence_ack_window,
+                )
+                lock.assert_held(allow_fence=True)
+                continue
+            lock._emit_boundary("fence-child-blocked")
+            record = _validate_fence_record(
+                {
+                    "schema": "forge-rebase-inflight/1",
+                    "owner_kind": lock.owner.record["owner_kind"],
+                    "chain_id": lock.owner.record["chain_id"],
+                    "operation": operation,
+                    "host": lock.owner.record["host"],
+                    "pid": child.pid,
+                    "pgid": child.pgid,
+                    "started_at": iso_z(),
+                    "intent_digest": intent_digest,
+                    "nonce": secrets.token_hex(16),
+                }
+            )
+            try:
+                fence = _publish_fence(lock, record)
+                break
+            except _PublicationCleanupFailure as exc:
+                stopped = _stop_unstarted_child(
+                    child,
+                    clock=lock._clock,
+                    sleeper=lock._sleeper,
+                )
+                child = None
+                if not stopped:
+                    detail = "publication cleanup and blocked-child reap both failed"
+                else:
+                    detail = "fence publication cleanup could not prove durable removal"
+                raise CommonLockUnavailable(
+                    {
+                        "common_dir": str(lock.common_dir),
+                        "detail": detail,
+                        "error": str(exc),
+                    }
+                ) from exc
+            except (OSError, ValueError) as exc:
+                stopped = _stop_unstarted_child(
+                    child,
+                    clock=lock._clock,
+                    sleeper=lock._sleeper,
+                )
+                child = None
+                if not stopped:
+                    raise CommonLockUnavailable(
+                        {
+                            "common_dir": str(lock.common_dir),
+                            "detail": "blocked child could not be reaped after failed fence publication",
+                        }
+                    )
+                if not _sleep_with_deadline(
+                    publication_deadline, lock._clock, lock._sleeper
+                ):
+                    detail = (
+                        "existing in-flight fence exhausted the fence-publication deadline"
+                        if isinstance(exc, FileExistsError)
+                        else "incomplete fence publication exhausted the fence-publication deadline"
+                    )
+                    raise CommonLockUnavailable(
+                        {
+                            "common_dir": str(lock.common_dir),
+                            "detail": detail,
+                            "error": str(exc),
+                        }
+                    )
+                fence_ack_deadline = min(
+                    publication_deadline,
+                    lock._clock() + fence_ack_window,
+                )
+                lock.assert_held(allow_fence=True)
+        lock.assert_held(allow_fence=True)
+        assert child is not None and fence is not None
+        _revalidate_record_at(
+            lock._common,
+            COMMON_LOCK_INFLIGHT_NAME,
+            lock.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+            fence,
+            _validate_fence_record,
+        )
+        if not intent_validator():
+            stopped = _stop_unstarted_child(
+                child,
+                clock=lock._clock,
+                sleeper=lock._sleeper,
+            )
+            child = None
+            if not stopped:
+                lock._unresolved_fence = fence
+                raise CommonLockUnavailable(
+                    {
+                        "common_dir": str(lock.common_dir),
+                        "detail": "blocked child could not be reaped after intent revalidation failed",
+                    }
+                )
+            _unlink_revalidated_record_at(
+                lock._common,
+                COMMON_LOCK_INFLIGHT_NAME,
+                lock.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+                fence,
+                _validate_fence_record,
+            )
+            os.fsync(lock._common)
+            fence = None
+            raise CommonLockUnavailable(
+                {
+                    "common_dir": str(lock.common_dir),
+                    "detail": "durable operation intent changed before the start byte",
+                }
+            )
+        lock._emit_boundary("fence-before-authorization")
+        os.write(child.start_descriptor, b"\x01")
+        os.close(child.start_descriptor)
+        child.start_descriptor = -1
+        authorized = True
+        lock._emit_boundary("fence-after-authorization")
+        started = clock()
+        (
+            returncode,
+            output,
+            output_digest,
+            timed_out,
+            output_limit,
+            launch_failed,
+            group_survived,
+        ) = _collect_fenced_child(
+            child,
+            argv=argv,
+            started=started,
+            timeout=float(timeout),
+            cap=cap,
+            clock=clock,
+            sleeper=sleeper,
+            group_probe=probe,
+            signal_group=signal_group,
+            verbose=verbose,
+        )
+        child = None
+        result = FencedProcessResult(
+            argv=list(argv),
+            returncode=returncode,
+            duration_seconds=clock() - started,
+            output=output,
+            output_digest=output_digest,
+            timed_out=timed_out,
+            output_limit=output_limit,
+            launch_failed=launch_failed,
+            group_survived=group_survived,
+            authorized=authorized,
+            fence_digest=fence.digest,
+            fence_inode=fence.inode,
+        )
+        lock._emit_boundary("fence-before-result")
+        persist_result(result)
+        lock._emit_boundary("fence-result-persisted")
+        if group_survived:
+            lock._unresolved_fence = fence
+            raise FencedChildSurvived(result)
+        if probe(int(fence.record["pgid"])) != "dead":
+            lock._unresolved_fence = fence
+            raise FencedChildSurvived(dataclasses.replace(result, group_survived=True))
+        try:
+            _unlink_revalidated_record_at(
+                lock._common,
+                COMMON_LOCK_INFLIGHT_NAME,
+                lock.common_dir / COMMON_LOCK_INFLIGHT_NAME,
+                fence,
+                _validate_fence_record,
+            )
+            os.fsync(lock._common)
+            lock._emit_boundary("fence-released")
+        except (OSError, ValueError) as exc:
+            lock._unresolved_fence = fence
+            lock._release_pending = True
+            raise CommonLockReleaseFailure(
+                {
+                    "path": str(lock.common_dir / COMMON_LOCK_INFLIGHT_NAME),
+                    "inode": fence.inode,
+                    "digest": fence.digest,
+                    "error": str(exc),
+                }
+            ) from exc
+        return result
+    except BaseException as exc:
+        if isinstance(exc, CommonLockBoundaryCrash):
+            raise
+        if child is not None:
+            if child.start_descriptor >= 0 and not authorized:
+                stopped = _stop_unstarted_child(
+                    child,
+                    clock=lock._clock,
+                    sleeper=lock._sleeper,
+                )
+                if not stopped:
+                    if fence is not None:
+                        lock._unresolved_fence = fence
+                    raise CommonLockUnavailable(
+                        {
+                            "common_dir": str(lock.common_dir),
+                            "detail": "blocked child could not be reaped during failure cleanup",
+                        }
+                    ) from exc
+            else:
+                try:
+                    _terminate_fenced_group(
+                        child,
+                        signal_group=signal_group,
+                        group_probe=probe,
+                        clock=clock,
+                        sleeper=sleeper,
+                    )
+                finally:
+                    for descriptor in (
+                        child.output_descriptor,
+                        child.exec_error_descriptor,
+                    ):
+                        try:
+                            os.close(descriptor)
+                        except OSError:
+                            pass
+        if fence is not None and not isinstance(
+            exc, (FencedChildSurvived, CommonLockReleaseFailure)
+        ):
+            # Once authorization may have occurred, an absent durable result
+            # is a recovery fact: retain the fence for observation.  Before
+            # authorization, ordinary validation/publication failures may
+            # release the proven fence after the blocked child exits.
+            if authorized:
+                lock._unresolved_fence = fence
+        raise
+
+
+def hold_common_lock(
+    repository: Repository,
+    *,
+    owner_kind: str,
+    chain_id: str | None,
+    operation: str,
+    ready_fd: int,
+    input_stream: Any | None = None,
+) -> Outcome:
+    """Long-lived wrapper protocol for future non-Python lock consumers.
+
+    The caller supplies a writable descriptor numbered three or higher.  Once
+    the complete common lock is held, the wrapper writes exactly one canonical
+    LF-terminated ``forge-common-lock-ready/1`` record there.  It then accepts
+    exactly one stdin frame, the eight bytes ``release\n``, and closes stdin.
+    Only after the
+    reverse-order release completes does stdout receive the ordinary single
+    ``forge-cli/2`` outcome from ``main``.
+    """
+
+    if not isinstance(ready_fd, int) or isinstance(ready_fd, bool) or ready_fd < 3:
+        raise Refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            "forge: common-lock hold refused — --ready-fd must name a writable inherited descriptor >= 3",
+            expected="one writable inherited readiness descriptor numbered 3 or higher",
+            observed=str(ready_fd),
+            remediation="open a dedicated readiness pipe and retry common-lock hold",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    try:
+        os.fstat(ready_fd)
+        os.write(ready_fd, b"")
+    except OSError as exc:
+        raise Refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            "forge: common-lock hold refused — readiness descriptor is unavailable",
+            expected="a writable inherited readiness descriptor",
+            observed=str(exc),
+            remediation="open a dedicated readiness pipe and retry common-lock hold",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+    try:
+        lock = acquire_common_lock(
+            repository.git_common_dir(),
+            owner_kind=owner_kind,
+            chain_id=chain_id,
+            operation=operation,
+            # This dormant physical-lock wrapper has no transaction store.
+            # Consuming merge/push verbs must replace this explicit opt-out
+            # with their synchronous transaction recorder before activation.
+            no_transaction_record=owner_kind in {"merge", "push"},
+        )
+    except ValueError as exc:
+        raise Refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            "forge: common-lock hold refused — owner tuple is invalid",
+            expected="an FR-235 owner-kind, chain-id, and operation tuple",
+            observed=str(exc),
+            remediation="supply the exact owner tuple for the calling Forge operation",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+    protocol_error: Refusal | None = None
+    try:
+        ready = {
+            "schema": "forge-common-lock-ready/1",
+            "owner_digest": lock.digest,
+            "nonce": lock.owner.record["nonce"],
+            "pid": lock.owner.record["pid"],
+        }
+        try:
+            _write_all(ready_fd, canonical_bytes(ready) + b"\n")
+        except OSError as exc:
+            protocol_error = Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: common-lock hold refused — readiness acknowledgement failed",
+                expected="one complete readiness record",
+                observed=str(exc),
+                remediation="repair the readiness pipe and retry common-lock hold",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if protocol_error is None:
+            stream = input_stream if input_stream is not None else sys.stdin.buffer
+            try:
+                frame = stream.readline(129)
+                trailing = stream.read(1) if frame == b"release\n" else b""
+            except (OSError, ValueError) as exc:
+                frame = b""
+                trailing = b""
+                protocol_error = Refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: common-lock hold refused — release frame could not be read",
+                    observed=str(exc),
+                    remediation="send exactly release followed by LF on stdin",
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            if protocol_error is None and (frame != b"release\n" or trailing != b""):
+                protocol_error = Refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: common-lock hold refused — invalid release frame",
+                    expected="the exact stdin bytes release followed by LF",
+                    observed=repr(frame + trailing),
+                    remediation="send exactly release followed by LF on stdin",
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+    finally:
+        lock.release()
+    if protocol_error is not None:
+        raise protocol_error
+    return Outcome(
+        ok=True,
+        reason_code=V2ReasonCode.OK,
+        message="forge: common rebase lock released",
+        chain_id=chain_id,
+        next_required_step="none — common rebase lock released",
+        evidence_refs=(
+            str(lock.common_dir / COMMON_LOCK_INTENT_NAME),
+        ),
+        schema=REVISION9_OUTPUT_SCHEMA,
+    )
 
 
 @dataclasses.dataclass
