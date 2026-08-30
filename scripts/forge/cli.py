@@ -184,6 +184,88 @@ STATE_KEYS = {
     "journal_outbox",
 }
 EVENT_KEYS = {"sequence", "prev_digest", "payload", "digest"}
+MERGE_STATE_KEYS = frozenset(
+    {
+        "schema",
+        "chain_id",
+        "kind",
+        "state",
+        "created_at",
+        "last_event_at",
+        "inactive_after",
+        "owner",
+        "run",
+        "repository",
+        "worktree",
+        "branch",
+        "target",
+        "policy_source",
+        "candidate",
+        "tier",
+        "steps",
+        "review",
+        "approval",
+        "authorization",
+        "integration",
+        "cleanup",
+        "run_binding",
+        "journal_outbox",
+    }
+)
+MERGE_EVENT_KEYS = frozenset(
+    {
+        "schema",
+        "chain_id",
+        "sequence",
+        "at",
+        "event",
+        "generation_digest",
+        "previous_digest",
+        "payload",
+        "digest",
+    }
+)
+MERGE_EVENT_NAMES = frozenset(
+    {
+        "chain_started",
+        "ownership_intent",
+        "ownership_claimed",
+        "ownership_release_intent",
+        "ownership_released",
+        "gate_recorded",
+        "review_requested",
+        "review_attached",
+        "review_disposition",
+        "approval_recorded",
+        "generation_refreshed",
+        "generation_carried_forward",
+        "epoch_intent",
+        "fetch_intent",
+        "fetch_result",
+        "rebase_intent",
+        "rebase_conflict",
+        "rebase_result",
+        "reverification_result",
+        "push_intent",
+        "push_observed",
+        "cleanup_intent",
+        "cleanup_result",
+        "condition_recorded",
+        "lock_release_result",
+        "aborted",
+        "closed",
+        "journal_receipted",
+    }
+)
+MERGE_CONSEQUENTIAL_EVENTS = frozenset(
+    {
+        "gate_recorded",
+        "review_attached",
+        "approval_recorded",
+        "generation_carried_forward",
+        "push_observed",
+    }
+)
 ENVELOPE_KEYS = {
     "chain_id",
     "evidence_refs",
@@ -331,6 +413,23 @@ _REQUIRED_REVISION9_STATE_CONTROLS = frozenset(
     {"run-binding-shape", "journal-outbox-shape"}
 )
 REVISION9_STATE_CONTROLS = _REQUIRED_REVISION9_STATE_CONTROLS
+_REQUIRED_MERGE_STORE_CONTROLS = frozenset(
+    {
+        "event-first-family",
+        "family-isolated-enumeration",
+        "separate-merge-grammar",
+        "lease-tail-authentication",
+        "nonrecursive-source-digest",
+        "typed-journal-builders",
+        "consequential-event-set",
+        "projected-journal-outbox",
+        "builder-transition-validation",
+        "event-before-state",
+        "post-serialization-journal-drain",
+        "replay-projection-repair",
+    }
+)
+MERGE_STORE_CONTROLS = _REQUIRED_MERGE_STORE_CONTROLS
 _REQUIRED_ARCHIVE_RECHECK_CONTROLS = frozenset(
     {"start", "authorization", "commit"}
 )
@@ -3223,7 +3322,9 @@ class Refusal(Exception):
         chain_is_revision9 = bool(
             isinstance(chain, Mapping)
             and (
-                chain.get("run_binding") is not None
+                chain.get("kind") == "merge"
+                or chain.get("schema") == "forge-merge-chain/1"
+                or chain.get("run_binding") is not None
                 or isinstance(chain.get("staging"), Mapping)
                 and chain.get("staging", {}).get("archive") is not None
             )
@@ -3977,6 +4078,322 @@ def validate_state(state: Any, chain_id: str | None = None) -> dict[str, Any]:
     return state
 
 
+def _require_merge_store_control(name: str) -> None:
+    if (
+        name not in _REQUIRED_MERGE_STORE_CONTROLS
+        or name not in MERGE_STORE_CONTROLS
+    ):
+        raise FrozenError(
+            f"merge storage control is unavailable: {name}",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+
+def validate_merge_state(
+    state: Any, chain_id: str | None = None
+) -> dict[str, Any]:
+    """Validate the separate 24-key DM-014 materialized projection."""
+
+    _require_merge_store_control("separate-merge-grammar")
+    if not isinstance(state, dict) or set(state) != MERGE_STATE_KEYS:
+        raise FrozenError(
+            "materialized merge state has an invalid top-level key set",
+            chain_id=chain_id,
+            observed=(
+                ",".join(sorted(state))
+                if isinstance(state, dict)
+                else type(state).__name__
+            ),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    actual_id = state.get("chain_id")
+    if not isinstance(actual_id, str) or CHAIN_ID_RE.fullmatch(actual_id) is None:
+        raise FrozenError(
+            "merge state has an invalid chain_id",
+            chain_id=chain_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    if chain_id is not None and actual_id != chain_id:
+        raise FrozenError(
+            "merge filename and payload identity diverge",
+            chain_id=chain_id,
+            observed=str(actual_id),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    _batch, builders, _journal = _coordination_modules()
+    if (
+        MERGE_STATE_KEYS != builders._MERGE_STATE_KEYS
+        or MERGE_EVENT_NAMES != builders._MERGE_EVENT_NAMES
+        or not builders._state_shape_valid(state, actual_id, "merge")
+    ):
+        raise FrozenError(
+            "materialized merge state is invalid",
+            chain_id=actual_id,
+            state=str(state.get("state")),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    return state
+
+
+@dataclasses.dataclass(frozen=True)
+class MergeReplayResult:
+    """Authenticated DM-014 replay before materialized-state comparison."""
+
+    state: dict[str, Any]
+    events: tuple[dict[str, Any], ...]
+    entries: tuple[
+        tuple[
+            dict[str, Any],
+            dict[str, Any] | None,
+            dict[str, Any],
+            tuple[dict[str, Any], ...],
+            str | None,
+        ],
+        ...,
+    ]
+    prefix_state_bytes: tuple[bytes, ...]
+    context: dict[str, Any]
+    raw_events: bytes
+    tail_sequence: int
+    tail_digest: str
+
+
+def _replay_merge_event_bytes(
+    chain_id: str,
+    raw_events: bytes,
+    *,
+    verify_receipts: bool = True,
+) -> MergeReplayResult:
+    """Replay DM-014 by composing the registered reducer and builder grammar."""
+
+    _require_merge_store_control("separate-merge-grammar")
+    if not raw_events or not raw_events.endswith(b"\n"):
+        raise FrozenError(
+            "merge event log is empty or has a partial final record",
+            chain_id=chain_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    _batch, builders, _journal = _coordination_modules()
+    if (
+        MERGE_STATE_KEYS != builders._MERGE_STATE_KEYS
+        or MERGE_EVENT_NAMES != builders._MERGE_EVENT_NAMES
+    ):
+        raise FrozenError(
+            "merge grammar authority is unavailable",
+            chain_id=chain_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    previous_digest = ZERO_DIGEST
+    replayed: dict[str, Any] | None = None
+    events: list[dict[str, Any]] = []
+    entries: list[
+        tuple[
+            dict[str, Any],
+            dict[str, Any] | None,
+            dict[str, Any],
+            tuple[dict[str, Any], ...],
+            str | None,
+        ]
+    ] = []
+    prefix_state_bytes: list[bytes] = []
+    context: dict[str, Any] = {}
+    pending_outbox: dict[str, Any] | None = None
+    pending_records: tuple[dict[str, Any], ...] = ()
+    for sequence, raw in enumerate(raw_events.splitlines(keepends=True), 1):
+        try:
+            event = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, ValueError, RecursionError) as exc:
+            raise FrozenError(
+                f"merge event {sequence} is malformed",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        if (
+            not isinstance(event, dict)
+            or set(event) != MERGE_EVENT_KEYS
+            or event.get("schema") != "forge-merge-event/1"
+            or event.get("chain_id") != chain_id
+            or event.get("sequence") != sequence
+            or event.get("previous_digest") != previous_digest
+            or event.get("event") not in MERGE_EVENT_NAMES
+            or builders._utc_value(event.get("at")) is None
+        ):
+            raise FrozenError(
+                f"merge event {sequence} has an invalid identity or key set",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if raw != canonical_bytes(event) + b"\n":
+            raise FrozenError(
+                f"merge event {sequence} is not canonical",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        projection = {name: event[name] for name in event if name != "digest"}
+        digest = event.get("digest")
+        if (
+            not isinstance(digest, str)
+            or SHA256_RE.fullmatch(digest) is None
+            or digest != sha256_bytes(canonical_bytes(projection))
+        ):
+            raise FrozenError(
+                f"merge event {sequence} digest is invalid",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        prior = copy.deepcopy(replayed)
+        try:
+            records, event_outbox, source_digest = builders._event_batch_records(
+                event, "merge"
+            )
+            event_name = event.get("event")
+            is_receipt = event_name == "journal_receipted"
+            if pending_outbox is not None and not is_receipt:
+                raise ValueError("pending merge outbox was bypassed")
+            if pending_outbox is None and is_receipt:
+                raise ValueError("merge receipt has no pending outbox")
+            receipt = (
+                builders._receipt_metadata(event, "merge")
+                if is_receipt
+                else None
+            )
+            if is_receipt:
+                if (
+                    receipt is None
+                    or records
+                    or event_outbox is not None
+                    or source_digest is not None
+                    or receipt.get("idempotency_key")
+                    != pending_outbox.get("idempotency_key")
+                    or receipt.get("batch_digest")
+                    != pending_outbox.get("batch_digest")
+                    or replayed is None
+                ):
+                    raise ValueError("merge receipt identity is invalid")
+                if verify_receipts:
+                    builders._verify_receipted_batch(
+                        Path(str(replayed["repository"])),
+                        chain_id,
+                        replayed,
+                        pending_outbox,
+                        pending_records,
+                        receipt,
+                    )
+            elif event_outbox is not None and pending_outbox is not None:
+                raise ValueError("merge event introduced a second pending outbox")
+
+            current = reduce_merge_event(prior, copy.deepcopy(event))
+        except (
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            RuntimeError,
+            _journal.CoordinationRefusal,
+        ) as exc:
+            raise FrozenError(
+                f"merge event {sequence} payload is invalid",
+                chain_id=chain_id,
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        if not builders._state_shape_valid(current, chain_id, "merge") or not (
+            builders._merge_transition_valid(
+                event,
+                prior,
+                current,
+                context=context,
+            )
+        ):
+            raise FrozenError(
+                f"merge event {sequence} transition is invalid",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if is_receipt:
+            if current.get("journal_outbox") is not None or prior is None:
+                raise FrozenError(
+                    f"merge event {sequence} receipt did not clear its outbox",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            ignored = {"last_event_at", "inactive_after", "journal_outbox"}
+            if any(
+                prior.get(name) != current.get(name)
+                for name in MERGE_STATE_KEYS - ignored
+            ):
+                raise FrozenError(
+                    f"merge event {sequence} receipt changed chain authority",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            pending_outbox = None
+            pending_records = ()
+        elif event_outbox is not None:
+            if current.get("journal_outbox") != event_outbox:
+                raise FrozenError(
+                    f"merge event {sequence} outbox projection is invalid",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            pending_outbox = copy.deepcopy(event_outbox)
+            pending_records = tuple(copy.deepcopy(records))
+        elif current.get("journal_outbox") != pending_outbox:
+            raise FrozenError(
+                f"merge event {sequence} changed its pending outbox",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        for carried_record in records:
+            carried_binding = carried_record.get("binding")
+            if not isinstance(
+                carried_binding, dict
+            ) or not builders._binding_matches_source_fact(
+                carried_binding,
+                carried_record,
+                event,
+                prior,
+                current,
+                family="merge",
+            ):
+                raise FrozenError(
+                    f"merge event {sequence} carries an invalid journal binding",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+        replayed = copy.deepcopy(current)
+        event_copy = copy.deepcopy(event)
+        current_copy = copy.deepcopy(current)
+        events.append(event_copy)
+        entries.append(
+            (
+                event_copy,
+                prior,
+                current_copy,
+                tuple(copy.deepcopy(records)),
+                source_digest,
+            )
+        )
+        prefix_state_bytes.append(canonical_bytes(current) + b"\n")
+        previous_digest = digest
+    if replayed is None or not events:
+        raise FrozenError(
+            "merge event replay is empty",
+            chain_id=chain_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    return MergeReplayResult(
+        state=validate_merge_state(replayed, chain_id),
+        events=tuple(events),
+        entries=tuple(entries),
+        prefix_state_bytes=tuple(prefix_state_bytes),
+        context=copy.deepcopy(context),
+        raw_events=raw_events,
+        tail_sequence=len(events),
+        tail_digest=previous_digest,
+    )
+
+
 @dataclasses.dataclass
 class FinalizeContext:
     engine: Engine
@@ -4486,6 +4903,25 @@ def _validate_revision9_cross_options(
         )
 
 
+def _route_shared_chain_engine(engine: Engine) -> Engine | MergeEngine:
+    """Route explicit shared verbs by the authenticated event-one family."""
+
+    chain_id = engine.ctx.options.chain_id
+    if chain_id is None:
+        return engine
+    family = engine.ctx.store.chain_family(chain_id)
+    if family == "commit":
+        return engine
+    engine.ctx.options.revision9_face = True
+    merge_context = CommandContext(
+        repo=engine.ctx.repo,
+        store=MergeChainStore(engine.ctx.store.common_root),
+        options=engine.ctx.options,
+        policy=engine.ctx.policy,
+    )
+    return MergeEngine(merge_context)
+
+
 def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
     if args.command == "common-lock" and args.common_lock_command == "hold":
         return hold_common_lock(
@@ -4496,7 +4932,7 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
             ready_fd=args.ready_fd,
         )
     if args.command == "status":
-        return engine.status()
+        return _route_shared_chain_engine(engine).status()
     if args.command == "verify":
         return engine.verify()
     if args.command == "classify":
@@ -4506,14 +4942,15 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
     if args.command == "scan" and args.scan_command == "secrets":
         return engine.scan_secrets()
     if args.command == "review":
+        routed = _route_shared_chain_engine(engine)
         if args.review_command == "request":
-            return engine.review_request()
+            return routed.review_request()
         if args.review_command == "collect":
-            return engine.review_collect()
+            return routed.review_collect()
         if args.review_command == "attach":
-            return engine.review_attach(args.verdict_file)
+            return routed.review_attach(args.verdict_file)
         if args.review_command == "disposition":
-            return engine.review_disposition(
+            return routed.review_disposition(
                 args.finding, args.severity, args.resolution
             )
     if args.command == "journal":
@@ -4963,13 +5400,72 @@ def _build_chain_journal_records(
     return (record,)
 
 
-class ChainStore:
-    """Digest-chained event log plus atomically replaced materialized state."""
+def _drain_chain_batch_capability(
+    state: Mapping[str, Any],
+    pending_outbox: Mapping[str, Any],
+    carried_records: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Drain one exact carrier through Revision-9's opaque authority path."""
 
-    def __init__(self, common_root: Path) -> None:
+    binding = state.get("run_binding")
+    if not isinstance(binding, Mapping):
+        raise FrozenError(
+            "pending journal outbox lacks an immutable run binding",
+            chain_id=str(state.get("chain_id") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    batch, _builders, _journal = _coordination_modules()
+    capability = object()
+    registry = batch._FORGE_CLI_CHAIN_CAPABILITIES
+    registry_lock = batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK
+    with registry_lock:
+        registry[id(capability)] = (
+            capability,
+            {
+                "repository": Path(str(binding["repository"])),
+                "run_id": str(binding["run_id"]),
+                "task_id": str(binding["task_id"]),
+                "chain_id": str(state["chain_id"]),
+                "source_event_digest": pending_outbox[
+                    "source_event_digest"
+                ],
+                "records": tuple(copy.deepcopy(tuple(carried_records))),
+            },
+        )
+    try:
+        outcome = batch.drain_chain_batch(
+            Path(str(binding["repository"])),
+            str(binding["run_id"]),
+            chain_id=str(state["chain_id"]),
+            source_event_digest=str(pending_outbox["source_event_digest"]),
+            records=carried_records,
+            capability=capability,
+        )
+    finally:
+        with registry_lock:
+            registered = registry.get(id(capability))
+            if isinstance(registered, tuple) and registered[0] is capability:
+                registry.pop(id(capability), None)
+    return batch.journal_receipted_details(dict(pending_outbox), outcome.receipt)
+
+
+class _ChainStoragePrimitives:
+    """Shared descriptor-safe primitives for both chain storage families."""
+
+    def __init__(
+        self,
+        common_root: Path,
+        *,
+        boundary: Callable[[str], None] | None = None,
+    ) -> None:
         self.common_root = Path(os.path.realpath(common_root))
         self.root = self.common_root / ".forge" / "chains"
         self._state_versions: dict[int, tuple[dict[str, Any], int, str]] = {}
+        self._storage_boundary = boundary
+
+    def _boundary(self, stage: str) -> None:
+        if self._storage_boundary is not None:
+            self._storage_boundary(stage)
 
     @staticmethod
     def _owned_directory(descriptor: int, label: str) -> None:
@@ -5179,7 +5675,7 @@ class ChainStore:
         if not CHAIN_ID_RE.fullmatch(chain_id):
             raise FrozenError("invalid chain identifier", chain_id=chain_id)
 
-    def list_ids(self) -> list[str]:
+    def list_ids(self, *, family: str | None = None) -> list[str]:
         result: set[str] = set()
         with self.root_descriptor() as root:
             for name in os.listdir(root):
@@ -5191,7 +5687,279 @@ class ChainStore:
                     chain_id = name[: -len(".events.jsonl")]
                     if CHAIN_ID_RE.fullmatch(chain_id):
                         result.add(chain_id)
-        return sorted(result)
+        ordered = sorted(result)
+        if family is None:
+            return ordered
+        _require_merge_store_control("family-isolated-enumeration")
+        if family not in {"commit", "merge"}:
+            raise ValueError(f"unknown chain family: {family}")
+        selected: list[str] = []
+        for chain_id in ordered:
+            try:
+                if self.chain_family(chain_id) == family:
+                    selected.append(chain_id)
+            except FrozenError:
+                # An unreadable chain remains addressable by its explicit ID,
+                # but never wedges selection for another authenticated chain.
+                continue
+        return selected
+
+    def chain_family(self, chain_id: str) -> str:
+        """Authenticate family from event one without consulting state JSON."""
+
+        _require_merge_store_control("event-first-family")
+        self._validate_id(chain_id)
+        path = self.events_path(chain_id)
+        try:
+            with self.event_lock(chain_id):
+                data = self._read_root_bytes(path.name)
+        except FileNotFoundError as exc:
+            raise FrozenError(
+                "chain event log is missing",
+                chain_id=chain_id,
+                observed=str(path),
+            ) from exc
+        except OSError as exc:
+            raise FrozenError(
+                "chain event log is unreadable",
+                chain_id=chain_id,
+                observed=str(exc),
+            ) from exc
+        if not data or not data.endswith(b"\n"):
+            raise FrozenError(
+                "chain event log is empty or has a partial final record",
+                chain_id=chain_id,
+            )
+        first = data.splitlines(keepends=True)[0]
+        try:
+            event = json.loads(first)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FrozenError(
+                "chain event 1 is malformed",
+                chain_id=chain_id,
+            ) from exc
+        if first != canonical_bytes(event) + b"\n":
+            raise FrozenError(
+                "chain event 1 is not canonical",
+                chain_id=chain_id,
+                schema=(
+                    REVISION9_OUTPUT_SCHEMA
+                    if isinstance(event, dict)
+                    and event.get("schema") == "forge-merge-event/1"
+                    else OUTPUT_SCHEMA
+                ),
+            )
+        if isinstance(event, dict) and set(event) == EVENT_KEYS:
+            payload = event.get("payload")
+            unsigned = {
+                "sequence": event.get("sequence"),
+                "prev_digest": event.get("prev_digest"),
+                "payload": payload,
+            }
+            if (
+                event.get("sequence") != 1
+                or event.get("prev_digest") != ZERO_DIGEST
+                or event.get("digest")
+                != sha256_bytes(canonical_bytes(unsigned))
+                or not isinstance(payload, dict)
+                or set(payload) != {"at", "details", "event", "state"}
+            ):
+                raise FrozenError(
+                    "chain event 1 does not authenticate a chain family",
+                    chain_id=chain_id,
+                )
+            try:
+                validate_state(payload.get("state"), chain_id)
+            except FrozenError as exc:
+                raise FrozenError(
+                    "chain event 1 does not authenticate a commit family",
+                    chain_id=chain_id,
+                    observed=str(exc),
+                ) from exc
+            return "commit"
+        if (
+            isinstance(event, dict)
+            and set(event) == MERGE_EVENT_KEYS
+            and event.get("schema") == "forge-merge-event/1"
+        ):
+            try:
+                replay = _replay_merge_event_bytes(
+                    chain_id,
+                    first,
+                )
+            except FrozenError:
+                raise
+            except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                raise FrozenError(
+                    "chain event 1 does not authenticate a merge family",
+                    chain_id=chain_id,
+                    observed=str(exc),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                ) from exc
+            if len(replay.events) != 1:
+                raise FrozenError(
+                    "chain event 1 does not authenticate a merge family",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            return "merge"
+        raise FrozenError(
+            "chain event 1 does not authenticate a chain family",
+            chain_id=chain_id,
+            schema=(
+                REVISION9_OUTPUT_SCHEMA
+                if isinstance(event, dict)
+                and event.get("schema") == "forge-merge-event/1"
+                else OUTPUT_SCHEMA
+            ),
+        )
+
+    def _remember_version(
+        self, state: dict[str, Any], sequence: int, digest: str
+    ) -> None:
+        self._state_versions[id(state)] = (state, sequence, digest)
+
+    def _require_tail_version(
+        self,
+        state: dict[str, Any],
+        sequence: int,
+        digest: str,
+        *,
+        family: str,
+        refusal_chain: Mapping[str, Any] | None = None,
+    ) -> None:
+        version_entry = self._state_versions.get(id(state))
+        snapshot_version = (
+            (version_entry[1], version_entry[2])
+            if version_entry is not None and version_entry[0] is state
+            else None
+        )
+        current_version = (sequence, digest)
+        if snapshot_version != current_version:
+            raise Refusal(
+                ReasonCode.STATE_PRECONDITION,
+                "chain state changed concurrently; stale result was not persisted",
+                expected=(
+                    "a versioned snapshot"
+                    if snapshot_version is None
+                    else f"event tail {snapshot_version[0]}:{snapshot_version[1]}"
+                ),
+                observed=f"current event tail {sequence}:{digest}",
+                remediation=_forge_command(state, "status"),
+                chain=(refusal_chain if refusal_chain is not None else state),
+                schema=(
+                    REVISION9_OUTPUT_SCHEMA if family == "merge" else None
+                ),
+            )
+
+    def _append_event_bytes(
+        self,
+        chain_id: str,
+        encoded: bytes,
+        *,
+        initial: bool,
+    ) -> None:
+        """Append one already-canonical event and fsync its regular file."""
+
+        flags = (
+            os.O_WRONLY
+            | os.O_APPEND
+            | os.O_CREAT
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        if initial:
+            flags |= os.O_EXCL
+        descriptor: int | None = None
+        with self.root_descriptor() as root:
+            try:
+                descriptor = os.open(
+                    self.events_path(chain_id).name,
+                    flags,
+                    0o600,
+                    dir_fd=root,
+                )
+                opened = os.fstat(descriptor)
+                if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+                    raise OSError(
+                        "event log is not an owner-controlled regular file"
+                    )
+                os.fchmod(descriptor, 0o600)
+                written = 0
+                while written < len(encoded):
+                    count = os.write(descriptor, encoded[written:])
+                    if count <= 0:
+                        raise OSError("short event-log write")
+                    written += count
+                os.fsync(descriptor)
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+            os.fsync(root)
+
+    def _atomic_state(self, state: Mapping[str, Any]) -> None:
+        """Atomically replace one canonical state projection and fsync it."""
+
+        chain_id = str(state["chain_id"])
+        self.ensure_root()
+        temporary_name = f".{chain_id}.{secrets.token_hex(8)}.tmp"
+        descriptor = -1
+        with self.root_descriptor() as root:
+            try:
+                descriptor = os.open(
+                    temporary_name,
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                    dir_fd=root,
+                )
+                opened = os.fstat(descriptor)
+                if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+                    raise OSError(
+                        "temporary state is not an owner-controlled regular file"
+                    )
+                os.fchmod(descriptor, 0o600)
+                encoded = canonical_bytes(state) + b"\n"
+                written = 0
+                while written < len(encoded):
+                    count = os.write(descriptor, encoded[written:])
+                    if count <= 0:
+                        raise OSError("short state write")
+                    written += count
+                os.fsync(descriptor)
+                os.close(descriptor)
+                descriptor = -1
+                os.replace(
+                    temporary_name,
+                    self.state_path(chain_id).name,
+                    src_dir_fd=root,
+                    dst_dir_fd=root,
+                )
+                os.fsync(root)
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+                try:
+                    os.unlink(temporary_name, dir_fd=root)
+                except FileNotFoundError:
+                    pass
+
+    @staticmethod
+    def _fsync_dir(path: Path) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        descriptor = os.open(path, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+class ChainStore(_ChainStoragePrimitives):
+    """Commit-family snapshot log over the shared storage primitives."""
 
     def _events(self, chain_id: str) -> list[dict[str, Any]]:
         with self.event_lock(chain_id):
@@ -5265,6 +6033,12 @@ class ChainStore:
 
     def load(self, chain_id: str) -> dict[str, Any]:
         self._validate_id(chain_id)
+        if self.chain_family(chain_id) != "commit":
+            raise FrozenError(
+                "commit store refused a merge-family chain",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
         with self.event_lock(chain_id):
             return self._load_locked(chain_id)
 
@@ -5512,7 +6286,7 @@ class ChainStore:
                     observed=str(exc),
                     schema=REVISION9_OUTPUT_SCHEMA,
                 ) from exc
-        self._state_versions[id(replayed)] = (
+        self._remember_version(
             replayed,
             int(events[-1]["sequence"]),
             str(events[-1]["digest"]),
@@ -5581,31 +6355,13 @@ class ChainStore:
             existing: list[dict[str, Any]] = []
             if not initial:
                 existing = self._events_unlocked(chain_id)
-                current_version = (
+                self._require_tail_version(
+                    state,
                     int(existing[-1]["sequence"]),
                     str(existing[-1]["digest"]),
+                    family="commit",
+                    refusal_chain=existing[-1]["payload"]["state"],
                 )
-                version_entry = self._state_versions.get(id(state))
-                snapshot_version = (
-                    (version_entry[1], version_entry[2])
-                    if version_entry is not None and version_entry[0] is state
-                    else None
-                )
-                if snapshot_version != current_version:
-                    raise Refusal(
-                        ReasonCode.STATE_PRECONDITION,
-                        "chain state changed concurrently; stale result was not persisted",
-                        expected=(
-                            "a versioned snapshot"
-                            if snapshot_version is None
-                            else f"event tail {snapshot_version[0]}:{snapshot_version[1]}"
-                        ),
-                        observed=(
-                            f"current event tail {current_version[0]}:{current_version[1]}"
-                        ),
-                        remediation=_forge_command(state, "status"),
-                        chain=existing[-1]["payload"]["state"],
-                    )
             elif self._root_entry_exists(self.events_path(chain_id).name):
                 raise FrozenError("initial event log already exists", chain_id=chain_id)
             when = utc_now()
@@ -5665,48 +6421,9 @@ class ChainStore:
                     unsigned["payload"] = payload
             record = {**unsigned, "digest": sha256_bytes(canonical_bytes(unsigned))}
             encoded = canonical_bytes(record) + b"\n"
-            flags = (
-                os.O_WRONLY
-                | os.O_APPEND
-                | os.O_CREAT
-                | getattr(os, "O_NOFOLLOW", 0)
-                | getattr(os, "O_CLOEXEC", 0)
-                | getattr(os, "O_NONBLOCK", 0)
-            )
-            if initial:
-                flags |= os.O_EXCL
-            descriptor: int | None = None
-            with self.root_descriptor() as root:
-                try:
-                    descriptor = os.open(
-                        self.events_path(chain_id).name,
-                        flags,
-                        0o600,
-                        dir_fd=root,
-                    )
-                    opened = os.fstat(descriptor)
-                    if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
-                        raise OSError(
-                            "event log is not an owner-controlled regular file"
-                        )
-                    os.fchmod(descriptor, 0o600)
-                    written = 0
-                    while written < len(encoded):
-                        count = os.write(descriptor, encoded[written:])
-                        if count <= 0:
-                            raise OSError("short event-log write")
-                        written += count
-                    os.fsync(descriptor)
-                finally:
-                    if descriptor is not None:
-                        os.close(descriptor)
-                os.fsync(root)
+            self._append_event_bytes(chain_id, encoded, initial=initial)
             self._atomic_state(state)
-            self._state_versions[id(state)] = (
-                state,
-                sequence,
-                str(record["digest"]),
-            )
+            self._remember_version(state, sequence, str(record["digest"]))
         if pending_outbox is not None:
             self._drain_pending_batch(
                 state,
@@ -5751,40 +6468,10 @@ class ChainStore:
             except journal.CoordinationRefusal as exc:
                 raise _coordination_refusal(exc) from exc
 
-        batch, _builders, _journal = _coordination_modules()
-        capability = object()
-        registry = batch._FORGE_CLI_CHAIN_CAPABILITIES
-        registry_lock = batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK
-        with registry_lock:
-            registry[id(capability)] = (
-                capability,
-                {
-                    "repository": Path(str(binding["repository"])),
-                    "run_id": str(binding["run_id"]),
-                    "task_id": str(binding["task_id"]),
-                    "chain_id": str(state["chain_id"]),
-                    "source_event_digest": pending_outbox[
-                        "source_event_digest"
-                    ],
-                    "records": tuple(copy.deepcopy(tuple(carried_records))),
-                },
-            )
-        try:
-            outcome = batch.drain_chain_batch(
-                Path(str(binding["repository"])),
-                str(binding["run_id"]),
-                chain_id=str(state["chain_id"]),
-                source_event_digest=str(pending_outbox["source_event_digest"]),
-                records=carried_records,
-                capability=capability,
-            )
-        finally:
-            with registry_lock:
-                registered = registry.get(id(capability))
-                if isinstance(registered, tuple) and registered[0] is capability:
-                    registry.pop(id(capability), None)
-        receipt_details = batch.journal_receipted_details(
-            dict(pending_outbox), outcome.receipt
+        receipt_details = _drain_chain_batch_capability(
+            state,
+            pending_outbox,
+            carried_records,
         )
         if state.get("journal_outbox") != pending_outbox:
             raise FrozenError(
@@ -5875,62 +6562,837 @@ class ChainStore:
         except journal.CoordinationRefusal as exc:
             raise _coordination_refusal(exc) from exc
 
-    def _atomic_state(self, state: Mapping[str, Any]) -> None:
-        chain_id = str(state["chain_id"])
-        self.ensure_root()
-        temporary_name = f".{chain_id}.{secrets.token_hex(8)}.tmp"
-        descriptor = -1
-        with self.root_descriptor() as root:
-            try:
-                descriptor = os.open(
-                    temporary_name,
-                    os.O_WRONLY
-                    | os.O_CREAT
-                    | os.O_EXCL
-                    | getattr(os, "O_NOFOLLOW", 0)
-                    | getattr(os, "O_CLOEXEC", 0),
-                    0o600,
-                    dir_fd=root,
-                )
-                opened = os.fstat(descriptor)
-                if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
-                    raise OSError(
-                        "temporary state is not an owner-controlled regular file"
+
+def _build_merge_chain_journal_records(
+    repository: Path,
+    event: dict[str, Any],
+    prior: dict[str, Any] | None,
+    current: dict[str, Any],
+    source_event_digest: str,
+) -> tuple[dict[str, Any], ...]:
+    """Build live merge rows through the retrospective ingest templates."""
+
+    binding = current.get("run_binding")
+    if not isinstance(binding, Mapping):
+        return ()
+    _require_merge_store_control("typed-journal-builders")
+    _require_merge_store_control("consequential-event-set")
+    if MERGE_CONSEQUENTIAL_EVENTS != {
+        "gate_recorded",
+        "review_attached",
+        "approval_recorded",
+        "generation_carried_forward",
+        "push_observed",
+    }:
+        raise FrozenError(
+            "merge consequential event authority is unavailable",
+            chain_id=str(current.get("chain_id") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    run_id = str(binding["run_id"])
+    task_id = str(binding["task_id"])
+    _batch, builders, journal = _coordination_modules()
+    _canonical_repository, state_root = journal._resolve_repository(
+        repository, "journal batch"
+    )
+    run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
+    run_state = journal._scan_run(run_dir)
+    task_records = [
+        record
+        for record in run_state.records
+        if record.get("type") == "task" and record.get("id") == task_id
+    ]
+    if not task_records or task_records[-1].get("status") != "active":
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+
+    introduced = _merge_gate_event_fact(prior, current)
+    required_gate_ids = frozenset(
+        {introduced[0]} if introduced is not None else set()
+    )
+    approval = current.get("approval")
+    templates = _merge_ingest_record_templates(
+        builders,
+        journal,
+        event,
+        prior,
+        current,
+        task=task_id,
+        approval_required=bool(
+            isinstance(approval, dict)
+            and approval.get("purpose") == "gate-4"
+        ),
+        required_gate_ids=required_gate_ids,
+    )
+    if templates and event.get("event") not in MERGE_CONSEQUENTIAL_EVENTS:
+        raise FrozenError(
+            "non-consequential merge event attempted to carry journal records",
+            chain_id=str(current.get("chain_id") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    projected = list(run_state.records)
+    records: list[dict[str, Any]] = []
+    review_binding = builders._review_binding_for_state(current)
+    for template, _gate_id in templates:
+        record = copy.deepcopy(template)
+        record_type = str(record["type"])
+        record["id"] = builders._allocate_id(projected, record_type)
+        record["run_id"] = run_id
+        record["recorded_at"] = event["at"]
+        record["binding"] = _merge_ingest_binding(
+            builders,
+            current,
+            source_event_digest,
+            (
+                review_binding
+                if record.get("criterion") == journal.GATE_3_CRITERION
+                else None
+            ),
+        )
+        evidence = record.get("evidence")
+        if isinstance(evidence, list):
+            for citation in evidence:
+                if (
+                    not isinstance(citation, str)
+                    or _parsed_run_captured_path(citation, run_id) is None
+                ):
+                    raise journal.CoordinationRefusal(
+                        journal.INVALID_JOURNAL_RECORD
                     )
-                os.fchmod(descriptor, 0o600)
-                encoded = canonical_bytes(state) + b"\n"
-                written = 0
-                while written < len(encoded):
-                    count = os.write(descriptor, encoded[written:])
-                    if count <= 0:
-                        raise OSError("short state write")
-                    written += count
-                os.fsync(descriptor)
-                os.close(descriptor)
-                descriptor = -1
-                os.replace(
-                    temporary_name,
-                    self.state_path(chain_id).name,
-                    src_dir_fd=root,
-                    dst_dir_fd=root,
-                )
-                os.fsync(root)
-            finally:
-                if descriptor >= 0:
-                    os.close(descriptor)
-                try:
-                    os.unlink(temporary_name, dir_fd=root)
-                except FileNotFoundError:
-                    pass
+        records.append(record)
+        projected.append(record)
+    if records:
+        _batch._prevalidate_records(
+            _canonical_repository,
+            run_state,
+            records,
+            close=False,
+            defer_binding=True,
+        )
+    return tuple(records)
+
+
+def _new_merge_record_is_current(
+    builders: Any,
+    state: dict[str, Any],
+    binding: dict[str, Any],
+    record: dict[str, Any],
+    source_event: dict[str, Any],
+    source_prior: dict[str, Any] | None,
+    source_state: dict[str, Any],
+    replay_entries: Sequence[
+        tuple[
+            dict[str, Any],
+            dict[str, Any] | None,
+            dict[str, Any],
+            tuple[dict[str, Any], ...],
+            str | None,
+        ]
+    ],
+) -> bool:
+    """Apply currentness only to the newly proposed carried merge fact."""
+
+    if builders._binding_is_current(
+        state,
+        binding,
+        record,
+        source_event,
+        source_prior,
+        source_state,
+        replay_entries,
+        chain_family="merge",
+    ):
+        return True
+    return bool(
+        record.get("type") == "decision"
+        and record.get("outcome") == "chain-landing"
+        and state.get("state") == "pushed"
+        and builders._merge_current_head_contained(state)
+        and builders._binding_matches_source_fact(
+            binding,
+            record,
+            source_event,
+            source_prior,
+            source_state,
+            family="merge",
+        )
+    )
+
+
+class MergeChainStore(_ChainStoragePrimitives):
+    """DM-014 delta log with lease-owned event-first materialization."""
+
+    _TRANSITION_CONTROLS = (
+        "lease-tail-authentication",
+        "nonrecursive-source-digest",
+        "typed-journal-builders",
+        "projected-journal-outbox",
+        "builder-transition-validation",
+        "event-before-state",
+        "post-serialization-journal-drain",
+    )
 
     @staticmethod
-    def _fsync_dir(path: Path) -> None:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        descriptor = os.open(path, flags)
+    def _session(value: str | None) -> str:
+        selected = (
+            value
+            or os.environ.get("CLAUDE_SESSION_ID")
+            or os.environ.get("FORGE_SESSION_PID")
+            or f"forge-merge-store-{os.getpid()}"
+        )
+        if not selected or "\x00" in selected:
+            raise ValueError("merge store session must be nonempty and NUL-free")
+        return selected
+
+    @contextlib.contextmanager
+    def _journal_outer(
+        self, binding: Mapping[str, Any] | None
+    ) -> Iterable[None]:
+        if not isinstance(binding, Mapping):
+            yield
+            return
+        register_coordination_seams()
+        batch, _builders, journal = _coordination_modules()
+        run_dir = (
+            self.common_root
+            / ".codex-orchestrator"
+            / "runs"
+            / str(binding["run_id"])
+        )
         try:
-            os.fsync(descriptor)
+            with batch.batch_lock(run_dir, create=False):
+                yield
+        except journal.CoordinationRefusal as exc:
+            raise _coordination_refusal(exc) from exc
+
+    def _read_replay_locked(
+        self, chain_id: str, *, verify_receipts: bool = True
+    ) -> MergeReplayResult:
+        try:
+            raw = self._read_root_bytes(self.events_path(chain_id).name)
+        except FileNotFoundError as exc:
+            raise FrozenError(
+                "merge event log is missing",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        except OSError as exc:
+            raise FrozenError(
+                "merge event log is unreadable",
+                chain_id=chain_id,
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        return _replay_merge_event_bytes(
+            chain_id, raw, verify_receipts=verify_receipts
+        )
+
+    def _projection_status(
+        self, replay: MergeReplayResult
+    ) -> tuple[str, bytes | None]:
+        state_name = self.state_path(str(replay.state["chain_id"])).name
+        try:
+            raw = self._read_root_bytes(state_name)
+        except FileNotFoundError:
+            return "missing", None
+        except OSError as exc:
+            raise FrozenError(
+                "merge materialized state is unreadable",
+                chain_id=str(replay.state["chain_id"]),
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        final = canonical_bytes(replay.state) + b"\n"
+        if raw == final:
+            return "current", raw
+        if raw in replay.prefix_state_bytes[:-1]:
+            return "stale", raw
+        raise FrozenError(
+            "merge materialized state contradicts authenticated event replay",
+            chain_id=str(replay.state["chain_id"]),
+            observed=sha256_bytes(raw),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+    def _resolve_replayed_projection(
+        self, replay: MergeReplayResult
+    ) -> dict[str, Any]:
+        binding = replay.state.get("run_binding")
+        register_coordination_seams()
+        _batch, builders, journal = _coordination_modules()
+        try:
+            with self.root_descriptor() as root:
+                root_observation = journal._file_observation(os.fstat(root))
+                authoritative = builders._resolve_binding_from_descriptor(
+                    Path(
+                        str(
+                            binding["repository"]
+                            if isinstance(binding, Mapping)
+                            else replay.state["repository"]
+                        )
+                    ),
+                    root,
+                    str(replay.state["chain_id"]),
+                    ZERO_DIGEST,
+                    expected_type=None,
+                    expected_fields=None,
+                    expected_run_id=None,
+                    expected_task_id=None,
+                    replay_only=True,
+                    allow_pending=True,
+                )
+                if (
+                    authoritative != replay.state
+                    or journal._file_observation(os.fstat(root))
+                    != root_observation
+                ):
+                    raise ValueError("authoritative merge replay changed")
+        except (
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            RuntimeError,
+            journal.CoordinationRefusal,
+        ) as exc:
+            raise FrozenError(
+                "merge binding authority replay failed",
+                chain_id=str(replay.state["chain_id"]),
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        return copy.deepcopy(replay.state)
+
+    def _load_with_outer(
+        self, chain_id: str, *, session: str | None
+    ) -> dict[str, Any]:
+        with self.event_lock(chain_id):
+            replay = self._read_replay_locked(chain_id)
+            projection_status, _raw = self._projection_status(replay)
+        if projection_status != "current":
+            _require_merge_store_control("replay-projection-repair")
+            lease = acquire_chain_lease(
+                self.root,
+                chain_id=chain_id,
+                session=self._session(session),
+            )
+            try:
+                with self.event_lock(chain_id):
+                    replay = self._read_replay_locked(chain_id)
+                    projection_status, _raw = self._projection_status(replay)
+                    if projection_status != "current":
+                        lease.before_state_replace()
+                        self._atomic_state(replay.state)
+                        self._boundary("merge-replay-state-replaced")
+            finally:
+                lease.release()
+        with self.event_lock(chain_id):
+            replay = self._read_replay_locked(chain_id)
+            if self._projection_status(replay)[0] != "current":
+                raise FrozenError(
+                    "merge projection did not stabilize after replay repair",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            state = self._resolve_replayed_projection(replay)
+            self._remember_version(
+                state, replay.tail_sequence, replay.tail_digest
+            )
+            return state
+
+    def load(
+        self, chain_id: str, *, session: str | None = None
+    ) -> dict[str, Any]:
+        self._validate_id(chain_id)
+        if self.chain_family(chain_id) != "merge":
+            raise FrozenError(
+                "merge store refused a commit-family chain",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        with self.event_lock(chain_id):
+            preliminary = self._read_replay_locked(
+                chain_id, verify_receipts=False
+            )
+        binding = preliminary.state.get("run_binding")
+        with self._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ):
+            return self._load_with_outer(chain_id, session=session)
+
+    def _prepare_event(
+        self,
+        replay: MergeReplayResult | None,
+        *,
+        chain_id: str,
+        event_name: str,
+        generation_digest: str | None,
+        payload: Mapping[str, Any],
+        at: str,
+    ) -> tuple[
+        dict[str, Any],
+        dict[str, Any],
+        tuple[dict[str, Any], ...],
+        dict[str, Any] | None,
+    ]:
+        _require_merge_store_control("nonrecursive-source-digest")
+        if event_name not in MERGE_EVENT_NAMES or event_name == "journal_receipted":
+            raise ValueError("public merge transition event is invalid")
+        if "source_event_digest" in payload or "journal_batch" in payload:
+            raise ValueError("merge journal carrier members are store-owned")
+        previous_state = replay.state if replay is not None else None
+        sequence = replay.tail_sequence + 1 if replay is not None else 1
+        previous_digest = replay.tail_digest if replay is not None else ZERO_DIGEST
+        unsigned_source: dict[str, Any] = {
+            "schema": "forge-merge-event/1",
+            "chain_id": chain_id,
+            "sequence": sequence,
+            "at": at,
+            "event": event_name,
+            "generation_digest": generation_digest,
+            "previous_digest": previous_digest,
+            "payload": copy.deepcopy(dict(payload)),
+        }
+        source_event_digest = sha256_bytes(canonical_bytes(unsigned_source))
+        provisional_event = {
+            **copy.deepcopy(unsigned_source),
+            "digest": source_event_digest,
+        }
+        try:
+            provisional_state = reduce_merge_event(
+                copy.deepcopy(previous_state), copy.deepcopy(provisional_event)
+            )
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise FrozenError(
+                "proposed merge delta cannot be reduced",
+                chain_id=chain_id,
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        records = _build_merge_chain_journal_records(
+            Path(str(provisional_state.get("repository"))),
+            provisional_event,
+            copy.deepcopy(previous_state),
+            provisional_state,
+            source_event_digest,
+        )
+        final_payload = copy.deepcopy(dict(payload))
+        pending_outbox: dict[str, Any] | None = None
+        if records:
+            _require_merge_store_control("projected-journal-outbox")
+            _batch, _builders, journal = _coordination_modules()
+            batch_bytes = b"".join(journal._journal_line(record) for record in records)
+            batch_digest = sha256_bytes(batch_bytes)
+            final_payload.update(
+                {
+                    "source_event_digest": source_event_digest,
+                    "journal_batch": {
+                        "idempotency_key": source_event_digest,
+                        "batch_digest": batch_digest,
+                        "record_count": len(records),
+                        "records": copy.deepcopy(list(records)),
+                    },
+                }
+            )
+            pending_outbox = {
+                "idempotency_key": source_event_digest,
+                "batch_digest": batch_digest,
+                "record_count": len(records),
+                "source_event_digest": source_event_digest,
+            }
+        unsigned_outer = {**unsigned_source, "payload": final_payload}
+        event = {
+            **unsigned_outer,
+            "digest": sha256_bytes(canonical_bytes(unsigned_outer)),
+        }
+        try:
+            current = reduce_merge_event(
+                copy.deepcopy(previous_state), copy.deepcopy(event)
+            )
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise FrozenError(
+                "proposed merge carrier cannot be reduced",
+                chain_id=chain_id,
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        _require_merge_store_control("builder-transition-validation")
+        _batch, builders, _journal = _coordination_modules()
+        validation_context = (
+            copy.deepcopy(replay.context) if replay is not None else {}
+        )
+        if not builders._state_shape_valid(current, chain_id, "merge") or not (
+            builders._merge_transition_valid(
+                event,
+                copy.deepcopy(previous_state),
+                current,
+                context=validation_context,
+            )
+        ):
+            raise FrozenError(
+                "proposed merge transition is not admitted by DM-014",
+                chain_id=chain_id,
+                state=str(current.get("state")),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if bool(records) != bool(pending_outbox):
+            raise FrozenError(
+                "merge journal outbox projection is inconsistent",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if records:
+            replay_entries = tuple(replay.entries if replay is not None else ()) + (
+                (
+                    copy.deepcopy(event),
+                    copy.deepcopy(previous_state),
+                    copy.deepcopy(current),
+                    tuple(copy.deepcopy(records)),
+                    source_event_digest,
+                ),
+            )
+            for record in records:
+                record_binding = record.get("binding")
+                if (
+                    not isinstance(record_binding, dict)
+                    or not builders._binding_matches_source_fact(
+                        record_binding,
+                        record,
+                        event,
+                        copy.deepcopy(previous_state),
+                        current,
+                        family="merge",
+                    )
+                    or not _new_merge_record_is_current(
+                        builders,
+                        current,
+                        record_binding,
+                        record,
+                        event,
+                        copy.deepcopy(previous_state),
+                        current,
+                        replay_entries,
+                    )
+                ):
+                    raise FrozenError(
+                        "new merge journal binding is not current",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+        return event, current, records, pending_outbox
+
+    def _write_transition_with_outer(
+        self,
+        snapshot: dict[str, Any] | None,
+        *,
+        chain_id: str,
+        event_name: str,
+        generation_digest: str | None,
+        payload: Mapping[str, Any],
+        at: str,
+        session: str | None,
+        initial: bool,
+        drain: bool,
+    ) -> dict[str, Any]:
+        for control in self._TRANSITION_CONTROLS:
+            _require_merge_store_control(control)
+        self.ensure_root()
+        lease = acquire_chain_lease(
+            self.root,
+            chain_id=chain_id,
+            session=self._session(session),
+        )
+        records: tuple[dict[str, Any], ...] = ()
+        pending_outbox: dict[str, Any] | None = None
+        try:
+            with self.event_lock(chain_id):
+                replay: MergeReplayResult | None = None
+                if initial:
+                    if self._root_entry_exists(
+                        self.events_path(chain_id).name
+                    ) or self._root_entry_exists(self.state_path(chain_id).name):
+                        raise FrozenError(
+                            "generated merge chain identity already exists",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                else:
+                    replay = self._read_replay_locked(chain_id)
+                    if snapshot is None:
+                        raise ValueError("merge transition requires a loaded snapshot")
+                    _require_merge_store_control("lease-tail-authentication")
+                    self._require_tail_version(
+                        snapshot,
+                        replay.tail_sequence,
+                        replay.tail_digest,
+                        family="merge",
+                    )
+                    if canonical_bytes(snapshot) != canonical_bytes(replay.state):
+                        raise FrozenError(
+                            "merge transition snapshot contradicts event replay",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    if replay.state.get("journal_outbox") is not None:
+                        raise Refusal(
+                            V2ReasonCode.JOURNAL_OUTBOX_PENDING,
+                            "forge: merge transition refused — journal outbox is pending",
+                            remediation=f"forge status --chain-id {chain_id}",
+                            chain=replay.state,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                event, current, records, pending_outbox = self._prepare_event(
+                    replay,
+                    chain_id=chain_id,
+                    event_name=event_name,
+                    generation_digest=generation_digest,
+                    payload=payload,
+                    at=at,
+                )
+                _require_merge_store_control("event-before-state")
+                lease.before_event_append()
+                self._append_event_bytes(
+                    chain_id,
+                    canonical_bytes(event) + b"\n",
+                    initial=initial,
+                )
+                self._boundary("merge-event-appended")
+                lease.before_state_replace()
+                self._atomic_state(current)
+                self._boundary("merge-state-replaced")
+                with self.root_descriptor() as root:
+                    os.fsync(root)
+                self._boundary("merge-directory-fsynced")
+                self._remember_version(
+                    current,
+                    int(event["sequence"]),
+                    str(event["digest"]),
+                )
         finally:
-            os.close(descriptor)
+            lease.release()
+            self._boundary("merge-chain-serialization-released")
+        if pending_outbox is not None and drain:
+            _require_merge_store_control("post-serialization-journal-drain")
+            receipt = _drain_chain_batch_capability(
+                current,
+                pending_outbox,
+                records,
+            )
+            self._boundary("merge-journal-drained")
+            return self._append_receipt_with_outer(
+                current,
+                receipt,
+                session=session,
+            )
+        return current
+
+    def _append_receipt_with_outer(
+        self,
+        snapshot: dict[str, Any],
+        receipt: Mapping[str, Any],
+        *,
+        session: str | None,
+    ) -> dict[str, Any]:
+        for control in (
+            "lease-tail-authentication",
+            "builder-transition-validation",
+            "event-before-state",
+        ):
+            _require_merge_store_control(control)
+        chain_id = str(snapshot["chain_id"])
+        if set(receipt) != {
+            "idempotency_key",
+            "batch_digest",
+            "receipt_digest",
+        }:
+            raise FrozenError(
+                "merge journal receipt is malformed",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        lease = acquire_chain_lease(
+            self.root,
+            chain_id=chain_id,
+            session=self._session(session),
+        )
+        try:
+            with self.event_lock(chain_id):
+                replay = self._read_replay_locked(chain_id)
+                self._require_tail_version(
+                    snapshot,
+                    replay.tail_sequence,
+                    replay.tail_digest,
+                    family="merge",
+                )
+                pending = replay.state.get("journal_outbox")
+                if not isinstance(pending, dict) or (
+                    receipt.get("idempotency_key")
+                    != pending.get("idempotency_key")
+                    or receipt.get("batch_digest") != pending.get("batch_digest")
+                ):
+                    raise FrozenError(
+                        "merge journal receipt does not match pending outbox",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                unsigned = {
+                    "schema": "forge-merge-event/1",
+                    "chain_id": chain_id,
+                    "sequence": replay.tail_sequence + 1,
+                    "at": iso_z(),
+                    "event": "journal_receipted",
+                    "generation_digest": (
+                        replay.state.get("candidate", {}).get("generation_digest")
+                        if isinstance(replay.state.get("candidate"), dict)
+                        else None
+                    ),
+                    "previous_digest": replay.tail_digest,
+                    "payload": copy.deepcopy(dict(receipt)),
+                }
+                event = {
+                    **unsigned,
+                    "digest": sha256_bytes(canonical_bytes(unsigned)),
+                }
+                current = reduce_merge_event(
+                    copy.deepcopy(replay.state), copy.deepcopy(event)
+                )
+                _batch, builders, _journal = _coordination_modules()
+                context = copy.deepcopy(replay.context)
+                if not builders._state_shape_valid(
+                    current, chain_id, "merge"
+                ) or not builders._merge_transition_valid(
+                    event,
+                    replay.state,
+                    current,
+                    context=context,
+                ):
+                    raise FrozenError(
+                        "merge journal receipt transition is invalid",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                lease.before_event_append()
+                self._append_event_bytes(
+                    chain_id, canonical_bytes(event) + b"\n", initial=False
+                )
+                self._boundary("merge-receipt-appended")
+                lease.before_state_replace()
+                self._atomic_state(current)
+                self._boundary("merge-receipt-state-replaced")
+                self._remember_version(
+                    current,
+                    int(event["sequence"]),
+                    str(event["digest"]),
+                )
+        finally:
+            lease.release()
+        return current
+
+    def create(
+        self,
+        initial_delta: Mapping[str, Any],
+        *,
+        at: str | None = None,
+        session: str | None = None,
+    ) -> dict[str, Any]:
+        chain_id = str(initial_delta.get("chain_id", ""))
+        self._validate_id(chain_id)
+        binding = initial_delta.get("run_binding")
+        with self._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ):
+            return self._write_transition_with_outer(
+                None,
+                chain_id=chain_id,
+                event_name="chain_started",
+                generation_digest=None,
+                payload={"delta": copy.deepcopy(dict(initial_delta))},
+                at=at or iso_z(),
+                session=session,
+                initial=True,
+                drain=True,
+            )
+
+    def transition(
+        self,
+        snapshot: dict[str, Any],
+        event_name: str,
+        payload: Mapping[str, Any],
+        *,
+        generation_digest: str | None,
+        at: str | None = None,
+        session: str | None = None,
+    ) -> dict[str, Any]:
+        validate_merge_state(snapshot, str(snapshot.get("chain_id", "")))
+        chain_id = str(snapshot["chain_id"])
+        if self.chain_family(chain_id) != "merge":
+            raise FrozenError(
+                "merge transition routed to a non-merge family",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        binding = snapshot.get("run_binding")
+        with self._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ):
+            return self._write_transition_with_outer(
+                snapshot,
+                chain_id=chain_id,
+                event_name=event_name,
+                generation_digest=generation_digest,
+                payload=payload,
+                at=at or iso_z(),
+                session=session,
+                initial=False,
+                drain=True,
+            )
+
+    def recover_pending_outbox(
+        self, chain_id: str, *, session: str | None = None
+    ) -> dict[str, Any]:
+        _require_merge_store_control("post-serialization-journal-drain")
+        self._validate_id(chain_id)
+        if self.chain_family(chain_id) != "merge":
+            raise FrozenError(
+                "merge outbox recovery routed to a non-merge family",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        with self.event_lock(chain_id):
+            preliminary = self._read_replay_locked(
+                chain_id, verify_receipts=False
+            )
+        binding = preliminary.state.get("run_binding")
+        if not isinstance(binding, Mapping):
+            raise FrozenError(
+                "pending merge outbox lacks an immutable run binding",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        with self._journal_outer(binding):
+            state = self._load_with_outer(chain_id, session=session)
+            pending = state.get("journal_outbox")
+            if pending is None:
+                return state
+            with self.event_lock(chain_id):
+                replay = self._read_replay_locked(chain_id)
+                carrier = replay.entries[-1]
+                records = carrier[3]
+                if (
+                    not records
+                    or carrier[4] != pending.get("source_event_digest")
+                ):
+                    raise FrozenError(
+                        "pending merge outbox lacks its exact carried batch",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+            receipt = _drain_chain_batch_capability(state, pending, records)
+            self._boundary("merge-journal-drained")
+            return self._append_receipt_with_outer(
+                state,
+                receipt,
+                session=session,
+            )
 
 
 def _require_common_lock_control(name: str) -> None:
@@ -10735,7 +12197,9 @@ def _success(
     revision9 = bool(
         isinstance(state, Mapping)
         and (
-            state.get("run_binding") is not None
+            state.get("kind") == "merge"
+            or state.get("schema") == "forge-merge-chain/1"
+            or state.get("run_binding") is not None
             or isinstance(state.get("staging"), Mapping)
             and state.get("staging", {}).get("archive") is not None
         )
@@ -10951,15 +12415,13 @@ def _peek_chain_state(store: ChainStore, chain_id: str) -> dict[str, Any] | None
     """Read only enough immutable identity to choose the outer journal lock."""
 
     try:
-        raw = store._read_root_bytes(store.state_path(chain_id).name)
-        return validate_state(json.loads(raw), chain_id)
-    except (FileNotFoundError, OSError, UnicodeError, ValueError, FrozenError):
-        try:
-            with store.event_lock(chain_id):
-                events = store._events_unlocked(chain_id)
-                return copy.deepcopy(events[-1]["payload"]["state"])
-        except (FileNotFoundError, OSError, ValueError, FrozenError):
+        if store.chain_family(chain_id) != "commit":
             return None
+        with store.event_lock(chain_id):
+            events = store._events_unlocked(chain_id)
+            return copy.deepcopy(events[-1]["payload"]["state"])
+    except (FileNotFoundError, OSError, UnicodeError, ValueError, FrozenError):
+        return None
 
 
 def _peek_selected_chain(
@@ -10969,7 +12431,7 @@ def _peek_selected_chain(
     if selected_id is not None:
         return _peek_chain_state(engine.ctx.store, selected_id)
     candidates: list[dict[str, Any]] = []
-    for chain_id in engine.ctx.store.list_ids():
+    for chain_id in engine.ctx.store.list_ids(family="commit"):
         state = _peek_chain_state(engine.ctx.store, chain_id)
         if (
             isinstance(state, dict)
@@ -11041,6 +12503,77 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
         )
 
     return wrapped
+
+
+class MergeEngine:
+    """Dormant merge-family target for explicit shared CLI verbs."""
+
+    def __init__(self, ctx: CommandContext) -> None:
+        self.ctx = ctx
+
+    @property
+    def store(self) -> MergeChainStore:
+        if not isinstance(self.ctx.store, MergeChainStore):
+            raise FrozenError(
+                "merge routing lacks the merge-family store",
+                chain_id=self.ctx.options.chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return self.ctx.store
+
+    def _load(self) -> dict[str, Any]:
+        chain_id = self.ctx.options.chain_id
+        if chain_id is None:
+            raise Refusal(
+                ReasonCode.STATE_PRECONDITION,
+                "forge: merge shared verb refused — explicit --chain-id is required",
+                remediation="forge status --chain-id <id>",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        state = self.store.load(chain_id)
+        if state.get("journal_outbox") is not None:
+            state = self.store.recover_pending_outbox(chain_id)
+        return state
+
+    def status(self) -> Outcome:
+        state = self._load()
+        if state["state"] == "closed":
+            next_step = "none — merge chain closed"
+        elif state["state"] == "aborted":
+            next_step = "none — merge chain aborted"
+        else:
+            next_step = f"forge status --chain-id {state['chain_id']}"
+        return _success(
+            state,
+            f"merge chain {state['chain_id']} is {state['state']}",
+            next_step,
+        )
+
+    def _dormant_review(self, verb: str) -> Outcome:
+        state = self._load()
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            f"forge: {verb} refused — merge review adapter is dormant",
+            expected="the later phase-3 merge review adapter activation",
+            observed="event-family routing is active; merge review mutation is dormant",
+            remediation=f"forge status --chain-id {state['chain_id']}",
+            chain=state,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+    def review_request(self) -> Outcome:
+        return self._dormant_review("review request")
+
+    def review_collect(self) -> Outcome:
+        return self._dormant_review("review collect")
+
+    def review_attach(self, _verdict_file: str) -> Outcome:
+        return self._dormant_review("review attach")
+
+    def review_disposition(
+        self, _finding: int, _severity: str, _resolution: str
+    ) -> Outcome:
+        return self._dormant_review("review disposition")
 
 
 class Engine:
@@ -11190,14 +12723,25 @@ class Engine:
 
     def _chains_for_worktree(self) -> list[dict[str, Any]]:
         chains: list[dict[str, Any]] = []
-        for chain_id in self.ctx.store.list_ids():
-            state = self.ctx.store.load(chain_id)
+        for chain_id in self.ctx.store.list_ids(family="commit"):
+            try:
+                state = self.ctx.store.load(chain_id)
+            except FrozenError:
+                # Explicit selection surfaces this chain's own failure.  An
+                # unrelated frozen file never blocks a healthy worktree chain.
+                continue
             if state["staging"].get("worktree_root") == str(self.ctx.repo.root):
                 chains.append(state)
         return chains
 
     def select(self, *, include_terminal: bool = True) -> dict[str, Any]:
         if self.ctx.options.chain_id:
+            if self.ctx.store.chain_family(self.ctx.options.chain_id) != "commit":
+                raise FrozenError(
+                    "commit selection refused a merge-family chain",
+                    chain_id=self.ctx.options.chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
             state = self.ctx.store.load(self.ctx.options.chain_id)
             if state.get("journal_outbox") is not None:
                 state = self.ctx.store.recover_pending_outbox(state)
