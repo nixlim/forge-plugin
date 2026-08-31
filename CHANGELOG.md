@@ -21,6 +21,11 @@ Release dates are the UTC dates of the release commits.
 
 ### Added
 
+- Spec revision 11: normative authority for the landed coordination fixes
+  (replay history admission, operator tombstones, enumeration isolation, ingest
+  evidence capture, typed readmission), the bounded receipts-ledger gap repair,
+  the FR-236 per-operation publication budget, and the archive-mode changelog
+  exemption.
 - CI: a GitHub Actions workflow running the forge gates on pushes, pull
   requests, and a weekly schedule — full unittest discovery, routing/inventory
   conformance, STRICT evals, and the mechanical drift check in reduced-signal
