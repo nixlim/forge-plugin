@@ -440,6 +440,19 @@ _REQUIRED_MERGE_ADAPTER_CONTROLS = frozenset(
     }
 )
 MERGE_ADAPTER_CONTROLS = _REQUIRED_MERGE_ADAPTER_CONTROLS
+_REQUIRED_MERGE_LIFECYCLE_CONTROLS = frozenset(
+    {
+        "dormant-parser-gate",
+        "atomic-worktree-ownership",
+        "admission-priority",
+        "candidate-bound-approval",
+    }
+)
+MERGE_LIFECYCLE_CONTROLS = _REQUIRED_MERGE_LIFECYCLE_CONTROLS
+# Slice 8 is the only candidate authorized to flip this switch.  Keeping the
+# grammar construction immediately adjacent to the flag makes dormancy a
+# mechanically testable property rather than a deployment convention.
+MERGE_LIFECYCLE_ACTIVE = False
 _REQUIRED_ARCHIVE_RECHECK_CONTROLS = frozenset(
     {"start", "authorization", "commit"}
 )
@@ -4177,6 +4190,17 @@ def _require_merge_adapter_control(name: str) -> None:
         )
 
 
+def _require_merge_lifecycle_control(name: str) -> None:
+    if (
+        name not in _REQUIRED_MERGE_LIFECYCLE_CONTROLS
+        or name not in MERGE_LIFECYCLE_CONTROLS
+    ):
+        raise FrozenError(
+            f"merge lifecycle control is unavailable: {name}",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+
 def validate_merge_state(
     state: Any, chain_id: str | None = None
 ) -> dict[str, Any]:
@@ -4720,6 +4744,8 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
         "--dispense-citation",
         "--dispense-reason",
     }
+    if MERGE_LIFECYCLE_ACTIVE:
+        verb_value_options.add("--worktree")
     seen_singletons: set[str] = set()
     index = 0
     while index < len(argv):
@@ -4828,12 +4854,38 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
     return options, remaining
 
 
+def _attach_merge_lifecycle_parser(
+    commands: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Attach only the slice-4 merge verbs; later slices own the rest."""
+
+    _require_merge_lifecycle_control("dormant-parser-gate")
+    merge = commands.add_parser("merge")
+    merge_commands = merge.add_subparsers(dest="merge_command", required=True)
+    start = merge_commands.add_parser("start")
+    start.add_argument("--worktree", required=True)
+    start.add_argument("--declare-tier", choices=tuple(TIER_RANK))
+    start.add_argument("--task")
+    merge_commands.add_parser("refresh")
+    merge_commands.add_parser("verify")
+    gate = merge_commands.add_parser("gate")
+    gate_commands = gate.add_subparsers(dest="merge_gate_command", required=True)
+    gate_run = gate_commands.add_parser("run")
+    gate_run.add_argument("gate_id")
+    approve = merge_commands.add_parser("approve")
+    approve.add_argument("--candidate", required=True)
+    abort = merge_commands.add_parser("abort")
+    abort.add_argument("--reason")
+
+
 def build_parser() -> ContractArgumentParser:
     parser = ContractArgumentParser(prog="forge", add_help=True)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     commands.add_parser("verify")
     commands.add_parser("classify")
+    if MERGE_LIFECYCLE_ACTIVE:
+        _attach_merge_lifecycle_parser(commands)
 
     commit = commands.add_parser("commit")
     commit_commands = commit.add_subparsers(dest="commit_command", required=True)
@@ -4946,6 +4998,30 @@ def _validate_revision9_cross_options(
 ) -> None:
     """Refuse Revision-9 flag tuples before repository discovery."""
 
+    if (
+        MERGE_LIFECYCLE_ACTIVE
+        and args.command == "merge"
+        and args.merge_command == "start"
+    ):
+        if (options.run_id is None) != (args.task is None):
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
+                "forge: merge start refused — --run-id and --task must be supplied together",
+                expected="both --run-id and --task, or neither",
+                observed="exactly one run/task binding flag",
+                remediation="rerun merge start with both binding flags or neither",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if options.chain_id is not None:
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge start refused — --chain-id is not admitted for a new chain",
+                expected="no preselected chain identity",
+                observed=options.chain_id,
+                remediation="remove --chain-id and retry merge start",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return
     if args.command != "commit" or args.commit_command != "start":
         return
     task = args.task
@@ -5010,6 +5086,21 @@ def _route_shared_chain_engine(engine: Engine) -> Engine | MergeEngine:
     return MergeEngine(merge_context)
 
 
+def _merge_command_engine(engine: Engine) -> MergeEngine:
+    """Construct the dormant merge-family engine without implicit selection."""
+
+    _require_merge_lifecycle_control("dormant-parser-gate")
+    engine.ctx.options.revision9_face = True
+    return MergeEngine(
+        CommandContext(
+            repo=engine.ctx.repo,
+            store=MergeChainStore(engine.ctx.store.common_root),
+            options=engine.ctx.options,
+            policy=engine.ctx.policy,
+        )
+    )
+
+
 def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
     if args.command == "common-lock" and args.common_lock_command == "hold":
         return hold_common_lock(
@@ -5021,6 +5112,24 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
         )
     if args.command == "status":
         return _route_shared_chain_engine(engine).status()
+    if MERGE_LIFECYCLE_ACTIVE and args.command == "merge":
+        merge_engine = _merge_command_engine(engine)
+        if args.merge_command == "start":
+            return merge_engine.start_chain(
+                args.worktree,
+                args.declare_tier,
+                task=args.task,
+            )
+        if args.merge_command == "refresh":
+            return merge_engine.refresh()
+        if args.merge_command == "verify":
+            return merge_engine.verify()
+        if args.merge_command == "gate" and args.merge_gate_command == "run":
+            return merge_engine.gate_run(args.gate_id)
+        if args.merge_command == "approve":
+            return merge_engine.approve(args.candidate)
+        if args.merge_command == "abort":
+            return merge_engine.abort(args.reason)
     if args.command == "verify":
         return engine.verify()
     if args.command == "classify":
@@ -5177,11 +5286,15 @@ def _raw_top_level_command(argv: Sequence[str]) -> str | None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+    raw_command = _raw_top_level_command(raw_argv)
     options = CLIOptions(
         json="--json" in raw_argv,
         verbose="--verbose" in raw_argv,
         original_argv=tuple(raw_argv),
-        revision9_face=_raw_top_level_command(raw_argv) == "common-lock",
+        revision9_face=(
+            raw_command == "common-lock"
+            or (MERGE_LIFECYCLE_ACTIVE and raw_command == "merge")
+        ),
     )
     try:
         options, command_argv = _extract_global_options(raw_argv)
@@ -5192,6 +5305,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             options.run_id is not None
             or "journal" in command_argv
             or bool(command_argv and command_argv[0] == "common-lock")
+            or bool(
+                MERGE_LIFECYCLE_ACTIVE
+                and command_argv
+                and command_argv[0] == "merge"
+            )
             or any(
                 token == name or token.startswith(f"{name}=")
                 for token in command_argv
@@ -5208,6 +5326,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = build_parser().parse_args(command_argv)
         options.revision9_face = options.revision9_face or bool(
             args.command in {"journal", "common-lock"}
+            or (MERGE_LIFECYCLE_ACTIVE and args.command == "merge")
             or (
                 args.command == "commit"
                 and args.commit_command == "start"
@@ -5220,6 +5339,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         run_id_admitted = bool(
             args.command == "journal"
+            or (
+                MERGE_LIFECYCLE_ACTIVE
+                and args.command == "merge"
+                and args.merge_command == "start"
+            )
             or (
                 args.command == "commit"
                 and args.commit_command == "start"
@@ -12787,7 +12911,11 @@ def _registered_worktrees(repository: Repository) -> tuple[dict[str, str], ...]:
             except UnicodeDecodeError as exc:
                 raise OSError("Git worktree inventory is not UTF-8") from exc
             name, separator, value = field.partition(" ")
-            if not separator or name in record:
+            if not separator:
+                if name not in {"bare", "detached", "locked", "prunable"}:
+                    raise OSError("Git worktree inventory is malformed")
+                value = ""
+            if name in record:
                 raise OSError("Git worktree inventory is malformed")
             record[name] = value
         if "worktree" not in record or "HEAD" not in record:
@@ -12799,14 +12927,29 @@ def _registered_worktrees(repository: Repository) -> tuple[dict[str, str], ...]:
 def _merge_worktree_status(
     repository: Repository, git_dir: Path, *, verb: str = "merge start"
 ) -> bytes:
-    status = repository.git(
-        ["status", "--porcelain=v1", "--untracked-files=all"],
-        check=False,
-    )
+    try:
+        status = repository.git(
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+            check=False,
+        )
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — source worktree status is unavailable",
+            expected="a complete Git status observation",
+            observed=str(exc),
+            remediation="inspect the recorded worktree and retry",
+        ) from exc
     if status.returncode != 0:
-        raise OSError(
-            status.stderr.decode("utf-8", "replace").strip()
-            or "git status failed"
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — source worktree status is unavailable",
+            expected="a complete Git status observation",
+            observed=(
+                status.stderr.decode("utf-8", "replace").strip()
+                or "git status failed"
+            ),
+            remediation="inspect the recorded worktree and retry",
         )
     operation_markers = (
         "MERGE_HEAD",
@@ -13318,9 +13461,17 @@ def bind_merge_candidate_generation(
     _merge_worktree_status(
         candidate_repo, Path(admission.worktree_identity["git_dir"])
     )
-    diff = candidate_repo.git(
-        ["diff", f"{remote_tip}...{admission.candidate_head}"]
-    ).stdout
+    try:
+        diff = candidate_repo.git(
+            ["diff", f"{remote_tip}...{admission.candidate_head}"]
+        ).stdout
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: merge start refused — fixed candidate diff is unavailable",
+            expected=f"git diff {remote_tip}...{admission.candidate_head}",
+            observed=str(exc),
+        ) from exc
     generation_preimage: dict[str, Any] = {
         "remote": "origin",
         "destination_ref": admission.target["destination_ref"],
@@ -13343,16 +13494,24 @@ def bind_merge_candidate_generation(
     if scope is not None:
         changed_paths = scope.changed_paths
     else:
-        names = candidate_repo.git(
-            [
-                "diff",
-                "--name-only",
-                "-z",
-                "--diff-filter=ACDMRTUXB",
-                f"{remote_tip}...{admission.candidate_head}",
-                "--",
-            ]
-        ).stdout
+        try:
+            names = candidate_repo.git(
+                [
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    "--diff-filter=ACDMRTUXB",
+                    f"{remote_tip}...{admission.candidate_head}",
+                    "--",
+                ]
+            ).stdout
+        except OSError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: merge start refused — candidate path set is unavailable",
+                expected="the complete fixed-range changed-path set",
+                observed=str(exc),
+            ) from exc
         try:
             changed_paths = tuple(
                 sorted(
@@ -13781,6 +13940,673 @@ def _merge_gate_current(
     )
 
 
+_MERGE_INITIAL_INTEGRATION = {
+    "condition": "none",
+    "primary_condition": "none",
+    "epoch": None,
+    "remote_movement_count": 0,
+    "intent": None,
+    "observed": None,
+    "pre_rebase": None,
+    "conflict": None,
+    "push": None,
+}
+
+
+def _validate_merge_claim_record(value: Any) -> dict[str, Any]:
+    _require_merge_lifecycle_control("atomic-worktree-ownership")
+    if not isinstance(value, dict) or set(value) != {
+        "chain_id",
+        "host",
+        "pid",
+        "session",
+        "started_at",
+        "worktree_digest",
+    }:
+        raise ValueError("merge ownership claim has an invalid key set")
+    if (
+        not isinstance(value.get("chain_id"), str)
+        or CHAIN_ID_RE.fullmatch(str(value["chain_id"])) is None
+        or not _valid_host(value.get("host"))
+        or not _valid_positive_int(value.get("pid"))
+        or not isinstance(value.get("session"), str)
+        or not value["session"]
+        or "\x00" in value["session"]
+        or not _valid_utc_second(value.get("started_at"))
+        or not isinstance(value.get("worktree_digest"), str)
+        or SHA256_RE.fullmatch(str(value["worktree_digest"])) is None
+    ):
+        raise ValueError("merge ownership claim fields are invalid")
+    return copy.deepcopy(value)
+
+
+@contextlib.contextmanager
+def _merge_owner_directory(store: MergeChainStore) -> Iterable[tuple[int, Path]]:
+    store.ensure_root()
+    with store.root_descriptor() as root:
+        owners = store._open_child_directory(root, "owners", create=True)
+        try:
+            opened = os.fstat(owners)
+            if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.geteuid():
+                raise OSError("merge ownership directory is not owner-controlled")
+            os.fchmod(owners, 0o700)
+            yield owners, store.root / "owners"
+        finally:
+            os.close(owners)
+
+
+def _merge_claim_identity(
+    store: MergeChainStore, worktree_identity: Mapping[str, str]
+) -> tuple[str, str, Path]:
+    worktree_digest = sha256_bytes(canonical_bytes(dict(worktree_identity)))
+    name = f"{worktree_digest}.claim"
+    return worktree_digest, name, store.root / "owners" / name
+
+
+def _read_merge_claim(
+    store: MergeChainStore, name: str, path: Path
+) -> PublishedLockRecord | None:
+    with _merge_owner_directory(store) as (owners, _owners_path):
+        return _record_at_if_present(
+            owners, name, path, _validate_merge_claim_record
+        )
+
+
+def _publish_merge_claim(
+    store: MergeChainStore,
+    name: str,
+    path: Path,
+    record: Mapping[str, Any],
+) -> PublishedLockRecord:
+    _require_merge_lifecycle_control("atomic-worktree-ownership")
+    with _merge_owner_directory(store) as (owners, owners_path):
+        temporary, private = _create_private_record_at(
+            owners,
+            owners_path,
+            name,
+            record,
+            boundary=None,
+            stage="merge-claim-temp-fsynced",
+        )
+        published = False
+        try:
+            _publish_no_replace_link(owners, temporary, owners, name)
+            published = True
+            os.fsync(owners)
+            canonical = _read_owned_record_at(
+                owners, name, path, _validate_merge_claim_record
+            )
+            if not _same_published_record(canonical, private):
+                raise OSError("published merge claim changed inode or digest")
+            return canonical
+        finally:
+            try:
+                _unlink_revalidated_record_at(
+                    owners,
+                    temporary,
+                    owners_path / temporary,
+                    private,
+                    _validate_merge_claim_record,
+                )
+                os.fsync(owners)
+            except FileNotFoundError:
+                if not published:
+                    raise
+
+
+def _merge_publication_failure(
+    store: MergeChainStore,
+    state: Mapping[str, Any],
+    claim_path: Path,
+    intended_record: Mapping[str, Any],
+    error: OSError,
+) -> Refusal:
+    """Classify a publication race without trusting the collided pathname."""
+
+    try:
+        existing = _read_merge_claim(store, claim_path.name, claim_path)
+    except (OSError, ValueError) as exc:
+        raise FrozenError(
+            "merge ownership publication collision is malformed",
+            chain_id=str(state["chain_id"]),
+            observed=f"{claim_path}: {exc}",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+    if existing is None:
+        if isinstance(error, FileExistsError):
+            raise FrozenError(
+                "merge ownership publication collision vanished before authentication",
+                chain_id=str(state["chain_id"]),
+                observed=str(claim_path),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return _merge_refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            "forge: merge start refused — ownership claim publication failed",
+            expected="one atomic no-replace owner claim",
+            observed=str(error),
+            remediation=f"forge status --chain-id {state['chain_id']}",
+            chain=state,
+        )
+
+    intended_digest = sha256_bytes(canonical_bytes(dict(intended_record)))
+    if (
+        existing.record == dict(intended_record)
+        and existing.digest == intended_digest
+        and existing.record.get("chain_id") == state["chain_id"]
+        and state["worktree"]["claim"].get("status") == "unpublished"
+        and state["worktree"]["claim"].get("digest") == intended_digest
+    ):
+        return _merge_refusal(
+            V2ReasonCode.STATE_PRECONDITION,
+            "forge: merge start refused — ownership publication requires recovery",
+            expected="completion of the authenticated publish-before-event claim",
+            observed=str(claim_path),
+            remediation=f"forge merge recover --chain-id {state['chain_id']}",
+            chain=state,
+        )
+
+    prior_id = str(existing.record.get("chain_id", ""))
+    try:
+        with store.event_lock(prior_id):
+            replay = store._read_replay_locked(prior_id)
+            store._projection_status(replay)
+    except (FrozenError, ValueError) as exc:
+        raise FrozenError(
+            "merge ownership publication collision names an unverifiable chain",
+            chain_id=prior_id or str(state["chain_id"]),
+            observed=str(claim_path),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+    prior = replay.state
+    prior_claim = prior.get("worktree", {}).get("claim")
+    same_identity = all(
+        prior.get("worktree", {}).get(name) == state["worktree"].get(name)
+        for name in ("path", "git_dir", "common_dir")
+    )
+    exact_acquired = bool(
+        isinstance(prior_claim, Mapping)
+        and prior_claim.get("status") in {"owned", "releasing"}
+        and prior_claim.get("path") == str(claim_path)
+        and prior_claim.get("inode") == existing.inode
+        and prior_claim.get("digest") == existing.digest
+    )
+    exact_publish_window = bool(
+        isinstance(prior_claim, Mapping)
+        and prior_claim.get("status") == "unpublished"
+        and prior_claim.get("path") == str(claim_path)
+        and prior_claim.get("inode") is None
+        and prior_claim.get("digest") == existing.digest
+    )
+    if (
+        same_identity
+        and prior.get("state") not in {"closed", "aborted"}
+        and (exact_acquired or exact_publish_window)
+    ):
+        return _merge_refusal(
+            V2ReasonCode.LIVE_MERGE_CHAIN_EXISTS,
+            "forge: merge start refused — selected worktree already has a live merge owner",
+            expected="an unowned registered worktree",
+            observed=prior_id,
+            remediation=f"forge status --chain-id {prior_id}",
+            chain=prior,
+        )
+    raise FrozenError(
+        "merge ownership publication collision does not match an authoritative live owner",
+        chain_id=prior_id or str(state["chain_id"]),
+        observed=canonical_bytes(existing.evidence()).decode("utf-8"),
+        schema=REVISION9_OUTPUT_SCHEMA,
+    )
+
+
+def _remove_merge_claim(
+    store: MergeChainStore,
+    state: Mapping[str, Any],
+    *,
+    unlink: bool = True,
+) -> PublishedLockRecord:
+    _require_merge_lifecycle_control("atomic-worktree-ownership")
+    claim = state["worktree"]["claim"]
+    path = Path(str(claim["path"]))
+    identity = {
+        name: str(state["worktree"][name])
+        for name in ("path", "git_dir", "common_dir")
+    }
+    _worktree_digest, expected_name, expected_path = _merge_claim_identity(
+        store, identity
+    )
+    with _merge_owner_directory(store) as (owners, owners_path):
+        if (
+            path != expected_path
+            or path.parent != owners_path
+            or path.name != expected_name
+        ):
+            raise FrozenError(
+                "merge ownership claim path is not canonical",
+                chain_id=str(state["chain_id"]),
+                observed=str(path),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        try:
+            existing = _read_owned_record_at(
+                owners, path.name, path, _validate_merge_claim_record
+            )
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            raise FrozenError(
+                "acquired merge ownership claim is absent or invalid",
+                chain_id=str(state["chain_id"]),
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        if (
+            existing.record.get("chain_id") != state["chain_id"]
+            or existing.inode != claim.get("inode")
+            or existing.digest != claim.get("digest")
+        ):
+            raise FrozenError(
+                "merge ownership claim diverges from its chain projection",
+                chain_id=str(state["chain_id"]),
+                observed=canonical_bytes(existing.evidence()).decode("utf-8"),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if unlink:
+            _unlink_revalidated_record_at(
+                owners,
+                path.name,
+                path,
+                existing,
+                _validate_merge_claim_record,
+            )
+            os.fsync(owners)
+        return existing
+
+
+def _merge_event_digest(
+    store: MergeChainStore, chain_id: str, event_name: str
+) -> str | None:
+    """Return a digest only from an authenticated, lease-stable event replay."""
+
+    with store.event_lock(chain_id):
+        replay = store._read_replay_locked(chain_id)
+    matches = [
+        event.get("digest")
+        for event in replay.events
+        if isinstance(event, dict) and event.get("event") == event_name
+    ]
+    return str(matches[-1]) if matches and SHA256_RE.fullmatch(str(matches[-1])) else None
+
+
+def _merge_released_predecessor(
+    store: MergeChainStore,
+    claim_path: Path,
+    worktree_identity: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    """Authenticate the complete causal ownership line and select its tail.
+
+    Wall-clock order is not ownership authority.  Every acquired claimant is
+    instead linked to the immediately preceding released claimant by the
+    immutable event digests recorded in the ownership intent.
+    """
+
+    expected_identity = {
+        name: str(worktree_identity[name])
+        for name in ("path", "git_dir", "common_dir")
+    }
+    summaries: dict[str, dict[str, Any]] = {}
+    for chain_id in store.list_ids(family="merge"):
+        with store.event_lock(chain_id):
+            try:
+                replay = store._read_replay_locked(chain_id)
+            except FrozenError as exc:
+                # Event one remains the authenticated family/identity router.
+                # A corrupt unrelated tail must not become a repository-wide
+                # denial of service, while a corrupt same-slot tail freezes.
+                raw = store._read_root_bytes(store.events_path(chain_id).name)
+                first = raw.splitlines(keepends=True)[0] if raw else b""
+                opening = _replay_merge_event_bytes(chain_id, first)
+                opening_worktree = opening.state.get("worktree")
+                opening_identity = (
+                    {
+                        name: opening_worktree.get(name)
+                        for name in ("path", "git_dir", "common_dir")
+                    }
+                    if isinstance(opening_worktree, Mapping)
+                    else None
+                )
+                if opening_identity == expected_identity:
+                    raise exc
+                continue
+        state = replay.state
+        identity = state.get("worktree")
+        if not isinstance(identity, Mapping) or {
+            name: identity.get(name)
+            for name in ("path", "git_dir", "common_dir")
+        } != expected_identity:
+            continue
+        with store.event_lock(chain_id):
+            replay = store._read_replay_locked(chain_id)
+            store._projection_status(replay)
+        state = replay.state
+        identity = state["worktree"]
+
+        claim = identity.get("claim")
+        if not isinstance(claim, Mapping) or claim.get("path") != str(claim_path):
+            raise FrozenError(
+                "merge ownership lineage has a noncanonical claim path",
+                chain_id=chain_id,
+                observed=str(claim.get("path") if isinstance(claim, Mapping) else None),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        intent = next(
+            (
+                event
+                for event in replay.events
+                if event.get("event") == "ownership_intent"
+            ),
+            None,
+        )
+        if not isinstance(intent, Mapping) or not isinstance(
+            intent.get("payload"), Mapping
+        ):
+            raise FrozenError(
+                "merge ownership lineage lacks an authenticated intent",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        claimed = next(
+            (
+                event
+                for event in replay.events
+                if event.get("event") == "ownership_claimed"
+            ),
+            None,
+        )
+        released = next(
+            (
+                event
+                for event in reversed(replay.events)
+                if event.get("event") == "ownership_released"
+                and isinstance(event.get("payload"), Mapping)
+                and event["payload"].get("release_mode") == "acquired"
+            ),
+            None,
+        )
+        terminal = state.get("state") in {"closed", "aborted"}
+        claim_status = claim.get("status")
+        if claimed is None:
+            if not terminal or claim_status != "released":
+                raise _merge_refusal(
+                    V2ReasonCode.LIVE_MERGE_CHAIN_EXISTS,
+                    "forge: merge start refused — selected worktree already has a live merge owner",
+                    expected="an unowned registered worktree",
+                    observed=chain_id,
+                    remediation=f"forge status --chain-id {chain_id}",
+                    chain=state,
+                )
+            # A never-published terminal release never became a lineage node.
+            continue
+        if not terminal:
+            if claim_status == "released":
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge start refused — ownership release completion is pending",
+                    expected="the cutoff-selected terminal event",
+                    observed=chain_id,
+                    remediation=f"forge merge recover --chain-id {chain_id}",
+                    chain=state,
+                )
+            raise _merge_refusal(
+                V2ReasonCode.LIVE_MERGE_CHAIN_EXISTS,
+                "forge: merge start refused — selected worktree already has a live merge owner",
+                expected="an unowned registered worktree",
+                observed=chain_id,
+                remediation=f"forge status --chain-id {chain_id}",
+                chain=state,
+            )
+        if claim_status != "released" or not isinstance(released, Mapping):
+            raise FrozenError(
+                "terminal acquired merge ownership is not durably released",
+                chain_id=chain_id,
+                observed=str(claim_status),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        payload = intent["payload"]
+        summaries[chain_id] = {
+            "predecessor_chain_id": payload.get("predecessor_chain_id"),
+            "predecessor_release_digest": payload.get(
+                "predecessor_release_digest"
+            ),
+            "released_digest": released.get("digest"),
+        }
+
+    if not summaries:
+        return None, None
+
+    children: dict[tuple[Any, Any], list[str]] = {}
+    referenced: set[str] = set()
+    roots: list[str] = []
+    for chain_id, summary in summaries.items():
+        predecessor_id = summary["predecessor_chain_id"]
+        predecessor_digest = summary["predecessor_release_digest"]
+        edge = (predecessor_id, predecessor_digest)
+        children.setdefault(edge, []).append(chain_id)
+        if predecessor_id is None:
+            if predecessor_digest is not None:
+                raise FrozenError(
+                    "merge ownership lineage has a partial root edge",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            roots.append(chain_id)
+            continue
+        predecessor = summaries.get(str(predecessor_id))
+        if (
+            predecessor is None
+            or predecessor.get("released_digest") != predecessor_digest
+        ):
+            raise FrozenError(
+                "merge ownership lineage has a missing predecessor edge",
+                chain_id=chain_id,
+                observed=str(predecessor_id),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        referenced.add(str(predecessor_id))
+    if len(roots) != 1 or any(len(values) != 1 for values in children.values()):
+        raise FrozenError(
+            "merge ownership lineage is forked",
+            observed=",".join(sorted(summaries)),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    tails = [chain_id for chain_id in summaries if chain_id not in referenced]
+    if len(tails) != 1:
+        raise FrozenError(
+            "merge ownership lineage is cyclic or has no unique tail",
+            observed=",".join(sorted(summaries)),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    cursor: str | None = tails[0]
+    visited: set[str] = set()
+    while cursor is not None:
+        if cursor in visited or len(visited) >= len(summaries):
+            raise FrozenError(
+                "merge ownership lineage contains a cycle",
+                chain_id=cursor,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        visited.add(cursor)
+        predecessor = summaries[cursor]["predecessor_chain_id"]
+        cursor = str(predecessor) if predecessor is not None else None
+    if len(visited) != len(summaries):
+        raise FrozenError(
+            "merge ownership lineage is disconnected",
+            observed=",".join(sorted(summaries)),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    tail_id = tails[0]
+    tail_digest = str(summaries[tail_id]["released_digest"])
+    if SHA256_RE.fullmatch(tail_digest) is None:
+        raise FrozenError(
+            "merge ownership lineage tail digest is invalid",
+            chain_id=tail_id,
+            observed=tail_digest,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    return tail_id, tail_digest
+
+
+def _resolve_recorded_merge_tip(
+    admission: MergeAdmission, *, verb: str
+) -> str:
+    destination = admission.target["destination_ref"]
+    branch = destination.removeprefix("refs/heads/")
+    tracking = f"refs/remotes/origin/{branch}"
+    repository = Repository(admission.worktree)
+    result = repository.git(
+        ["rev-parse", "--verify", f"{tracking}^{{commit}}"], check=False
+    )
+    try:
+        value = result.stdout.decode("ascii").strip()
+    except UnicodeDecodeError:
+        value = ""
+    if result.returncode != 0 or COMMIT_RE.fullmatch(value) is None:
+        raise _merge_refusal(
+            V2ReasonCode.FETCH_FAILED,
+            f"forge: {verb} refused — fixed target tip is unavailable",
+            expected=f"an already-fetched full commit at {tracking}",
+            observed=(
+                result.stderr.decode("utf-8", "replace").strip()
+                or value
+                or "missing tracking tip"
+            ),
+            remediation=f"forge merge {verb.split()[-1]} --chain-id <id>",
+        )
+    return value
+
+
+def _merge_inactive(state: Mapping[str, Any]) -> bool:
+    try:
+        return utc_now() >= parse_time(str(state["inactive_after"]))
+    except (KeyError, TypeError, ValueError):
+        raise FrozenError(
+            "merge inactivity deadline is malformed",
+            chain_id=str(state.get("chain_id") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+
+def _merge_unpublished_claim_absent(
+    state: Mapping[str, Any], store: MergeChainStore | None = None
+) -> bool:
+    try:
+        path = Path(str(state["worktree"]["claim"]["path"]))
+        if store is None:
+            os.lstat(path)
+        else:
+            identity = {
+                name: str(state["worktree"][name])
+                for name in ("path", "git_dir", "common_dir")
+            }
+            _digest, expected_name, expected_path = _merge_claim_identity(
+                store, identity
+            )
+            if path != expected_path or path.name != expected_name:
+                return False
+            with _merge_owner_directory(store) as (owners, _owners_path):
+                os.stat(path.name, dir_fd=owners, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except (KeyError, TypeError, OSError, ValueError):
+        return False
+    return False
+
+
+def _merge_containment(
+    state: Mapping[str, Any],
+) -> tuple[str, tuple[bool, ...]]:
+    integration = state.get("integration")
+    candidate = state.get("candidate")
+    if not isinstance(integration, Mapping) or not isinstance(candidate, Mapping):
+        return "none", ()
+    push = integration.get("push")
+    observed = integration.get("observed")
+    if not isinstance(push, Mapping) or not isinstance(observed, Mapping):
+        return "none", ()
+    attempts = push.get("attempted_heads")
+    vector = observed.get("attempted_head_containment")
+    if (
+        observed.get("exists") not in {True, False}
+        or not isinstance(attempts, list)
+        or not attempts
+        or not isinstance(vector, list)
+        or len(vector) != len(attempts)
+    ):
+        return "unresolved", ()
+    flags: list[bool] = []
+    for head, item in zip(attempts, vector):
+        if (
+            not isinstance(head, str)
+            or not isinstance(item, Mapping)
+            or item.get("head") != head
+            or type(item.get("contained")) is not bool
+        ):
+            return "unresolved", ()
+        flags.append(bool(item["contained"]))
+    current_head = candidate.get("candidate_head")
+    current_attempt = push.get("intended_head")
+    if current_head != current_attempt or attempts[-1] != current_attempt:
+        return "unresolved", tuple(flags)
+    if observed.get("contains_intended_head") is not flags[-1]:
+        return "unresolved", tuple(flags)
+    if flags[-1]:
+        return "current", tuple(flags)
+    if any(flags[:-1]):
+        return "older", tuple(flags)
+    return "all-false", tuple(flags)
+
+
+def _merge_has_attempt(state: Mapping[str, Any]) -> bool:
+    integration = state.get("integration")
+    push = integration.get("push") if isinstance(integration, Mapping) else None
+    attempts = push.get("attempted_heads") if isinstance(push, Mapping) else None
+    return isinstance(attempts, list) and bool(attempts)
+
+
+def _merge_process_unresolved(
+    state: Mapping[str, Any], *, allow_current_abort_lock: bool = False
+) -> bool:
+    integration = state.get("integration")
+    if not isinstance(integration, Mapping):
+        return True
+    if integration.get("condition") == "foreign-git-state":
+        return True
+    intent = integration.get("intent")
+    if isinstance(intent, Mapping) and any(
+        intent.get(name) is True
+        for name in ("live", "process_live", "group_survived", "unresolved")
+    ):
+        return True
+    try:
+        inspection = inspect_common_lock(Path(str(state["worktree"]["common_dir"])))
+    except (KeyError, OSError, ValueError, FrozenError):
+        return True
+    artifacts = inspection.artifacts or {}
+    owns_abort_lock = bool(
+        allow_current_abort_lock
+        and inspection.topology == "complete"
+        and inspection.outer is not None
+        and inspection.inner is not None
+        and inspection.outer.record.get("owner_kind") == "merge"
+        and inspection.outer.record.get("chain_id") == state.get("chain_id")
+        and inspection.outer.record.get("operation") == "abort"
+        and inspection.outer.record.get("pid") == os.getpid()
+    )
+    return bool(
+        (inspection.topology != "free" and not owns_abort_lock)
+        or "inflight" in artifacts
+        or inspection.detail
+    )
+
+
 class MergeEngine:
     """Dormant merge-family target for explicit shared CLI verbs."""
 
@@ -13865,14 +14691,1183 @@ class MergeEngine:
             generation=generation,
         )
 
+    def _preflight_lifecycle(
+        self,
+        state: dict[str, Any],
+        verb: str,
+        *,
+        persist_missing: bool = True,
+    ) -> dict[str, Any]:
+        """Apply FR-232 priority rows before an ordinary scalar-state row."""
+
+        _require_merge_lifecycle_control("admission-priority")
+        claim = state.get("worktree", {}).get("claim")
+        claim_status = claim.get("status") if isinstance(claim, Mapping) else None
+        if claim_status == "unpublished":
+            next_step = (
+                f"forge merge abort --chain-id {state['chain_id']}"
+                if _merge_unpublished_claim_absent(state, self.store)
+                else f"forge merge recover --chain-id {state['chain_id']}"
+            )
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: {verb} refused — ownership publication requires recovery",
+                expected="owned or terminal merge ownership",
+                observed="unpublished",
+                remediation=next_step,
+                chain=state,
+            )
+        if claim_status in {"releasing", "released"} and state["state"] not in {
+            "closed",
+            "aborted",
+        }:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: {verb} refused — ownership release completion is pending",
+                expected="the cutoff-selected terminal event",
+                observed=str(claim_status),
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        containment, _vector = _merge_containment(state)
+        if containment == "current" and state["state"] != "pushed":
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: {verb} refused — current intended HEAD containment requires recovery",
+                expected="durable current-generation pushed truth",
+                observed="current intended HEAD is contained",
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if containment == "older":
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: {verb} refused — older attempted HEAD containment requires recovery",
+                expected="historical landing reconciliation before another transition",
+                observed="only an older attempted HEAD is contained",
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if _merge_inactive(state):
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: {verb} refused — merge chain is inactive",
+                expected="an active merge transition tuple",
+                observed=str(state["inactive_after"]),
+                remediation=f"forge status --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        worktree = Path(str(state.get("worktree", {}).get("path", "")))
+        if not worktree.exists():
+            current = state
+            integration = state.get("integration")
+            if (
+                persist_missing
+                and isinstance(integration, dict)
+                and integration.get("condition") != "foreign-git-state"
+            ):
+                updated = copy.deepcopy(integration)
+                updated["condition"] = "foreign-git-state"
+                updated["primary_condition"] = "none"
+                generation = state.get("candidate")
+                current = self.store.transition(
+                    state,
+                    "condition_recorded",
+                    {"delta": {"integration": updated}},
+                    generation_digest=(
+                        str(generation["generation_digest"])
+                        if isinstance(generation, Mapping)
+                        else None
+                    ),
+                    at=iso_z(),
+                )
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: {verb} refused — recorded worktree is missing",
+                expected=str(worktree),
+                observed="foreign-git-state",
+                remediation=f"forge status --chain-id {state['chain_id']}",
+                chain=current,
+            )
+        return state
+
+    def _claim_slot(
+        self,
+        admission: MergeAdmission,
+    ) -> tuple[str, str, Path, str | None, str | None]:
+        worktree_digest, name, path = _merge_claim_identity(
+            self.store, admission.worktree_identity
+        )
+        try:
+            existing = _read_merge_claim(self.store, name, path)
+        except (OSError, ValueError) as exc:
+            raise FrozenError(
+                "merge ownership slot is malformed or unreadable",
+                observed=f"{path}: {exc}",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        if existing is not None:
+            prior_id = str(existing.record["chain_id"])
+            try:
+                prior = self.store.load(prior_id)
+            except (FrozenError, Refusal) as exc:
+                raise FrozenError(
+                    "merge ownership slot names an unverifiable chain",
+                    chain_id=prior_id,
+                    observed=str(path),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                ) from exc
+            claim = prior.get("worktree", {}).get("claim")
+            publish_before_event = bool(
+                isinstance(claim, Mapping)
+                and claim.get("status") == "unpublished"
+                and claim.get("path") == str(path)
+                and claim.get("inode") is None
+                and claim.get("digest") == existing.digest
+            )
+            exact = bool(
+                isinstance(claim, Mapping)
+                and claim.get("path") == str(path)
+                and claim.get("inode") == existing.inode
+                and claim.get("digest") == existing.digest
+            )
+            if not exact and not publish_before_event:
+                raise FrozenError(
+                    "merge ownership slot diverges from its named chain",
+                    chain_id=prior_id,
+                    observed=canonical_bytes(existing.evidence()).decode("utf-8"),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            if prior.get("state") not in {"closed", "aborted"}:
+                raise _merge_refusal(
+                    V2ReasonCode.LIVE_MERGE_CHAIN_EXISTS,
+                    "forge: merge start refused — selected worktree already has a live merge owner",
+                    expected="an unowned registered worktree",
+                    observed=prior_id,
+                    remediation=f"forge status --chain-id {prior_id}",
+                    chain=prior,
+                )
+            if claim.get("status") != "released":
+                raise FrozenError(
+                    "terminal merge ownership projection is not released",
+                    chain_id=prior_id,
+                    observed=str(claim.get("status")),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            _remove_merge_claim(self.store, prior)
+        predecessor_id, predecessor_digest = _merge_released_predecessor(
+            self.store, path, admission.worktree_identity
+        )
+        return worktree_digest, name, path, predecessor_id, predecessor_digest
+
+    def _allocate_chain_id(self) -> str:
+        for _attempt in range(32):
+            chain_id = chain_id_now()
+            if (
+                not self.store.state_path(chain_id).exists()
+                and not self.store.events_path(chain_id).exists()
+            ):
+                return chain_id
+        raise FrozenError(
+            "unable to allocate a collision-free merge chain identifier",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+    def _initial_merge_state(
+        self,
+        chain_id: str,
+        admission: MergeAdmission,
+        claim_path: Path,
+        *,
+        at: str,
+    ) -> dict[str, Any]:
+        session = self.store._session(None)
+        owner = {
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "session": session,
+            "started_at": at,
+        }
+        binding = (
+            copy.deepcopy(admission.run_task.binding)
+            if admission.run_task is not None
+            else None
+        )
+        return {
+            "schema": "forge-merge-chain/1",
+            "chain_id": chain_id,
+            "kind": "merge",
+            "state": "classifying",
+            "created_at": at,
+            "owner": owner,
+            "run": binding["run_id"] if binding is not None else None,
+            "repository": str(admission.repository),
+            "worktree": {
+                **copy.deepcopy(admission.worktree_identity),
+                "claim": {
+                    "status": "unpublished",
+                    "path": str(claim_path),
+                    "inode": None,
+                    "digest": None,
+                },
+            },
+            "branch": admission.branch,
+            "target": copy.deepcopy(admission.target),
+            "policy_source": {
+                "commit": admission.policy.sha,
+                "digest": admission.policy.digest,
+            },
+            "candidate": None,
+            "tier": None,
+            "steps": {},
+            "review": {},
+            "approval": {},
+            "authorization": {},
+            "integration": copy.deepcopy(_MERGE_INITIAL_INTEGRATION),
+            "cleanup": {"condition": "none"},
+            "run_binding": binding,
+        }
+
+    def _record_bootstrap_failure(
+        self,
+        state: dict[str, Any],
+        operation_nonce: str,
+        refusal: Refusal,
+        *,
+        attempt: int = 1,
+    ) -> Refusal:
+        integration = copy.deepcopy(state["integration"])
+        integration.update(
+            {
+                "condition": "fetch-failed",
+                "primary_condition": "none",
+                "intent": {
+                    "operation": "fetch-result",
+                    "operation_nonce": operation_nonce,
+                    "attempt": attempt,
+                    "result": "failed",
+                    "resolved_tip": None,
+                },
+            }
+        )
+        current = self.store.transition(
+            state,
+            "fetch_result",
+            {"delta": {"integration": integration}},
+            generation_digest=None,
+            at=iso_z(),
+        )
+        return _merge_refusal(
+            refusal.reason_code,
+            refusal.message,
+            expected=refusal.expected,
+            observed=refusal.observed,
+            remediation=f"forge merge refresh --chain-id {state['chain_id']}",
+            chain=current,
+            evidence_refs=refusal.evidence_refs,
+        )
+
+    def start_chain(
+        self,
+        worktree: str,
+        declared_tier: str | None = None,
+        *,
+        task: str | None = None,
+        remote_tip: str | None = None,
+    ) -> Outcome:
+        """Create and classify one dormant DM-014 chain."""
+
+        _require_merge_lifecycle_control("atomic-worktree-ownership")
+        if self.ctx.options.chain_id is not None:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge start refused — --chain-id is not admitted for a new chain",
+                observed=self.ctx.options.chain_id,
+            )
+        admission = prepare_merge_admission(
+            self.ctx, worktree, declared_tier, task=task
+        )
+        chain_id = self._allocate_chain_id()
+        journal_binding = (
+            admission.run_task.binding if admission.run_task is not None else None
+        )
+        with self.store._journal_outer(journal_binding):
+            with self.store.admission_lock(admission.worktree), acquire_common_lock(
+                Path(admission.worktree_identity["common_dir"]),
+                owner_kind="merge",
+                chain_id=chain_id,
+                operation="start",
+                no_transaction_record=True,
+            ):
+                admission = prepare_merge_admission(
+                    self.ctx, worktree, declared_tier, task=task
+                )
+                refreshed_binding = (
+                    admission.run_task.binding
+                    if admission.run_task is not None
+                    else None
+                )
+                if refreshed_binding != journal_binding:
+                    raise _merge_refusal(
+                        V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                        "forge: merge start refused — run/task binding changed during admission",
+                        expected=str(journal_binding),
+                        observed=str(refreshed_binding),
+                    )
+                (
+                    worktree_digest,
+                    claim_name,
+                    claim_path,
+                    predecessor_id,
+                    predecessor_digest,
+                ) = self._claim_slot(admission)
+                started_at = iso_z()
+                initial = self._initial_merge_state(
+                    chain_id, admission, claim_path, at=started_at
+                )
+                state = self.store.create(initial, at=started_at)
+                claim_record = {
+                    "chain_id": chain_id,
+                    "host": initial["owner"]["host"],
+                    "pid": initial["owner"]["pid"],
+                    "session": initial["owner"]["session"],
+                    "started_at": started_at,
+                    "worktree_digest": worktree_digest,
+                }
+                claim_digest = sha256_bytes(canonical_bytes(claim_record))
+                state = self.store.transition(
+                    state,
+                    "ownership_intent",
+                    {
+                        "worktree_digest": worktree_digest,
+                        "claim_path": str(claim_path),
+                        "intended_claim_digest": claim_digest,
+                        "predecessor_chain_id": predecessor_id,
+                        "predecessor_release_digest": predecessor_digest,
+                    },
+                    generation_digest=None,
+                    at=iso_z(),
+                )
+                ownership_intent_digest = _merge_event_digest(
+                    self.store, chain_id, "ownership_intent"
+                )
+                if ownership_intent_digest is None:
+                    raise FrozenError(
+                        "merge ownership intent digest is unavailable",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                try:
+                    published = _publish_merge_claim(
+                        self.store, claim_name, claim_path, claim_record
+                    )
+                except OSError as exc:
+                    raise _merge_publication_failure(
+                        self.store,
+                        state,
+                        claim_path,
+                        claim_record,
+                        exc,
+                    ) from exc
+                state = self.store.transition(
+                    state,
+                    "ownership_claimed",
+                    {
+                        "ownership_intent_digest": ownership_intent_digest,
+                        "claim_inode": published.inode,
+                        "claim_digest": published.digest,
+                        "predecessor_chain_id": predecessor_id,
+                        "predecessor_release_digest": predecessor_digest,
+                    },
+                    generation_digest=None,
+                    at=iso_z(),
+                )
+                operation_nonce = secrets.token_hex(16)
+                state = self.store.transition(
+                    state,
+                    "fetch_intent",
+                    {
+                        "repository": str(admission.repository),
+                        "worktree": copy.deepcopy(admission.worktree_identity),
+                        "branch": admission.branch,
+                        "target": copy.deepcopy(admission.target),
+                        "pre_fetch_head": admission.candidate_head,
+                        "policy_digest": admission.policy.digest,
+                        "operation_nonce": operation_nonce,
+                        "attempt": 1,
+                    },
+                    generation_digest=None,
+                    at=iso_z(),
+                )
+                try:
+                    fixed_tip = remote_tip or _resolve_recorded_merge_tip(
+                        admission, verb="merge start"
+                    )
+                except Refusal as exc:
+                    raise self._record_bootstrap_failure(
+                        state, operation_nonce, exc
+                    ) from exc
+                try:
+                    generation = bind_merge_candidate_generation(
+                        self.ctx, admission, fixed_tip, generation=1
+                    )
+                except Refusal as exc:
+                    raise self._record_bootstrap_failure(
+                        state, operation_nonce, exc
+                    ) from exc
+                if generation.scope is not None and generation.scope.result == "exceeded":
+                    terminal = self._release_to_aborted(
+                        state,
+                        reason="changed paths exceed bound task scope",
+                    )
+                    raise _merge_refusal(
+                        V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                        "forge: merge start refused — changed paths exceed bound task scope",
+                        expected="every changed path within task files and admitted run scope",
+                        observed=str(generation.scope.out_of_scope_paths),
+                        chain=terminal,
+                    )
+                integration = copy.deepcopy(state["integration"])
+                integration.update(
+                    {
+                        "condition": "none",
+                        "primary_condition": "none",
+                        "intent": {
+                            "operation": "fetch-result",
+                            "operation_nonce": operation_nonce,
+                            "attempt": 1,
+                            "result": "success",
+                            "resolved_tip": fixed_tip,
+                        },
+                    }
+                )
+                state = self.store.transition(
+                    state,
+                    "fetch_result",
+                    {
+                        "delta": {
+                            "candidate": copy.deepcopy(generation.candidate),
+                            "tier": copy.deepcopy(generation.tier),
+                            "state": "verifying",
+                            "integration": integration,
+                        }
+                    },
+                    generation_digest=str(
+                        generation.candidate["generation_digest"]
+                    ),
+                    at=iso_z(),
+                )
+        return _success(
+            state,
+            f"merge chain {chain_id} started for {admission.worktree}",
+            f"forge merge verify --chain-id {chain_id}",
+        )
+
+    def _admission_for_refresh(self, state: Mapping[str, Any]) -> MergeAdmission:
+        binding = state.get("run_binding")
+        options = dataclasses.replace(
+            self.ctx.options,
+            chain_id=None,
+            run_id=(str(binding["run_id"]) if isinstance(binding, Mapping) else None),
+        )
+        context = CommandContext(
+            repo=self.ctx.repo,
+            store=self.store,
+            options=options,
+            policy=self.ctx.policy,
+        )
+        admission = prepare_merge_admission(
+            context,
+            str(state["worktree"]["path"]),
+            None,
+            task=(
+                str(binding["task_id"])
+                if isinstance(binding, Mapping)
+                else None
+            ),
+        )
+        if (
+            admission.repository != Path(str(state["repository"]))
+            or admission.worktree_identity
+            != {
+                name: state["worktree"][name]
+                for name in ("path", "git_dir", "common_dir")
+            }
+            or admission.branch != state["branch"]
+            or admission.target != state["target"]
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.WORKTREE_INVALID,
+                "forge: merge refresh refused — recorded admission identity changed",
+                expected="the immutable repository/worktree/branch/target tuple",
+                observed=str(admission),
+                chain=state,
+            )
+        return admission
+
+    def _refresh_iteration(self, state: Mapping[str, Any]) -> int:
+        """Apply the ordinary scalar row before review-specific refusals."""
+
+        integration = state.get("integration")
+        condition = integration.get("condition") if isinstance(integration, Mapping) else None
+        admitted_conditions = {
+            ("classifying", "fetch-failed"),
+            ("revising", "rebase-failed"),
+        }
+        if condition != "none" and (state["state"], condition) not in admitted_conditions:
+            self._wrong_state(
+                state,
+                "an ordinary active pre-push tuple or retryable refresh condition",
+                "merge refresh",
+            )
+        if state["state"] not in {
+            "classifying",
+            "verifying",
+            "reviewing",
+            "revising",
+            "awaiting_approval",
+            "authorized",
+        }:
+            self._wrong_state(state, "an active mutable pre-push state", "merge refresh")
+        review = state.get("review")
+        iteration = review.get("iteration", 0) if isinstance(review, Mapping) else 0
+        if type(iteration) is not int:
+            raise FrozenError(
+                "merge review iteration is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if iteration >= 8:
+            raise _merge_refusal(
+                V2ReasonCode.ITERATION_CAP,
+                "forge: merge refresh refused — review iteration cap of 8 is final",
+                expected="safe abort after the eighth review cycle",
+                observed=str(iteration),
+                chain=state,
+            )
+        if isinstance(review, Mapping) and review.get("operator_cosign_required") is True:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge refresh refused — above-MINOR disposition awaits operator co-sign",
+                expected="merge approve for the sole outstanding disposition",
+                observed="pending finding-disposition",
+                chain=state,
+            )
+        return iteration
+
+    def refresh(self, *, remote_tip: str | None = None) -> Outcome:
+        _require_merge_lifecycle_control("admission-priority")
+        state = self._preflight_lifecycle(self._load(), "merge refresh")
+        self._halt(state)
+        self._refresh_iteration(state)
+        binding = state.get("run_binding")
+        with self.store._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ), acquire_common_lock(
+            Path(str(state["worktree"]["common_dir"])),
+            owner_kind="merge",
+            chain_id=str(state["chain_id"]),
+            operation="refresh",
+            no_transaction_record=True,
+        ):
+            state = self._preflight_lifecycle(self._load(), "merge refresh")
+            iteration = self._refresh_iteration(state)
+            admission = self._admission_for_refresh(state)
+            prior_candidate = state.get("candidate")
+            bootstrap_nonce: str | None = None
+            bootstrap_attempt = 1
+            if prior_candidate is None:
+                prior_intent = state.get("integration", {}).get("intent")
+                if isinstance(prior_intent, Mapping) and type(
+                    prior_intent.get("attempt")
+                ) is int:
+                    bootstrap_attempt = int(prior_intent["attempt"]) + 1
+                bootstrap_nonce = secrets.token_hex(16)
+                state = self.store.transition(
+                    state,
+                    "fetch_intent",
+                    {
+                        "repository": str(admission.repository),
+                        "worktree": copy.deepcopy(admission.worktree_identity),
+                        "branch": admission.branch,
+                        "target": copy.deepcopy(admission.target),
+                        "pre_fetch_head": admission.candidate_head,
+                        "policy_digest": admission.policy.digest,
+                        "operation_nonce": bootstrap_nonce,
+                        "attempt": bootstrap_attempt,
+                    },
+                    generation_digest=None,
+                    at=iso_z(),
+                )
+            try:
+                fixed_tip = remote_tip or _resolve_recorded_merge_tip(
+                    admission, verb="merge refresh"
+                )
+            except Refusal as exc:
+                if bootstrap_nonce is not None:
+                    raise self._record_bootstrap_failure(
+                        state,
+                        bootstrap_nonce,
+                        exc,
+                        attempt=bootstrap_attempt,
+                    ) from exc
+                raise
+            next_number = (
+                int(prior_candidate["generation"]) + 1
+                if isinstance(prior_candidate, Mapping)
+                else 1
+            )
+            generation = bind_merge_candidate_generation(
+                self.ctx, admission, fixed_tip, generation=next_number
+            )
+            candidate = copy.deepcopy(generation.candidate)
+            if isinstance(prior_candidate, Mapping):
+                identity_fields = (
+                    "remote",
+                    "destination_ref",
+                    "remote_tip",
+                    "candidate_head",
+                    "diff_sha256",
+                    "policy_commit",
+                    "policy_digest",
+                    "worktree_identity",
+                )
+                if all(
+                    prior_candidate.get(name) == candidate.get(name)
+                    for name in identity_fields
+                ):
+                    candidate = copy.deepcopy(dict(prior_candidate))
+            retained_review = {} if iteration == 0 else {"iteration": iteration}
+            next_integration = copy.deepcopy(state["integration"])
+            next_integration.update(
+                {
+                    "condition": "none",
+                    "primary_condition": "none",
+                    "epoch": None,
+                    "intent": {
+                        "operation": (
+                            "fetch-result"
+                            if prior_candidate is None
+                            else "refresh-result"
+                        ),
+                        "operation_nonce": (
+                            bootstrap_nonce or secrets.token_hex(16)
+                        ),
+                        "attempt": bootstrap_attempt,
+                        "result": "success",
+                        "resolved_tip": fixed_tip,
+                    },
+                }
+            )
+            if prior_candidate is None:
+                event_name = "fetch_result"
+            else:
+                event_name = "generation_refreshed"
+            desired = {
+                "state": "verifying",
+                "policy_source": {
+                    "commit": admission.policy.sha,
+                    "digest": admission.policy.digest,
+                },
+                "candidate": candidate,
+                "tier": copy.deepcopy(generation.tier),
+                "steps": {},
+                "review": retained_review,
+                "approval": {},
+                "authorization": {},
+                "integration": next_integration,
+            }
+            delta = {
+                name: value
+                for name, value in desired.items()
+                if state.get(name) != value
+            }
+            state = self.store.transition(
+                state,
+                event_name,
+                {"delta": delta},
+                generation_digest=str(candidate["generation_digest"]),
+                at=iso_z(),
+            )
+        return _success(
+            state,
+            f"merge chain {state['chain_id']} refreshed to generation {candidate['generation']}",
+            f"forge merge verify --chain-id {state['chain_id']}",
+        )
+
+    def approve(self, candidate: str) -> Outcome:
+        _require_merge_lifecycle_control("candidate-bound-approval")
+        state = self._preflight_lifecycle(self._load(), "merge approve")
+        self._halt(state)
+        review = state.get("review")
+        pending = bool(
+            state["state"] in {"reviewing", "revising"}
+            and isinstance(review, Mapping)
+            and review.get("operator_cosign_required") is True
+        )
+        iteration = review.get("iteration", 0) if isinstance(review, Mapping) else 0
+        if type(iteration) is not int:
+            raise FrozenError(
+                "merge review iteration is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if pending and iteration >= 8:
+            raise _merge_refusal(
+                V2ReasonCode.ITERATION_CAP,
+                "forge: merge approve refused — review iteration cap of 8 is final",
+                expected="status or safe abort after the eighth review cycle",
+                observed=str(iteration),
+                chain=state,
+            )
+        if not pending and state["state"] != "awaiting_approval":
+            self._wrong_state(
+                state,
+                "a sole pending disposition or awaiting_approval",
+                "merge approve",
+            )
+        generation = state.get("candidate")
+        if not isinstance(generation, Mapping):
+            raise FrozenError(
+                "merge approval generation is unavailable",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        expected = str(generation.get("candidate_head", ""))
+        if COMMIT_RE.fullmatch(candidate) is None or candidate != expected:
+            raise _merge_refusal(
+                V2ReasonCode.CANDIDATE_STALE,
+                "forge: merge approve refused — candidate HEAD does not match the current generation",
+                expected=expected,
+                observed=candidate,
+                remediation=f"forge merge approve --candidate {expected} --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        now = iso_z()
+        if pending:
+            dispositions = review.get("dispositions")
+            approval = state.get("approval")
+            unresolved = []
+            if isinstance(dispositions, list):
+                for disposition in dispositions:
+                    if not isinstance(disposition, Mapping) or disposition.get(
+                        "severity"
+                    ) not in {"CRITICAL", "MAJOR"}:
+                        continue
+                    separately_cosigned = bool(
+                        isinstance(approval, Mapping)
+                        and approval.get("purpose") == "finding-disposition"
+                        and approval.get("finding") == disposition.get("finding")
+                        and approval.get("resolution") == disposition.get("resolution")
+                    )
+                    if not separately_cosigned:
+                        unresolved.append(disposition)
+            if len(unresolved) != 1:
+                raise FrozenError(
+                    "merge disposition co-sign projection is ambiguous",
+                    chain_id=str(state["chain_id"]),
+                    observed=str(len(unresolved)),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            selected = unresolved[0]
+            current_review = copy.deepcopy(dict(review))
+            current_review["operator_cosign_required"] = False
+            approval_record = {
+                "purpose": "finding-disposition",
+                "chain_id": state["chain_id"],
+                "finding": selected["finding"],
+                "severity": selected["severity"],
+                "resolution": selected["resolution"],
+                "candidate": expected,
+                "generation_digest": state["candidate"]["generation_digest"],
+                "recorded_at": now,
+                "directed_by": "operator",
+            }
+            delta = {"review": current_review, "approval": approval_record}
+            message = f"merge finding {selected['finding']} operator co-sign recorded"
+        elif state["state"] == "awaiting_approval":
+            integration = state.get("integration")
+            if not isinstance(integration, dict):
+                raise FrozenError(
+                    "merge integration projection is malformed",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            if integration.get("condition") == "remote-churn":
+                purpose = "remote-churn"
+                updated_integration = copy.deepcopy(integration)
+                updated_integration.update(
+                    {
+                        "condition": "none",
+                        "primary_condition": "none",
+                        "remote_movement_count": 0,
+                    }
+                )
+                delta = {"state": "authorized", "integration": updated_integration}
+                message = "merge remote-churn acknowledgement recorded"
+            else:
+                purpose = "gate-4"
+                delta = {"state": "authorized"}
+                message = "merge Gate-4 operator approval recorded"
+            approval_record = {
+                "purpose": purpose,
+                "chain_id": state["chain_id"],
+                "candidate": expected,
+                "generation_digest": state["candidate"]["generation_digest"],
+                "recorded_at": now,
+                "directed_by": "operator",
+            }
+            delta["approval"] = approval_record
+        state = self.store.transition(
+            state,
+            "approval_recorded",
+            {"delta": delta},
+            generation_digest=str(state["candidate"]["generation_digest"]),
+            at=now,
+        )
+        return _success(
+            state,
+            message,
+            f"forge status --chain-id {state['chain_id']}",
+        )
+
+    def _release_to_aborted(
+        self,
+        state: dict[str, Any],
+        *,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        claim = state["worktree"]["claim"]
+        release_mode = (
+            "acquired" if claim["status"] == "owned" else "never-published"
+        )
+        preconditions = {
+            "schema": "forge-merge-abort-preconditions/1",
+            "chain_id": state["chain_id"],
+            "source_state": state["state"],
+            "candidate": copy.deepcopy(state.get("candidate")),
+            "integration": copy.deepcopy(state["integration"]),
+            "claim": copy.deepcopy(claim),
+            "reason": reason,
+        }
+        generation = state.get("candidate")
+        generation_digest = (
+            str(generation["generation_digest"])
+            if isinstance(generation, Mapping)
+            else None
+        )
+        claim_path = Path(str(claim["path"]))
+        if (
+            release_mode == "never-published"
+            and not _merge_unpublished_claim_absent(state, self.store)
+        ):
+            raise FrozenError(
+                "unpublished merge ownership path unexpectedly exists",
+                chain_id=str(state["chain_id"]),
+                observed=str(claim_path),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        state = self.store.transition(
+            state,
+            "ownership_release_intent",
+            {
+                "target_terminal": "aborted",
+                "terminal_disposition": "ordinary",
+                "source_state": state["state"],
+                "terminal_preconditions_digest": sha256_bytes(
+                    canonical_bytes(preconditions)
+                ),
+                "release_mode": release_mode,
+            },
+            generation_digest=generation_digest,
+            at=iso_z(),
+        )
+        release_intent_digest = _merge_event_digest(
+            self.store, str(state["chain_id"]), "ownership_release_intent"
+        )
+        if release_intent_digest is None:
+            raise FrozenError(
+                "merge ownership release intent digest is unavailable",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if release_mode == "acquired":
+            observed_claim = _remove_merge_claim(self.store, state, unlink=False)
+            exists = True
+            observed_inode = observed_claim.inode
+            observed_digest = observed_claim.digest
+        else:
+            if not _merge_unpublished_claim_absent(state, self.store):
+                raise FrozenError(
+                    "unpublished merge ownership path unexpectedly exists",
+                    chain_id=str(state["chain_id"]),
+                    observed=str(claim_path),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            exists = False
+            observed_inode = None
+            observed_digest = None
+        observation = {
+            "claim_path": state["worktree"]["claim"]["path"],
+            "exists": exists,
+            "inode": observed_inode,
+            "digest": observed_digest,
+        }
+        state = self.store.transition(
+            state,
+            "ownership_released",
+            {
+                "release_intent_digest": release_intent_digest,
+                "release_mode": release_mode,
+                "terminal_disposition": "ordinary",
+                "claim_inode": state["worktree"]["claim"]["inode"],
+                "claim_digest": state["worktree"]["claim"]["digest"],
+                "claim_observation_digest": sha256_bytes(
+                    canonical_bytes(observation)
+                ),
+            },
+            generation_digest=generation_digest,
+            at=iso_z(),
+        )
+        if (
+            release_mode == "never-published"
+            and not _merge_unpublished_claim_absent(state, self.store)
+        ):
+            raise FrozenError(
+                "unpublished merge ownership path unexpectedly exists",
+                chain_id=str(state["chain_id"]),
+                observed=str(claim_path),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        terminal = self.store.transition(
+            state,
+            "aborted",
+            {"delta": {"state": "aborted"}},
+            generation_digest=generation_digest,
+            at=iso_z(),
+        )
+        if release_mode == "acquired":
+            try:
+                _remove_merge_claim(self.store, terminal)
+            except (FrozenError, OSError):
+                # Terminal truth is event-authoritative; tombstone collection
+                # is best effort and must never revoke the durable release.
+                pass
+        return terminal
+
+    def abort(self, reason: str | None = None) -> Outcome:
+        _require_merge_lifecycle_control("admission-priority")
+        state = self._load()
+        claim = state.get("worktree", {}).get("claim")
+        if isinstance(claim, Mapping) and claim.get("status") in {
+            "releasing",
+            "released",
+        } and state["state"] not in {"closed", "aborted"}:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — ownership release completion is pending",
+                expected="the cutoff-selected terminal event",
+                observed=str(claim.get("status")),
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        containment, _vector = _merge_containment(state)
+        if containment == "current":
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — current intended HEAD is already contained",
+                expected="pushed classification and cleanup",
+                observed="current intended HEAD contained",
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if containment == "older":
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — an older attempted HEAD is contained",
+                expected="historical landing reconciliation",
+                observed="newest attempted HEAD uncontained",
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        inactive = _merge_inactive(state)
+        attempted = _merge_has_attempt(state)
+        if inactive and attempted and containment != "all-false":
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — inactive attempted chain lacks authoritative all-false containment",
+                expected="fresh all-false attempted-head containment and no live process",
+                observed=containment,
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        worktree = Path(str(state.get("worktree", {}).get("path", "")))
+        if not worktree.exists():
+            if inactive:
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge abort refused — inactive chain cannot prove missing-worktree safety",
+                    expected="an unchanged worktree or observation-only recovery",
+                    observed="recorded worktree is missing",
+                    remediation=f"forge status --chain-id {state['chain_id']}",
+                    chain=state,
+                )
+            self._preflight_lifecycle(state, "merge abort")
+        if state["state"] in {"closed", "aborted"}:
+            self._wrong_state(state, "a nonterminal pre-push chain", "merge abort")
+        if state["state"] in {"pushed", "cleanup_pending"}:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — durable pushed truth requires cleanup",
+                expected="merge cleanup after pushed truth",
+                observed=str(state["state"]),
+                chain=state,
+            )
+        if state["state"] in {"rebasing", "rebase_conflict"}:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — active rebase restoration is required",
+                expected="owned rebase abort/restoration before logical release",
+                observed=str(state["state"]),
+                remediation=f"forge merge recover --abort-rebase --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if attempted and containment != "all-false":
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — attempted heads lack authoritative all-false containment",
+                expected="fresh all-false attempted-head containment",
+                observed=containment,
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if attempted:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — fresh attempted-head observation requires recovery",
+                expected="slice-5 authoritative remote observation under the complete lock",
+                observed="persisted all-false containment is not a fresh release cutoff",
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if _merge_process_unresolved(state):
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge abort refused — a live or unresolved process remains",
+                expected="no live or unresolved fence/process",
+                observed="repository mutation ownership is unresolved",
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        self._halt(state)
+        binding = state.get("run_binding")
+        with self.store._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ), acquire_common_lock(
+            Path(str(state["worktree"]["common_dir"])),
+            owner_kind="merge",
+            chain_id=str(state["chain_id"]),
+            operation="abort",
+            no_transaction_record=True,
+        ):
+            current = self._load()
+            current_containment, _current_vector = _merge_containment(current)
+            if current_containment == "current":
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge abort refused — current intended HEAD is already contained",
+                    expected="pushed classification and cleanup",
+                    observed="current intended HEAD contained",
+                    remediation=f"forge merge recover --chain-id {current['chain_id']}",
+                    chain=current,
+                )
+            if current_containment == "older":
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge abort refused — an older attempted HEAD is contained",
+                    expected="historical landing reconciliation",
+                    observed="newest attempted HEAD uncontained",
+                    remediation=f"forge merge recover --chain-id {current['chain_id']}",
+                    chain=current,
+                )
+            if _merge_has_attempt(current) and current_containment != "all-false":
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge abort refused — attempted heads lack authoritative all-false containment",
+                    expected="fresh all-false attempted-head containment",
+                    observed=current_containment,
+                    remediation=f"forge merge recover --chain-id {current['chain_id']}",
+                    chain=current,
+                )
+            if current != state:
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge abort refused — merge state changed before release",
+                    expected=str(state["last_event_at"]),
+                    observed=str(current["last_event_at"]),
+                    chain=current,
+                )
+            if _merge_process_unresolved(
+                current, allow_current_abort_lock=True
+            ):
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge abort refused — a live or unresolved process remains",
+                    expected="no live or unresolved fence/process",
+                    observed="repository mutation ownership is unresolved",
+                    remediation=f"forge merge recover --chain-id {current['chain_id']}",
+                    chain=current,
+                )
+            state = self._release_to_aborted(current, reason=reason)
+        return _success(
+            state,
+            f"merge chain {state['chain_id']} aborted",
+            "none — merge chain aborted",
+        )
+
     def status(self) -> Outcome:
         state = self._load()
-        if state["state"] == "closed":
-            next_step = "none — merge chain closed"
-        elif state["state"] == "aborted":
-            next_step = "none — merge chain aborted"
+        claim = state.get("worktree", {}).get("claim")
+        if isinstance(claim, Mapping) and claim.get("status") == "unpublished":
+            next_step = (
+                f"forge merge abort --chain-id {state['chain_id']}"
+                if _merge_unpublished_claim_absent(state, self.store)
+                else f"forge merge recover --chain-id {state['chain_id']}"
+            )
+        elif isinstance(claim, Mapping) and claim.get("status") in {
+            "releasing",
+            "released",
+        } and state["state"] not in {"closed", "aborted"}:
+            next_step = f"forge merge recover --chain-id {state['chain_id']}"
         else:
-            next_step = f"forge status --chain-id {state['chain_id']}"
+            candidate = state.get("candidate")
+            candidate_head = (
+                candidate.get("candidate_head")
+                if isinstance(candidate, Mapping)
+                else "<unavailable>"
+            )
+            next_steps = {
+                "classifying": f"forge merge refresh --chain-id {state['chain_id']}",
+                "verifying": f"forge merge verify --chain-id {state['chain_id']}",
+                "reviewing": f"forge review request --chain-id {state['chain_id']}",
+                "revising": f"forge merge refresh --chain-id {state['chain_id']}",
+                "awaiting_approval": (
+                    "forge merge approve --candidate "
+                    f"{candidate_head} "
+                    f"--chain-id {state['chain_id']}"
+                ),
+                "authorized": f"forge merge finalize --chain-id {state['chain_id']}",
+                "rebasing": f"forge merge recover --chain-id {state['chain_id']}",
+                "rebase_conflict": f"forge merge recover --chain-id {state['chain_id']}",
+                "reverifying": f"forge merge verify --chain-id {state['chain_id']}",
+                "reverification_failed": f"forge merge recover --chain-id {state['chain_id']}",
+                "pushing": f"forge merge recover --chain-id {state['chain_id']}",
+                "pushed": f"forge merge cleanup --chain-id {state['chain_id']}",
+                "cleanup_pending": f"forge merge cleanup --chain-id {state['chain_id']}",
+                "closed": "none — merge chain closed",
+                "aborted": "none — merge chain aborted",
+            }
+            next_step = next_steps[str(state["state"])]
         return _success(
             state,
             f"merge chain {state['chain_id']} is {state['state']}",
@@ -14106,7 +16101,9 @@ class MergeEngine:
 
     def gate_run(self, gate_id: str) -> Outcome:
         _require_merge_adapter_control("ordered-gate-suite")
-        state = self._load()
+        state = self._preflight_lifecycle(
+            self._load(), f"merge gate run {gate_id}"
+        )
         self._halt(state)
         if state["state"] != "verifying":
             self._wrong_state(state, "verifying", f"merge gate run {gate_id}")
@@ -14235,7 +16232,7 @@ class MergeEngine:
 
     def verify(self) -> Outcome:
         _require_merge_adapter_control("ordered-gate-suite")
-        state = self._load()
+        state = self._preflight_lifecycle(self._load(), "merge verify")
         repository, policy, _changed_paths = _observe_current_merge_candidate(
             self.ctx, state, verb="merge verify"
         )
@@ -14341,12 +16338,21 @@ class MergeEngine:
             for fact in facts
             if isinstance(fact, dict) and isinstance(fact.get("scoped_mutation"), dict)
         ]
-        diff = repository.git(
-            [
-                "diff",
-                f"{candidate['remote_tip']}...{candidate['candidate_head']}",
-            ]
-        ).stdout
+        try:
+            diff = repository.git(
+                [
+                    "diff",
+                    f"{candidate['remote_tip']}...{candidate['candidate_head']}",
+                ]
+            ).stdout
+        except OSError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: review request refused — authoritative candidate diff is unavailable",
+                expected="the complete fixed-generation three-dot diff",
+                observed=str(exc),
+                chain=state,
+            ) from exc
         package = (
             header
             + control
@@ -14361,7 +16367,7 @@ class MergeEngine:
 
     def review_request(self) -> Outcome:
         _require_merge_adapter_control("mandatory-review-final")
-        state = self._load()
+        state = self._preflight_lifecycle(self._load(), "review request")
         self._halt(state)
         if state["state"] != "reviewing":
             self._wrong_state(state, "reviewing", "review request")
@@ -14393,14 +16399,25 @@ class MergeEngine:
         )
         iteration = prior_iteration + 1
         package_digest = sha256_bytes(package)
-        package_ref = _write_merge_artifact(
-            self.ctx,
-            state,
-            f"review/iteration-{iteration:02d}/master-package.txt",
-            package,
-            master_package=True,
-        )
         if len(package) > OUTPUT_CAP_BYTES:
+            bound = _merge_run_directory(state)
+            package_ref = (
+                (
+                    Path("captured")
+                    / "sha256"
+                    / package_digest
+                    / "state.json"
+                ).as_posix()
+                if bound is not None
+                else (
+                    Path(".forge")
+                    / "chains"
+                    / str(state["chain_id"])
+                    / "review"
+                    / f"iteration-{iteration:02d}"
+                    / "master-package.txt"
+                ).as_posix()
+            )
             raise _merge_refusal(
                 V2ReasonCode.EVIDENCE_INCOMPLETE,
                 "forge: review refused — reviewer cannot inspect the complete authoritative package",
@@ -14410,6 +16427,13 @@ class MergeEngine:
                 chain=state,
                 evidence_refs=[package_ref],
             )
+        package_ref = _write_merge_artifact(
+            self.ctx,
+            state,
+            f"review/iteration-{iteration:02d}/master-package.txt",
+            package,
+            master_package=True,
+        )
         request = {
             "candidate": state["candidate"]["candidate_head"],
             "package": package_ref,
@@ -14447,7 +16471,7 @@ class MergeEngine:
         )
 
     def review_collect(self) -> Outcome:
-        state = self._load()
+        state = self._preflight_lifecycle(self._load(), "review collect")
         if state["state"] != "reviewing":
             self._wrong_state(state, "reviewing", "review collect")
         raise _merge_refusal(
@@ -14460,7 +16484,7 @@ class MergeEngine:
 
     def review_attach(self, verdict_file: str) -> Outcome:
         _require_merge_adapter_control("mandatory-review-final")
-        state = self._load()
+        state = self._preflight_lifecycle(self._load(), "review attach")
         self._halt(state)
         if state["state"] != "reviewing":
             self._wrong_state(state, "reviewing", "review attach")
@@ -14591,11 +16615,26 @@ class MergeEngine:
         self, finding: int, severity: str, resolution: str
     ) -> Outcome:
         _require_merge_adapter_control("mandatory-review-final")
-        state = self._load()
+        state = self._preflight_lifecycle(self._load(), "review disposition")
         self._halt(state)
         if state["state"] not in {"reviewing", "revising"}:
             self._wrong_state(state, "reviewing or revising", "review disposition")
         review = state.get("review")
+        iteration = review.get("iteration", 0) if isinstance(review, Mapping) else 0
+        if type(iteration) is not int:
+            raise FrozenError(
+                "merge review iteration is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if iteration >= 8:
+            raise _merge_refusal(
+                V2ReasonCode.ITERATION_CAP,
+                "forge: review disposition refused — review iteration cap of 8 is final",
+                expected="status or safe abort after the eighth review cycle",
+                observed=str(iteration),
+                chain=state,
+            )
         verdict = review.get("verdict") if isinstance(review, dict) else None
         findings = verdict.get("findings") if isinstance(verdict, dict) else None
         if (
