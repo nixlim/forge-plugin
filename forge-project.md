@@ -106,7 +106,86 @@ python3 -m unittest discover -s tests
 ## Changelog Policy
 
 <!-- FORGE:REGION changelog-policy BEGIN -->
-No changelog gate is configured for this repository.
+A `CHANGELOG.md` in Keep a Changelog format is maintained at the repository root. A commit whose
+staged paths touch the `python`, `bash`, `config`, or `control` categories requires at least one
+new changelog entry line staged in the same candidate — normally under the `## [Unreleased]`
+heading; a release commit instead moves the `[Unreleased]` body under the new version heading,
+which the mechanical check deliberately also accepts. A commit whose
+staged paths are exclusively docs-class (`docs/**`, `.forge/history/**`,
+`.forge/evals/candidates/**`, `*.md`/`*.txt` outside control locations, `UPSTREAM`, and
+`CHANGELOG.md` itself) is exempt. Release commits move the `[Unreleased]` body under the new
+version heading. Archive-only chains skip this gate under the operator's standing direction of
+2026-08-31 (recorded per chain via `commit skip changelog`).
+
+```bash
+python3 - "$@" <<'PY'
+import re
+import subprocess
+import sys
+
+paths = sys.argv[1:]
+if not paths:
+    print("changelog gate: no target paths supplied", file=sys.stderr)
+    raise SystemExit(1)
+
+EXEMPT_PREFIXES = ("docs/", ".forge/history/", ".forge/evals/candidates/")
+CONTROL_PREFIXES = (
+    "docs/specs/", "skills/", "hooks/", "scripts/", "rules/", "agents/",
+    ".claude-plugin/", "system/", ".codex/", ".forge/evals/tasks/",
+    ".github/workflows/", "tests/fixtures/", ".beads/", ".claude/",
+)
+CONTROL_FILES = {"forge-project.md", ".forge-manifest", "AGENTS.md", "CLAUDE.md"}
+CODE_SUFFIXES = (".py", ".sh", ".yml", ".yaml", ".json", ".jsonl", ".toml")
+
+
+def requires_entry(path: str) -> bool:
+    if path == "CHANGELOG.md":
+        return False
+    if path in CONTROL_FILES:
+        return True
+    if any(path.startswith(prefix) for prefix in CONTROL_PREFIXES):
+        return True
+    if path.startswith(EXEMPT_PREFIXES):
+        return False
+    if path == ".gitignore" or path.endswith(CODE_SUFFIXES):
+        return True
+    return False
+
+
+required = sorted(path for path in paths if requires_entry(path))
+if not required:
+    print("changelog gate: docs-class candidate, no entry required")
+    raise SystemExit(0)
+
+diff = subprocess.run(
+    ["git", "diff", "--cached", "--", "CHANGELOG.md"],
+    capture_output=True, text=True, check=False,
+)
+if diff.returncode != 0:
+    print("changelog gate: git diff --cached failed", file=sys.stderr)
+    raise SystemExit(1)
+added_entries = [
+    line for line in diff.stdout.splitlines()
+    if line.startswith("+- ") or re.match(r"^\+\s+- ", line)
+]
+staged = subprocess.run(
+    ["git", "show", ":CHANGELOG.md"], capture_output=True, text=True, check=False,
+)
+if added_entries and staged.returncode == 0 and "## [Unreleased]" in staged.stdout:
+    print(f"changelog gate: entry present for {len(required)} in-scope path(s)")
+    raise SystemExit(0)
+print(
+    "changelog gate: staged candidate touches "
+    + ", ".join(required[:5])
+    + (" …" if len(required) > 5 else "")
+    + " but adds no CHANGELOG.md [Unreleased] entry",
+    file=sys.stderr,
+)
+raise SystemExit(1)
+PY
+```
+
+Output path: `CHANGELOG.md`
 <!-- FORGE:REGION changelog-policy END -->
 
 ## Review Prompt Project Focus
