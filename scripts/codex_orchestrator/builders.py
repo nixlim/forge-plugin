@@ -7005,34 +7005,45 @@ def scope_change(
     repo: Path,
     run_id: str,
     *,
+    idempotency_key: str,
     scope: Sequence[str],
     replace: bool = False,
-) -> dict[str, object]:
+) -> batch.BatchOutcome:
     """Build and append the typed scope-readmission lifecycle record."""
 
+    batch.validate_idempotency_key(idempotency_key)
     if "scope-change" not in BUILDER_VALIDATION_CONTROLS:
         raise journal.CoordinationRefusal(
             "forge: journal builder refused — scope-change control is unavailable"
         )
-    canonical = journal._operation_scope("run readmit", list(scope))
-    record = _with_derived(
-        {
-            "type": "decision",
-            "id": f"forge-scope-readmission-{uuid.uuid4().hex}",
-            "resolution": journal.READMISSION_RESOLUTION,
-            "scope": list(canonical),
-        },
-        run_id,
-    )
-    journal.readmit_run(
+    supplied_scope = list(scope)
+    canonical = journal._operation_scope("run readmit", supplied_scope)
+
+    def make_record() -> dict[str, object]:
+        return _with_derived(
+            {
+                "type": "decision",
+                "id": f"forge-scope-readmission-{uuid.uuid4().hex}",
+                "resolution": journal.READMISSION_RESOLUTION,
+                "scope": list(canonical),
+            },
+            run_id,
+        )
+
+    def build(
+        _state: journal.RunState, _repository: Path
+    ) -> Sequence[dict[str, object]]:
+        return (make_record(),)
+
+    return batch.execute_scope_change_batch(
         repo,
         run_id,
-        list(canonical),
+        idempotency_key=idempotency_key,
+        inputs={"scope": supplied_scope, "replace": replace},
+        scope=canonical,
         replace=replace,
-        _builder_authority=journal._SCOPE_CHANGE_BUILDER_AUTHORITY,
-        _record=record,
+        build_records=build,
     )
-    return record
 
 
 def task_start(

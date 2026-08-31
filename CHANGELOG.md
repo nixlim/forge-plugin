@@ -10,6 +10,8 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Typed scope readmission now writes a contiguous batch receipt, and batch recovery can backfill one journal-proven historical receipt gap before clearing an exact landed intent.
+
 - Commit-chain replay now preserves receipted history, isolates frozen chains, and supports explicit operator tombstones and frozen aborts.
 - Commit-chain ingest now captures every cited evidence file into the run-relative content-addressed store.
 - Activated runs now route scope readmission through the typed scope-change builder.

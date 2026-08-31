@@ -62,6 +62,7 @@ class Revision8CoordinationTests(unittest.TestCase):
         self.env = os.environ.copy()
         self.env["FORGE_SESSION_PID"] = str(os.getpid())
         self._record_number = 0
+        self._readmit_number = 0
 
     @property
     def runs_root(self) -> Path:
@@ -273,12 +274,15 @@ class Revision8CoordinationTests(unittest.TestCase):
         replace: bool = False,
         environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        self._readmit_number += 1
         arguments = [
             "run-readmit",
             "--repo",
             str(self.repo),
             "--run-id",
             run_id,
+            "--idempotency-key",
+            f"{self._readmit_number:064x}",
         ]
         for item in scope:
             arguments.extend(("--scope", item))
@@ -1793,6 +1797,8 @@ class Revision8CoordinationTests(unittest.TestCase):
                     str(missing_repo),
                     "--run-id",
                     "run-repo-missing",
+                    "--idempotency-key",
+                    "f" * 64,
                     "--scope",
                     "src/**",
                 ),

@@ -187,6 +187,23 @@ class RunCoordinationTests(unittest.TestCase):
             os.path.relpath(outside, self.journal_path(run_id).parent)
         ).as_posix()
 
+    def test_readmission_missing_key_refuses_before_repository_access(self) -> None:
+        missing_repo = Path(self.temporary.name) / "missing-repository"
+
+        refused = self.command(
+            "run-readmit",
+            "--repo",
+            str(missing_repo),
+            "--run-id",
+            "run-missing-key",
+            "--scope",
+            "src/**",
+        )
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr, f"{journal.BATCH_KEY_REFUSAL}\n")
+        self.assertFalse(missing_repo.exists())
+
     def test_open_is_atomic_and_registry_is_canonical(self) -> None:
         """FR-191/FR-192 and DM-010/DM-011: atomically open a registered owned run."""
         result = self.open("run-b", "src/a/**", "src/b/**")
@@ -1490,6 +1507,7 @@ class RunCoordinationTests(unittest.TestCase):
 
         refused = self.command(
             "run-readmit", "--repo", str(self.repo), "--run-id", "run-A",
+            "--idempotency-key", "1" * 64,
             "--scope", "src/a/other.py",
         )
 
@@ -1500,6 +1518,7 @@ class RunCoordinationTests(unittest.TestCase):
 
         replaced_but_unsafe = self.command(
             "run-readmit", "--repo", str(self.repo), "--run-id", "run-A",
+            "--idempotency-key", "2" * 64,
             "--scope", "src/a/other.py", "--replace",
         )
         self.assertEqual(replaced_but_unsafe.returncode, 1)
@@ -1508,6 +1527,7 @@ class RunCoordinationTests(unittest.TestCase):
 
         replaced = self.command(
             "run-readmit", "--repo", str(self.repo), "--run-id", "run-A",
+            "--idempotency-key", "3" * 64,
             "--scope", "src/a/x.py", "--replace",
         )
         self.assertEqual(replaced.returncode, 0, replaced.stderr)
@@ -1521,6 +1541,7 @@ class RunCoordinationTests(unittest.TestCase):
 
         refused = self.command(
             "run-readmit", "--repo", str(self.repo), "--run-id", "run-A",
+            "--idempotency-key", "4" * 64,
             "--scope", "src/**",
         )
 

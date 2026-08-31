@@ -106,6 +106,16 @@ _CHAIN_BATCH_AUTHORIZATION_REQUIRED = frozenset(
 CHAIN_BATCH_AUTHORIZATION_CONTROLS = _CHAIN_BATCH_AUTHORIZATION_REQUIRED
 _CHAIN_BATCH_AUTHORIZER_LOCK = threading.Lock()
 _CHAIN_BATCH_AUTHORIZER: ChainBatchAuthorizer | None = None
+_BATCH_GAP_REPAIR_REQUIRED = frozenset({"canonical-gap-receipt"})
+BATCH_GAP_REPAIR_CONTROLS = _BATCH_GAP_REPAIR_REQUIRED
+_SCOPE_CHANGE_TRANSACTION_REQUIRED = frozenset(
+    {"registry-lock", "readmission-validation"}
+)
+SCOPE_CHANGE_TRANSACTION_CONTROLS = _SCOPE_CHANGE_TRANSACTION_REQUIRED
+_BATCH_GAP_REPAIR_SCHEMA = "forge-journal-batch-gap-repair/1"
+_BATCH_GAP_REPAIR_REASON = (
+    "reconstructed from canonical journal bytes and byte-exact following receipt"
+)
 
 
 def _register_chain_batch_authorizer(
@@ -573,6 +583,10 @@ def _receipt_keys() -> set[str]:
     }
 
 
+def _repair_receipt_keys() -> set[str]:
+    return _receipt_keys() | {"repaired", "repair_reason"}
+
+
 def _sha_member(value: object) -> bool:
     return isinstance(value, str) and journal.HEX_SHA256_PATTERN.fullmatch(value) is not None
 
@@ -617,7 +631,8 @@ def _validate_intent(value: object) -> dict[str, object]:
         raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
     receipt = _validate_receipt(receipt_value)
     if (
-        receipt_bytes != _canonical_sidecar(receipt)
+        set(receipt) != _receipt_keys()
+        or receipt_bytes != _canonical_sidecar(receipt)
         or receipt["idempotency_key"] != value["idempotency_key"]
         or receipt["request_sha256"] != value["request_sha256"]
         or receipt["base_size"] != value["base_size"]
@@ -630,9 +645,11 @@ def _validate_intent(value: object) -> dict[str, object]:
 
 
 def _validate_receipt(value: object) -> dict[str, object]:
+    keys = set(value) if isinstance(value, dict) else set()
+    repair = keys == _repair_receipt_keys()
     if (
         not isinstance(value, dict)
-        or set(value) != _receipt_keys()
+        or keys not in (_receipt_keys(), _repair_receipt_keys())
         or value.get("schema") != journal.BATCH_RECEIPT_SCHEMA
         or any(
             not _sha_member(value.get(name))
@@ -651,6 +668,13 @@ def _validate_receipt(value: object) -> dict[str, object]:
         or not journal._valid_utc(str(value["recorded_at"]))
         or int(value.get("record_count", 0)) <= 0
         or int(value.get("base_size", 0)) > int(value.get("journal_size", 0))
+        or (
+            repair
+            and (
+                value.get("repaired") is not True
+                or value.get("repair_reason") != _BATCH_GAP_REPAIR_REASON
+            )
+        )
     ):
         raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
     return value
@@ -749,9 +773,25 @@ def _load_receipts(
         )
     if raw and not raw.endswith(b"\n"):
         raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    receipts = _parse_receipt_lines(raw)
+    activated = _writer_contract_activated(locked.run_descriptor)
+    if activated and not receipts:
+        journal_raw, _ = _read_named_file(
+            locked.run_descriptor, "journal.jsonl"
+        )
+        if journal_raw:
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    _validate_receipt_chain(receipts, require_zero_base=activated)
+    for receipt in receipts:
+        _verify_receipt_journal(locked, receipt)
+    _validate_repair_receipts(locked, receipts)
+    return receipts, raw, observed
+
+
+def _parse_receipt_lines(raw: bytes) -> list[dict[str, object]]:
+    """Decode complete canonical receipt lines without assuming continuity."""
+
     receipts: list[dict[str, object]] = []
-    keys: set[str] = set()
-    previous_journal_size: int | None = None
     for line in raw.splitlines(keepends=True):
         try:
             value = json.loads(line.decode("utf-8"))
@@ -760,20 +800,186 @@ def _load_receipts(
         receipt = _validate_receipt(value)
         if line != _canonical_sidecar(receipt):
             raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        receipts.append(receipt)
+    return receipts
+
+
+def _validate_receipt_chain(
+    receipts: Sequence[dict[str, object]], *, require_zero_base: bool = False
+) -> None:
+    """Validate the logical chain, including append-only backfill receipts."""
+
+    if require_zero_base and receipts and int(receipts[0]["base_size"]) != 0:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    keys: set[str] = set()
+    for receipt in receipts:
         key = str(receipt["idempotency_key"])
         if key in keys:
             raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        keys.add(key)
+
+    repair_entries = [
+        (index, receipt)
+        for index, receipt in enumerate(receipts)
+        if receipt.get("repaired") is True
+    ]
+    if not repair_entries:
+        previous_journal_size: int | None = None
+        for receipt in receipts:
+            if (
+                previous_journal_size is not None
+                and receipt["base_size"] != previous_journal_size
+            ):
+                raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+            previous_journal_size = int(receipt["journal_size"])
+        return
+
+    normal_entries = [
+        (index, receipt)
+        for index, receipt in enumerate(receipts)
+        if receipt.get("repaired") is not True
+    ]
+    previous_normal_end: int | None = None
+    for _index, receipt in normal_entries:
+        base_size = int(receipt["base_size"])
+        if previous_normal_end is not None and base_size < previous_normal_end:
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        previous_normal_end = int(receipt["journal_size"])
+
+    ordered = sorted(
+        receipts,
+        key=lambda receipt: (
+            int(receipt["base_size"]),
+            int(receipt["journal_size"]),
+        ),
+    )
+    previous_journal_size = None
+    for receipt in ordered:
         if (
             previous_journal_size is not None
-            and receipt["base_size"] != previous_journal_size
+            and int(receipt["base_size"]) != previous_journal_size
         ):
             raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-        keys.add(key)
-        receipts.append(receipt)
         previous_journal_size = int(receipt["journal_size"])
-    for receipt in receipts:
-        _verify_receipt_journal(locked, receipt)
-    return receipts, raw, observed
+
+    for repair_index, repair in repair_entries:
+        if not any(
+            normal_index < repair_index
+            and int(candidate["base_size"])
+            == int(repair["journal_size"])
+            for normal_index, candidate in normal_entries
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+
+def _repair_receipt_value(
+    *,
+    repository: str,
+    run_id: str,
+    gap_base: int,
+    gap_end: int,
+    gap_bytes: bytes,
+    following: dict[str, object],
+    journal_raw: bytes,
+) -> dict[str, object]:
+    """Derive the sole canonical repair receipt from durable evidence."""
+
+    gap_records = _records_from_batch(gap_bytes)
+    if len(gap_records) != 1 or gap_records[0].get("run_id") != run_id:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    repair_identity = {
+        "schema": _BATCH_GAP_REPAIR_SCHEMA,
+        "repository": repository,
+        "run_id": run_id,
+        "base_size": gap_base,
+        "journal_size": gap_end,
+        "batch_sha256": journal._sha256(gap_bytes),
+        "record_count": 1,
+        "following_idempotency_key": following["idempotency_key"],
+    }
+    repair_key = journal._sha256(
+        journal._canonical_json_bytes(repair_identity)
+    )
+    repair_request = {
+        "schema": journal.BATCH_REQUEST_SCHEMA,
+        "verb": "journal batch-recover",
+        "repository": repository,
+        "run_id": run_id,
+        "inputs": repair_identity,
+    }
+    repair_receipt = {
+        "schema": journal.BATCH_RECEIPT_SCHEMA,
+        "idempotency_key": repair_key,
+        "request_sha256": journal._sha256(
+            journal._canonical_json_bytes(repair_request)
+        ),
+        "base_size": gap_base,
+        "batch_sha256": journal._sha256(gap_bytes),
+        "record_count": 1,
+        "journal_size": gap_end,
+        "journal_sha256": journal._sha256(journal_raw[:gap_end]),
+        "recorded_at": following["recorded_at"],
+        "repaired": True,
+        "repair_reason": _BATCH_GAP_REPAIR_REASON,
+    }
+    return _validate_receipt(repair_receipt)
+
+
+def _validate_repair_receipts(
+    locked: BatchLock, receipts: Sequence[dict[str, object]]
+) -> None:
+    """Re-derive every persisted repair receipt on every ledger load."""
+
+    repair_entries = [
+        (index, receipt)
+        for index, receipt in enumerate(receipts)
+        if receipt.get("repaired") is True
+    ]
+    if not repair_entries:
+        return
+    journal_raw, journal_observation = _read_named_file(
+        locked.run_descriptor, "journal.jsonl"
+    )
+    try:
+        state = journal._scan_run(
+            locked.run_dir,
+            raw=journal_raw,
+            directory_observation=journal._file_observation(
+                os.fstat(locked.run_descriptor)
+            ),
+            journal_observation=journal_observation,
+        )
+        repository = state.records[0]["repo"]
+    except (KeyError, journal.CoordinationRefusal) as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+    if not isinstance(repository, str) or not repository:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    for repair_index, repair in repair_entries:
+        if repair_index == 0:
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        following = receipts[repair_index - 1]
+        gap_base = int(repair["base_size"])
+        gap_end = int(repair["journal_size"])
+        if (
+            following.get("repaired") is True
+            or int(following["base_size"]) != gap_end
+            or int(repair["record_count"]) != 1
+            or not 0 <= gap_base < gap_end <= len(journal_raw)
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        expected = _repair_receipt_value(
+            repository=repository,
+            run_id=state.run_id,
+            gap_base=gap_base,
+            gap_end=gap_end,
+            gap_bytes=journal_raw[gap_base:gap_end],
+            following=following,
+            journal_raw=journal_raw,
+        )
+        if repair != expected:
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
 
 
 def _records_from_batch(value: bytes) -> tuple[dict[str, object], ...]:
@@ -814,6 +1020,188 @@ def _verify_receipt_journal(
     ):
         raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
     return records
+
+
+def _repair_receipt_gap_locked(
+    locked: BatchLock,
+    intent: dict[str, object],
+    intent_observation: journal.FileObservation,
+    *,
+    repository: Path,
+    run_id: str,
+) -> bool:
+    """Backfill one journal-proven interior receipt gap, if present."""
+
+    ledger_raw, ledger_observation = _read_named_file(
+        locked.run_descriptor, journal.BATCH_RECEIPTS_NAME
+    )
+    if ledger_raw.endswith(b"\n"):
+        complete_ledger = ledger_raw
+        trailing = b""
+    else:
+        boundary = ledger_raw.rfind(b"\n") + 1
+        complete_ledger = ledger_raw[:boundary]
+        trailing = ledger_raw[boundary:]
+
+    receipts = _parse_receipt_lines(complete_ledger)
+    if len({str(receipt["idempotency_key"]) for receipt in receipts}) != len(
+        receipts
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    journal_raw, journal_observation = _read_named_file(
+        locked.run_descriptor, "journal.jsonl"
+    )
+    journal_exact = journal.ExactFile(journal_raw, journal_observation)
+    for receipt in receipts:
+        _verify_receipt_journal(
+            locked, receipt, expected_journal=journal_exact
+        )
+
+    activated = _writer_contract_activated(locked.run_descriptor)
+    if activated and (
+        (receipts and int(receipts[0]["base_size"]) != 0)
+        or (not receipts and int(intent["base_size"]) != 0)
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    if any(receipt.get("repaired") is True for receipt in receipts):
+        _validate_receipt_chain(receipts, require_zero_base=activated)
+        _validate_repair_receipts(locked, receipts)
+
+    ordered = sorted(
+        receipts,
+        key=lambda receipt: (
+            int(receipt["base_size"]),
+            int(receipt["journal_size"]),
+        ),
+    )
+    gaps: list[tuple[int, int, dict[str, object]]] = []
+    previous_end: int | None = None
+    for receipt in ordered:
+        base_size = int(receipt["base_size"])
+        if previous_end is not None:
+            if base_size < previous_end:
+                raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+            if base_size > previous_end:
+                gaps.append((previous_end, base_size, receipt))
+        previous_end = int(receipt["journal_size"])
+    if not gaps:
+        receipted_end = previous_end if previous_end is not None else 0
+        if activated and receipted_end < int(intent["base_size"]):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        return False
+    if len(gaps) != 1 or BATCH_GAP_REPAIR_CONTROLS != _BATCH_GAP_REPAIR_REQUIRED:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    gap_base, gap_end, following = gaps[0]
+    if (
+        following is not receipts[-1]
+        or int(following["journal_size"]) != len(journal_raw)
+        or not 0 <= gap_base < gap_end <= len(journal_raw)
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    gap_bytes = journal_raw[gap_base:gap_end]
+    gap_records = _records_from_batch(gap_bytes)
+    if len(gap_records) != 1:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    try:
+        state = journal._scan_run(
+            locked.run_dir,
+            raw=journal_raw,
+            directory_observation=journal._file_observation(
+                os.fstat(locked.run_descriptor)
+            ),
+            journal_observation=journal_observation,
+        )
+    except journal.CoordinationRefusal as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+    if state.run_id != run_id or any(
+        record.get("run_id") != run_id for record in gap_records
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    intent_exact = journal.ExactFile(
+        _canonical_sidecar(intent), intent_observation
+    )
+    _require_exact_named_file(
+        locked, journal.BATCH_INTENT_NAME, intent_exact
+    )
+    intended_batch = _decode_base64url(intent["batch_bytes"])
+    intended_base = int(intent["base_size"])
+    intended_end = intended_base + len(intended_batch)
+    following_line = _canonical_sidecar(following)
+    intended_receipt = _decode_base64url(intent["receipt_bytes"])
+    line_offset = 0
+    following_offset: int | None = None
+    for receipt in receipts:
+        line = _canonical_sidecar(receipt)
+        if receipt is following:
+            following_offset = line_offset
+        line_offset += len(line)
+    if (
+        intended_base != gap_end
+        or intended_end != len(journal_raw)
+        or journal_raw[intended_base:intended_end] != intended_batch
+        or journal._sha256(journal_raw[:intended_base])
+        != intent["base_sha256"]
+        or intended_receipt != following_line
+        or following_offset is None
+        or intent["receipt_base_size"] != following_offset
+        or journal._sha256(complete_ledger[:following_offset])
+        != intent["receipt_base_sha256"]
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    try:
+        recorded_repository = state.records[0]["repo"]
+    except KeyError as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+    if recorded_repository != str(repository):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    repair_receipt = _repair_receipt_value(
+        repository=str(recorded_repository),
+        run_id=run_id,
+        gap_base=gap_base,
+        gap_end=gap_end,
+        gap_bytes=gap_bytes,
+        following=following,
+        journal_raw=journal_raw,
+    )
+    repair_key = str(repair_receipt["idempotency_key"])
+    if any(
+        receipt.get("idempotency_key") == repair_key
+        for receipt in receipts
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    repair_bytes = _canonical_sidecar(repair_receipt)
+    if trailing and not repair_bytes.startswith(trailing):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    ledger_exact = journal.ExactFile(ledger_raw, ledger_observation)
+    repaired_ledger = _append_missing_prefix(
+        locked,
+        journal.BATCH_RECEIPTS_NAME,
+        len(complete_ledger),
+        journal._sha256(complete_ledger),
+        repair_bytes,
+        expected_file=ledger_exact,
+        protected=(
+            ("journal.jsonl", journal_exact),
+            (journal.BATCH_INTENT_NAME, intent_exact),
+        ),
+    )
+    loaded, loaded_raw, loaded_observation = _load_receipts(locked)
+    if (
+        loaded_raw != repaired_ledger.payload
+        or loaded_observation != repaired_ledger.observation
+        or sum(
+            receipt.get("idempotency_key") == repair_key
+            for receipt in loaded
+        )
+        != 1
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    return True
 
 
 def _matching_receipt(
@@ -1366,28 +1754,45 @@ def _recover_locked(
     _require_exact_named_file(
         locked, "journal.jsonl", journal_exact
     )
-    receipt_exact = _append_missing_prefix(
-        locked,
-        journal.BATCH_RECEIPTS_NAME,
-        int(intent["receipt_base_size"]),
-        str(intent["receipt_base_sha256"]),
-        receipt_bytes,
-        append_enabled=(
-            "receipt" in journal.BATCH_TRANSACTION_CONTROLS
-        ),
-        expected_file=expected_receipts,
-        protected=(
-            ("journal.jsonl", journal_exact),
-            (journal.BATCH_INTENT_NAME, intent_exact),
-        ),
-    )
+    receipt_base_size = int(intent["receipt_base_size"])
+    receipt_suffix = expected_receipts.payload[receipt_base_size:]
+    if len(receipt_suffix) > len(receipt_bytes):
+        if (
+            journal._sha256(
+                expected_receipts.payload[:receipt_base_size]
+            )
+            != intent["receipt_base_sha256"]
+            or not receipt_suffix.startswith(receipt_bytes)
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        _load_receipts(locked)
+        receipt_exact = expected_receipts
+    else:
+        receipt_exact = _append_missing_prefix(
+            locked,
+            journal.BATCH_RECEIPTS_NAME,
+            receipt_base_size,
+            str(intent["receipt_base_sha256"]),
+            receipt_bytes,
+            append_enabled=(
+                "receipt" in journal.BATCH_TRANSACTION_CONTROLS
+            ),
+            expected_file=expected_receipts,
+            protected=(
+                ("journal.jsonl", journal_exact),
+                (journal.BATCH_INTENT_NAME, intent_exact),
+            ),
+        )
 
     try:
         receipt_value = json.loads(receipt_bytes.decode("utf-8"))
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
     receipt = _validate_receipt(receipt_value)
-    if receipt_bytes != _canonical_sidecar(receipt):
+    if (
+        set(receipt) != _receipt_keys()
+        or receipt_bytes != _canonical_sidecar(receipt)
+    ):
         raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
     if (
         receipt["idempotency_key"] != intent["idempotency_key"]
@@ -1487,10 +1892,16 @@ def _prepare_intent(
     batch_bytes = b"".join(journal._journal_line(record) for record in records)
     if not records or not batch_bytes:
         raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-    _, ledger_bytes, ledger_observation = _load_receipts(
+    receipts, ledger_bytes, ledger_observation = _load_receipts(
         locked, create=True
     )
     if ledger_observation is None:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    if _writer_contract_activated(locked.run_descriptor) and (
+        not receipts
+        or max(int(receipt["journal_size"]) for receipt in receipts)
+        != len(journal_bytes)
+    ):
         raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
     journal_exact = journal.ExactFile(
         journal_bytes, journal_observation
@@ -1815,6 +2226,7 @@ def _prevalidate_records(
     *,
     close: bool,
     defer_binding: bool = False,
+    scope_change: bool = False,
 ) -> None:
     """Validate final IDs, relations, binding, and the projected journal."""
 
@@ -1874,9 +2286,18 @@ def _prevalidate_records(
                     "forge: journal append refused — lifecycle command required"
                 )
         elif journal._ordinary_append_requires_lifecycle_command(record):
-            raise journal.CoordinationRefusal(
-                "forge: journal append refused — lifecycle command required"
+            readmission = bool(
+                scope_change
+                and len(records) == 1
+                and index == 0
+                and kind == "decision"
+                and record.get("resolution")
+                == journal.READMISSION_RESOLUTION
             )
+            if not readmission:
+                raise journal.CoordinationRefusal(
+                    "forge: journal append refused — lifecycle command required"
+                )
         if kind in seen:
             field = id_fields[str(kind)]
             record_id = record.get(field)
@@ -2358,6 +2779,533 @@ def _ensure_recovery_owner(
     )
 
 
+def _scope_change_record(
+    records: Sequence[dict[str, object]],
+    *,
+    run_id: str,
+    scope: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    if len(records) != 1:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    record = records[0]
+    record_scope = record.get("scope")
+    if (
+        record.get("type") != "decision"
+        or record.get("resolution") != journal.READMISSION_RESOLUTION
+        or record.get("run_id") != run_id
+        or not isinstance(record_scope, list)
+        or not all(isinstance(value, str) for value in record_scope)
+        or (scope is not None and record_scope != list(scope))
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    return record
+
+
+def _adopt_owner_in_coordination_view(
+    state_root: Path,
+    state: journal.RunState,
+    view: journal.CoordinationView,
+    registry_lock: journal.RegistryLock,
+    *,
+    expected_prefix: bytes | None = None,
+) -> journal.Owner:
+    current = journal._session_owner()
+    with journal._locked_journal(
+        state, _expected_prefix=expected_prefix
+    ) as locked_journal:
+        classification = journal._classify_owner(
+            state,
+            current,
+            adopt_missing=state.pre_coordination,
+            locked=locked_journal,
+        )
+        with journal._owner_takeover_transaction(
+            state,
+            current,
+            classification,
+            adopt_missing=state.pre_coordination,
+            locked=locked_journal,
+        ) as takeover:
+            journal._validate_registry_lock(state_root, registry_lock)
+            if (
+                journal._read_registry_snapshot(
+                    state_root, locked=registry_lock
+                )
+                != view.registry
+            ):
+                raise journal.CoordinationRefusal(
+                    journal.REGISTRY_UNAVAILABLE
+                )
+            journal._validate_owner_takeover(locked_journal, takeover)
+    return current
+
+
+def _scope_change_recovery_context(
+    locked: BatchLock,
+    state_root: Path,
+    registry_lock: journal.RegistryLock,
+    *,
+    run_id: str,
+    record: dict[str, object],
+    base_size: int,
+) -> tuple[
+    journal.CoordinationView,
+    journal.RunState,
+    tuple[str, ...],
+    bool,
+    bytes,
+]:
+    journal_raw, journal_observation = _read_named_file(
+        locked.run_descriptor, "journal.jsonl"
+    )
+    if not 0 <= base_size <= len(journal_raw):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    base = journal_raw[:base_size]
+    try:
+        base_state = journal._scan_run(
+            locked.run_dir,
+            raw=base,
+            directory_observation=journal._file_observation(
+                os.fstat(locked.run_descriptor)
+            ),
+            journal_observation=journal_observation,
+        )
+        scope = journal.canonical_scope(list(record["scope"]))
+    except (KeyError, journal.CoordinationRefusal) as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+    if base_state.run_id != run_id:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+
+    snapshot = journal._read_registry_snapshot(
+        state_root, locked=registry_lock
+    )
+    if snapshot.open_runs.get(run_id) == base_state.scope:
+        expected_journal = journal.ExactFile(
+            journal_raw, journal_observation
+        )
+        try:
+            view = _recovery_coordination_view(
+                state_root,
+                registry_lock,
+                base_state,
+                expected_journal,
+                base,
+            )
+            classified = journal._target_state(
+                view, run_id, "run readmit"
+            )
+        except journal.CoordinationRefusal as exc:
+            raise journal.CoordinationRefusal(
+                journal.BATCH_DIVERGED
+            ) from exc
+        if classified.records != base_state.records:
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        return view, base_state, scope, False, base
+
+    if snapshot.open_runs.get(run_id) != scope:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    try:
+        view = journal._coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = journal._target_state(view, run_id, "run readmit")
+    except journal.CoordinationRefusal as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+    if state.scope != scope:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    return view, state, scope, True, base
+
+
+def _publish_scope_change(
+    state_root: Path,
+    view: journal.CoordinationView,
+    registry_lock: journal.RegistryLock,
+    *,
+    run_id: str,
+    scope: tuple[str, ...],
+    record: dict[str, object],
+    current: journal.Owner,
+    already_published: bool,
+) -> None:
+    if already_published:
+        journal._assert_coordination_view_unchanged(
+            state_root, view, locked=registry_lock
+        )
+        return
+    updated = dict(view.open_runs)
+    updated[run_id] = scope
+    journal._write_registry(
+        state_root,
+        updated,
+        view=view,
+        changed_run_id=run_id,
+        appended_record=record,
+        expected_owner=current,
+        locked=registry_lock,
+        expected_runs_root=view.runs_root_observation,
+    )
+
+
+def _recover_scope_change_locked(
+    locked: BatchLock,
+    intent: dict[str, object],
+    intent_observation: journal.FileObservation,
+    *,
+    repository: Path,
+    state_root: Path,
+    run_id: str,
+    repeated: bool,
+    replace: bool | None,
+) -> BatchOutcome:
+    if (
+        SCOPE_CHANGE_TRANSACTION_CONTROLS
+        != _SCOPE_CHANGE_TRANSACTION_REQUIRED
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    records = _records_from_batch(_decode_base64url(intent["batch_bytes"]))
+    record = _scope_change_record(records, run_id=run_id)
+    expected_journal = _optional_exact_named_file(
+        locked, "journal.jsonl"
+    )
+    expected_receipts = _optional_exact_named_file(
+        locked, journal.BATCH_RECEIPTS_NAME
+    )
+    if not isinstance(expected_journal, journal.ExactFile):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    with journal._registry_lock(state_root) as registry_lock:
+        view, state, scope, published, base = (
+            _scope_change_recovery_context(
+                locked,
+                state_root,
+                registry_lock,
+                run_id=run_id,
+                record=record,
+                base_size=int(intent["base_size"]),
+            )
+        )
+        try:
+            recorded_repository = journal._recorded_repository_root(
+                state.run_dir, state_root, records=state.records
+            )
+        except journal.CoordinationRefusal as exc:
+            raise journal.CoordinationRefusal(
+                journal.BATCH_DIVERGED
+            ) from exc
+        if recorded_repository != repository:
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        if not published:
+            # Standalone recovery has no durable proof of --replace.  It may
+            # safely recover a widening request, while a shrinking request is
+            # left pending for an identical caller-bound retry.
+            journal._validate_readmission_scope(
+                view,
+                state,
+                run_id=run_id,
+                scope=scope,
+                replace=False if replace is None else replace,
+            )
+        current = _adopt_owner_in_coordination_view(
+            state_root,
+            state,
+            view,
+            registry_lock,
+            expected_prefix=base if not published else None,
+        )
+        outcome = _recover_locked(
+            locked,
+            intent,
+            intent_observation,
+            repeated=repeated,
+            expected_journal=expected_journal,
+            expected_receipts=expected_receipts,
+        )
+        _publish_scope_change(
+            state_root,
+            view,
+            registry_lock,
+            run_id=run_id,
+            scope=scope,
+            record=record,
+            current=current,
+            already_published=published,
+        )
+        return outcome
+
+
+def _finalize_scope_change_receipt_locked(
+    locked: BatchLock,
+    outcome: BatchOutcome,
+    *,
+    state_root: Path,
+    run_id: str,
+    replace: bool,
+) -> BatchOutcome:
+    if (
+        SCOPE_CHANGE_TRANSACTION_CONTROLS
+        != _SCOPE_CHANGE_TRANSACTION_REQUIRED
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    record = _scope_change_record(outcome.records, run_id=run_id)
+    with journal._registry_lock(state_root) as registry_lock:
+        view, state, scope, published, base = (
+            _scope_change_recovery_context(
+                locked,
+                state_root,
+                registry_lock,
+                run_id=run_id,
+                record=record,
+                base_size=int(outcome.receipt["base_size"]),
+            )
+        )
+        if published:
+            journal._assert_coordination_view_unchanged(
+                state_root, view, locked=registry_lock
+            )
+            return outcome
+        journal._validate_readmission_scope(
+            view,
+            state,
+            run_id=run_id,
+            scope=scope,
+            replace=replace,
+        )
+        current = _adopt_owner_in_coordination_view(
+            state_root,
+            state,
+            view,
+            registry_lock,
+            expected_prefix=base,
+        )
+        _publish_scope_change(
+            state_root,
+            view,
+            registry_lock,
+            run_id=run_id,
+            scope=scope,
+            record=record,
+            current=current,
+            already_published=False,
+        )
+    return outcome
+
+
+def execute_scope_change_batch(
+    repo: Path,
+    run_id: str,
+    *,
+    idempotency_key: str,
+    inputs: dict[str, object],
+    scope: tuple[str, ...],
+    replace: bool,
+    build_records: RecordBuilder,
+) -> BatchOutcome:
+    """Execute one typed readmission under the batch and registry locks."""
+
+    key = validate_idempotency_key(idempotency_key)
+    if (
+        SCOPE_CHANGE_TRANSACTION_CONTROLS
+        != _SCOPE_CHANGE_TRANSACTION_REQUIRED
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    if (
+        type(replace) is not bool
+        or not scope
+        or inputs != {"scope": list(scope), "replace": replace}
+    ):
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    run_id = journal._operation_run_id("run readmit", run_id)
+    repository, state_root = journal._resolve_repository(
+        repo, "run readmit"
+    )
+    _, request_sha256 = normalized_request(
+        repository, run_id, "run-readmit", inputs
+    )
+    run_dir = state_root / ".codex-orchestrator/runs" / run_id
+
+    try:
+        os.lstat(run_dir)
+    except FileNotFoundError as exc:
+        raise journal.CoordinationRefusal(
+            f"forge: run readmit refused — run {run_id} does not exist"
+        ) from exc
+    except OSError as exc:
+        raise journal.CoordinationRefusal(
+            journal.REGISTRY_UNAVAILABLE
+        ) from exc
+
+    # Legacy runs have no batch sidecars yet.  Repeat their read-only
+    # coordination checks before allocating the first lock file so a refused
+    # readmission remains byte- and name-identical to the prior state.
+    try:
+        os.lstat(run_dir / journal.BATCH_LOCK_NAME)
+    except FileNotFoundError:
+        with journal._registry_lock(state_root) as registry_lock:
+            view = journal._coordination_view(
+                state_root,
+                owner_target_ids=frozenset({run_id}),
+                locked=registry_lock,
+            )
+            state = journal._target_state(view, run_id, "run readmit")
+            recorded_repository = journal._recorded_repository_root(
+                state.run_dir, state_root, records=state.records
+            )
+            if recorded_repository != repository:
+                raise journal.CoordinationRefusal(
+                    journal.REGISTRY_UNAVAILABLE
+                )
+            journal._classify_owner(
+                state,
+                _read_only_session_owner(),
+                adopt_missing=state.pre_coordination,
+            )
+            journal._validate_readmission_scope(
+                view,
+                state,
+                run_id=run_id,
+                scope=scope,
+                replace=replace,
+            )
+    except OSError as exc:
+        raise journal.CoordinationRefusal(
+            journal.REGISTRY_UNAVAILABLE
+        ) from exc
+
+    with batch_lock(run_dir, create=True) as locked:
+        _matching_intent_temporary(locked, key, request_sha256)
+        pending = _load_intent(locked)
+        if pending is not None:
+            intent, observed = pending
+            if intent["idempotency_key"] != key:
+                raise journal.CoordinationRefusal(journal.BATCH_PENDING)
+            if intent["request_sha256"] != request_sha256:
+                raise journal.CoordinationRefusal(
+                    journal.BATCH_KEY_CONFLICT
+                )
+            _scope_change_record(
+                _records_from_batch(
+                    _decode_base64url(intent["batch_bytes"])
+                ),
+                run_id=run_id,
+                scope=scope,
+            )
+            return _recover_scope_change_locked(
+                locked,
+                intent,
+                observed,
+                repository=repository,
+                state_root=state_root,
+                run_id=run_id,
+                repeated=True,
+                replace=replace,
+            )
+
+        completed = _matching_receipt(locked, key, request_sha256)
+        if completed is not None:
+            _scope_change_record(
+                completed.records, run_id=run_id, scope=scope
+            )
+            return _finalize_scope_change_receipt_locked(
+                locked,
+                completed,
+                state_root=state_root,
+                run_id=run_id,
+                replace=replace,
+            )
+
+        with journal._registry_lock(state_root) as registry_lock:
+            view = journal._coordination_view(
+                state_root,
+                owner_target_ids=frozenset({run_id}),
+                locked=registry_lock,
+            )
+            state = journal._target_state(view, run_id, "run readmit")
+            recorded_repository = journal._recorded_repository_root(
+                state.run_dir, state_root, records=state.records
+            )
+            if recorded_repository != repository:
+                raise journal.CoordinationRefusal(
+                    journal.REGISTRY_UNAVAILABLE
+                )
+            _validate_target_lifecycle(state, close=False)
+            journal._classify_owner(
+                state,
+                _read_only_session_owner(),
+                adopt_missing=state.pre_coordination,
+            )
+            journal._validate_readmission_scope(
+                view,
+                state,
+                run_id=run_id,
+                scope=scope,
+                replace=replace,
+            )
+            records = tuple(build_records(state, repository))
+            _scope_change_record(
+                records, run_id=run_id, scope=scope
+            )
+            _prevalidate_records(
+                repository,
+                state,
+                records,
+                close=False,
+                scope_change=True,
+            )
+            current = _adopt_owner_in_coordination_view(
+                state_root,
+                state,
+                view,
+                registry_lock,
+            )
+            intent, _receipt, expected_journal, expected_receipts = (
+                _prepare_intent(
+                    locked, key, request_sha256, records
+                )
+            )
+            if "intent" not in journal.BATCH_TRANSACTION_CONTROLS:
+                raise journal.CoordinationRefusal(
+                    journal.BATCH_DIVERGED
+                )
+            published = _write_intent(locked, intent)
+            _require_exact_named_file(
+                locked, "journal.jsonl", expected_journal
+            )
+            _require_exact_named_file(
+                locked,
+                journal.BATCH_RECEIPTS_NAME,
+                expected_receipts,
+            )
+            pending = _load_intent(locked)
+            if pending is None:
+                raise journal.CoordinationRefusal(
+                    journal.BATCH_DIVERGED
+                )
+            stored_intent, observed = pending
+            _validate_published_intent(
+                intent, stored_intent, observed, published
+            )
+            outcome = _recover_locked(
+                locked,
+                stored_intent,
+                observed,
+                repeated=False,
+                expected_journal=expected_journal,
+                expected_receipts=expected_receipts,
+            )
+            _publish_scope_change(
+                state_root,
+                view,
+                registry_lock,
+                run_id=run_id,
+                scope=scope,
+                record=records[0],
+                current=current,
+                already_published=False,
+            )
+            return outcome
+
+
 def execute_existing_batch(
     repo: Path,
     run_id: str,
@@ -2563,6 +3511,32 @@ def recover_batch(repo: Path, run_id: str) -> BatchOutcome:
                 raise journal.CoordinationRefusal(journal.BATCH_PENDING)
             raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
         intent, observed = pending
+        _repair_receipt_gap_locked(
+            locked,
+            intent,
+            observed,
+            repository=repository,
+            run_id=run_id,
+        )
+        records = _records_from_batch(
+            _decode_base64url(intent["batch_bytes"])
+        )
+        if (
+            len(records) == 1
+            and records[0].get("type") == "decision"
+            and records[0].get("resolution")
+            == journal.READMISSION_RESOLUTION
+        ):
+            return _recover_scope_change_locked(
+                locked,
+                intent,
+                observed,
+                repository=repository,
+                state_root=state_root,
+                run_id=run_id,
+                repeated=True,
+                replace=None,
+            )
         return _recover_current_locked(
             locked,
             intent,
@@ -2580,7 +3554,8 @@ def validate_pending_outbox_receipt(
 
     _validate_receipt(receipt)
     if (
-        set(pending) != {
+        set(receipt) != _receipt_keys()
+        or set(pending) != {
             "idempotency_key",
             "batch_digest",
             "record_count",

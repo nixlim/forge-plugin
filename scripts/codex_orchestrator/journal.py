@@ -6322,9 +6322,7 @@ def readmit_run(
         authority_supplied = (
             _builder_authority is _SCOPE_CHANGE_BUILDER_AUTHORITY
         )
-        if (activated and not authority_supplied) or (
-            authority_supplied and _record is None
-        ):
+        if authority_supplied and _record is None:
             raise CoordinationRefusal(
                 "forge: journal append refused — activated writer requires typed builder"
             )
@@ -6334,6 +6332,10 @@ def readmit_run(
                 or record.get("scope") != list(scope)
             ):
                 raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
+        if activated:
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
         with _locked_journal(state) as locked:
             prior = state.records
             _validate_append_citations(repository, state.run_dir, record)
@@ -6351,36 +6353,12 @@ def readmit_run(
                 scope=scope,
                 prior_records=prior,
             )
-            if not replace:
-                omitted = tuple(
-                    sorted(
-                        set(view.open_runs[run_id]) - set(scope),
-                        key=_byte_key,
-                    )
-                )
-                if omitted:
-                    raise CoordinationRefusal(
-                        "forge: run readmit refused — proposed scope omits current "
-                        f"pathspecs for run {run_id}: {_named_pathspecs(omitted)}"
-                    )
-            outside = _pathspecs_outside_scope(
-                (
-                    item
-                    for prior_record in prior
-                    for item in _task_files(prior_record)
-                ),
-                scope,
-            )
-            if outside:
-                raise CoordinationRefusal(
-                    f"forge: journal append refused — task files exceed admitted scope "
-                    f"for run {run_id}: {_named_pathspecs(outside)}"
-                )
-            _conflict_refusal(
-                run_id,
-                scope,
-                view.reservations,
-                excluded=frozenset({run_id}),
+            _validate_readmission_scope(
+                view,
+                state,
+                run_id=run_id,
+                scope=scope,
+                replace=replace,
             )
             payload = _journal_payload(record)
             with _owner_takeover_transaction(
@@ -6414,6 +6392,48 @@ def readmit_run(
                     raise
                 except BaseException as exc:
                     _rollback_registry_failure(locked, offset, exc)
+
+
+def _validate_readmission_scope(
+    view: CoordinationView,
+    state: RunState,
+    *,
+    run_id: str,
+    scope: tuple[str, ...],
+    replace: bool,
+) -> None:
+    """Apply the locked readmission predicates without mutating state."""
+
+    if state.run_id != run_id or view.open_runs.get(run_id) != state.scope:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if not replace:
+        omitted = tuple(
+            sorted(set(state.scope) - set(scope), key=_byte_key)
+        )
+        if omitted:
+            raise CoordinationRefusal(
+                "forge: run readmit refused — proposed scope omits current "
+                f"pathspecs for run {run_id}: {_named_pathspecs(omitted)}"
+            )
+    outside = _pathspecs_outside_scope(
+        (
+            item
+            for prior_record in state.records
+            for item in _task_files(prior_record)
+        ),
+        scope,
+    )
+    if outside:
+        raise CoordinationRefusal(
+            f"forge: journal append refused — task files exceed admitted scope "
+            f"for run {run_id}: {_named_pathspecs(outside)}"
+        )
+    _conflict_refusal(
+        run_id,
+        scope,
+        view.reservations,
+        excluded=frozenset({run_id}),
+    )
 
 
 def close_run(

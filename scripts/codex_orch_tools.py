@@ -147,12 +147,6 @@ def _coordination_parser() -> argparse.ArgumentParser:
     appended.add_argument("--run-id", required=True)
     appended.add_argument("--record-json", required=True)
 
-    admitted = subparsers.add_parser("run-readmit")
-    admitted.add_argument("--repo", required=True)
-    admitted.add_argument("--run-id", required=True)
-    admitted.add_argument("--scope", action="append", required=True)
-    admitted.add_argument("--replace", action="store_true")
-
     closed = subparsers.add_parser("run-close")
     closed.add_argument("--repo", required=True)
     closed.add_argument("--run-id", required=True)
@@ -181,6 +175,11 @@ def _typed_parser() -> argparse.ArgumentParser:
     closed.add_argument("--summary", required=True)
     closed.add_argument("--risk", action="append", default=[])
     closed.add_argument("--follow-up", action="append", default=[])
+
+    readmitted = subparsers.add_parser("run-readmit")
+    _typed_identity(readmitted)
+    readmitted.add_argument("--scope", action="append", required=True)
+    readmitted.add_argument("--replace", action="store_true")
 
     journal_parser = subparsers.add_parser("journal")
     journal_subparsers = journal_parser.add_subparsers(
@@ -300,6 +299,14 @@ def _typed_main(argv: list[str]) -> int:
                 risks=args.risk,
                 follow_ups=args.follow_up,
             )
+        elif args.command == "run-readmit":
+            outcome = builders.scope_change(
+                repo,
+                args.run_id,
+                idempotency_key=args.idempotency_key,
+                scope=args.scope,
+                replace=args.replace,
+            )
         elif args.journal_command == "batch-recover":
             outcome = batch.recover_batch(repo, args.run_id)
         elif args.journal_command == "task-start":
@@ -407,13 +414,6 @@ def _coordination_main(argv: list[str]) -> int:
             print(target)
         elif args.command == "journal-append":
             append_run_record(repo, args.run_id, _record(args.record_json))
-        elif args.command == "run-readmit":
-            builders.scope_change(
-                repo,
-                args.run_id,
-                scope=args.scope,
-                replace=args.replace,
-            )
         elif args.command == "run-close":
             close_run(repo, args.run_id, _record(args.record_json))
         else:
@@ -438,8 +438,11 @@ def main(argv: list[str] | None = None) -> int:
         and (
             selected[0] == "journal"
             or (
-                selected[0] in {"run-open", "run-close"}
-                and not has_record_json
+                (
+                    selected[0] in {"run-open", "run-close"}
+                    and not has_record_json
+                )
+                or selected[0] == "run-readmit"
             )
         )
     )

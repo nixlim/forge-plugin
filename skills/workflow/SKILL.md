@@ -51,7 +51,8 @@ refusal by manually creating a run directory or appending a journal line.
 
 Disjoint open runs may proceed concurrently. Before adding a task, ensure every `task.files`
 pathspec is contained by its admitted run scope; re-declare the complete admitted set first, under
-the same registry lock, with `run-readmit --repo "$REPO" --run-id <run-id> --scope <pathspec> ...`.
+the same registry lock, with `run-readmit --repo "$REPO" --run-id <run-id>
+--idempotency-key <64-hex> --scope <pathspec> ...` (the typed builder requires the key).
 Use `--replace` only when intentionally replacing the previously admitted set.
 Append every later record only with `journal-append --repo "$REPO" --run-id <run-id>
 --record-json <file>`, which proves the current PID/host owner before every write. A different live

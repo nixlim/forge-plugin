@@ -777,11 +777,32 @@ class Revision9BuilderBatchTests(unittest.TestCase):
             ):
                 journal.readmit_run(self.repo, run_id, ["src/**"])
 
-            builders.scope_change(
+            readmission = builders.scope_change(
                 self.repo,
                 run_id,
+                idempotency_key=key("activated-readmit-api"),
                 scope=["src/**", "tests/**"],
             )
+            self.assertIsInstance(readmission, batch.BatchOutcome)
+            self.assertFalse(readmission.repeated)
+            repeated = builders.scope_change(
+                self.repo,
+                run_id,
+                idempotency_key=key("activated-readmit-api"),
+                scope=["src/**", "tests/**"],
+            )
+            self.assertIsInstance(repeated, batch.BatchOutcome)
+            self.assertTrue(repeated.repeated)
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                "idempotency key already names different content",
+            ):
+                builders.scope_change(
+                    self.repo,
+                    run_id,
+                    idempotency_key=key("activated-readmit-api"),
+                    scope=["docs/**", "src/**", "tests/**"],
+                )
             state = journal._scan_run(self.run_dir(self.repo, run_id))
             self.assertEqual(state.scope, ("src/**", "tests/**"))
             self.assertEqual(
@@ -794,6 +815,8 @@ class Revision9BuilderBatchTests(unittest.TestCase):
                 str(self.repo),
                 "--run-id",
                 run_id,
+                "--idempotency-key",
+                key("activated-readmit-cli"),
                 "--scope",
                 "docs/**",
                 "--scope",
@@ -816,12 +839,912 @@ class Revision9BuilderBatchTests(unittest.TestCase):
                 builders.scope_change(
                     self.repo,
                     run_id,
+                    idempotency_key=key("activated-readmit-disabled"),
                     scope=["docs/**", "src/**", "tests/**", "tools/**"],
                 )
             self.assertEqual(
                 (self.run_dir(self.repo, run_id) / "journal.jsonl").read_bytes(),
                 before,
             )
+
+    def test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume(self) -> None:
+        run_id = "run-20260831-readmit-receipts"
+        with self.api_environment():
+            self.open_run(self.repo, run_id)
+            builders.task_start(
+                self.repo,
+                run_id,
+                idempotency_key=key("readmit-sequence-task-1"),
+                task="task-01",
+                goal="Establish the initial admitted task",
+                acceptance=["The task is receipted"],
+                files=["src/example.py"],
+            )
+            readmitted = self.command(
+                "run-readmit",
+                "--repo",
+                str(self.repo),
+                "--run-id",
+                run_id,
+                "--idempotency-key",
+                key("readmit-sequence-scope"),
+                "--scope",
+                "src/**",
+                "--scope",
+                "tests/**",
+            )
+            self.assertEqual(readmitted.returncode, 0, readmitted.stderr)
+            self.assertEqual(
+                json.loads(readmitted.stdout)["records"][0]["resolution"],
+                journal.READMISSION_RESOLUTION,
+            )
+            builders.task_start(
+                self.repo,
+                run_id,
+                idempotency_key=key("readmit-sequence-task-2"),
+                task="task-02",
+                goal="Use the widened scope",
+                acceptance=["The second task is receipted"],
+                files=["tests/test_example.py"],
+            )
+
+            run_dir = self.run_dir(self.repo, run_id)
+            records, issues = journal.read_journal(
+                run_dir / "journal.jsonl"
+            )
+            self.assertEqual(issues, [])
+            self.assertEqual(
+                [record["type"] for record in records],
+                ["run_started", "task", "decision", "task"],
+            )
+            builders.task_start(
+                self.repo,
+                run_id,
+                idempotency_key=key("readmit-sequence-task-3"),
+                task="task-03",
+                goal="Prove appends continue",
+                acceptance=["A later append succeeds"],
+                files=["tests/test_later.py"],
+            )
+
+        receipts = [
+            json.loads(line)
+            for line in (
+                run_dir / journal.BATCH_RECEIPTS_NAME
+            ).read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(len(receipts), 5)
+        self.assertTrue(
+            all(
+                current["base_size"] == previous["journal_size"]
+                for previous, current in zip(receipts, receipts[1:])
+            )
+        )
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+
+    def test_scope_change_recovers_intent_and_receipted_registry_publication(self) -> None:
+        for crash_point in ("intent", "registry"):
+            with self.subTest(crash_point=crash_point):
+                repo, _ = self._new_repo(f"repo-readmit-{crash_point}")
+                run_id = f"run-20260831-readmit-{crash_point}"
+                transaction_key = key(f"readmit-{crash_point}")
+                with self.api_environment():
+                    self.open_run(repo, run_id)
+                    if crash_point == "intent":
+                        with mock.patch.object(
+                            batch,
+                            "_recover_locked",
+                            side_effect=RuntimeError("crash after intent"),
+                        ), self.assertRaisesRegex(
+                            RuntimeError, "crash after intent"
+                        ):
+                            builders.scope_change(
+                                repo,
+                                run_id,
+                                idempotency_key=transaction_key,
+                                scope=["src/**", "tests/**"],
+                            )
+                        run_dir = self.run_dir(repo, run_id)
+                        self.assertTrue(
+                            (run_dir / journal.BATCH_INTENT_NAME).is_file()
+                        )
+                        original_registry_lock = journal._registry_lock
+                        registry_epochs = 0
+
+                        @contextmanager
+                        def counted_registry_lock(state_root: Path):
+                            nonlocal registry_epochs
+                            registry_epochs += 1
+                            with original_registry_lock(state_root) as locked:
+                                yield locked
+
+                        with mock.patch.object(
+                            journal,
+                            "_registry_lock",
+                            side_effect=counted_registry_lock,
+                        ):
+                            recovered = batch.recover_batch(repo, run_id)
+                        self.assertEqual(registry_epochs, 1)
+                    else:
+                        with mock.patch.object(
+                            journal,
+                            "_write_registry",
+                            side_effect=journal.CoordinationRefusal(
+                                journal.REGISTRY_UPDATE_FAILED
+                            ),
+                        ), self.assertRaisesRegex(
+                            journal.CoordinationRefusal,
+                            journal.REGISTRY_UPDATE_FAILED,
+                        ):
+                            builders.scope_change(
+                                repo,
+                                run_id,
+                                idempotency_key=transaction_key,
+                                scope=["src/**", "tests/**"],
+                            )
+                        run_dir = self.run_dir(repo, run_id)
+                        self.assertFalse(
+                            (run_dir / journal.BATCH_INTENT_NAME).exists()
+                        )
+                        recovered = builders.scope_change(
+                            repo,
+                            run_id,
+                            idempotency_key=transaction_key,
+                            scope=["src/**", "tests/**"],
+                        )
+                    self.assertTrue(recovered.repeated)
+                    self.assertFalse(
+                        (run_dir / journal.BATCH_INTENT_NAME).exists()
+                    )
+                    state = journal._scan_run(run_dir)
+                    self.assertEqual(state.scope, ("src/**", "tests/**"))
+                    receipts = [
+                        json.loads(line)
+                        for line in (
+                            run_dir / journal.BATCH_RECEIPTS_NAME
+                        ).read_text(encoding="utf-8").splitlines()
+                    ]
+                    self.assertEqual(len(receipts), 2)
+
+    def test_scope_change_recovery_refuses_unproved_replace_and_disabled_control(self) -> None:
+        for scenario in ("unproved-replace", "disabled-control"):
+            with self.subTest(scenario=scenario):
+                repo, _ = self._new_repo(f"repo-readmit-{scenario}")
+                run_id = f"run-20260831-readmit-{scenario}"
+                transaction_key = key(f"readmit-{scenario}")
+                with self.api_environment():
+                    builders.run_open(
+                        repo,
+                        run_id,
+                        idempotency_key=key(f"{scenario}-open"),
+                        goal="Exercise guarded readmission recovery",
+                        scope=["src/**", "tests/**"],
+                        plugin_ref="forge-test-revision-9",
+                    )
+                    with mock.patch.object(
+                        batch,
+                        "_recover_locked",
+                        side_effect=RuntimeError("crash after intent"),
+                    ), self.assertRaisesRegex(RuntimeError, "crash after intent"):
+                        builders.scope_change(
+                            repo,
+                            run_id,
+                            idempotency_key=transaction_key,
+                            scope=(
+                                ["src/**"]
+                                if scenario == "unproved-replace"
+                                else ["src/**", "tests/**", "tools/**"]
+                            ),
+                            replace=scenario == "unproved-replace",
+                        )
+                    run_dir = self.run_dir(repo, run_id)
+                    if scenario == "unproved-replace":
+                        current = journal._session_owner()
+                        (run_dir / "owner").write_bytes(
+                            journal._owner_bytes(
+                                journal.Owner(
+                                    pid=99999999,
+                                    host=current.host,
+                                    started_at="2026-08-31T00:00:00Z",
+                                )
+                            )
+                        )
+                    before = {
+                        path.name: path.read_bytes()
+                        for path in run_dir.iterdir()
+                        if path.is_file()
+                    }
+                    controls = (
+                        batch.SCOPE_CHANGE_TRANSACTION_CONTROLS
+                        if scenario == "unproved-replace"
+                        else frozenset()
+                    )
+                    expected = (
+                        "proposed scope omits current pathspecs"
+                        if scenario == "unproved-replace"
+                        else journal.BATCH_DIVERGED
+                    )
+                    with mock.patch.object(
+                        batch,
+                        "SCOPE_CHANGE_TRANSACTION_CONTROLS",
+                        controls,
+                    ), self.assertRaisesRegex(
+                        journal.CoordinationRefusal, expected
+                    ):
+                        batch.recover_batch(repo, run_id)
+                    after = {
+                        path.name: path.read_bytes()
+                        for path in run_dir.iterdir()
+                        if path.is_file()
+                    }
+                    self.assertEqual(after, before)
+
+                    recovered = builders.scope_change(
+                        repo,
+                        run_id,
+                        idempotency_key=transaction_key,
+                        scope=(
+                            ["src/**"]
+                            if scenario == "unproved-replace"
+                            else ["src/**", "tests/**", "tools/**"]
+                        ),
+                        replace=scenario == "unproved-replace",
+                    )
+                    self.assertTrue(recovered.repeated)
+                    self.assertFalse(
+                        (run_dir / journal.BATCH_INTENT_NAME).exists()
+                    )
+
+    def test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps(self) -> None:
+        def assert_unchanged_refusal(repo: Path, run_dir: Path) -> None:
+            before = {
+                path.name: path.read_bytes()
+                for path in run_dir.iterdir()
+                if path.is_file()
+            }
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, journal.BATCH_DIVERGED
+            ):
+                batch.recover_batch(repo, run_dir.name)
+            after = {
+                path.name: path.read_bytes()
+                for path in run_dir.iterdir()
+                if path.is_file()
+            }
+            self.assertEqual(after, before)
+
+        with self.api_environment():
+            repo, _ = self._new_repo("repo-gap-leading")
+            run_dir, _intent = self._leave_complete_intent(
+                repo, "run-20260831-gap-leading"
+            )
+            (run_dir / journal.BATCH_RECEIPTS_NAME).write_bytes(b"")
+            assert_unchanged_refusal(repo, run_dir)
+
+            repo, _ = self._new_repo("repo-gap-trailing")
+            run_dir, _removed = self._leave_scope_receipt_gap(
+                repo, "run-20260831-gap-trailing"
+            )
+            ledger = run_dir / journal.BATCH_RECEIPTS_NAME
+            lines = ledger.read_bytes().splitlines(keepends=True)
+            ledger.write_bytes(b"".join(lines[:-1]))
+            assert_unchanged_refusal(repo, run_dir)
+
+            repo, _ = self._new_repo("repo-gap-multi-record")
+            run_id = "run-20260831-gap-multi-record"
+            self.open_run(repo, run_id)
+            self.start_task(repo, run_id)
+            builders.scope_change(
+                repo,
+                run_id,
+                idempotency_key=key("multi-record-readmit-1"),
+                scope=["src/**", "tests/**"],
+            )
+            builders.scope_change(
+                repo,
+                run_id,
+                idempotency_key=key("multi-record-readmit-2"),
+                scope=["docs/**", "src/**", "tests/**"],
+            )
+            builders.task_start(
+                repo,
+                run_id,
+                idempotency_key=key("multi-record-following"),
+                task="task-02",
+                goal="Anchor the multi-record gap",
+                acceptance=["The following receipt is exact"],
+                files=["docs/example.md"],
+            )
+            run_dir = self.run_dir(repo, run_id)
+            ledger = run_dir / journal.BATCH_RECEIPTS_NAME
+            lines = ledger.read_bytes().splitlines(keepends=True)
+            kept = lines[:-3] + [lines[-1]]
+            ledger.write_bytes(b"".join(kept))
+            self._write_landed_intent_for_last_receipt(run_dir, kept)
+            assert_unchanged_refusal(repo, run_dir)
+
+            repo, _ = self._new_repo("repo-gap-multiple")
+            run_id = "run-20260831-gap-multiple"
+            self.open_run(repo, run_id)
+            self.start_task(repo, run_id)
+            builders.scope_change(
+                repo,
+                run_id,
+                idempotency_key=key("multiple-gap-readmit-1"),
+                scope=["src/**", "tests/**"],
+            )
+            builders.task_start(
+                repo,
+                run_id,
+                idempotency_key=key("multiple-gap-task-2"),
+                task="task-02",
+                goal="Separate the receipt gaps",
+                acceptance=["A normal receipt separates gaps"],
+                files=["tests/example.py"],
+            )
+            builders.scope_change(
+                repo,
+                run_id,
+                idempotency_key=key("multiple-gap-readmit-2"),
+                scope=["docs/**", "src/**", "tests/**"],
+            )
+            builders.task_start(
+                repo,
+                run_id,
+                idempotency_key=key("multiple-gap-following"),
+                task="task-03",
+                goal="Anchor both receipt gaps",
+                acceptance=["Both gaps remain ambiguous"],
+                files=["docs/example.md"],
+            )
+            run_dir = self.run_dir(repo, run_id)
+            ledger = run_dir / journal.BATCH_RECEIPTS_NAME
+            lines = ledger.read_bytes().splitlines(keepends=True)
+            kept = [lines[0], lines[1], lines[3], lines[5]]
+            ledger.write_bytes(b"".join(kept))
+            self._write_landed_intent_for_last_receipt(run_dir, kept)
+            assert_unchanged_refusal(repo, run_dir)
+
+    def test_repair_receipt_is_rederived_on_every_load(self) -> None:
+        for field, replacement in (
+            ("idempotency_key", key("forged-repair-key")),
+            ("request_sha256", key("forged-repair-request")),
+            ("recorded_at", "2026-08-31T00:00:00Z"),
+        ):
+            with self.subTest(field=field):
+                repo, _ = self._new_repo(f"repo-forged-repair-{field}")
+                run_id = f"run-20260831-forged-repair-{field}"
+                with self.api_environment():
+                    run_dir, _removed = self._leave_scope_receipt_gap(
+                        repo, run_id
+                    )
+                    batch.recover_batch(repo, run_id)
+                    ledger = run_dir / journal.BATCH_RECEIPTS_NAME
+                    lines = ledger.read_bytes().splitlines(keepends=True)
+                    repair = json.loads(lines[-1])
+                    self.assertIs(repair["repaired"], True)
+                    repair[field] = replacement
+                    lines[-1] = journal._canonical_json_bytes(repair) + b"\n"
+                    ledger.write_bytes(b"".join(lines))
+                    before = ledger.read_bytes()
+                    with batch.batch_lock(
+                        run_dir, create=False
+                    ) as locked, self.assertRaisesRegex(
+                        journal.CoordinationRefusal, journal.BATCH_DIVERGED
+                    ):
+                        batch._load_receipts(locked)
+                    self.assertEqual(ledger.read_bytes(), before)
+
+    def test_torn_repair_receipt_resumes_only_its_derived_suffix(self) -> None:
+        run_id = "run-20260831-torn-repair"
+        with self.api_environment():
+            run_dir, _removed = self._leave_scope_receipt_gap(
+                self.repo, run_id
+            )
+            original = batch._append_named_file
+            tore = False
+
+            def tear_repair(
+                locked: batch.BatchLock,
+                name: str,
+                payload: bytes,
+                expected: journal.FileObservation,
+                **kwargs: object,
+            ) -> None:
+                nonlocal tore
+                if (
+                    not tore
+                    and name == journal.BATCH_RECEIPTS_NAME
+                    and b'"repaired":true' in payload
+                ):
+                    tore = True
+                    prefix = payload[: max(1, len(payload) // 2)]
+                    original(locked, name, prefix, expected, **kwargs)
+                    raise RuntimeError("torn repair receipt")
+                original(locked, name, payload, expected, **kwargs)
+
+            with mock.patch.object(
+                batch, "_append_named_file", side_effect=tear_repair
+            ), self.assertRaisesRegex(RuntimeError, "torn repair receipt"):
+                batch.recover_batch(self.repo, run_id)
+            torn = (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes()
+            self.assertFalse(torn.endswith(b"\n"))
+
+            recovered = batch.recover_batch(self.repo, run_id)
+            self.assertTrue(recovered.repeated)
+            self.assertFalse(
+                (run_dir / journal.BATCH_INTENT_NAME).exists()
+            )
+            with batch.batch_lock(run_dir, create=False) as locked:
+                receipts, raw, _observed = batch._load_receipts(locked)
+            self.assertTrue(raw.endswith(b"\n"))
+            self.assertEqual(
+                sum(receipt.get("repaired") is True for receipt in receipts),
+                1,
+            )
+
+    def test_activated_scope_change_rechecks_superset_containment_and_conflicts(self) -> None:
+        run_id = "run-20260831-readmit-predicates"
+        other_id = "run-20260831-readmit-conflict"
+        with self.api_environment():
+            builders.run_open(
+                self.repo,
+                run_id,
+                idempotency_key=key("readmit-predicates-open"),
+                goal="Exercise every locked readmission predicate",
+                scope=["src/**", "tests/**"],
+                plugin_ref="forge-test-revision-9",
+            )
+            builders.task_start(
+                self.repo,
+                run_id,
+                idempotency_key=key("readmit-predicates-task"),
+                task="task-01",
+                goal="Pin a contained task",
+                acceptance=["Readmission retains this file"],
+                files=["src/example.py"],
+            )
+            builders.run_open(
+                self.repo,
+                other_id,
+                idempotency_key=key("readmit-conflict-open"),
+                goal="Reserve a conflicting scope",
+                scope=["docs/**"],
+                plugin_ref="forge-test-revision-9",
+            )
+            run_dir = self.run_dir(self.repo, run_id)
+
+            cases = (
+                (
+                    "omitted-current",
+                    ["src/**"],
+                    False,
+                    '"tests/**"',
+                ),
+                (
+                    "task-containment",
+                    ["tests/**"],
+                    True,
+                    '"src/example.py"',
+                ),
+                (
+                    "other-run-conflict",
+                    ["docs/**", "src/**", "tests/**"],
+                    False,
+                    other_id,
+                ),
+            )
+            for label, scope, replace, expected in cases:
+                with self.subTest(label=label):
+                    before = {
+                        path.name: path.read_bytes()
+                        for path in run_dir.iterdir()
+                        if path.is_file()
+                    }
+                    with self.assertRaises(
+                        journal.CoordinationRefusal
+                    ) as caught:
+                        builders.scope_change(
+                            self.repo,
+                            run_id,
+                            idempotency_key=key(f"readmit-{label}"),
+                            scope=scope,
+                            replace=replace,
+                        )
+                    self.assertIn(expected, str(caught.exception))
+                    after = {
+                        path.name: path.read_bytes()
+                        for path in run_dir.iterdir()
+                        if path.is_file()
+                    }
+                    self.assertEqual(after, before)
+
+    def test_concurrent_admission_and_scope_change_remain_disjoint(self) -> None:
+        target = "run-20260831-readmit-race-target"
+        contender = "run-20260831-readmit-race-contender"
+        with self.api_environment():
+            self.open_run(self.repo, target)
+            current = journal._session_owner()
+            (self.run_dir(self.repo, target) / "owner").write_bytes(
+                journal._owner_bytes(
+                    journal.Owner(
+                        pid=99999999,
+                        host=current.host,
+                        started_at="2026-08-31T00:00:00Z",
+                    )
+                )
+            )
+
+        barrier_dir = Path(self.temporary.name) / "readmit-race-barrier"
+        barrier_dir.mkdir()
+        program = r'''
+import os
+import sys
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from codex_orchestrator import builders, journal
+
+mode, repository, barrier = sys.argv[2:]
+repository = Path(repository)
+barrier = Path(barrier)
+os.environ["FORGE_SESSION_PID"] = str(os.getpid())
+original = journal._registry_lock
+first = True
+
+@contextmanager
+def synchronized_registry_lock(state_root):
+    global first
+    if first:
+        first = False
+        (barrier / mode).write_text("ready\n", encoding="utf-8")
+        deadline = time.monotonic() + 10.0
+        while len(tuple(barrier.iterdir())) < 2:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("barrier timeout")
+            time.sleep(0.01)
+    with original(state_root) as locked:
+        yield locked
+
+journal._registry_lock = synchronized_registry_lock
+try:
+    if mode == "readmit":
+        builders.scope_change(
+            repository,
+            "run-20260831-readmit-race-target",
+            idempotency_key="1" * 64,
+            scope=["src/**", "tests/**"],
+        )
+    else:
+        builders.run_open(
+            repository,
+            "run-20260831-readmit-race-contender",
+            idempotency_key="2" * 64,
+            goal="Race the locked scope change",
+            scope=["tests/**"],
+            plugin_ref="forge-test-revision-9",
+        )
+except journal.CoordinationRefusal as exc:
+    print(str(exc))
+    raise SystemExit(1)
+print("committed")
+'''
+        processes = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    program,
+                    str(ROOT / "scripts"),
+                    mode,
+                    str(self.repo),
+                    str(barrier_dir),
+                ],
+                cwd=self.repo,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            for mode in ("readmit", "admit")
+        ]
+        results: list[tuple[int, str, str]] = []
+        try:
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=20)
+                results.append((process.returncode, stdout, stderr))
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=5)
+
+        self.assertEqual(
+            sorted(result[0] for result in results), [0, 1], results
+        )
+        refusal = next(result[1] for result in results if result[0] == 1)
+        self.assertIn("scope overlap", refusal)
+        registry = json.loads(
+            (self.repo / ".forge/tmp/run-registry.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        scopes = {
+            entry["run_id"]: tuple(entry["scope"])
+            for entry in registry["open_runs"]
+        }
+        if contender in scopes:
+            self.assertEqual(scopes[target], ("src/**",))
+            self.assertEqual(scopes[contender], ("tests/**",))
+        else:
+            self.assertEqual(scopes[target], ("src/**", "tests/**"))
+        with batch.batch_lock(
+            self.run_dir(self.repo, target), create=False
+        ) as locked:
+            batch._load_receipts(locked)
+
+    def _leave_scope_receipt_gap(
+        self, repo: Path, run_id: str
+    ) -> tuple[Path, dict[str, object]]:
+        self.open_run(repo, run_id)
+        builders.task_start(
+            repo,
+            run_id,
+            idempotency_key=key(f"{run_id}-task-1"),
+            task="task-01",
+            goal="Establish the initial receipt chain",
+            acceptance=["The first task is receipted"],
+            files=["src/example.py"],
+        )
+        builders.scope_change(
+            repo,
+            run_id,
+            idempotency_key=key(f"{run_id}-readmit"),
+            scope=["src/**", "tests/**"],
+        )
+        builders.task_start(
+            repo,
+            run_id,
+            idempotency_key=key(f"{run_id}-task-2"),
+            task="task-02",
+            goal="Land after the unreceipted readmission",
+            acceptance=["Recovery resumes later appends"],
+            files=["tests/test_gap.py"],
+        )
+        run_dir = self.run_dir(repo, run_id)
+        ledger = run_dir / journal.BATCH_RECEIPTS_NAME
+        receipt_lines = ledger.read_bytes().splitlines(keepends=True)
+        removed = json.loads(receipt_lines[-2])
+        following = json.loads(receipt_lines[-1])
+        self.assertEqual(removed["record_count"], 1)
+        ledger_prefix = b"".join(receipt_lines[:-2])
+        following_line = receipt_lines[-1]
+        ledger.write_bytes(ledger_prefix + following_line)
+
+        journal_bytes = (run_dir / "journal.jsonl").read_bytes()
+        batch_bytes = journal_bytes[
+            int(following["base_size"]) : int(following["journal_size"])
+        ]
+        intent = {
+            "schema": journal.BATCH_INTENT_SCHEMA,
+            "idempotency_key": following["idempotency_key"],
+            "request_sha256": following["request_sha256"],
+            "base_size": following["base_size"],
+            "base_sha256": journal._sha256(
+                journal_bytes[: int(following["base_size"])]
+            ),
+            "record_count": following["record_count"],
+            "batch_bytes": batch._encode_base64url(batch_bytes),
+            "batch_sha256": following["batch_sha256"],
+            "receipt_base_size": len(ledger_prefix),
+            "receipt_base_sha256": journal._sha256(ledger_prefix),
+            "receipt_bytes": batch._encode_base64url(following_line),
+        }
+        (run_dir / journal.BATCH_INTENT_NAME).write_bytes(
+            journal._canonical_json_bytes(intent) + b"\n"
+        )
+
+        with batch.batch_lock(run_dir, create=False) as locked, self.assertRaises(
+            journal.CoordinationRefusal
+        ) as caught:
+            batch._load_receipts(locked)
+        self.assertEqual(
+            str(caught.exception),
+            "forge: journal batch recovery refused — journal diverged from intent",
+        )
+        self.assertTrue((run_dir / journal.BATCH_INTENT_NAME).is_file())
+        return run_dir, removed
+
+    def _write_landed_intent_for_last_receipt(
+        self, run_dir: Path, ledger_lines: list[bytes]
+    ) -> dict[str, object]:
+        following_line = ledger_lines[-1]
+        following = json.loads(following_line)
+        ledger_prefix = b"".join(ledger_lines[:-1])
+        journal_bytes = (run_dir / "journal.jsonl").read_bytes()
+        batch_bytes = journal_bytes[
+            int(following["base_size"]) : int(following["journal_size"])
+        ]
+        intent = {
+            "schema": journal.BATCH_INTENT_SCHEMA,
+            "idempotency_key": following["idempotency_key"],
+            "request_sha256": following["request_sha256"],
+            "base_size": following["base_size"],
+            "base_sha256": journal._sha256(
+                journal_bytes[: int(following["base_size"])]
+            ),
+            "record_count": following["record_count"],
+            "batch_bytes": batch._encode_base64url(batch_bytes),
+            "batch_sha256": following["batch_sha256"],
+            "receipt_base_size": len(ledger_prefix),
+            "receipt_base_sha256": journal._sha256(ledger_prefix),
+            "receipt_bytes": batch._encode_base64url(following_line),
+        }
+        (run_dir / journal.BATCH_INTENT_NAME).write_bytes(
+            journal._canonical_json_bytes(intent) + b"\n"
+        )
+        return intent
+
+    def test_batch_recover_repairs_proven_readmission_gap_and_stale_intent(self) -> None:
+        run_id = "run-20260831-repair-readmit-gap"
+        with self.api_environment():
+            run_dir, removed = self._leave_scope_receipt_gap(
+                self.repo, run_id
+            )
+            journal_before = (run_dir / "journal.jsonl").read_bytes()
+            recovered = batch.recover_batch(self.repo, run_id)
+            self.assertTrue(recovered.repeated)
+            self.assertFalse(
+                (run_dir / journal.BATCH_INTENT_NAME).exists()
+            )
+            self.assertEqual(
+                (run_dir / "journal.jsonl").read_bytes(), journal_before
+            )
+            with batch.batch_lock(run_dir, create=False) as locked:
+                receipts, _raw, _observed = batch._load_receipts(locked)
+            repairs = [
+                receipt
+                for receipt in receipts
+                if receipt.get("repaired") is True
+            ]
+            self.assertEqual(len(repairs), 1)
+            self.assertEqual(repairs[0]["base_size"], removed["base_size"])
+            self.assertEqual(
+                repairs[0]["journal_size"], removed["journal_size"]
+            )
+            self.assertEqual(
+                repairs[0]["repair_reason"],
+                batch._BATCH_GAP_REPAIR_REASON,
+            )
+            records, issues = journal.read_journal(
+                run_dir / "journal.jsonl"
+            )
+            self.assertEqual(issues, [])
+            self.assertEqual(records[-1]["id"], "task-02")
+            builders.task_start(
+                self.repo,
+                run_id,
+                idempotency_key=key("repair-readmit-task-3"),
+                task="task-03",
+                goal="Prove post-repair append",
+                acceptance=["The append succeeds"],
+                files=["tests/test_after_repair.py"],
+            )
+
+    def test_batch_gap_repair_refuses_unproved_bytes_intent_and_disabled_control(self) -> None:
+        attacks = (
+            "non-record",
+            "tampered",
+            "intent-mismatch",
+            "repair-intent",
+            "disabled",
+        )
+        for attack in attacks:
+            with self.subTest(attack=attack):
+                repo, _ = self._new_repo(f"repo-gap-{attack}")
+                run_id = f"run-20260831-gap-{attack}"
+                with self.api_environment():
+                    run_dir, removed = self._leave_scope_receipt_gap(
+                        repo, run_id
+                    )
+                    journal_path = run_dir / "journal.jsonl"
+                    intent_path = run_dir / journal.BATCH_INTENT_NAME
+                    raw = bytearray(journal_path.read_bytes())
+                    base = int(removed["base_size"])
+                    end = int(removed["journal_size"])
+                    if attack == "non-record":
+                        raw[base:end] = b"x" * (end - base)
+                        journal_path.write_bytes(raw)
+                    elif attack == "tampered":
+                        marker = b"forge-scope-readmission-"
+                        offset = bytes(raw[base:end]).index(marker) + len(marker)
+                        absolute = base + offset
+                        raw[absolute] = (
+                            ord("0") if raw[absolute] != ord("0") else ord("1")
+                        )
+                        journal_path.write_bytes(raw)
+                    elif attack == "intent-mismatch":
+                        intent = json.loads(
+                            intent_path.read_text(encoding="utf-8")
+                        )
+                        batch_bytes = base64.urlsafe_b64decode(
+                            intent["batch_bytes"]
+                            + "=" * (-len(intent["batch_bytes"]) % 4)
+                        )
+                        record = json.loads(batch_bytes)
+                        record["goal"] = "Different already-landed bytes"
+                        replacement = journal._journal_line(record)
+                        receipt_bytes = base64.urlsafe_b64decode(
+                            intent["receipt_bytes"]
+                            + "=" * (-len(intent["receipt_bytes"]) % 4)
+                        )
+                        receipt = json.loads(receipt_bytes)
+                        receipt["batch_sha256"] = journal._sha256(replacement)
+                        receipt["journal_size"] = int(intent["base_size"]) + len(
+                            replacement
+                        )
+                        prefix = bytes(raw[: int(intent["base_size"])])
+                        receipt["journal_sha256"] = journal._sha256(
+                            prefix + replacement
+                        )
+                        replacement_receipt = (
+                            journal._canonical_json_bytes(receipt) + b"\n"
+                        )
+                        intent["batch_bytes"] = batch._encode_base64url(
+                            replacement
+                        )
+                        intent["batch_sha256"] = journal._sha256(replacement)
+                        intent["receipt_bytes"] = batch._encode_base64url(
+                            replacement_receipt
+                        )
+                        intent_path.write_bytes(
+                            journal._canonical_json_bytes(intent) + b"\n"
+                        )
+                    elif attack == "repair-intent":
+                        intent = json.loads(
+                            intent_path.read_text(encoding="utf-8")
+                        )
+                        receipt_bytes = base64.urlsafe_b64decode(
+                            intent["receipt_bytes"]
+                            + "=" * (-len(intent["receipt_bytes"]) % 4)
+                        )
+                        receipt = json.loads(receipt_bytes)
+                        receipt["repaired"] = True
+                        receipt["repair_reason"] = batch._BATCH_GAP_REPAIR_REASON
+                        intent["receipt_bytes"] = batch._encode_base64url(
+                            journal._canonical_json_bytes(receipt) + b"\n"
+                        )
+                        intent_path.write_bytes(
+                            journal._canonical_json_bytes(intent) + b"\n"
+                        )
+
+                    before = {
+                        path.name: path.read_bytes()
+                        for path in run_dir.iterdir()
+                        if path.is_file()
+                    }
+                    controls = (
+                        batch.BATCH_GAP_REPAIR_CONTROLS
+                        if attack != "disabled"
+                        else frozenset()
+                    )
+                    with mock.patch.object(
+                        batch,
+                        "BATCH_GAP_REPAIR_CONTROLS",
+                        controls,
+                    ), self.assertRaisesRegex(
+                        journal.CoordinationRefusal,
+                        journal.BATCH_DIVERGED,
+                    ):
+                        batch.recover_batch(repo, run_id)
+                    after = {
+                        path.name: path.read_bytes()
+                        for path in run_dir.iterdir()
+                        if path.is_file()
+                    }
+                    self.assertEqual(after, before)
 
     def test_typed_task_scope_refusal_names_offending_pathspec(self) -> None:
         run_id = "run-20260831-typed-task-scope"
@@ -868,6 +1791,32 @@ class Revision9BuilderBatchTests(unittest.TestCase):
             },
         )
         self.assertEqual(digest, journal._sha256(journal._canonical_json_bytes(request)))
+
+        readmit_request, readmit_digest = batch.normalized_request(
+            self.repo.resolve(),
+            "run-20260831-readmit-request",
+            "run-readmit",
+            {"scope": ["tests/**", "src/**"], "replace": False},
+        )
+        self.assertEqual(
+            readmit_request,
+            {
+                "schema": journal.BATCH_REQUEST_SCHEMA,
+                "verb": "run-readmit",
+                "repository": str(self.repo.resolve()),
+                "run_id": "run-20260831-readmit-request",
+                "inputs": {
+                    "scope": ["tests/**", "src/**"],
+                    "replace": False,
+                },
+            },
+        )
+        self.assertEqual(
+            readmit_digest,
+            journal._sha256(
+                journal._canonical_json_bytes(readmit_request)
+            ),
+        )
 
     def test_run_open_is_hidden_until_atomic_publication(self) -> None:
         repo, _ = self._new_repo("repo-open-atomic")
