@@ -10,6 +10,11 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Commit-chain replay now preserves receipted history, isolates frozen chains, and supports explicit operator tombstones and frozen aborts.
+- Commit-chain ingest now captures every cited evidence file into the run-relative content-addressed store.
+- Activated runs now route scope readmission through the typed scope-change builder.
+- Scope readmission preserves the current admitted set unless `--replace` is explicit, and containment refusals name escaped pathspecs.
+- Run-bound changelog outputs declared by the pinned committed policy are treated as engine-injected gate paths in binding and ingest proofs.
 - Revision-9 golden tests now skip with a stated reason on clean checkouts
   where the git-excluded origin-machine run journals cannot exist, instead of
   erroring (found by the CI candidate's binding review).

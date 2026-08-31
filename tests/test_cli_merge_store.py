@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import datetime as dt
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -220,6 +222,33 @@ class MergeStoreFixture(unittest.TestCase):
 
 
 class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
+    def test_operator_tombstone_refuses_captured_merge_with_unreadable_events(self) -> None:
+        _merge_store, merge_state, _metadata = self.create_merge(
+            "c-2026-08-30T120000Z-a000"
+        )
+        chain_id = str(merge_state["chain_id"])
+        store = CLI.ChainStore(self.root)
+        store.events_path(chain_id).write_bytes(b"{malformed-event}\n")
+        engine = CLI.Engine(
+            CLI.CommandContext(
+                CLI.Repository(self.root),
+                store,
+                CLI.CLIOptions(chain_id=chain_id, revision9_face=True),
+            )
+        )
+
+        with self.assertRaises(CLI.Refusal) as caught:
+            engine.operator_tombstone(
+                "a captured merge chain must not inherit commit family"
+            )
+
+        self.assertEqual(
+            caught.exception.reason_code.value, "state-precondition"
+        )
+        self.assertFalse(
+            (self.root / ".forge/chains/tombstones" / f"{chain_id}.json").exists()
+        )
+
     def test_commit_bytes_are_identical_and_merge_grammar_stays_separate(self) -> None:
         commit_store, commit_state, fixture = self.create_commit()
         chain_id = str(commit_state["chain_id"])
@@ -538,9 +567,14 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
         merge_store.events_path(bad_id).write_bytes(b"{not-json}\n")
 
         self.assertEqual(commit_store.chain_family(merge_id), "merge")
+        warning = io.StringIO()
+        with contextlib.redirect_stderr(warning):
+            commit_ids = commit_store.list_ids(family="commit")
+        self.assertEqual(commit_ids, [str(commit_state["chain_id"])])
         self.assertEqual(
-            commit_store.list_ids(family="commit"),
-            [str(commit_state["chain_id"])],
+            warning.getvalue(),
+            "forge: warning — skipped unreadable chain "
+            f"{bad_id} while enumerating commit chains\n",
         )
         self.assertEqual(commit_store.list_ids(family="merge"), [merge_id])
         with self.assertRaises(CLI.FrozenError):
@@ -560,6 +594,14 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
         )
 
         options.chain_id = merge_id
+        with self.assertRaisesRegex(
+            CLI.FrozenError, "commit selection refused a merge-family chain"
+        ):
+            engine.abort("commit abort must not seal merge state")
+        self.assertFalse(
+            (self.root / ".forge/chains/tombstones" / f"{merge_id}.json").exists()
+        )
+
         routed = CLI._route_shared_chain_engine(engine)
         self.assertIsInstance(routed, CLI.MergeEngine)
         with self.assertRaises(CLI.FrozenError) as routed_failure:

@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -1056,6 +1057,68 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(self.state(chain_id)["tier"]["effective"], "fast")
         return chain_id
 
+    def configure_changelog_gate(self) -> None:
+        (self.repo / "forge-project.md").write_text(
+            CLI_FIXTURE_SUPPORT.policy_with_changelog(), encoding="utf-8"
+        )
+        (self.repo / "CHANGELOG.md").write_text(
+            "# Changes\n", encoding="utf-8"
+        )
+        self.git("add", "--", "forge-project.md", "CHANGELOG.md")
+        self.git("commit", "--quiet", "-m", "configure changelog gate")
+
+    def test_bound_changelog_output_is_committed_policy_machinery(self) -> None:
+        self.configure_changelog_gate()
+        run_id = "run-20260831-bound-changelog-output"
+        chain_id = self.start_bound_chain(run_id)
+
+        exit_code, changed = self.invoke_cli(
+            "--chain-id", chain_id, "gate", "run", "changelog"
+        )
+
+        self.assertEqual(exit_code, 0, changed)
+        self.assertEqual(
+            self.state(chain_id)["paths"], ["src/app.py", "CHANGELOG.md"]
+        )
+        self.assertTrue(changed["ok"])
+
+        with mock.patch.object(
+            CLI, "_committed_changelog_output_paths", return_value=frozenset()
+        ):
+            exit_code, refused = self.invoke_cli(
+                "--chain-id", chain_id, "gate", "run", "gate-1"
+            )
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "run-task-binding-invalid")
+        self.assertIn("CHANGELOG.md", str(refused["observed"]))
+
+        exit_code, passed = self.invoke_cli(
+            "--chain-id", chain_id, "gate", "run", "gate-1"
+        )
+        self.assertEqual(exit_code, 0, passed)
+        self.assertTrue(passed["ok"])
+
+    def test_bound_non_changelog_output_still_names_out_of_scope_path(self) -> None:
+        self.configure_changelog_gate()
+        run_id = "run-20260831-bound-non-output"
+        self.open_run_and_task(run_id)
+        self.change("docs/guide.md", "# Outside task\n")
+
+        exit_code, refused = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "docs/guide.md",
+            "--task",
+            "task-01",
+        )
+
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "run-task-binding-invalid")
+        self.assertIn("docs/guide.md", str(refused["observed"]))
+
     def selected_commit_ingest_event_digests(
         self,
         materialized: dict[str, object],
@@ -1942,7 +2005,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertTrue(expected_lines)
         self.assertEqual(set(resolved), expected_lines)
 
-    def test_stale_carried_binding_refuses_before_missing_state_repair(self) -> None:
+    def test_historical_receipted_binding_replays_after_restage(self) -> None:
         run_id = "run-20260828-cli-stale-carried-binding"
         chain_id = self.start_bound_chain(run_id)
         _batch, _builders, journal = CLI._coordination_modules()
@@ -1994,19 +2057,273 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             ),
         )
 
-        with self.cli_process_context(), self.assertRaises(
-            CLI.FrozenError
-        ) as raised:
-            CLI.Engine(context).status()
+        with self.cli_process_context():
+            outcome = CLI.Engine(context).status()
 
-        outcome = raised.exception.outcome()
+        self.assertTrue(outcome.ok)
         self.assertEqual(outcome.schema, "forge-cli/2")
-        self.assertEqual(outcome.reason_code.value, "frozen-chain")
-        self.assertEqual(outcome.observed, "carried binding fact is stale")
-        self.assertFalse(state_path.exists())
+        self.assertTrue(state_path.exists())
+        self.assertEqual(
+            json.loads(state_path.read_bytes()), self.events(chain_id)[-1]["payload"]["state"]
+        )
         self.assertEqual(event_path.read_bytes(), events_before)
         self.assertEqual(journal_path.read_bytes(), journal_before)
         self.assertEqual(receipts_path.read_bytes(), receipts_before)
+
+    def test_frozen_abort_writes_explicit_tombstone_without_replay(self) -> None:
+        run_id = "run-20260831-frozen-abort"
+        chain_id = self.start_bound_chain(run_id)
+        state_before = self.state_path(chain_id).read_bytes()
+        self.events_path(chain_id).write_bytes(b"{malformed-event}\n")
+        events_before = self.events_path(chain_id).read_bytes()
+
+        exit_code, aborted = self.invoke_cli(
+            "--chain-id",
+            chain_id,
+            "commit",
+            "abort",
+            "--reason",
+            "operator quarantined malformed replay",
+        )
+
+        self.assertEqual(exit_code, 0, aborted)
+        self.assertEqual(aborted["state"], "aborted")
+        tombstone_path = (
+            self.state_path(chain_id).parent
+            / "tombstones"
+            / f"{chain_id}.json"
+        )
+        tombstone = json.loads(tombstone_path.read_bytes())
+        self.assertEqual(tombstone["schema"], CLI.CHAIN_TOMBSTONE_SCHEMA)
+        self.assertEqual(tombstone["event"], CLI.CHAIN_TOMBSTONE_EVENT)
+        self.assertEqual(tombstone["artifacts"]["state"]["status"], "captured")
+        self.assertEqual(tombstone["artifacts"]["events"]["status"], "captured")
+        self.assertEqual(self.state_path(chain_id).read_bytes(), state_before)
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+
+        exit_code, status = self.invoke_cli("--chain-id", chain_id, "status")
+        self.assertEqual(exit_code, 0, status)
+        self.assertEqual(status["state"], "aborted")
+
+        _batch, builders, journal = CLI._coordination_modules()
+        with self.cli_process_context(), mock.patch.object(
+            builders,
+            "TERMINAL_CHAIN_CONTROLS",
+            builders.TERMINAL_CHAIN_CONTROLS - {"tombstone"},
+        ), self.assertRaisesRegex(
+            journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+        ):
+            builders.task_finish(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-finish-disabled"),
+                task="task-01",
+                status="blocked",
+            )
+
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-finish"),
+                task="task-01",
+                status="blocked",
+            )
+        self.assertFalse(finished.repeated)
+        self.assertTrue(self.state_path(chain_id).exists())
+        self.assertTrue(self.events_path(chain_id).exists())
+
+        with self.cli_process_context(), mock.patch.object(
+            builders,
+            "TERMINAL_CHAIN_CONTROLS",
+            builders.TERMINAL_CHAIN_CONTROLS - {"tombstone"},
+        ), self.assertRaisesRegex(
+            journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+        ):
+            builders.run_close(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-close-disabled"),
+                judgment="blocked",
+                summary="Frozen chain remains sealed by its captured tombstone",
+                risks=[],
+                follow_ups=[],
+            )
+
+        with self.cli_process_context():
+            closed = builders.run_close(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-close"),
+                judgment="blocked",
+                summary="Frozen chain remains sealed by its captured tombstone",
+                risks=[],
+                follow_ups=[],
+            )
+        self.assertFalse(closed.repeated)
+        self.assertTrue(self.state_path(chain_id).exists())
+        self.assertTrue(self.events_path(chain_id).exists())
+
+    def test_operator_tombstone_admits_absent_chain_and_refuses_healthy_chain(self) -> None:
+        absent_id = "c-2026-08-31T120000Z-abcd"
+        exit_code, unknown = self.invoke_cli(
+            "--chain-id",
+            absent_id,
+            "commit",
+            "abort",
+            "--reason",
+            "must not guess an unknown chain family",
+        )
+        self.assertEqual(exit_code, 1, unknown)
+        self.assertEqual(unknown["reason_code"], "state-precondition")
+        self.assertIn(
+            "commit-family identity is not authenticated",
+            str(unknown["message"]),
+        )
+        self.assertFalse(
+            (
+                self.repo
+                / ".forge/chains/tombstones"
+                / f"{absent_id}.json"
+            ).exists()
+        )
+
+        exit_code, absent = self.invoke_cli(
+            "--chain-id",
+            absent_id,
+            "chain",
+            "tombstone",
+            "--reason",
+            "artifacts were explicitly quarantined",
+        )
+        self.assertEqual(exit_code, 0, absent)
+        self.assertEqual(absent["state"], "aborted")
+
+        self.change("src/app.py", "VALUE = 2\n")
+        exit_code, started = self.invoke_cli(
+            "commit", "start", "--paths", "src/app.py"
+        )
+        self.assertEqual(exit_code, 0, started)
+        healthy_id = str(started["chain_id"])
+        exit_code, refused = self.invoke_cli(
+            "--chain-id",
+            healthy_id,
+            "chain",
+            "tombstone",
+            "--reason",
+            "must not seal a healthy chain",
+        )
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "state-precondition")
+        self.assertIn("readable chain is not frozen", str(refused["message"]))
+
+    def test_tombstone_publication_recovers_only_authenticated_temp_alias(self) -> None:
+        chain_id = "c-2026-08-31T120001Z-abcd"
+        exit_code, created = self.invoke_cli(
+            "--chain-id",
+            chain_id,
+            "chain",
+            "tombstone",
+            "--reason",
+            "simulate an interrupted final-link publication",
+        )
+        self.assertEqual(exit_code, 0, created)
+        tombstones = self.repo / ".forge/chains/tombstones"
+        final = tombstones / f"{chain_id}.json"
+        temporary_alias = tombstones / (
+            f".{chain_id}.{os.getpid()}.0123456789abcdef.tmp"
+        )
+        os.link(final, temporary_alias)
+        self.assertEqual(final.stat().st_nlink, 2)
+
+        exit_code, status = self.invoke_cli("--chain-id", chain_id, "status")
+        self.assertEqual(exit_code, 0, status)
+        self.assertTrue(temporary_alias.exists())
+
+        exit_code, recovered = self.invoke_cli(
+            "--chain-id",
+            chain_id,
+            "chain",
+            "tombstone",
+            "--reason",
+            "recover the interrupted publication",
+        )
+        self.assertEqual(exit_code, 0, recovered)
+        self.assertFalse(temporary_alias.exists())
+        self.assertEqual(final.stat().st_nlink, 1)
+
+        foreign_alias = tombstones / "foreign-hardlink"
+        os.link(final, foreign_alias)
+        exit_code, refused = self.invoke_cli("--chain-id", chain_id, "status")
+        self.assertEqual(exit_code, 2, refused)
+        self.assertEqual(refused["reason_code"], "frozen-chain")
+        self.assertIn("unsafe hardlink topology", str(refused["message"]))
+
+    def test_tombstone_publication_retries_prelink_and_postunlink_failures(self) -> None:
+        repository = CLI.Repository(self.repo)
+
+        prelink_id = "c-2026-08-31T120002Z-abcd"
+        prelink_store = CLI.ChainStore(repository.common_root())
+        with self.cli_process_context(), mock.patch.object(
+            CLI.os, "link", side_effect=OSError("failure before final link")
+        ), self.assertRaisesRegex(
+            CLI.FrozenError, "chain tombstone publication failed"
+        ):
+            prelink_store.create_tombstone(
+                prelink_id,
+                "pre-link publication failure",
+                frozen_proven=True,
+            )
+        tombstones = self.repo / ".forge/chains/tombstones"
+        self.assertFalse((tombstones / f"{prelink_id}.json").exists())
+        self.assertEqual(list(tombstones.glob(f".{prelink_id}.*.tmp")), [])
+        with self.cli_process_context():
+            prelink_record = prelink_store.create_tombstone(
+                prelink_id,
+                "pre-link publication retry",
+                frozen_proven=True,
+            )
+        self.assertEqual(prelink_record["chain_id"], prelink_id)
+
+        postunlink_id = "c-2026-08-31T120003Z-abcd"
+        stages: list[str] = []
+        postunlink_store = CLI.ChainStore(
+            repository.common_root(), boundary=stages.append
+        )
+        real_fsync = CLI.os.fsync
+
+        def fail_directory_fsync(descriptor: int) -> None:
+            if (
+                stages
+                and stages[-1] == "tombstone-temp-unlinked"
+                and stat.S_ISDIR(os.fstat(descriptor).st_mode)
+            ):
+                raise OSError("failure before tombstone directory fsync")
+            real_fsync(descriptor)
+
+        with self.cli_process_context(), mock.patch.object(
+            CLI.os, "fsync", side_effect=fail_directory_fsync
+        ), self.assertRaisesRegex(
+            CLI.FrozenError, "chain tombstone publication failed"
+        ):
+            postunlink_store.create_tombstone(
+                postunlink_id,
+                "post-unlink publication failure",
+                frozen_proven=True,
+            )
+        postunlink_final = tombstones / f"{postunlink_id}.json"
+        self.assertTrue(postunlink_final.exists())
+        self.assertEqual(postunlink_final.stat().st_nlink, 1)
+        self.assertIn("tombstone-temp-unlinked", stages)
+        self.assertNotIn("tombstone-directory-fsynced", stages)
+
+        with self.cli_process_context():
+            postunlink_record = postunlink_store.create_tombstone(
+                postunlink_id,
+                "post-unlink publication retry",
+                frozen_proven=True,
+            )
+        self.assertEqual(postunlink_record["chain_id"], postunlink_id)
 
     def test_bound_replay_refuses_noncanonical_event_without_state_repair(self) -> None:
         run_id = "run-20260828-cli-noncanonical-event"

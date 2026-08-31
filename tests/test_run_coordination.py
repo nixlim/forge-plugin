@@ -173,6 +173,12 @@ class RunCoordinationTests(unittest.TestCase):
             self.registry_bytes(),
         )
 
+    def activate_writer_contract(self, run_id: str) -> None:
+        journal_path = self.journal_path(run_id)
+        opening = json.loads(journal_path.read_text(encoding="utf-8"))
+        opening["writer_contract"] = journal.WRITER_CONTRACT
+        journal_path.write_bytes(journal._journal_payload(opening))
+
     def outside_citation(self, run_id: str, name: str) -> str:
         outside = Path(self.temporary.name) / "outside" / name
         outside.parent.mkdir(parents=True, exist_ok=True)
@@ -1488,13 +1494,183 @@ class RunCoordinationTests(unittest.TestCase):
         )
 
         self.assertEqual(refused.returncode, 1)
-        self.assertEqual(
-            refused.stderr,
-            "forge: journal append refused — task files exceed admitted scope for run "
-            "run-A\n",
-        )
+        self.assertIn('"src/a/**"', refused.stderr)
         self.assertEqual(self.journal_path("run-A").read_bytes(), before)
         self.assertIn(b'"scope":["src/a/**"]', self.registry_bytes())
+
+        replaced_but_unsafe = self.command(
+            "run-readmit", "--repo", str(self.repo), "--run-id", "run-A",
+            "--scope", "src/a/other.py", "--replace",
+        )
+        self.assertEqual(replaced_but_unsafe.returncode, 1)
+        self.assertIn('"src/a/x.py"', replaced_but_unsafe.stderr)
+        self.assertEqual(self.journal_path("run-A").read_bytes(), before)
+
+        replaced = self.command(
+            "run-readmit", "--repo", str(self.repo), "--run-id", "run-A",
+            "--scope", "src/a/x.py", "--replace",
+        )
+        self.assertEqual(replaced.returncode, 0, replaced.stderr)
+        self.assertIn(b'"scope":["src/a/x.py"]', self.registry_bytes())
+
+    def test_readmission_requires_complete_current_set_without_replace(self) -> None:
+        self.assertEqual(
+            self.open("run-A", "docs/**", "src/**").returncode, 0
+        )
+        before = self.journal_path("run-A").read_bytes()
+
+        refused = self.command(
+            "run-readmit", "--repo", str(self.repo), "--run-id", "run-A",
+            "--scope", "src/**",
+        )
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('"docs/**"', refused.stderr)
+        self.assertEqual(self.journal_path("run-A").read_bytes(), before)
+
+    def test_activated_readmission_requires_typed_builder_record(self) -> None:
+        self.assertEqual(self.open("run-legacy", "legacy/**").returncode, 0)
+        self.assertEqual(self.open("run-activated", "src/**").returncode, 0)
+        self.activate_writer_contract("run-activated")
+
+        with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": str(os.getpid())}):
+            for label, run_id, transaction_scope, authority in (
+                ("activated-direct-raw", "run-activated", ["src/**"], None),
+                (
+                    "activated-authority-without-record",
+                    "run-activated",
+                    ["src/**"],
+                    journal._SCOPE_CHANGE_BUILDER_AUTHORITY,
+                ),
+                (
+                    "legacy-authority-without-record",
+                    "run-legacy",
+                    ["legacy/**"],
+                    journal._SCOPE_CHANGE_BUILDER_AUTHORITY,
+                ),
+            ):
+                with self.subTest(label=label):
+                    before = self.coordination_bytes(run_id)
+                    with self.assertRaises(journal.CoordinationRefusal) as caught:
+                        journal.readmit_run(
+                            self.repo,
+                            run_id,
+                            transaction_scope,
+                            _builder_authority=authority,
+                            _record=None,
+                        )
+                    self.assertEqual(
+                        str(caught.exception),
+                        "forge: journal append refused — activated writer requires "
+                        "typed builder",
+                    )
+                    self.assertEqual(self.coordination_bytes(run_id), before)
+
+    def test_readmission_authority_binds_run_and_scope_across_contracts(self) -> None:
+        self.assertEqual(self.open("run-legacy", "legacy/**").returncode, 0)
+        self.assertEqual(self.open("run-activated", "src/**").returncode, 0)
+        self.activate_writer_contract("run-activated")
+        contract_cases = (
+            (
+                "legacy",
+                "run-legacy",
+                ["legacy/**", "tests/**"],
+                ["docs/**", "legacy/**"],
+            ),
+            (
+                "activated",
+                "run-activated",
+                ["src/**", "tests/**"],
+                ["docs/**", "src/**"],
+            ),
+        )
+
+        with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": str(os.getpid())}):
+            for contract, run_id, transaction_scope, mismatched_scope in contract_cases:
+                record_cases = (
+                    (
+                        "run_id",
+                        self.strict_record(
+                            {
+                                "type": "decision",
+                                "id": f"forge-scope-readmission-{'a' * 32}",
+                                "resolution": journal.READMISSION_RESOLUTION,
+                                "run_id": "run-other",
+                                "scope": transaction_scope,
+                            }
+                        ),
+                    ),
+                    (
+                        "scope",
+                        self.strict_record(
+                            {
+                                "type": "decision",
+                                "id": f"forge-scope-readmission-{'b' * 32}",
+                                "resolution": journal.READMISSION_RESOLUTION,
+                                "run_id": run_id,
+                                "scope": mismatched_scope,
+                            }
+                        ),
+                    ),
+                )
+                for field, record in record_cases:
+                    with self.subTest(contract=contract, field=field):
+                        before = self.coordination_bytes(run_id)
+                        with self.assertRaises(journal.CoordinationRefusal) as caught:
+                            journal.readmit_run(
+                                self.repo,
+                                run_id,
+                                transaction_scope,
+                                _builder_authority=(
+                                    journal._SCOPE_CHANGE_BUILDER_AUTHORITY
+                                ),
+                                _record=record,
+                            )
+                        self.assertEqual(
+                            str(caught.exception), journal.INVALID_JOURNAL_RECORD
+                        )
+                        self.assertEqual(self.coordination_bytes(run_id), before)
+
+    def test_legacy_task_append_scope_refusal_names_offending_pathspec(self) -> None:
+        self.assertEqual(self.open("run-A", "src/**").returncode, 0)
+        task = self.record(
+            "outside-task.json",
+            {
+                "type": "task",
+                "id": "task-1",
+                "status": "active",
+                "files": ["docs/guide.md"],
+            },
+        )
+
+        refused = self.command(
+            "journal-append", "--repo", str(self.repo), "--run-id", "run-A",
+            "--record-json", str(task),
+        )
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('"docs/guide.md"', refused.stderr)
+
+    def test_named_scope_refusal_escapes_control_characters_on_one_line(self) -> None:
+        self.assertEqual(self.open("run-A", "src/**").returncode, 0)
+        task = self.record(
+            "escaped-outside-task.json",
+            {
+                "type": "task",
+                "id": "task-1",
+                "status": "active",
+                "files": ["docs/line\nbreak.md"],
+            },
+        )
+
+        refused = self.command(
+            "journal-append", "--repo", str(self.repo), "--run-id", "run-A",
+            "--record-json", str(task),
+        )
+
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stderr.count("\n"), 1)
+        self.assertIn('"docs/line\\nbreak.md"', refused.stderr)
 
     def test_append_path_cannot_bypass_retirement(self) -> None:
         """FR-014/FR-192 and DM-011: prevent append paths from bypassing retirement."""

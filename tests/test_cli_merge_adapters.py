@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import contextlib
+import datetime as dt
 import hashlib
 import importlib.util
 import io
@@ -265,7 +266,8 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
         bound: bool = False,
     ) -> tuple[object, dict[str, object]]:
         chain_id = self.chain_id
-        at = "2026-08-30T15:00:00Z"
+        created = CLI.utc_now() - dt.timedelta(seconds=5)
+        at = CLI.iso_z(created)
         owner = {
             "pid": os.getpid(),
             "host": "merge-adapter-test",
@@ -352,7 +354,7 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
                 "predecessor_release_digest": None,
             },
             generation_digest=None,
-            at="2026-08-30T15:00:01Z",
+            at=CLI.iso_z(created + dt.timedelta(seconds=1)),
             session="merge-adapter-session",
         )
         intent_digest = json.loads(
@@ -369,7 +371,7 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
                 "predecessor_release_digest": None,
             },
             generation_digest=None,
-            at="2026-08-30T15:00:02Z",
+            at=CLI.iso_z(created + dt.timedelta(seconds=2)),
             session="merge-adapter-session",
         )
         operation_nonce = digest(b"merge-adapter-bootstrap")[:32]
@@ -387,7 +389,7 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
                 "attempt": 1,
             },
             generation_digest=None,
-            at="2026-08-30T15:00:03Z",
+            at=CLI.iso_z(created + dt.timedelta(seconds=3)),
             session="merge-adapter-session",
         )
         integration = copy.deepcopy(initial["integration"])
@@ -410,7 +412,7 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
                 }
             },
             generation_digest=generation.candidate["generation_digest"],
-            at="2026-08-30T15:00:04Z",
+            at=CLI.iso_z(created + dt.timedelta(seconds=4)),
             session="merge-adapter-session",
         )
         return store, state

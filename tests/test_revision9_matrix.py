@@ -1124,23 +1124,6 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
         self.assertEqual(receipts_path.read_bytes(), receipts_before_retry)
         self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
 
-        evidence_paths: set[str] = set()
-        for record in records:
-            evidence = record.get("evidence")
-            if isinstance(evidence, list):
-                evidence_paths.update(
-                    value for value in evidence if isinstance(value, str)
-                )
-        for value in evidence_paths:
-            relative = Path(value)
-            self.assertFalse(relative.is_absolute())
-            source = (self.repo / relative).resolve()
-            source.relative_to(self.repo.resolve())
-            self.assertTrue(source.is_file(), source)
-            destination = run_dir / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(source.read_bytes())
-
         with self.cli_context():
             pre_close = journal.validate_run(run_dir, gates=True)
             self.assertEqual(pre_close["issues"], [], pre_close)

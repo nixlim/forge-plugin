@@ -186,7 +186,17 @@ class Revision9IngestPredicateNegativeTests(
         control: bool = False,
         run_scope: tuple[str, ...] | None = None,
         task_files: tuple[str, ...] | None = None,
+        configured_changelog: bool = False,
     ) -> SimpleNamespace:
+        if configured_changelog:
+            (self.repo / "forge-project.md").write_text(
+                CLI_FIXTURE_SUPPORT.policy_with_changelog(), encoding="utf-8"
+            )
+            (self.repo / "CHANGELOG.md").write_text(
+                "# Changes\n", encoding="utf-8"
+            )
+            self.git("add", "--", "forge-project.md", "CHANGELOG.md")
+            self.git("commit", "--quiet", "-m", "configure changelog gate")
         if control:
             changed_path = "scripts/tool.py"
             self.change(changed_path, "CONTROL = 2\n")
@@ -203,6 +213,12 @@ class Revision9IngestPredicateNegativeTests(
         self.assertEqual(exit_code, 0, started)
         self.assertEqual(started["schema"], "forge-cli/1")
         chain_id = str(started["chain_id"])
+
+        if configured_changelog:
+            exit_code, changelog = self.invoke_cli(
+                "--chain-id", chain_id, "gate", "run", "changelog"
+            )
+            self.assertEqual(exit_code, 0, changelog)
 
         exit_code, verified = self.invoke_cli(
             "--chain-id", chain_id, "verify"
@@ -880,6 +896,21 @@ class Revision9IngestPredicateNegativeTests(
             task_files=("src/app.py",),
         )
         self.assert_ingest_refusal(prepared, "scope-membership")
+
+    def test_committed_changelog_output_is_exempt_from_ingest_scope(self) -> None:
+        prepared = self.prepare_terminal_ingest(
+            "run-20260831-ingest-changelog-output",
+            configured_changelog=True,
+        )
+
+        with mock.patch.object(
+            CLI, "_committed_changelog_output_paths", return_value=frozenset()
+        ):
+            self.assert_ingest_refusal(prepared, "scope-membership")
+
+        exit_code, ingested = self.invoke_cli(*prepared.ingest_argv)
+        self.assertEqual(exit_code, 0, ingested)
+        self.assertTrue(ingested["ok"])
 
     def test_digest_valid_illegal_transition_reaches_monotonic_proof(self) -> None:
         prepared = self.prepare_terminal_ingest(

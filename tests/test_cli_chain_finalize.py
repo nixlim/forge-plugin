@@ -814,11 +814,11 @@ class FinalizeRecoveryTests(FinalizeFixture):
         original_load = self.store.load
         original_persist = self.store.persist
 
-        def traced_load(chain_id):
+        def traced_load(chain_id, *, family_proven=False):
             nonlocal load_count
             load_count += 1
             trace.append("initial-load" if load_count == 1 else "reload-under-lock")
-            loaded = original_load(chain_id)
+            loaded = original_load(chain_id, family_proven=family_proven)
             if load_count == 1:
                 stale = copy.deepcopy(loaded)
                 if post_commit:

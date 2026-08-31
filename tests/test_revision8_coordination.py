@@ -270,6 +270,7 @@ class Revision8CoordinationTests(unittest.TestCase):
         self,
         run_id: str,
         *scope: str,
+        replace: bool = False,
         environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         arguments = [
@@ -281,6 +282,8 @@ class Revision8CoordinationTests(unittest.TestCase):
         ]
         for item in scope:
             arguments.extend(("--scope", item))
+        if replace:
+            arguments.append("--replace")
         return self.command(*arguments, environment=environment)
 
     def retire(
@@ -1398,6 +1401,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                     self.repo,
                     "run-engine-owner-order",
                     ["src/engine/readmitted/**"],
+                    replace=True,
                 ),
             ),
             (
@@ -1442,6 +1446,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                     self.repo,
                     "run-engine-envelope-order",
                     ["src/engine/readmitted/**"],
+                    replace=True,
                 ),
                 journal.READMISSION_RESOLUTION,
             ),
@@ -1706,7 +1711,9 @@ class Revision8CoordinationTests(unittest.TestCase):
             "run-fresh-shells", self.decision_record(id="fresh-shell-append")
         )
         self.assertEqual(appended.returncode, 0, appended.stderr)
-        readmitted = self.readmit("run-fresh-shells", "src/fresh/new/**")
+        readmitted = self.readmit(
+            "run-fresh-shells", "src/fresh/new/**", replace=True
+        )
         self.assertEqual(readmitted.returncode, 0, readmitted.stderr)
         closed = self.close("run-fresh-shells")
         self.assertEqual(closed.returncode, 0, closed.stderr)
@@ -1901,7 +1908,9 @@ class Revision8CoordinationTests(unittest.TestCase):
             journal, "_write_registry", side_effect=OSError("secret update failure")
         ):
             with self.assertRaises(journal.CoordinationRefusal) as caught:
-                journal.readmit_run(self.repo, "run-update", ["src/update/new/**"])
+                journal.readmit_run(
+                    self.repo, "run-update", ["src/update/new/**"], replace=True
+                )
         self.assertEqual(
             str(caught.exception),
             "forge: run coordination refused — run registry update failed",
@@ -1914,7 +1923,9 @@ class Revision8CoordinationTests(unittest.TestCase):
             journal.os, "ftruncate", side_effect=OSError("secret rollback failure")
         ):
             with self.assertRaises(journal.CoordinationRefusal) as caught:
-                journal.readmit_run(self.repo, "run-update", ["src/update/again/**"])
+                journal.readmit_run(
+                    self.repo, "run-update", ["src/update/again/**"], replace=True
+                )
         self.assertEqual(
             str(caught.exception),
             "forge: run coordination refused — journal rollback failed after run registry "
@@ -2158,6 +2169,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                             self.repo,
                             "run-registry-epoch",
                             [f"src/epoch/{case}/**"],
+                            replace=True,
                         )
                 self.assertTrue(triggered)
                 self.assertEqual(
@@ -2219,6 +2231,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                     self.repo,
                     "run-postpublish-readmit",
                     ["src/postpublish/readmit/new/**"],
+                    replace=True,
                 ),
             ),
             (
@@ -2350,7 +2363,10 @@ class Revision8CoordinationTests(unittest.TestCase):
         ):
             with self.assertRaises(journal.CoordinationRefusal) as caught:
                 journal.readmit_run(
-                    self.repo, "run-restoration-prime", readmitted_scope
+                    self.repo,
+                    "run-restoration-prime",
+                    readmitted_scope,
+                    replace=True,
                 )
 
         self.assertEqual(str(caught.exception), journal.JOURNAL_ROLLBACK_FAILED)
@@ -2468,6 +2484,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                 self.repo,
                 "run-canonical-registry",
                 ["src/canonical/readmitted/**"],
+                replace=True,
             )
 
         self.assertEqual(len(backup_links), 1)
@@ -2554,6 +2571,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                     self.repo,
                     run_id,
                     ["src/stale/lifecycle/readmitted/**"],
+                    replace=True,
                 ),
             ),
             (
@@ -3272,6 +3290,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                     self.repo,
                     "run-interrupted-prime",
                     ["src/interrupted/readmitted/**"],
+                    replace=True,
                 )
 
         self.assertTrue(registry_exchanged)
@@ -3873,7 +3892,9 @@ class Revision8CoordinationTests(unittest.TestCase):
             "run-placeholder-a", self.decision_record(id="placeholder-append")
         )
         self.assertEqual(appended.returncode, 0, appended.stderr)
-        readmitted = self.readmit("run-placeholder-a", "src/a/new/**")
+        readmitted = self.readmit(
+            "run-placeholder-a", "src/a/new/**", replace=True
+        )
         self.assertEqual(readmitted.returncode, 0, readmitted.stderr)
 
         self.assertEqual(self.open_run("run-placeholder-b", "src/b/**").returncode, 0)
@@ -4262,9 +4283,13 @@ class Revision8CoordinationTests(unittest.TestCase):
             "open run run-C\n",
         )
 
-        readmitted = self.readmit("run-C", "src/ancestor/readmitted/**")
+        readmitted = self.readmit(
+            "run-C", "src/ancestor/readmitted/**", replace=True
+        )
         self.assertEqual(readmitted.returncode, 0, readmitted.stderr)
-        unrelated = self.readmit("run-C", "src/unrelated/file.py")
+        unrelated = self.readmit(
+            "run-C", "src/unrelated/file.py", replace=True
+        )
         self.assertEqual(unrelated.returncode, 1)
         self.assertEqual(
             unrelated.stderr,
@@ -4302,7 +4327,9 @@ class Revision8CoordinationTests(unittest.TestCase):
         )
         self.assertEqual(successor.returncode, 0, successor.stderr)
 
-        readmitted = self.readmit("run-readmit-B", "src/disjoint/**")
+        readmitted = self.readmit(
+            "run-readmit-B", "src/disjoint/**", replace=True
+        )
 
         self.assertEqual(readmitted.returncode, 0, readmitted.stderr)
         registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
@@ -4979,6 +5006,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                     self.repo,
                     "run-directory-publication",
                     ["src/readmitted/**"],
+                    replace=True,
                 )
 
         self.assertTrue(triggered)
@@ -5016,6 +5044,7 @@ class Revision8CoordinationTests(unittest.TestCase):
                     self.repo,
                     "run-journal-publication",
                     ["src/readmitted/**"],
+                    replace=True,
                 )
 
         self.assertTrue(triggered)

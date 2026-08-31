@@ -20,7 +20,6 @@ from codex_orchestrator.journal import (
     append_run_record,
     close_run,
     open_run,
-    readmit_run,
     retire_run,
 )
 
@@ -152,6 +151,7 @@ def _coordination_parser() -> argparse.ArgumentParser:
     admitted.add_argument("--repo", required=True)
     admitted.add_argument("--run-id", required=True)
     admitted.add_argument("--scope", action="append", required=True)
+    admitted.add_argument("--replace", action="store_true")
 
     closed = subparsers.add_parser("run-close")
     closed.add_argument("--repo", required=True)
@@ -408,7 +408,12 @@ def _coordination_main(argv: list[str]) -> int:
         elif args.command == "journal-append":
             append_run_record(repo, args.run_id, _record(args.record_json))
         elif args.command == "run-readmit":
-            readmit_run(repo, args.run_id, args.scope)
+            builders.scope_change(
+                repo,
+                args.run_id,
+                scope=args.scope,
+                replace=args.replace,
+            )
         elif args.command == "run-close":
             close_run(repo, args.run_id, _record(args.record_json))
         else:

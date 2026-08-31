@@ -49,9 +49,10 @@ each conflict in bytewise run-ID order. Missing, malformed, ambiguous, or unregi
 state refuses exactly `forge: new run refused — run registry unavailable`. Never bypass either
 refusal by manually creating a run directory or appending a journal line.
 
-Disjoint open runs may proceed concurrently. Scope remains fixed for the run. Before adding a task,
-ensure every `task.files` pathspec is contained by its admitted run scope; widen it first, under the
-same registry lock, with `run-readmit --repo "$REPO" --run-id <run-id> --scope <pathspec> ...`.
+Disjoint open runs may proceed concurrently. Before adding a task, ensure every `task.files`
+pathspec is contained by its admitted run scope; re-declare the complete admitted set first, under
+the same registry lock, with `run-readmit --repo "$REPO" --run-id <run-id> --scope <pathspec> ...`.
+Use `--replace` only when intentionally replacing the previously admitted set.
 Append every later record only with `journal-append --repo "$REPO" --run-id <run-id>
 --record-json <file>`, which proves the current PID/host owner before every write. A different live
 owner, or a missing/malformed owner after `run_started`, is a hard refusal and leaves the journal

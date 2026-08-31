@@ -7,7 +7,9 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Sequence
@@ -25,7 +27,7 @@ from commitment_paths import (  # noqa: E402
 
 
 BUILDER_VALIDATION_CONTROLS = frozenset(
-    {"derived-fields", "relations", "binding-replay"}
+    {"derived-fields", "relations", "binding-replay", "scope-change"}
 )
 _INGEST_PROOF_ORDER = (
     "chain-schema-and-digest-replay",
@@ -53,7 +55,7 @@ _INGEST_CAPTURE_CITATION_PREFIX = (
     "ingest.captured_package: "
 )
 TERMINAL_CHAIN_CONTROLS = frozenset(
-    {"enumeration", "lock", "binding", "replay", "outbox", "landing"}
+    {"enumeration", "lock", "binding", "replay", "outbox", "landing", "tombstone"}
 )
 TERMINAL_CHAIN_INVALID = (
     "forge: journal builder refused — bound chain proof is invalid"
@@ -6456,6 +6458,194 @@ def _captured_ingest_chain_ids(
     return result
 
 
+def _terminal_tombstone_valid(
+    chains_descriptor: int, chain_id: str
+) -> bool:
+    if "tombstone" not in TERMINAL_CHAIN_CONTROLS:
+        return False
+    tombstones_descriptor: int | None = None
+    try:
+        before = os.stat(
+            "tombstones", dir_fd=chains_descriptor, follow_symlinks=False
+        )
+        tombstones_descriptor, observation = journal._open_bound_child_directory(
+            chains_descriptor, "tombstones", before
+        )
+        tombstone_name = f"{chain_id}.json"
+        tombstone_before = os.stat(
+            tombstone_name,
+            dir_fd=tombstones_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            not stat.S_ISREG(tombstone_before.st_mode)
+            or tombstone_before.st_uid != os.geteuid()
+            or tombstone_before.st_nlink not in {1, 2}
+        ):
+            return False
+        if tombstone_before.st_nlink == 2:
+            alias_pattern = re.compile(
+                rf"^\.{re.escape(chain_id)}\.[1-9][0-9]*\.[0-9a-f]{{16}}\.tmp$"
+            )
+            aliases = []
+            for candidate in os.listdir(tombstones_descriptor):
+                if alias_pattern.fullmatch(candidate) is None:
+                    continue
+                candidate_stat = os.stat(
+                    candidate,
+                    dir_fd=tombstones_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    candidate_stat.st_dev == tombstone_before.st_dev
+                    and candidate_stat.st_ino == tombstone_before.st_ino
+                ):
+                    aliases.append(candidate)
+            if len(aliases) != 1:
+                return False
+        raw, file_observation = journal._read_bound_regular(
+            tombstones_descriptor,
+            tombstone_name,
+            require_nonempty=True,
+        )
+        if (
+            len(raw) > 65536
+            or journal._file_observation(os.fstat(tombstones_descriptor))
+            != observation
+            or journal._file_observation(
+                os.stat(
+                    "tombstones",
+                    dir_fd=chains_descriptor,
+                    follow_symlinks=False,
+                )
+            )
+            != observation
+        ):
+            return False
+        rebound = os.stat(
+            tombstone_name,
+            dir_fd=tombstones_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            journal._file_observation(rebound) != file_observation
+            or rebound.st_uid != tombstone_before.st_uid
+            or rebound.st_nlink != tombstone_before.st_nlink
+        ):
+            return False
+        value = json.loads(raw.decode("utf-8"))
+    except (FileNotFoundError, OSError, UnicodeError, ValueError, RecursionError):
+        return False
+    finally:
+        if tombstones_descriptor is not None:
+            os.close(tombstones_descriptor)
+    if (
+        not isinstance(value, dict)
+        or raw != journal._canonical_json_bytes(value) + b"\n"
+        or set(value)
+        != {
+            "schema",
+            "chain_id",
+            "event",
+            "reason",
+            "recorded_at",
+            "operator",
+            "artifacts",
+        }
+        or value.get("schema") != "forge-chain-tombstone/1"
+        or value.get("chain_id") != chain_id
+        or value.get("event") != "frozen-abort"
+        or not isinstance(value.get("reason"), str)
+        or not str(value["reason"]).strip()
+        or len(str(value["reason"])) > 4096
+        or not isinstance(value.get("recorded_at"), str)
+        or not journal._valid_utc(value["recorded_at"])
+    ):
+        return False
+    operator = value.get("operator")
+    artifacts = value.get("artifacts")
+    reason = value.get("reason")
+    try:
+        reason_bytes = reason.encode("utf-8") if isinstance(reason, str) else b""
+    except UnicodeError:
+        return False
+    if (
+        not isinstance(operator, dict)
+        or set(operator) != {"host", "pid", "uid"}
+        or not isinstance(operator.get("host"), str)
+        or not operator.get("host")
+        or type(operator.get("pid")) is not int
+        or int(operator["pid"]) <= 0
+        or type(operator.get("uid")) is not int
+        or not isinstance(artifacts, dict)
+        or set(artifacts) != {"state", "events"}
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or not reason_bytes
+        or len(reason_bytes) > 4096
+        or "\x00" in reason
+    ):
+        return False
+    statuses: set[str] = set()
+    for fact in artifacts.values():
+        if not isinstance(fact, dict):
+            return False
+        status = fact.get("status")
+        statuses.add(str(status))
+        if status == "absent":
+            if set(fact) != {"status"}:
+                return False
+        elif status == "captured":
+            if (
+                set(fact) != {"status", "sha256", "bytes"}
+                or not isinstance(fact.get("sha256"), str)
+                or journal.HEX_SHA256_PATTERN.fullmatch(str(fact["sha256"]))
+                is None
+                or type(fact.get("bytes")) is not int
+                or int(fact["bytes"]) < 0
+            ):
+                return False
+        else:
+            return False
+    if len(statuses) != 1:
+        return False
+
+    current_facts: dict[str, dict[str, object]] = {}
+    for fact_name, artifact_name in (
+        ("state", f"{chain_id}.json"),
+        ("events", f"{chain_id}.events.jsonl"),
+    ):
+        try:
+            artifact_raw = _read_regular_bytes_at(
+                chains_descriptor, artifact_name
+            )
+        except journal.CoordinationRefusal:
+            try:
+                os.stat(
+                    artifact_name,
+                    dir_fd=chains_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                current_facts[fact_name] = {"status": "absent"}
+                continue
+            except OSError:
+                return False
+            return False
+        current_facts[fact_name] = {
+            "status": "captured",
+            "sha256": journal._sha256(artifact_raw),
+            "bytes": len(artifact_raw),
+        }
+
+    current_statuses = {fact["status"] for fact in current_facts.values()}
+    if len(current_statuses) != 1:
+        return False
+    if "absent" in current_statuses:
+        return True
+    return current_facts == artifacts
+
+
 def _terminal_chain_guard(
     repository: Path,
     run_id: str,
@@ -6522,6 +6712,8 @@ def _terminal_chain_guard(
                 root_descriptor=chains_descriptor,
                 root_observation=observed_root,
             ):
+                if _terminal_tombstone_valid(chains_descriptor, chain_id):
+                    continue
                 try:
                     state = _read_json_at(chains_descriptor, f"{chain_id}.json")
                 except journal.CoordinationRefusal as exc:
@@ -6809,6 +7001,40 @@ def run_open(
     )
 
 
+def scope_change(
+    repo: Path,
+    run_id: str,
+    *,
+    scope: Sequence[str],
+    replace: bool = False,
+) -> dict[str, object]:
+    """Build and append the typed scope-readmission lifecycle record."""
+
+    if "scope-change" not in BUILDER_VALIDATION_CONTROLS:
+        raise journal.CoordinationRefusal(
+            "forge: journal builder refused — scope-change control is unavailable"
+        )
+    canonical = journal._operation_scope("run readmit", list(scope))
+    record = _with_derived(
+        {
+            "type": "decision",
+            "id": f"forge-scope-readmission-{uuid.uuid4().hex}",
+            "resolution": journal.READMISSION_RESOLUTION,
+            "scope": list(canonical),
+        },
+        run_id,
+    )
+    journal.readmit_run(
+        repo,
+        run_id,
+        list(canonical),
+        replace=replace,
+        _builder_authority=journal._SCOPE_CHANGE_BUILDER_AUTHORITY,
+        _record=record,
+    )
+    return record
+
+
 def task_start(
     repo: Path,
     run_id: str,
@@ -6833,9 +7059,14 @@ def task_start(
         _caller_array("task", "files", files, nonempty=True)
 
     def validate_schema(
-        _state: journal.RunState, _repository: Path
+        state: journal.RunState, _repository: Path
     ) -> None:
-        return None
+        outside = journal._pathspecs_outside_scope(files, state.scope)
+        if outside:
+            raise journal.CoordinationRefusal(
+                "forge: journal builder refused — task files exceed admitted "
+                f"scope for run {run_id}: {journal._named_pathspecs(outside)}"
+            )
 
     def build(state: journal.RunState, _repository: Path) -> Sequence[dict[str, object]]:
         if "relations" in BUILDER_VALIDATION_CONTROLS and _latest_task(state, task) is not None:

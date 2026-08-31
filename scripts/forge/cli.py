@@ -409,6 +409,11 @@ CHAIN_ID_RE = re.compile(r"^c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+CHAIN_TOMBSTONE_SCHEMA = "forge-chain-tombstone/1"
+CHAIN_TOMBSTONE_EVENT = "frozen-abort"
+CHAIN_TOMBSTONE_KEYS = frozenset(
+    {"schema", "chain_id", "event", "reason", "recorded_at", "operator", "artifacts"}
+)
 _REQUIRED_REVISION9_STATE_CONTROLS = frozenset(
     {"run-binding-shape", "journal-outbox-shape"}
 )
@@ -2332,7 +2337,15 @@ def _verify_and_build_merge_ingest_records(
     files = task_record.get("files")
     if not isinstance(files, list) or not files:
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    try:
+        mechanical_outputs = _committed_changelog_output_paths(parsed_policy)
+    except PolicyError as exc:
+        raise journal.CoordinationRefusal(
+            builders.INGEST_PROOF_INVALID
+        ) from exc
     for path in changed_paths:
+        if path in mechanical_outputs:
+            continue
         if not any(
             isinstance(pattern, str)
             and journal.pathspec_contained(path, pattern)
@@ -3033,7 +3046,15 @@ def _verify_and_build_ingest_records(
     files = task_record.get("files")
     if not isinstance(files, list) or not files:
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    try:
+        mechanical_outputs = _committed_changelog_output_paths(parsed_policy)
+    except PolicyError as exc:
+        raise journal.CoordinationRefusal(
+            builders.INGEST_PROOF_INVALID
+        ) from exc
     for path in changed_paths:
+        if path in mechanical_outputs:
+            continue
         if (
             not any(
                 journal.pathspec_contained(path, pattern)
@@ -3148,6 +3169,11 @@ def _verify_and_build_ingest_records(
             record["id"] = builders._allocate_id(projected, record_type)
             record["run_id"] = run_id
             record["recorded_at"] = payload["at"]
+            _capture_ingest_record_evidence(
+                canonical_repository,
+                run_dir,
+                record,
+            )
             if record.get("outcome") == "chain-landing":
                 record["basis"] = list(captured_citations)
             record_binding = record.get("binding")
@@ -3996,6 +4022,19 @@ def parse_policy(sha: str, raw: bytes) -> Policy:
         invariants=_parse_invariants(regions["invariants"]),
         changelog=_parse_changelog(regions["changelog-policy"]),
     )
+
+
+def _committed_changelog_output_paths(policy: Policy) -> frozenset[str]:
+    """Return only exact outputs from an already authenticated policy snapshot."""
+
+    if policy.changelog is None:
+        return frozenset()
+    outputs = policy.changelog.get("outputs")
+    if not isinstance(outputs, list) or not outputs or not all(
+        isinstance(item, str) and item for item in outputs
+    ):
+        raise PolicyError("configured changelog gate has malformed output paths")
+    return frozenset(outputs)
 
 
 def validate_state(state: Any, chain_id: str | None = None) -> dict[str, Any]:
@@ -4954,6 +4993,11 @@ def build_parser() -> ContractArgumentParser:
     ingest.add_argument("--idempotency-key", required=True)
     journal_commands.add_parser("batch-recover")
 
+    chain = commands.add_parser("chain")
+    chain_commands = chain.add_subparsers(dest="chain_command", required=True)
+    tombstone = chain_commands.add_parser("tombstone")
+    tombstone.add_argument("--reason", required=True)
+
     common_lock = commands.add_parser("common-lock")
     common_lock_commands = common_lock.add_subparsers(
         dest="common_lock_command", required=True
@@ -4997,6 +5041,19 @@ def _validate_revision9_cross_options(
     options: CLIOptions, args: argparse.Namespace
 ) -> None:
     """Refuse Revision-9 flag tuples before repository discovery."""
+
+    if args.command == "chain" and args.chain_command == "tombstone":
+        options.revision9_face = True
+        if options.chain_id is None:
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: chain tombstone refused — explicit --chain-id is required",
+                expected="one exact frozen or absent chain identity",
+                observed="missing chain identity",
+                remediation="rerun with --chain-id <chain-id>",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return
 
     if (
         MERGE_LIFECYCLE_ACTIVE
@@ -5073,6 +5130,8 @@ def _route_shared_chain_engine(engine: Engine) -> Engine | MergeEngine:
     chain_id = engine.ctx.options.chain_id
     if chain_id is None:
         return engine
+    if engine.ctx.store.tombstone(chain_id) is not None:
+        return engine
     family = engine.ctx.store.chain_family(chain_id)
     if family == "commit":
         return engine
@@ -5112,6 +5171,8 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
         )
     if args.command == "status":
         return _route_shared_chain_engine(engine).status()
+    if args.command == "chain" and args.chain_command == "tombstone":
+        return engine.operator_tombstone(args.reason)
     if MERGE_LIFECYCLE_ACTIVE and args.command == "merge":
         merge_engine = _merge_command_engine(engine)
         if args.merge_command == "start":
@@ -5800,6 +5861,487 @@ class _ChainStoragePrimitives:
         self._validate_id(chain_id)
         return self.root / f"{chain_id}.events.jsonl"
 
+    @staticmethod
+    def _tombstone_artifact_fact(root: int, name: str) -> dict[str, Any]:
+        try:
+            before = os.stat(name, dir_fd=root, follow_symlinks=False)
+        except FileNotFoundError:
+            return {"status": "absent"}
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+        ):
+            raise FrozenError("chain artifact is unsafe for operator tombstone")
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=root,
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                opened.st_dev != before.st_dev
+                or opened.st_ino != before.st_ino
+                or opened.st_mode != before.st_mode
+                or opened.st_uid != before.st_uid
+                or opened.st_nlink != before.st_nlink
+            ):
+                raise FrozenError("chain artifact changed during operator tombstone")
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                total += len(chunk)
+            after = os.fstat(descriptor)
+            rebound = os.stat(name, dir_fd=root, follow_symlinks=False)
+            if (
+                after.st_dev != before.st_dev
+                or after.st_ino != before.st_ino
+                or after.st_mode != before.st_mode
+                or after.st_size != before.st_size
+                or rebound.st_dev != before.st_dev
+                or rebound.st_ino != before.st_ino
+                or total != before.st_size
+            ):
+                raise FrozenError("chain artifact changed during operator tombstone")
+            return {
+                "status": "captured",
+                "sha256": digest.hexdigest(),
+                "bytes": total,
+            }
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _valid_tombstone_record(value: object, chain_id: str) -> bool:
+        if not isinstance(value, dict) or set(value) != CHAIN_TOMBSTONE_KEYS:
+            return False
+        operator = value.get("operator")
+        artifacts = value.get("artifacts")
+        reason = value.get("reason")
+        try:
+            reason_bytes = reason.encode("utf-8") if isinstance(reason, str) else b""
+        except UnicodeError:
+            return False
+        if (
+            value.get("schema") != CHAIN_TOMBSTONE_SCHEMA
+            or value.get("chain_id") != chain_id
+            or value.get("event") != CHAIN_TOMBSTONE_EVENT
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or not reason_bytes
+            or len(reason_bytes) > 4096
+            or "\x00" in reason
+            or not isinstance(value.get("recorded_at"), str)
+            or not isinstance(operator, dict)
+            or set(operator) != {"host", "pid", "uid"}
+            or not isinstance(operator.get("host"), str)
+            or not operator.get("host")
+            or type(operator.get("pid")) is not int
+            or int(operator["pid"]) <= 0
+            or type(operator.get("uid")) is not int
+            or not isinstance(artifacts, dict)
+            or set(artifacts) != {"state", "events"}
+        ):
+            return False
+        try:
+            parse_time(str(value["recorded_at"]))
+        except ValueError:
+            return False
+        statuses: list[str] = []
+        for fact in artifacts.values():
+            if not isinstance(fact, dict):
+                return False
+            status_value = fact.get("status")
+            statuses.append(str(status_value))
+            if status_value == "absent":
+                if set(fact) != {"status"}:
+                    return False
+            elif status_value == "captured":
+                if (
+                    set(fact) != {"status", "sha256", "bytes"}
+                    or not isinstance(fact.get("sha256"), str)
+                    or SHA256_RE.fullmatch(str(fact["sha256"])) is None
+                    or type(fact.get("bytes")) is not int
+                    or int(fact["bytes"]) < 0
+                ):
+                    return False
+            else:
+                return False
+        return len(set(statuses)) == 1
+
+    @staticmethod
+    def _tombstone_publication_alias(
+        tombstones: int,
+        chain_id: str,
+        final_name: str,
+        opened: os.stat_result,
+    ) -> str | None:
+        """Recognize only the temp alias left by one interrupted publication."""
+
+        if opened.st_nlink == 1:
+            return None
+        if opened.st_nlink != 2:
+            raise FrozenError(
+                "chain tombstone has an unsafe hardlink topology",
+                chain_id=chain_id,
+            )
+        temporary_pattern = re.compile(
+            rf"\.{re.escape(chain_id)}\.[1-9][0-9]*\.[0-9a-f]{{16}}\.tmp"
+        )
+        aliases: list[str] = []
+        try:
+            names = os.listdir(tombstones)
+        except OSError as exc:
+            raise FrozenError(
+                "chain tombstone hardlink topology is unreadable",
+                chain_id=chain_id,
+                observed=str(exc),
+            ) from exc
+        for candidate in names:
+            try:
+                candidate_stat = os.stat(
+                    candidate, dir_fd=tombstones, follow_symlinks=False
+                )
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise FrozenError(
+                    "chain tombstone hardlink topology is unreadable",
+                    chain_id=chain_id,
+                    observed=str(exc),
+                ) from exc
+            if (
+                candidate_stat.st_dev == opened.st_dev
+                and candidate_stat.st_ino == opened.st_ino
+            ):
+                aliases.append(candidate)
+        temporary_aliases = [
+            name
+            for name in aliases
+            if name != final_name and temporary_pattern.fullmatch(name) is not None
+        ]
+        if sorted(aliases) != sorted([final_name, *temporary_aliases]) or len(
+            temporary_aliases
+        ) != 1:
+            raise FrozenError(
+                "chain tombstone has an unsafe hardlink topology",
+                chain_id=chain_id,
+            )
+        return temporary_aliases[0]
+
+    @staticmethod
+    def _recover_tombstone_publication(
+        tombstones: int,
+        chain_id: str,
+        final_name: str,
+        temporary_alias: str | None,
+        opened: os.stat_result,
+    ) -> None:
+        """Durably remove one authenticated publication alias on mutation."""
+
+        try:
+            if temporary_alias is not None:
+                final = os.stat(
+                    final_name, dir_fd=tombstones, follow_symlinks=False
+                )
+                temporary = os.stat(
+                    temporary_alias, dir_fd=tombstones, follow_symlinks=False
+                )
+                if any(
+                    (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino)
+                    or not stat.S_ISREG(entry.st_mode)
+                    or entry.st_uid != os.geteuid()
+                    or entry.st_nlink != 2
+                    for entry in (final, temporary)
+                ):
+                    raise OSError("publication alias changed inode")
+                os.unlink(temporary_alias, dir_fd=tombstones)
+                rebound = os.stat(
+                    final_name, dir_fd=tombstones, follow_symlinks=False
+                )
+                if (
+                    (rebound.st_dev, rebound.st_ino)
+                    != (opened.st_dev, opened.st_ino)
+                    or not stat.S_ISREG(rebound.st_mode)
+                    or rebound.st_uid != os.geteuid()
+                    or rebound.st_nlink != 1
+                ):
+                    raise OSError("published tombstone changed during alias cleanup")
+            os.fsync(tombstones)
+        except OSError as exc:
+            raise FrozenError(
+                "chain tombstone publication recovery failed",
+                chain_id=chain_id,
+                observed=str(exc),
+            ) from exc
+
+    def _read_tombstone_locked(
+        self, chain_id: str, *, recover_publication: bool = False
+    ) -> dict[str, Any] | None:
+        self._validate_id(chain_id)
+        with self.root_descriptor() as root:
+            try:
+                tombstones = self._open_child_directory(
+                    root, "tombstones", create=False
+                )
+            except FileNotFoundError:
+                return None
+            try:
+                name = f"{chain_id}.json"
+                try:
+                    before = os.stat(
+                        name, dir_fd=tombstones, follow_symlinks=False
+                    )
+                    descriptor = os.open(
+                        name,
+                        os.O_RDONLY
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_CLOEXEC", 0),
+                        dir_fd=tombstones,
+                    )
+                except FileNotFoundError:
+                    return None
+                try:
+                    opened = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(opened.st_mode)
+                        or opened.st_uid != os.geteuid()
+                        or opened.st_nlink not in {1, 2}
+                        or opened.st_size > 65536
+                        or opened.st_dev != before.st_dev
+                        or opened.st_ino != before.st_ino
+                        or opened.st_mode != before.st_mode
+                        or opened.st_uid != before.st_uid
+                        or opened.st_nlink != before.st_nlink
+                    ):
+                        raise FrozenError(
+                            "chain tombstone is not an owner-controlled regular file",
+                            chain_id=chain_id,
+                        )
+                    raw = b""
+                    while len(raw) <= 65536:
+                        chunk = os.read(descriptor, 65537 - len(raw))
+                        if not chunk:
+                            break
+                        raw += chunk
+                    after = os.fstat(descriptor)
+                    rebound = os.stat(
+                        name, dir_fd=tombstones, follow_symlinks=False
+                    )
+                    if (
+                        len(raw) > 65536
+                        or len(raw) != opened.st_size
+                        or after.st_dev != before.st_dev
+                        or after.st_ino != before.st_ino
+                        or after.st_mode != before.st_mode
+                        or after.st_size != before.st_size
+                        or after.st_uid != before.st_uid
+                        or after.st_nlink != before.st_nlink
+                        or rebound.st_dev != before.st_dev
+                        or rebound.st_ino != before.st_ino
+                        or rebound.st_mode != before.st_mode
+                        or rebound.st_uid != before.st_uid
+                        or rebound.st_nlink != before.st_nlink
+                    ):
+                        raise FrozenError(
+                            "chain tombstone exceeds its size bound or changed",
+                            chain_id=chain_id,
+                        )
+                    temporary_alias = self._tombstone_publication_alias(
+                        tombstones, chain_id, name, opened
+                    )
+                finally:
+                    os.close(descriptor)
+                try:
+                    value = json.loads(raw)
+                except (UnicodeError, ValueError, RecursionError) as exc:
+                    raise FrozenError(
+                        "chain tombstone is malformed", chain_id=chain_id
+                    ) from exc
+                if (
+                    raw != canonical_bytes(value) + b"\n"
+                    or not self._valid_tombstone_record(value, chain_id)
+                ):
+                    raise FrozenError(
+                        "chain tombstone is malformed", chain_id=chain_id
+                    )
+                assert isinstance(value, dict)
+                facts = {
+                    "state": self._tombstone_artifact_fact(root, f"{chain_id}.json"),
+                    "events": self._tombstone_artifact_fact(
+                        root, f"{chain_id}.events.jsonl"
+                    ),
+                }
+                statuses = {fact["status"] for fact in facts.values()}
+                if len(statuses) != 1:
+                    raise FrozenError(
+                        "tombstoned chain has partial artifacts", chain_id=chain_id
+                    )
+                recorded_facts = value["artifacts"]
+                assert isinstance(recorded_facts, dict)
+                if "captured" in statuses and facts != recorded_facts:
+                    raise FrozenError(
+                        "tombstoned chain artifacts changed", chain_id=chain_id
+                    )
+                if recover_publication:
+                    self._recover_tombstone_publication(
+                        tombstones,
+                        chain_id,
+                        name,
+                        temporary_alias,
+                        opened,
+                    )
+                return copy.deepcopy(value)
+            finally:
+                os.close(tombstones)
+
+    def tombstone(
+        self, chain_id: str, *, recover_publication: bool = False
+    ) -> dict[str, Any] | None:
+        with self.event_lock(chain_id):
+            return self._read_tombstone_locked(
+                chain_id, recover_publication=recover_publication
+            )
+
+    def create_tombstone(
+        self,
+        chain_id: str,
+        reason: str,
+        *,
+        frozen_proven: bool,
+    ) -> dict[str, Any]:
+        self._validate_id(chain_id)
+        try:
+            reason_bytes = reason.encode("utf-8") if isinstance(reason, str) else b""
+        except UnicodeError:
+            reason_bytes = b""
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or not reason_bytes
+            or len(reason_bytes) > 4096
+            or "\x00" in reason
+        ):
+            raise Refusal(
+                ReasonCode.STATE_PRECONDITION,
+                "forge: chain tombstone refused — a nonempty bounded reason is required",
+                observed="invalid tombstone reason",
+                remediation="rerun with --reason <operator-reason>",
+            )
+        with self.event_lock(chain_id):
+            existing = self._read_tombstone_locked(
+                chain_id, recover_publication=True
+            )
+            if existing is not None:
+                return existing
+            with self.root_descriptor() as root:
+                facts = {
+                    "state": self._tombstone_artifact_fact(root, f"{chain_id}.json"),
+                    "events": self._tombstone_artifact_fact(
+                        root, f"{chain_id}.events.jsonl"
+                    ),
+                }
+                statuses = {fact["status"] for fact in facts.values()}
+                if len(statuses) != 1:
+                    raise FrozenError(
+                        "operator tombstone refused partial chain artifacts",
+                        chain_id=chain_id,
+                    )
+                if "captured" in statuses and not frozen_proven:
+                    raise Refusal(
+                        ReasonCode.STATE_PRECONDITION,
+                        "forge: chain tombstone refused — readable chain is not frozen",
+                        observed=chain_id,
+                        remediation=f"forge status --chain-id {chain_id}",
+                    )
+                record = {
+                    "schema": CHAIN_TOMBSTONE_SCHEMA,
+                    "chain_id": chain_id,
+                    "event": CHAIN_TOMBSTONE_EVENT,
+                    "reason": reason,
+                    "recorded_at": iso_z(),
+                    "operator": {
+                        "host": socket.gethostname(),
+                        "pid": os.getpid(),
+                        "uid": os.geteuid(),
+                    },
+                    "artifacts": facts,
+                }
+                encoded = canonical_bytes(record) + b"\n"
+                tombstones = self._open_child_directory(
+                    root, "tombstones", create=True
+                )
+                descriptor = -1
+                temporary_name = (
+                    f".{chain_id}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+                )
+                final_name = f"{chain_id}.json"
+                try:
+                    descriptor = os.open(
+                        temporary_name,
+                        os.O_WRONLY
+                        | os.O_CREAT
+                        | os.O_EXCL
+                        | getattr(os, "O_NOFOLLOW", 0)
+                        | getattr(os, "O_CLOEXEC", 0),
+                        0o600,
+                        dir_fd=tombstones,
+                    )
+                    written = 0
+                    while written < len(encoded):
+                        count = os.write(descriptor, encoded[written:])
+                        if count <= 0:
+                            raise OSError("short tombstone write")
+                        written += count
+                    os.fsync(descriptor)
+                    os.close(descriptor)
+                    descriptor = -1
+                    self._boundary("tombstone-before-link")
+                    os.link(
+                        temporary_name,
+                        final_name,
+                        src_dir_fd=tombstones,
+                        dst_dir_fd=tombstones,
+                        follow_symlinks=False,
+                    )
+                    self._boundary("tombstone-final-linked")
+                    os.unlink(temporary_name, dir_fd=tombstones)
+                    self._boundary("tombstone-temp-unlinked")
+                    os.fsync(tombstones)
+                    self._boundary("tombstone-directory-fsynced")
+                except FileExistsError:
+                    observed = self._read_tombstone_locked(
+                        chain_id, recover_publication=True
+                    )
+                    if observed is None:
+                        raise FrozenError(
+                            "chain tombstone publication raced", chain_id=chain_id
+                        )
+                    return observed
+                except OSError as exc:
+                    raise FrozenError(
+                        "chain tombstone publication failed",
+                        chain_id=chain_id,
+                        observed=str(exc),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    ) from exc
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
+                    try:
+                        os.unlink(temporary_name, dir_fd=tombstones)
+                    except FileNotFoundError:
+                        pass
+                    os.close(tombstones)
+                return record
+
     def artifact_dir(self, chain_id: str) -> Path:
         self._validate_id(chain_id)
         path = self.root / chain_id
@@ -5873,6 +6415,90 @@ class _ChainStoragePrimitives:
             finally:
                 os.close(descriptor)
 
+    def _canonical_raw_commit_state(
+        self, chain_id: str
+    ) -> dict[str, Any] | None:
+        """Read stable canonical raw identity without replaying the event log."""
+
+        self._validate_id(chain_id)
+        name = self.state_path(chain_id).name
+        try:
+            with self.root_descriptor() as root:
+                before = os.stat(name, dir_fd=root, follow_symlinks=False)
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NONBLOCK", 0),
+                    dir_fd=root,
+                )
+                try:
+                    opened = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(opened.st_mode)
+                        or opened.st_uid != os.geteuid()
+                        or opened.st_nlink != 1
+                        or opened.st_dev != before.st_dev
+                        or opened.st_ino != before.st_ino
+                        or opened.st_mode != before.st_mode
+                        or opened.st_uid != before.st_uid
+                        or opened.st_nlink != before.st_nlink
+                        or opened.st_size != before.st_size
+                    ):
+                        return None
+                    chunks: list[bytes] = []
+                    remaining = opened.st_size
+                    while remaining:
+                        chunk = os.read(descriptor, min(65536, remaining))
+                        if not chunk:
+                            return None
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    if os.read(descriptor, 1):
+                        return None
+                    after = os.fstat(descriptor)
+                    rebound = os.stat(
+                        name, dir_fd=root, follow_symlinks=False
+                    )
+                    for current in (after, rebound):
+                        if (
+                            current.st_dev != before.st_dev
+                            or current.st_ino != before.st_ino
+                            or current.st_mode != before.st_mode
+                            or current.st_uid != before.st_uid
+                            or current.st_nlink != before.st_nlink
+                            or current.st_size != before.st_size
+                            or current.st_mtime_ns != before.st_mtime_ns
+                            or current.st_ctime_ns != before.st_ctime_ns
+                        ):
+                            return None
+                finally:
+                    os.close(descriptor)
+        except (FileNotFoundError, OSError):
+            return None
+        raw = b"".join(chunks)
+        try:
+            value = json.loads(raw)
+        except (UnicodeError, ValueError, RecursionError):
+            return None
+        if not (
+            isinstance(value, dict)
+            and value.get("chain_id") == chain_id
+            and value.get("kind") == "commit"
+            and raw == canonical_bytes(value) + b"\n"
+        ):
+            return None
+        try:
+            return copy.deepcopy(validate_state(value, chain_id))
+        except FrozenError:
+            return None
+
+    def raw_state_proves_commit_family(self, chain_id: str) -> bool:
+        """Prove commit family from canonical raw identity when events cannot."""
+
+        return self._canonical_raw_commit_state(chain_id) is not None
+
     def _root_entry_exists(self, name: str) -> bool:
         name = self._root_name(name)
         with self.root_descriptor() as root:
@@ -5908,11 +6534,18 @@ class _ChainStoragePrimitives:
         selected: list[str] = []
         for chain_id in ordered:
             try:
+                if self.tombstone(chain_id) is not None:
+                    continue
                 if self.chain_family(chain_id) == family:
                     selected.append(chain_id)
             except FrozenError:
                 # An unreadable chain remains addressable by its explicit ID,
                 # but never wedges selection for another authenticated chain.
+                print(
+                    "forge: warning — skipped unreadable chain "
+                    f"{chain_id} while enumerating {family} chains",
+                    file=sys.stderr,
+                )
                 continue
         return selected
 
@@ -6243,9 +6876,11 @@ class ChainStore(_ChainStoragePrimitives):
             events.append(event)
         return events
 
-    def load(self, chain_id: str) -> dict[str, Any]:
+    def load(
+        self, chain_id: str, *, family_proven: bool = False
+    ) -> dict[str, Any]:
         self._validate_id(chain_id)
-        if self.chain_family(chain_id) != "commit":
+        if not family_proven and self.chain_family(chain_id) != "commit":
             raise FrozenError(
                 "commit store refused a merge-family chain",
                 chain_id=chain_id,
@@ -6375,19 +7010,39 @@ class ChainStore(_ChainStoragePrimitives):
             if replayed is None:
                 raise ValueError("bound chain replay is empty")
             frozen_entries = tuple(replay_entries)
-            for event, prior, current, records, _source_digest in frozen_entries:
+            latest_record_index = next(
+                (
+                    index
+                    for index in range(len(frozen_entries) - 1, -1, -1)
+                    if frozen_entries[index][3]
+                ),
+                None,
+            )
+            for index, (
+                event,
+                prior,
+                current,
+                records,
+                _source_digest,
+            ) in enumerate(frozen_entries):
+                # Receipted records are authenticated historical facts.  Only
+                # the newest appended set can still be live authority, and it
+                # is checked against the exact state/prefix at its append.
+                if index != latest_record_index:
+                    continue
+                appended_history = frozen_entries[: index + 1]
                 for record in records:
                     record_binding = record.get("binding")
                     current_fact = bool(
                         isinstance(record_binding, dict)
                         and builders._binding_is_current(
-                            replayed,
+                            current,
                             record_binding,
                             record,
                             event,
                             prior,
                             current,
-                            frozen_entries,
+                            appended_history,
                             chain_family="commit",
                         )
                     )
@@ -6398,8 +7053,8 @@ class ChainStore(_ChainStoragePrimitives):
                     # in-flight landing in ``committing``.  Admit only that
                     # exact recovery window; every other stale fact freezes.
                     if not current_fact and isinstance(record_binding, dict):
-                        final_result = replayed.get("commit_result")
-                        final_candidate = replayed.get("candidate")
+                        final_result = current.get("commit_result")
+                        final_candidate = current.get("candidate")
                         source_payload = event.get("payload")
                         source_details = (
                             source_payload.get("details")
@@ -6409,7 +7064,7 @@ class ChainStore(_ChainStoragePrimitives):
                         bound_candidate = record_binding.get("candidate")
                         current_fact = bool(
                             record.get("outcome") == "chain-landing"
-                            and replayed.get("state") == "committing"
+                            and current.get("state") == "committing"
                             and isinstance(final_result, dict)
                             and isinstance(final_candidate, dict)
                             and isinstance(source_payload, dict)
@@ -11147,7 +11802,10 @@ def _prove_run_task_binding(
                 or not all(isinstance(item, str) and item for item in task_files)
             ):
                 raise ValueError("task files are malformed")
+            mechanical_outputs = _committed_changelog_output_paths(policy)
             for path in paths:
+                if path in mechanical_outputs:
+                    continue
                 if not any(
                     journal.pathspec_contained(path, item) for item in task_files
                 ):
@@ -11208,18 +11866,6 @@ def _validate_bound_chain_state(state: Mapping[str, Any]) -> None:
             files = tasks[-1].get("files")
             if not isinstance(files, list) or not files:
                 raise ValueError("bound task files are malformed")
-            for path in state.get("paths", ()):
-                if not isinstance(path, str) or not any(
-                    journal.pathspec_contained(path, pattern)
-                    for pattern in files
-                    if isinstance(pattern, str)
-                ):
-                    raise ValueError("chain path is outside bound task membership")
-                if not any(
-                    journal.pathspec_contained(path, admitted)
-                    for admitted in run_state.scope
-                ):
-                    raise ValueError("chain path is outside admitted run scope")
             policy_source = state.get("policy_source")
             if not isinstance(policy_source, Mapping):
                 raise ValueError("chain policy source is malformed")
@@ -11237,9 +11883,37 @@ def _validate_bound_chain_state(state: Mapping[str, Any]) -> None:
             )
             if (
                 policy.returncode != 0
-                or sha256_bytes(policy.stdout) != binding.get("policy_digest")
+                or sha256_bytes(policy.stdout) != policy_source.get("digest")
+                or policy_source.get("digest") != binding.get("policy_digest")
             ):
                 raise ValueError("committed policy identity changed")
+            try:
+                parsed_policy = parse_policy(
+                    str(policy_source.get("sha")), policy.stdout
+                )
+                mechanical_outputs = _committed_changelog_output_paths(
+                    parsed_policy
+                )
+            except (PolicyError, UnicodeError) as exc:
+                raise ValueError("committed policy is malformed") from exc
+            for path in state.get("paths", ()):
+                if path in mechanical_outputs:
+                    continue
+                if not isinstance(path, str) or not any(
+                    journal.pathspec_contained(path, pattern)
+                    for pattern in files
+                    if isinstance(pattern, str)
+                ):
+                    raise ValueError(
+                        f"chain path {path} is outside bound task membership"
+                    )
+                if not any(
+                    journal.pathspec_contained(path, admitted)
+                    for admitted in run_state.scope
+                ):
+                    raise ValueError(
+                        f"chain path {path} is outside admitted run scope"
+                    )
     except (OSError, RuntimeError, ValueError, journal.CoordinationRefusal) as exc:
         raise Refusal(
             V2ReasonCode.RUN_TASK_BINDING_INVALID,
@@ -12663,6 +13337,17 @@ def _peek_chain_state(store: ChainStore, chain_id: str) -> dict[str, Any] | None
         return None
 
 
+def _peek_raw_abort_state(
+    store: ChainStore, chain_id: str
+) -> dict[str, Any] | None:
+    """Peek explicit abort identity/binding without replaying a frozen log."""
+
+    try:
+        return store._canonical_raw_commit_state(chain_id)
+    except (FileNotFoundError, OSError, UnicodeError, ValueError, FrozenError):
+        return None
+
+
 def _peek_selected_chain(
     engine: "Engine", *, include_terminal: bool
 ) -> dict[str, Any] | None:
@@ -12686,7 +13371,21 @@ def _peek_selected_chain(
 
 
 def _command_run_lock_id(engine: "Engine", method_name: str) -> str | None:
-    include_terminal = method_name in {"status", "abort"}
+    selected_id = engine.ctx.options.chain_id
+    if method_name == "abort" and selected_id is not None:
+        raw_state = _peek_raw_abort_state(engine.ctx.store, selected_id)
+        if raw_state is not None:
+            raw_binding = raw_state.get("run_binding")
+            if (
+                isinstance(raw_binding, Mapping)
+                and set(raw_binding)
+                == {"run_id", "task_id", "repository", "policy_digest"}
+                and isinstance(raw_binding.get("run_id"), str)
+                and RUN_ID_RE.fullmatch(str(raw_binding["run_id"])) is not None
+            ):
+                return str(raw_binding["run_id"])
+            return None
+    include_terminal = method_name in {"status", "abort", "operator_tombstone"}
     selected = _peek_selected_chain(engine, include_terminal=include_terminal)
     binding = selected.get("run_binding") if isinstance(selected, dict) else None
     if isinstance(binding, Mapping) and isinstance(binding.get("run_id"), str):
@@ -16724,6 +17423,83 @@ class Engine:
     def __init__(self, ctx: CommandContext) -> None:
         self.ctx = ctx
 
+    @staticmethod
+    def _require_tombstone_control() -> None:
+        register_coordination_seams()
+        _batch, builders, _journal = _coordination_modules()
+        if "tombstone" not in builders.TERMINAL_CHAIN_CONTROLS:
+            raise FrozenError(
+                "chain tombstone control is unavailable",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+
+    def _tombstone_outcome(
+        self, chain_id: str, *, created: bool
+    ) -> Outcome:
+        return Outcome(
+            ok=True,
+            reason_code=V2ReasonCode.OK,
+            message=(
+                f"frozen chain {chain_id} aborted with operator tombstone"
+                if created
+                else f"frozen chain {chain_id} is operator-tombstoned"
+            ),
+            chain_id=chain_id,
+            state="aborted",
+            next_required_step="none — frozen chain is sealed",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+    @_serialize_worktree_command
+    def operator_tombstone(self, reason: str) -> Outcome:
+        self._require_tombstone_control()
+        chain_id = self.ctx.options.chain_id
+        if chain_id is None:
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: chain tombstone refused — explicit --chain-id is required",
+                remediation="rerun with --chain-id <chain-id>",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        existing = self.ctx.store.tombstone(
+            chain_id, recover_publication=True
+        )
+        if existing is not None:
+            return self._tombstone_outcome(chain_id, created=False)
+        frozen = False
+        try:
+            family = self.ctx.store.chain_family(chain_id)
+            if family != "commit":
+                raise Refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: chain tombstone refused — chain is not commit-family",
+                    observed=family,
+                    remediation=f"forge status --chain-id {chain_id}",
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            self.ctx.store.load(chain_id)
+        except FrozenError:
+            frozen = self.ctx.store.raw_state_proves_commit_family(chain_id)
+            if not frozen:
+                # The migration surface may seal a fully quarantined identity,
+                # but captured bytes never inherit a guessed family.
+                self.ctx.store.create_tombstone(
+                    chain_id, reason, frozen_proven=False
+                )
+                return self._tombstone_outcome(chain_id, created=True)
+        if not frozen:
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: chain tombstone refused — readable chain is not frozen",
+                observed=chain_id,
+                remediation=f"forge commit abort --chain-id {chain_id}",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        self.ctx.store.create_tombstone(
+            chain_id, reason, frozen_proven=True
+        )
+        return self._tombstone_outcome(chain_id, created=True)
+
     def journal_batch_recover(self) -> Outcome:
         register_coordination_seams()
         batch, _builders, journal = _coordination_modules()
@@ -16873,20 +17649,33 @@ class Engine:
             except FrozenError:
                 # Explicit selection surfaces this chain's own failure.  An
                 # unrelated frozen file never blocks a healthy worktree chain.
+                print(
+                    "forge: warning — skipped unreadable chain "
+                    f"{chain_id} while enumerating commit chains",
+                    file=sys.stderr,
+                )
                 continue
             if state["staging"].get("worktree_root") == str(self.ctx.repo.root):
                 chains.append(state)
         return chains
 
-    def select(self, *, include_terminal: bool = True) -> dict[str, Any]:
+    def select(
+        self, *, include_terminal: bool = True, family_proven: bool = False
+    ) -> dict[str, Any]:
         if self.ctx.options.chain_id:
-            if self.ctx.store.chain_family(self.ctx.options.chain_id) != "commit":
+            if (
+                not family_proven
+                and self.ctx.store.chain_family(self.ctx.options.chain_id)
+                != "commit"
+            ):
                 raise FrozenError(
                     "commit selection refused a merge-family chain",
                     chain_id=self.ctx.options.chain_id,
                     schema=REVISION9_OUTPUT_SCHEMA,
                 )
-            state = self.ctx.store.load(self.ctx.options.chain_id)
+            state = self.ctx.store.load(
+                self.ctx.options.chain_id, family_proven=family_proven
+            )
             if state.get("journal_outbox") is not None:
                 state = self.ctx.store.recover_pending_outbox(state)
             if state["staging"].get("worktree_root") != str(self.ctx.repo.root):
@@ -17042,6 +17831,11 @@ class Engine:
 
     @_serialize_worktree_command
     def status(self) -> Outcome:
+        selected_id = self.ctx.options.chain_id
+        if selected_id is not None:
+            if self.ctx.store.tombstone(selected_id) is not None:
+                self._require_tombstone_control()
+                return self._tombstone_outcome(selected_id, created=False)
         try:
             state = self.select()
         except Refusal as exc:
@@ -17379,7 +18173,53 @@ class Engine:
 
     @_serialize_worktree_command
     def abort(self, reason: str | None) -> Outcome:
-        state = self.select()
+        chain_id = self.ctx.options.chain_id
+        family_proven = False
+        if chain_id is not None:
+            try:
+                family = self.ctx.store.chain_family(chain_id)
+            except FrozenError as failure:
+                self._require_tombstone_control()
+                if not self.ctx.store.raw_state_proves_commit_family(chain_id):
+                    raise Refusal(
+                        V2ReasonCode.STATE_PRECONDITION,
+                        "forge: commit abort refused — commit-family identity is not authenticated",
+                        expected=(
+                            "an authenticated commit event family or canonical raw state "
+                            "with the selected chain_id and kind=commit"
+                        ),
+                        observed=chain_id,
+                        remediation=(
+                            f"forge chain tombstone --chain-id {chain_id} "
+                            "--reason <operator-reason>"
+                        ),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    ) from failure
+                self.ctx.store.create_tombstone(
+                    chain_id,
+                    reason or "operator aborted frozen chain",
+                    frozen_proven=True,
+                )
+                return self._tombstone_outcome(chain_id, created=True)
+            if family != "commit":
+                raise FrozenError(
+                    "commit selection refused a merge-family chain",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            family_proven = True
+        try:
+            state = self.select(family_proven=family_proven)
+        except FrozenError:
+            self._require_tombstone_control()
+            if chain_id is None:
+                raise
+            self.ctx.store.create_tombstone(
+                chain_id,
+                reason or "operator aborted frozen chain",
+                frozen_proven=True,
+            )
+            return self._tombstone_outcome(chain_id, created=True)
         self._preflight(
             state,
             "commit abort",

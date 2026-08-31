@@ -767,6 +767,79 @@ class Revision9BuilderBatchTests(unittest.TestCase):
                         "0" * 64,
                     )
 
+    def test_activated_scope_readmission_uses_typed_builder(self) -> None:
+        run_id = "run-20260831-activated-readmit"
+        with self.api_environment():
+            self.open_run(self.repo, run_id)
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                "activated writer requires typed builder",
+            ):
+                journal.readmit_run(self.repo, run_id, ["src/**"])
+
+            builders.scope_change(
+                self.repo,
+                run_id,
+                scope=["src/**", "tests/**"],
+            )
+            state = journal._scan_run(self.run_dir(self.repo, run_id))
+            self.assertEqual(state.scope, ("src/**", "tests/**"))
+            self.assertEqual(
+                state.records[-1]["resolution"], journal.READMISSION_RESOLUTION
+            )
+
+            public = self.command(
+                "run-readmit",
+                "--repo",
+                str(self.repo),
+                "--run-id",
+                run_id,
+                "--scope",
+                "docs/**",
+                "--scope",
+                "src/**",
+                "--scope",
+                "tests/**",
+            )
+            self.assertEqual(public.returncode, 0, public.stderr)
+            state = journal._scan_run(self.run_dir(self.repo, run_id))
+            self.assertEqual(state.scope, ("docs/**", "src/**", "tests/**"))
+
+            before = (self.run_dir(self.repo, run_id) / "journal.jsonl").read_bytes()
+            with mock.patch.object(
+                builders,
+                "BUILDER_VALIDATION_CONTROLS",
+                builders.BUILDER_VALIDATION_CONTROLS - {"scope-change"},
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal, "scope-change control is unavailable"
+            ):
+                builders.scope_change(
+                    self.repo,
+                    run_id,
+                    scope=["docs/**", "src/**", "tests/**", "tools/**"],
+                )
+            self.assertEqual(
+                (self.run_dir(self.repo, run_id) / "journal.jsonl").read_bytes(),
+                before,
+            )
+
+    def test_typed_task_scope_refusal_names_offending_pathspec(self) -> None:
+        run_id = "run-20260831-typed-task-scope"
+        with self.api_environment():
+            self.open_run(self.repo, run_id)
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, '"docs/example.py"'
+            ):
+                builders.task_start(
+                    self.repo,
+                    run_id,
+                    idempotency_key=key("typed-task-outside-scope"),
+                    task="task-01",
+                    goal="Exercise named scope refusal",
+                    acceptance=["The path is named"],
+                    files=["docs/example.py"],
+                )
+
     def test_builder_request_schema_and_digest_are_exact(self) -> None:
         request, digest = batch.normalized_request(
             self.repo.resolve(),
@@ -2292,6 +2365,178 @@ class Revision9BuilderBatchTests(unittest.TestCase):
                     task="task-01",
                     status="complete",
                 )
+
+    def test_terminal_builder_accepts_only_explicit_absent_chain_tombstone(self) -> None:
+        with self.api_environment():
+            repo, run_id, run_binding = self._terminal_control_repo(
+                "terminal-tombstone"
+            )
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox=None
+            )
+            self._append_test_landing(repo, run_id, chain_id)
+            events_path = state_path.with_name(f"{chain_id}.events.jsonl")
+            state_path.unlink()
+            events_path.unlink()
+
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo,
+                    run_id,
+                    idempotency_key=key("terminal-tombstone-absent"),
+                    task="task-01",
+                    status="complete",
+                )
+
+            tombstones = state_path.parent / "tombstones"
+            tombstones.mkdir(mode=0o700)
+            tombstone = {
+                "schema": "forge-chain-tombstone/1",
+                "chain_id": chain_id,
+                "event": "frozen-abort",
+                "reason": "operator quarantined exact chain artifacts",
+                "recorded_at": "2026-08-31T12:00:00Z",
+                "operator": {"host": "fixture", "pid": os.getpid(), "uid": os.geteuid()},
+                "artifacts": {
+                    "state": {"status": "absent"},
+                    "events": {"status": "absent"},
+                },
+            }
+            (tombstones / f"{chain_id}.json").write_bytes(
+                journal._canonical_json_bytes(tombstone) + b"\n"
+            )
+
+            state_path.write_bytes(b"{}\n")
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo,
+                    run_id,
+                    idempotency_key=key("terminal-tombstone-partial"),
+                    task="task-01",
+                    status="complete",
+                )
+            state_path.unlink()
+
+            with mock.patch.object(
+                builders,
+                "TERMINAL_CHAIN_CONTROLS",
+                builders.TERMINAL_CHAIN_CONTROLS - {"tombstone"},
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo,
+                    run_id,
+                    idempotency_key=key("terminal-tombstone-disabled"),
+                    task="task-01",
+                    status="complete",
+                )
+
+            outcome = builders.task_finish(
+                repo,
+                run_id,
+                idempotency_key=key("terminal-tombstone-enabled"),
+                task="task-01",
+                status="complete",
+            )
+            self.assertEqual(outcome.records[0]["status"], "complete")
+
+    def test_terminal_builder_accepts_exact_captured_tombstone_then_quarantine(self) -> None:
+        with self.api_environment():
+            repo, run_id, run_binding = self._terminal_control_repo(
+                "terminal-captured-tombstone"
+            )
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox=None
+            )
+            self._append_test_landing(repo, run_id, chain_id)
+            events_path = state_path.with_name(f"{chain_id}.events.jsonl")
+            events_path.write_bytes(b"{malformed-event}\n")
+
+            def captured(path: Path) -> dict[str, object]:
+                raw = path.read_bytes()
+                return {
+                    "status": "captured",
+                    "sha256": journal._sha256(raw),
+                    "bytes": len(raw),
+                }
+
+            tombstones = state_path.parent / "tombstones"
+            tombstones.mkdir(mode=0o700)
+            tombstone = {
+                "schema": "forge-chain-tombstone/1",
+                "chain_id": chain_id,
+                "event": "frozen-abort",
+                "reason": "operator sealed the exact frozen chain artifacts",
+                "recorded_at": "2026-08-31T12:00:00Z",
+                "operator": {
+                    "host": "fixture",
+                    "pid": os.getpid(),
+                    "uid": os.geteuid(),
+                },
+                "artifacts": {
+                    "state": captured(state_path),
+                    "events": captured(events_path),
+                },
+            }
+            (tombstones / f"{chain_id}.json").write_bytes(
+                journal._canonical_json_bytes(tombstone) + b"\n"
+            )
+
+            state_bytes = state_path.read_bytes()
+            state_path.write_bytes(state_bytes + b" ")
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo,
+                    run_id,
+                    idempotency_key=key("terminal-captured-changed"),
+                    task="task-01",
+                    status="complete",
+                )
+            state_path.write_bytes(state_bytes)
+
+            with mock.patch.object(
+                builders,
+                "TERMINAL_CHAIN_CONTROLS",
+                builders.TERMINAL_CHAIN_CONTROLS - {"tombstone"},
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo,
+                    run_id,
+                    idempotency_key=key("terminal-captured-disabled"),
+                    task="task-01",
+                    status="complete",
+                )
+
+            finished = builders.task_finish(
+                repo,
+                run_id,
+                idempotency_key=key("terminal-captured-enabled"),
+                task="task-01",
+                status="complete",
+            )
+            self.assertEqual(finished.records[0]["status"], "complete")
+
+            state_path.unlink()
+            events_path.unlink()
+            closed = builders.run_close(
+                repo,
+                run_id,
+                idempotency_key=key("terminal-captured-quarantined"),
+                judgment="blocked",
+                summary="Frozen chain was explicitly sealed and quarantined",
+                risks=[],
+                follow_ups=[],
+            )
+            self.assertEqual(closed.records[0]["type"], "run_closed")
 
     def test_each_terminal_chain_control_is_load_bearing(self) -> None:
         with self.api_environment():

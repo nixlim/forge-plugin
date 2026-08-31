@@ -20,7 +20,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 FORGE_SCRIPTS = Path(__file__).resolve().parents[1] / "forge"
 if str(FORGE_SCRIPTS) not in sys.path:
@@ -178,6 +178,7 @@ SESSION_PID_NOT_LIVE = (
 REGISTRY_SCHEMA_VERSION = 1
 RETIREMENT_RESOLUTION = "run-retired: non-mutating"
 READMISSION_RESOLUTION = "scope-readmission: locked"
+_SCOPE_CHANGE_BUILDER_AUTHORITY = object()
 OWNER_PATTERN = re.compile(
     rb"pid: ([1-9][0-9]*)\nhost: ([^\n]+)\nstarted_at: ([^\n]+)\n"
 )
@@ -1152,6 +1153,82 @@ def _all_task_files_contained(
     return all(
         all(any(pathspec_contained(item, admitted) for admitted in scope) for item in _task_files(record))
         for record in records
+    )
+
+
+def _pathspecs_outside_scope(
+    values: Iterable[object], scope: tuple[str, ...]
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                value
+                for value in values
+                if _valid_scope_item(value)
+                and not any(
+                    pathspec_contained(str(value), admitted)
+                    for admitted in scope
+                )
+            },
+            key=_byte_key,
+        )
+    )
+
+
+def _named_pathspecs(values: Iterable[str]) -> str:
+    """Render pathspec names as escaped, single-line JSON string literals."""
+
+    return ", ".join(
+        json.dumps(value, ensure_ascii=True)
+        for value in sorted(set(values), key=_byte_key)
+    )
+
+
+def _validate_append_with_named_scope(
+    candidate: dict[str, object],
+    *,
+    run_id: str,
+    repo_root: Path,
+    scope: tuple[str, ...],
+    prior_records: tuple[dict[str, object], ...],
+) -> None:
+    candidate_files = (
+        candidate.get("files") if candidate.get("type") == "task" else None
+    )
+    if isinstance(candidate_files, list):
+        # Preserve FR-019 field-order precedence: first validate every other
+        # field while making syntactically valid file members self-contained.
+        probe_scope = tuple(
+            dict.fromkeys(
+                [
+                    *scope,
+                    *(
+                        value
+                        for value in candidate_files
+                        if _valid_scope_item(value)
+                    ),
+                ]
+            )
+        )
+        _validate_proposed_record(
+            candidate,
+            run_id=run_id,
+            repo_root=repo_root,
+            scope=probe_scope,
+            prior_records=prior_records,
+        )
+        outside = _pathspecs_outside_scope(candidate_files, scope)
+        if outside:
+            raise CoordinationRefusal(
+                "forge: journal append refused — task files exceed admitted "
+                f"scope for run {run_id}: {_named_pathspecs(outside)}"
+            )
+    _validate_proposed_record(
+        candidate,
+        run_id=run_id,
+        repo_root=repo_root,
+        scope=scope,
+        prior_records=prior_records,
     )
 
 
@@ -4682,7 +4759,7 @@ def append_owned_record(journal: Path, record: object) -> None:
                 adopt_missing=state.pre_coordination,
                 locked=locked,
             )
-            _validate_proposed_record(
+            _validate_append_with_named_scope(
                 candidate,
                 run_id=run_id,
                 repo_root=repository,
@@ -6169,7 +6246,7 @@ def append_run_record(
                 adopt_missing=state.pre_coordination,
                 locked=locked,
             )
-            _validate_proposed_record(
+            _validate_append_with_named_scope(
                 candidate,
                 run_id=run_id,
                 repo_root=repository,
@@ -6210,12 +6287,22 @@ def append_run_record(
                     raise
 
 
-def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
+def readmit_run(
+    repo: Path,
+    run_id: str,
+    scope_values: list[str],
+    *,
+    replace: bool = False,
+    _builder_authority: object | None = None,
+    _record: object | None = None,
+) -> None:
     run_id = _operation_run_id("run readmit", run_id)
     repository, state_root = _resolve_repository(repo, "run readmit")
     scope = _operation_scope("run readmit", scope_values)
     record = _validate_record_envelope(
-        {
+        _record
+        if _record is not None
+        else {
             "type": "decision",
             "id": f"forge-scope-readmission-{uuid.uuid4().hex}",
             "resolution": READMISSION_RESOLUTION,
@@ -6231,10 +6318,22 @@ def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
             locked=registry_lock,
         )
         state = _target_state(view, run_id, "run readmit")
-        if _writer_contract_active(state.records):
+        activated = _writer_contract_active(state.records)
+        authority_supplied = (
+            _builder_authority is _SCOPE_CHANGE_BUILDER_AUTHORITY
+        )
+        if (activated and not authority_supplied) or (
+            authority_supplied and _record is None
+        ):
             raise CoordinationRefusal(
                 "forge: journal append refused — activated writer requires typed builder"
             )
+        if authority_supplied:
+            if (
+                record.get("run_id") != run_id
+                or record.get("scope") != list(scope)
+            ):
+                raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
         with _locked_journal(state) as locked:
             prior = state.records
             _validate_append_citations(repository, state.run_dir, record)
@@ -6252,10 +6351,30 @@ def readmit_run(repo: Path, run_id: str, scope_values: list[str]) -> None:
                 scope=scope,
                 prior_records=prior,
             )
-            if not _all_task_files_contained(list(prior), scope):
+            if not replace:
+                omitted = tuple(
+                    sorted(
+                        set(view.open_runs[run_id]) - set(scope),
+                        key=_byte_key,
+                    )
+                )
+                if omitted:
+                    raise CoordinationRefusal(
+                        "forge: run readmit refused — proposed scope omits current "
+                        f"pathspecs for run {run_id}: {_named_pathspecs(omitted)}"
+                    )
+            outside = _pathspecs_outside_scope(
+                (
+                    item
+                    for prior_record in prior
+                    for item in _task_files(prior_record)
+                ),
+                scope,
+            )
+            if outside:
                 raise CoordinationRefusal(
                     f"forge: journal append refused — task files exceed admitted scope "
-                    f"for run {run_id}"
+                    f"for run {run_id}: {_named_pathspecs(outside)}"
                 )
             _conflict_refusal(
                 run_id,
