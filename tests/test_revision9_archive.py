@@ -1506,6 +1506,23 @@ class Revision9LegacyClosingTests(unittest.TestCase):
 
 
 class Revision9Phase0GoldenTests(unittest.TestCase):
+    # These goldens replay the origin machine's real run journals, which are
+    # deliberately git-excluded (only committed archives travel).  On a clean
+    # checkout (CI) the inputs cannot exist, so the tests skip rather than
+    # fail; on the origin machine they always run.
+    def setUp(self) -> None:
+        runs_root = ROOT / ".codex-orchestrator" / "runs"
+        for run_id in (
+            "run-20260826-coordination-hardening",
+            "run-20260821-phase0-evals",
+        ):
+            if not (runs_root / run_id / "journal.jsonl").is_file():
+                self.skipTest(
+                    "origin-machine golden inputs absent: "
+                    f"{run_id}/journal.jsonl is git-excluded run state "
+                    "(clean checkouts cannot run this golden)"
+                )
+
     def test_real_hardening_journal_is_unbound_without_changing_committed_history(self) -> None:
         run_id = "run-20260826-coordination-hardening"
         run_dir = ROOT / ".codex-orchestrator" / "runs" / run_id

@@ -8,8 +8,18 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Fixed
+
+- Revision-9 golden tests now skip with a stated reason on clean checkouts
+  where the git-excluded origin-machine run journals cannot exist, instead of
+  erroring (found by the CI candidate's binding review).
+
 ### Added
 
+- CI: a GitHub Actions workflow running the forge gates on pushes, pull
+  requests, and a weekly schedule — full unittest discovery, routing/inventory
+  conformance, STRICT evals, and the mechanical drift check in reduced-signal
+  CI mode.
 - Changelog gate configured in `forge-project.md`: code-class commits require a
   staged changelog entry; docs-class commits are exempt, and archive-only chains
   record a per-chain operator-directed skip until the auto-exemption ships.

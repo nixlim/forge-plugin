@@ -1,0 +1,55 @@
+name: forge-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: forge gates (tests, conformance, evals, drift)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
+      - name: Gate 1 — full unittest discovery
+        run: python3 -m unittest discover -s tests
+
+      - name: Routing and executable-inventory conformance
+        run: python3 -m unittest tests.test_repo_conformance
+
+      - name: STRICT evals
+        run: STRICT=1 bash scripts/forge/run-evals.sh
+
+      - name: Drift check (mechanical pass, reduced-signal CI mode)
+        env:
+          CLAUDE_PLUGIN_ROOT: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          # errexit-safe capture: GitHub's default shell is `bash -e {0}`, so a
+          # bare nonzero pipeline would abort the step before any status check.
+          bash scripts/forge/drift-check.sh | tee drift-summary.json && status=0 || status=$?
+          # exit 2 is a drift-check failure; 0/1 (clean/findings) both pass CI —
+          # findings are the drift skill's concern, not a PR gate.
+          if [ "$status" -eq 2 ]; then exit 2; fi
+          exit 0
+
+      - name: Upload drift summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: drift-summary
+          path: drift-summary.json
+          if-no-files-found: ignore
