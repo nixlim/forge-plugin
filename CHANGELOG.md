@@ -8,6 +8,15 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Added
+
+- Spec revision 12: one fenced composite performs fetch/name-status/full-patch
+  when run-bound and fetch/full-patch when unbound, streaming patch bytes only
+  into SHA-256 with no retained transcript; the sixteen-member scope-fetch
+  sidecar /2 resolves DM-014/FR-236 for both modes. Also adds reservation-held
+  surviving-fence clearing and loud explicit-recover-flag refusal outside owned
+  conflict.
+
 ### Fixed
 
 - Typed scope readmission now writes a contiguous batch receipt, and batch recovery can backfill one journal-proven historical receipt gap before clearing an exact landed intent.
