@@ -11,6 +11,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from unittest import mock
@@ -1766,6 +1767,114 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
                 self.assertEqual(calls, expected_calls)
                 self.assertEqual(written, [])
 
+    def test_composite_and_parent_share_hostile_name_status_parser(self) -> None:
+        valid_cases = (
+            (b"", ()),
+            (
+                (
+                    b'R0\0src/old"quote.py\0src/new"quote.py\0'
+                    b"C01\0src/copy source.py\0src/copy target.py\0"
+                    b"R100\0z-last.py\0a-first.py\0"
+                    b"M\0src/repeated.py\0M\0src/repeated.py\0"
+                ),
+                (
+                    "a-first.py",
+                    'src/copy source.py',
+                    "src/copy target.py",
+                    'src/new"quote.py',
+                    'src/old"quote.py',
+                    "src/repeated.py",
+                    "z-last.py",
+                ),
+            ),
+        )
+        invalid_cases = (
+            b"M\0src/unterminated.py",
+            b"R101\0old.py\0new.py\0",
+            b"C999\0old.py\0new.py\0",
+            b"R\0old.py\0new.py\0",
+            b"M\0",
+            b"M\0/absolute.py\0",
+            b"M\0./relative.py\0",
+            b"M\0src//repeated.py\0",
+            b"M\0src/./dot.py\0",
+            b"M\0../escape.py\0",
+            b"M\0 leading.py\0",
+            b"M\0trailing.py \0",
+            b"M\0!exclude.py\0",
+            b"M\0^exclude.py\0",
+            b"M\0-option.py\0",
+            b"M\0:magic.py\0",
+            b"M\0*.py\0",
+            b"M\0[ab].py\0",
+            b"M\0question?.py\0",
+            b"M\0.forge/private.json\0",
+            b"M\0.codex-orchestrator/private.json\0",
+            b"M\0.worktrees/private.py\0",
+            b"M\0src\\quoted.py\0",
+            b"M\0src/invalid-utf8-\xff.py\0",
+            b"M\0src/nul\0tail.py\0",
+        )
+
+        fetch_argv = [CLI.sys.executable, "-c", "pass", "fixture-fetch"]
+        patch_argv = [CLI.sys.executable, "-c", "pass", "fixture-full-patch"]
+
+        def composite_paths(scope_output: bytes) -> tuple[str, ...] | None:
+            scope_argv = [
+                CLI.sys.executable,
+                "-c",
+                f"import os;os.write(1,{scope_output!r})",
+                "fixture-name-status",
+            ]
+            request = {
+                "schema": "forge-bootstrap-composite-request/1",
+                "worktree": str(self.worktree),
+                "git_dir": str(self.worktree / ".git"),
+                "candidate_head": self.candidate_head,
+                "remote_tip": self.base,
+                "run_bound": True,
+                "fetch_argv": fetch_argv,
+                "cap": CLI.OUTPUT_CAP_BYTES,
+            }
+            encoded = CLI.base64.urlsafe_b64encode(
+                CLI.canonical_bytes(request)
+            ).decode("ascii")
+            written: list[bytes] = []
+
+            def capture_write(descriptor: int, payload: bytes) -> int:
+                self.assertEqual(descriptor, 1)
+                written.append(bytes(payload))
+                return len(payload)
+
+            with mock.patch.object(
+                CLI, "_merge_scope_argv", return_value=scope_argv
+            ), mock.patch.object(
+                CLI, "_merge_full_patch_argv", return_value=patch_argv
+            ), mock.patch.object(
+                CLI.os, "write", side_effect=capture_write
+            ):
+                self.assertEqual(CLI._merge_bootstrap_child_main(encoded), 0)
+            self.assertEqual(len(written), 1)
+            protocol = json.loads(written[0])
+            self.assertEqual(protocol["constituent_order"][:2], ["fetch", "name-status"])
+            if protocol["scope"]["exit"] != 0:
+                self.assertIsNone(protocol["scope_changed_paths"])
+                self.assertIsNone(protocol["full_patch"])
+                return None
+            self.assertEqual(protocol["scope"]["exit"], 0)
+            self.assertEqual(protocol["constituent_order"][-1], "full-patch")
+            return tuple(protocol["scope_changed_paths"])
+
+        for raw, expected in valid_cases:
+            with self.subTest(kind="valid", raw=raw):
+                self.assertEqual(CLI._parse_merge_scope_output(raw), expected)
+                self.assertEqual(composite_paths(raw), expected)
+        for raw in invalid_cases:
+            with self.subTest(kind="invalid", raw=raw):
+                with self.assertRaises(ValueError):
+                    CLI._parse_merge_scope_output(raw)
+                self.assertIsNone(composite_paths(raw))
+
     def test_bound_name_status_output_remains_capped(self) -> None:
         marker = b"REV12-NAME-STATUS-CAP-PATCH-MUST-NOT-BE-RETAINED"
         bulk = self.worktree / "src" / "bulk"
@@ -3400,6 +3509,7 @@ class MergeLifecycleApprovalTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(state["approval"]["purpose"], "remote-churn")
         self.assertEqual(state["integration"]["condition"], "none")
         self.assertEqual(state["integration"]["remote_movement_count"], 0)
+        self.assertTrue(engine._current_merge_authority(state))
 
     def test_approval_stale_candidate_and_wrong_state_refusals_are_exact(self) -> None:
         store, engine, awaiting = self.awaiting_control_chain()
@@ -3511,26 +3621,29 @@ class MergeLifecycleAbortTests(ADAPTERS.MergeAdapterFixture):
                 "releasing",
                 "current",
                 "pushed",
+                past,
                 "forge: merge abort refused — ownership release completion is pending",
             ),
             (
                 "owned",
                 "current",
                 "pushed",
+                past,
                 "forge: merge abort refused — current intended HEAD is already contained",
             ),
             (
                 "owned",
                 "older",
                 "pushed",
+                "2999-01-01T00:00:00Z",
                 "forge: merge abort refused — an older attempted HEAD is contained",
             ),
         )
-        for claim_status, containment, scalar, message in priority:
+        for claim_status, containment, scalar, inactive_after, message in priority:
             state = copy.deepcopy(base)
             state["worktree"]["claim"]["status"] = claim_status
             state["worktree"]["path"] = missing
-            state["inactive_after"] = past
+            state["inactive_after"] = inactive_after
             state["state"] = scalar
             with self.subTest(message=message), mock.patch.object(
                 engine, "_load", return_value=state
@@ -3643,7 +3756,7 @@ class MergeLifecycleAbortTests(ADAPTERS.MergeAdapterFixture):
             "forge: merge abort refused — a live or unresolved process remains",
         )
 
-    def test_persisted_all_false_attempt_waits_for_slice_five_observation(self) -> None:
+    def test_synthetic_all_false_snapshot_cannot_bypass_locked_replay(self) -> None:
         _store, engine, base = self.start_owned_chain()
         attempted = copy.deepcopy(base)
         attempted["integration"]["push"] = {"attempted_heads": [self.candidate_head]}
@@ -3652,12 +3765,12 @@ class MergeLifecycleAbortTests(ADAPTERS.MergeAdapterFixture):
         ), mock.patch.object(
             CLI, "_merge_process_unresolved", return_value=False
         ), mock.patch.object(
-            engine, "_release_to_aborted"
+            engine, "_release_to_aborted_locked"
         ) as release, self.assertRaises(CLI.Refusal) as caught:
             engine.abort("not landed")
         self.assertEqual(
             caught.exception.message,
-            "forge: merge abort refused — fresh attempted-head observation requires recovery",
+            "forge: merge abort refused — merge state changed before release",
         )
         release.assert_not_called()
 
@@ -3804,6 +3917,113 @@ class MergeLifecycleReviewEdgeTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(
             disposition.exception.message,
             "forge: review disposition refused — review iteration cap of 8 is final",
+        )
+
+    def test_concurrent_above_minor_dispositions_admit_exactly_one(self) -> None:
+        store, _engine, base = self.blocked_chain()
+        before_events = store.events_path(self.chain_id).read_bytes()
+        engines = [
+            CLI.MergeEngine(self.context(chain_id=self.chain_id)) for _index in range(2)
+        ]
+        rendezvous = threading.Barrier(2)
+        synchronized_thread = threading.local()
+        synchronization_lock = threading.Lock()
+        arrivals: list[int] = []
+        crossings: list[int] = []
+        worker_threads: list[int | None] = [None, None]
+        original_acquire = CLI.acquire_chain_lease
+        results: list[BaseException | None] = [None, None]
+
+        def synchronized_acquire(*args, **kwargs):
+            if not getattr(synchronized_thread, "arrived", False):
+                synchronized_thread.arrived = True
+                identity = threading.get_ident()
+                with synchronization_lock:
+                    arrivals.append(identity)
+                rendezvous.wait(timeout=1)
+                with synchronization_lock:
+                    crossings.append(identity)
+            return original_acquire(*args, **kwargs)
+
+        def submit(index: int) -> None:
+            worker_threads[index] = threading.get_ident()
+            try:
+                engines[index].review_disposition(
+                    1, "MAJOR", f"concurrent resolution {index}"
+                )
+            except BaseException as exc:
+                results[index] = exc
+            else:
+                results[index] = AssertionError(
+                    "above-MINOR disposition unexpectedly returned success"
+                )
+
+        threads = [
+            threading.Thread(target=submit, args=(index,), daemon=True)
+            for index in range(2)
+        ]
+        with mock.patch.object(
+            CLI, "acquire_chain_lease", new=synchronized_acquire
+        ), mock.patch.object(engines[0], "_halt"), mock.patch.object(
+            engines[1], "_halt"
+        ):
+            for thread in threads:
+                thread.start()
+            deadline = time.monotonic() + 1
+            for thread in threads:
+                thread.join(max(0.0, deadline - time.monotonic()))
+
+        self.assertFalse(
+            any(thread.is_alive() for thread in threads),
+            "concurrent disposition workers did not finish",
+        )
+        self.assertEqual(len(set(arrivals)), 2)
+        self.assertEqual(set(arrivals), set(worker_threads))
+        self.assertEqual(set(crossings), set(worker_threads))
+        with self.assertRaises(FileNotFoundError):
+            (store.root / f"{self.chain_id}.lock").lstat()
+        self.assertTrue(all(isinstance(result, CLI.Refusal) for result in results))
+        refusals = [result for result in results if isinstance(result, CLI.Refusal)]
+        winners = [
+            (index, result)
+            for index, result in enumerate(results)
+            if isinstance(result, CLI.Refusal)
+            and result.reason_code == CLI.V2ReasonCode.APPROVAL_REQUIRED
+        ]
+        losers = [
+            result
+            for result in refusals
+            if result.reason_code == CLI.V2ReasonCode.STATE_PRECONDITION
+        ]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(len(losers), 1)
+        self.assertEqual(
+            winners[0][1].message,
+            "above-MINOR disposition is parked pending operator co-sign",
+        )
+        self.assertEqual(
+            losers[0].message,
+            "forge: review disposition refused — above-MINOR disposition already awaits operator co-sign",
+        )
+
+        current = store.load(self.chain_id)
+        self.assertEqual(current, winners[0][1].chain)
+        self.assertTrue(current["review"]["operator_cosign_required"])
+        self.assertEqual(len(current["review"]["dispositions"]), 1)
+        self.assertEqual(
+            current["review"]["dispositions"][0]["resolution"],
+            f"concurrent resolution {winners[0][0]}",
+        )
+        self.assertEqual(
+            current["review"]["dispositions"][0]["candidate"],
+            base["candidate"]["candidate_head"],
+        )
+        after_events = store.events_path(self.chain_id).read_bytes()
+        self.assertEqual(after_events[: len(before_events)], before_events)
+        appended_events = after_events[len(before_events) :].splitlines()
+        self.assertEqual(len(appended_events), 1)
+        self.assertEqual(
+            json.loads(appended_events[0])["event"], "review_disposition"
         )
 
     def test_disposition_severity_and_resolution_refusals_are_exact(self) -> None:

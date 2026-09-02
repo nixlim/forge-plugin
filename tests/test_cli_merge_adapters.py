@@ -1058,7 +1058,19 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
         self.assertEqual(len(caught.exception.evidence_refs), 1)
 
     def test_disposition_slot_allows_minor_then_exactly_one_above_minor(self) -> None:
-        _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
+        starter = CLI.MergeEngine(self.context())
+        started = starter.start_chain(str(self.worktree), remote_tip=self.base)
+        self.chain_id = str(started.chain_id)
+        store = starter.store
+        engine = CLI.MergeEngine(self.context(chain_id=self.chain_id))
+        with mock.patch.object(CLI, "run_bounded", side_effect=self.passing_process):
+            verified = engine.verify()
+        self.assertEqual(verified.state, "reviewing")
+        admitted_history = [
+            json.loads(line)
+            for line in store.events_path(self.chain_id).read_bytes().splitlines()
+        ]
+        self.assertTrue(CLI._merge_history_uses_additive_grammar(admitted_history))
         engine.review_request()
         request = store.load(self.chain_id)["review"]["request"]
         verdict = self.write_verdict(
@@ -1068,6 +1080,7 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
             ("MINOR", "minor finding"),
             ("MAJOR", "major finding"),
             ("CRITICAL", "critical finding"),
+            ("MAJOR", "second major finding"),
         )
         engine.review_attach(str(verdict))
         self.assertEqual(store.load(self.chain_id)["state"], "revising")
@@ -1081,29 +1094,104 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
         self.assertEqual(parked.exception.reason_code, CLI.V2ReasonCode.APPROVAL_REQUIRED)
         self.assertTrue(parked.exception.chain["review"]["operator_cosign_required"])
 
-        before_events = store.events_path(self.chain_id).read_bytes()
-        before_state = store.state_path(self.chain_id).read_bytes()
+        before_minor_events = store.events_path(self.chain_id).read_bytes()
         artifact_root = store.artifact_dir(self.chain_id)
         before_artifacts = {
             path.relative_to(artifact_root).as_posix(): digest(path.read_bytes())
             for path in artifact_root.rglob("*")
             if path.is_file()
         }
-        for finding, severity, resolution in (
-            (1, "MINOR", "must not clear pending slot"),
-            (3, "CRITICAL", "replace pending slot"),
-        ):
-            with self.subTest(severity=severity), self.assertRaises(
-                CLI.Refusal
-            ) as caught:
-                engine.review_disposition(finding, severity, resolution)
-            self.assertEqual(
-                caught.exception.reason_code, CLI.V2ReasonCode.STATE_PRECONDITION
-            )
-            self.assertEqual(
-                caught.exception.message,
-                "forge: review disposition refused — above-MINOR disposition already awaits operator co-sign",
-            )
+        minor = engine.review_disposition(
+            1, "MINOR", "must not clear pending slot"
+        )
+        after_minor = store.load(self.chain_id)
+        self.assertTrue(minor.ok)
+        self.assertTrue(after_minor["review"]["operator_cosign_required"])
+        self.assertEqual(len(after_minor["review"]["dispositions"]), 3)
+        self.assertEqual(
+            after_minor["review"]["dispositions"][-1]["resolution"],
+            "must not clear pending slot",
+        )
+        appended = store.events_path(self.chain_id).read_bytes()[
+            len(before_minor_events) :
+        ].splitlines()
+        self.assertEqual(len(appended), 1)
+        self.assertEqual(json.loads(appended[0])["event"], "review_disposition")
+
+        admitted_events = [
+            json.loads(line)
+            for line in store.events_path(self.chain_id).read_bytes().splitlines()
+        ]
+        admitted_replay = CLI._replay_merge_event_bytes(
+            self.chain_id,
+            store.events_path(self.chain_id).read_bytes(),
+        )
+        admitted_tail = admitted_events[-1]
+        self.assertEqual(admitted_tail["event"], "review_disposition")
+        self.assertTrue(
+            admitted_replay.entries[-1][1]["review"][
+                "operator_cosign_required"
+            ]
+        )
+        self.assertEqual(
+            admitted_tail["payload"]["delta"]["review"][
+                "operator_cosign_required"
+            ],
+            True,
+        )
+        for finding, severity in ((4, "MAJOR"), (3, "CRITICAL")):
+            with self.subTest(replay_severity=severity):
+                hostile_events = copy.deepcopy(admitted_events)
+                hostile = hostile_events[-1]
+                hostile_disposition = hostile["payload"]["delta"]["review"][
+                    "dispositions"
+                ][-1]
+                hostile_disposition.update(
+                    {
+                        "finding": finding,
+                        "severity": severity,
+                        "resolution": "digest-valid second occupied-slot disposition",
+                    }
+                )
+                unsigned = {
+                    name: value
+                    for name, value in hostile.items()
+                    if name != "digest"
+                }
+                hostile["digest"] = digest(CLI.canonical_bytes(unsigned))
+                self.assertEqual(
+                    hostile["digest"],
+                    digest(
+                        CLI.canonical_bytes(
+                            {
+                                name: value
+                                for name, value in hostile.items()
+                                if name != "digest"
+                            }
+                        )
+                    ),
+                )
+                hostile_bytes = b"".join(
+                    CLI.canonical_bytes(event) + b"\n"
+                    for event in hostile_events
+                )
+                with self.assertRaisesRegex(
+                    CLI.FrozenError,
+                    rf"merge event {hostile['sequence']} transition is invalid",
+                ):
+                    CLI._replay_merge_event_bytes(self.chain_id, hostile_bytes)
+
+        before_events = store.events_path(self.chain_id).read_bytes()
+        before_state = store.state_path(self.chain_id).read_bytes()
+        with self.assertRaises(CLI.Refusal) as caught:
+            engine.review_disposition(3, "CRITICAL", "replace pending slot")
+        self.assertEqual(
+            caught.exception.reason_code, CLI.V2ReasonCode.STATE_PRECONDITION
+        )
+        self.assertEqual(
+            caught.exception.message,
+            "forge: review disposition refused — above-MINOR disposition already awaits operator co-sign",
+        )
         self.assertEqual(store.events_path(self.chain_id).read_bytes(), before_events)
         self.assertEqual(store.state_path(self.chain_id).read_bytes(), before_state)
         self.assertEqual(

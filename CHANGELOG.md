@@ -8,6 +8,17 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Added
+
+- Phase-3 slice 6 completes the merge inventory with real common-lock
+  contention, fresh 300-second fence budgets, remote churn and destination-ref
+  races, historical-attempt and safe-release recovery, serialized review
+  edges, one shared hostile-path parser, and hermetic Revision-9 CI fixtures.
+  The merge integration matrix is now split across
+  `tests/test_cli_merge_integration.py` (shard 0) and two
+  `tests/test_cli_merge_integration_shard<n>.py` siblings; full discovery
+  runs all three, and a missing sibling refuses at load time.
+
 ## [0.6.10] - 2026-09-02
 
 ### Added

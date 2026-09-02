@@ -46,12 +46,12 @@ class Revision9FixtureTests(unittest.TestCase):
             FIXTURES / "prose-and-position-journal.jsonl",
             self.run_dir / "journal.jsonl",
         )
+        journal_path = self.run_dir / "journal.jsonl"
         self.records = [
             json.loads(line)
-            for line in (self.run_dir / "journal.jsonl").read_text(
-                encoding="utf-8"
-            ).splitlines()
+            for line in journal_path.read_text(encoding="utf-8").splitlines()
         ]
+        self._localize_absolute_evidence(journal_path)
         for record in self.records:
             if record.get("type") != "execution":
                 continue
@@ -66,6 +66,38 @@ class Revision9FixtureTests(unittest.TestCase):
             target = self.run_dir / target
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("fixture evidence\n", encoding="utf-8")
+
+    def _localize_absolute_evidence(self, journal_path: Path) -> None:
+        journal_text = journal_path.read_text(encoding="utf-8")
+        localized = 0
+        for record in self.records:
+            if record.get("type") != "verification":
+                continue
+            evidence = record.get("evidence")
+            if not isinstance(evidence, list):
+                continue
+            for index, value in enumerate(evidence):
+                if not isinstance(value, str) or not Path(value).is_absolute():
+                    continue
+                relative = (
+                    f"fixture-present-evidence/{record['id']}-{index}"
+                    f"{Path(value).suffix}"
+                )
+                source = json.dumps(value)
+                replacement = json.dumps(relative)
+                if journal_text.count(source) != 1:
+                    raise AssertionError(
+                        f"absolute fixture evidence path is not unique: {value}"
+                    )
+                journal_text = journal_text.replace(source, replacement)
+                evidence[index] = relative
+                self._materialize(relative)
+                localized += 1
+        if localized != 3:
+            raise AssertionError(
+                f"expected three absolute fixture evidence paths, found {localized}"
+            )
+        journal_path.write_text(journal_text, encoding="utf-8")
 
     def validate(self) -> dict[str, object]:
         return journal.validate_run(self.run_dir, gates=True)

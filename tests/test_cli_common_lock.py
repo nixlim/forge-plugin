@@ -598,6 +598,37 @@ class PortableCommonLockTests(unittest.TestCase):
 
 
 class ChainLeaseTests(unittest.TestCase):
+    def test_single_attempt_lease_contention_never_sleeps_or_resets_budget(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            chains = Path(temporary)
+            holder = CLI.acquire_chain_lease(
+                chains,
+                chain_id=CHAIN_ID,
+                session="holder-session",
+                timeout=2,
+            )
+            clock = FakeClock()
+            sleeper = mock.Mock(
+                side_effect=AssertionError("single-attempt lease acquisition slept")
+            )
+            try:
+                with self.assertRaises(CLI.ChainLeaseUnavailable):
+                    CLI.acquire_chain_lease(
+                        chains,
+                        chain_id=CHAIN_ID,
+                        session="contender-session",
+                        timeout=300,
+                        clock=clock,
+                        sleeper=sleeper,
+                        single_attempt=True,
+                    )
+            finally:
+                holder.release()
+            sleeper.assert_not_called()
+            self.assertEqual(clock.value, 0.0)
+
     def test_lease_revalidates_inode_and_digest_before_every_write_and_release(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             chains = Path(temporary)
@@ -1780,6 +1811,100 @@ class FencedProcessTests(unittest.TestCase):
                     self.assertEqual(len(result.output), cap)
                 self.assertFalse((common / CLI.COMMON_LOCK_INFLIGHT_NAME).exists())
                 lock.release()
+
+    def test_final_group_probe_is_persisted_before_survivor_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            common = Path(temporary)
+            lock = CLI.acquire_common_lock(
+                common,
+                owner_kind="merge",
+                chain_id=CHAIN_ID,
+                operation="finalize",
+                use_flock=False,
+                timeout=2,
+                no_transaction_record=True,
+            )
+            persisted: list[CLI.FencedProcessResult] = []
+            probe = mock.Mock(side_effect=["dead", "dead", "live"])
+            with self.assertRaises(CLI.FencedChildSurvived) as caught:
+                CLI.run_fenced_command(
+                    lock,
+                    operation="gate",
+                    intent_digest=hashlib.sha256(b"final-probe").hexdigest(),
+                    intent_validator=lambda: True,
+                    argv=[sys.executable, "-c", "pass"],
+                    cwd=common,
+                    persist_result=persisted.append,
+                    timeout=1,
+                    group_probe=probe,
+                )
+            self.assertEqual(probe.call_count, 3)
+            self.assertEqual(len(persisted), 1)
+            self.assertTrue(persisted[0].group_survived)
+            self.assertEqual(caught.exception.result, persisted[0])
+            self.assertIsNotNone(lock._unresolved_fence)
+            self.assertTrue((common / CLI.COMMON_LOCK_INFLIGHT_NAME).exists())
+            assert lock._unresolved_fence is not None
+            lock.recover_owned_fence(
+                lock._unresolved_fence,
+                lifecycle_classifier=lambda _reservation, _fence: None,
+            )
+            lock.release()
+
+    def test_post_persist_group_probe_retains_durable_result_before_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            common = Path(temporary)
+            lock = CLI.acquire_common_lock(
+                common,
+                owner_kind="merge",
+                chain_id=CHAIN_ID,
+                operation="finalize",
+                use_flock=False,
+                timeout=2,
+                no_transaction_record=True,
+            )
+            persisted: list[CLI.FencedProcessResult] = []
+            observed_statuses: list[str] = []
+
+            def probe_status(_pgid: int) -> str:
+                status = "live" if persisted else "dead"
+                observed_statuses.append(status)
+                return status
+
+            probe = mock.Mock(side_effect=probe_status)
+            with self.assertRaises(CLI.FencedChildSurvived) as caught:
+                CLI.run_fenced_command(
+                    lock,
+                    operation="gate",
+                    intent_digest=hashlib.sha256(b"post-persist-probe").hexdigest(),
+                    intent_validator=lambda: True,
+                    argv=[sys.executable, "-c", "pass"],
+                    cwd=common,
+                    persist_result=persisted.append,
+                    timeout=1,
+                    group_probe=probe,
+                )
+            self.assertGreaterEqual(probe.call_count, 2)
+            self.assertTrue(all(status == "dead" for status in observed_statuses[:-1]))
+            self.assertEqual(observed_statuses[-1], "live")
+            self.assertEqual(len(persisted), 1)
+            self.assertFalse(persisted[0].group_survived)
+            self.assertTrue(caught.exception.result.group_survived)
+            persisted_evidence = persisted[0].evidence()
+            refusal_evidence = dict(persisted_evidence)
+            refusal_evidence["group_survived"] = True
+            self.assertEqual(caught.exception.result.evidence(), refusal_evidence)
+            self.assertEqual(caught.exception.result.output, persisted[0].output)
+            self.assertEqual(caught.exception.result.metadata, persisted[0].metadata)
+            self.assertIsNot(caught.exception.result, persisted[0])
+            self.assertIsNotNone(lock._unresolved_fence)
+            self.assertTrue((common / CLI.COMMON_LOCK_INFLIGHT_NAME).exists())
+            assert lock._unresolved_fence is not None
+            lock.recover_owned_fence(
+                lock._unresolved_fence,
+                lifecycle_classifier=lambda _reservation, _fence: None,
+            )
+            lock.release()
 
     def test_unprovable_survivor_fences_every_later_owner_after_parent_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

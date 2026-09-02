@@ -60,6 +60,20 @@ def load_cli_fixture_support() -> object:
 CLI_FIXTURE_SUPPORT = load_cli_fixture_support()
 
 
+def load_revision9_matrix_support() -> object:
+    name = "_forge_revision9_archive_matrix_support"
+    cached = sys.modules.get(name)
+    if cached is not None:
+        return cached
+    path = ROOT / "tests" / "test_revision9_matrix.py"
+    specification = importlib.util.spec_from_file_location(name, path)
+    assert specification is not None and specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
 def canonical(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -67,6 +81,61 @@ def canonical(value: object) -> bytes:
 
 
 class Revision9ArchiveBlocksTests(unittest.TestCase):
+    def test_merge_cleanup_history_selects_legacy_grammar_until_additive_carrier(
+        self,
+    ) -> None:
+        matrix = load_revision9_matrix_support()
+        fixture = matrix.Revision9MergeIngestArchiveMatrixTests(
+            "test_real_merge_ingest_closes_and_renders_deterministically"
+        )
+        fixture.setUp()
+        try:
+            _state, events_raw, _outcome, _candidate, _base, _eligible = (
+                fixture.build_real_merge_package()
+            )
+            cli = archive._load_cli_ingest_authority()
+            cli.register_coordination_seams()
+            replay = cli._replay_merge_event_bytes(
+                fixture.chain_id, events_raw, verify_receipts=False
+            )
+            self.assertEqual(replay.state["state"], "closed")
+            self.assertFalse(cli._merge_history_uses_additive_grammar(replay.events))
+            self.assertFalse(
+                cli._merge_history_uses_additive_grammar(
+                    (
+                        {
+                            "event": "review_disposition",
+                            "payload": {"delta": {"review": {"dispositions": []}}},
+                        },
+                    )
+                )
+            )
+
+            additive = (
+                {"event": "fetch_intent", "payload": {"scope_request": {}}},
+                {"event": "fetch_result", "payload": {"scope_fetch_binding": {}}},
+                {"event": "cleanup_result", "payload": {"cleanup_results": []}},
+                {
+                    "event": "epoch_intent",
+                    "payload": {
+                        "delta": {"integration": {"epoch": {"gate_plan": {}}}}
+                    },
+                },
+                {
+                    "event": "approval_recorded",
+                    "payload": {
+                        "delta": {"approval": {"purpose": "remote-churn"}}
+                    },
+                },
+            )
+            for event in additive:
+                with self.subTest(event=event["event"]):
+                    self.assertTrue(
+                        cli._merge_history_uses_additive_grammar((event,))
+                    )
+        finally:
+            fixture.doCleanups()
+
     def test_discrepancy_enum_and_dispositions_are_closed(self) -> None:
         self.assertEqual(
             archive.DISCREPANCY_CODES,
@@ -911,13 +980,18 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
         exact = archive.create_archive_file(
             self.repo, archive_path, relative, "created\n"
         )
-        archive_path.unlink()
-        archive_path.write_text("concurrent replacement\n", encoding="utf-8")
-        with self.assertRaisesRegex(
-            archive.ArchiveRefusal,
-            "^forge: archive refused — transaction rollback failed$",
-        ):
-            archive.unlink_archive_candidate(self.repo, relative, exact)
+        with archive_path.open("rb") as original:
+            self.assertEqual(
+                (os.fstat(original.fileno()).st_dev, os.fstat(original.fileno()).st_ino),
+                (exact.identity.device, exact.identity.inode),
+            )
+            archive_path.unlink()
+            archive_path.write_text("concurrent replacement\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                archive.ArchiveRefusal,
+                "^forge: archive refused — transaction rollback failed$",
+            ):
+                archive.unlink_archive_candidate(self.repo, relative, exact)
         self.assertEqual(
             archive_path.read_text(encoding="utf-8"), "concurrent replacement\n"
         )
