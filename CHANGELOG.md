@@ -10,9 +10,10 @@ Release dates are the UTC dates of the release commits.
 
 ### Added
 
-- Phase-3 slice 7 evidence: the two planted-defect BLOCK eval baselines, the
-  candidate-bound generation-1 `fr230-phase3-4-v2` manifest, and its five
-  phase-3 PASS result fixtures under `tests/fixtures/fr230-results/`.
+- Phase-3 slice 7 evidence: the two planted-defect BLOCK eval baselines.
+- Phase-3 slice 7 manifest: the generation-1 `fr230-phase3-4-v2` manifest and
+  its five phase-3 PASS result fixtures under `tests/fixtures/fr230-results/`,
+  bound to the reviewed `commit-guard.sh` subject candidate.
 - Phase-3 slice 6 completes the merge inventory with real common-lock
   contention, fresh 300-second fence budgets, remote churn and destination-ref
   races, historical-attempt and safe-release recovery, serialized review
