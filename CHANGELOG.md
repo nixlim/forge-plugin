@@ -8,6 +8,8 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-09-02
+
 ### Added
 
 - Spec revision 12: one fenced composite performs fetch/name-status/full-patch
@@ -16,22 +18,6 @@ Release dates are the UTC dates of the release commits.
   sidecar /2 resolves DM-014/FR-236 for both modes. Also adds reservation-held
   surviving-fence clearing and loud explicit-recover-flag refusal outside owned
   conflict.
-
-### Fixed
-
-- Typed scope readmission now writes a contiguous batch receipt, and batch recovery can backfill one journal-proven historical receipt gap before clearing an exact landed intent.
-
-- Commit-chain replay now preserves receipted history, isolates frozen chains, and supports explicit operator tombstones and frozen aborts.
-- Commit-chain ingest now captures every cited evidence file into the run-relative content-addressed store.
-- Activated runs now route scope readmission through the typed scope-change builder.
-- Scope readmission preserves the current admitted set unless `--replace` is explicit, and containment refusals name escaped pathspecs.
-- Run-bound changelog outputs declared by the pinned committed policy are treated as engine-injected gate paths in binding and ingest proofs.
-- Revision-9 golden tests now skip with a stated reason on clean checkouts
-  where the git-excluded origin-machine run journals cannot exist, instead of
-  erroring (found by the CI candidate's binding review).
-
-### Added
-
 - Phase-3 slice 5: the dormant bounded-epoch merge finalize, recovery, cleanup,
   fenced gate execution, and Revision-12 composite bootstrap/run-scope proof
   engine, including one fenced fetch/name-status/full-patch process group,
@@ -62,6 +48,33 @@ Release dates are the UTC dates of the release commits.
 - Spec revision 10: phase-3 authority adjudications — pending-phase-4 result bindings,
   epoch gate plans, post-fetch run-scope abort, normative v2/v4 layouts, the
   one-outstanding-disposition rule, and single-master-package oversized review.
+
+### Fixed
+
+- Engine policy reader (GH#12): `forge-project.md` fenced `bash`/`sh` cells may
+  be uniformly indented (for example nested under a Markdown list item, as
+  `/forge:init` has written them); the opening fence's exact indentation is
+  stripped from every cell line so an indented cell is byte-identical to the
+  same cell at column 0. A misaligned or mixed-indentation cell refuses with
+  `forge: executable policy row malformed`; a CRLF closing fence now closes its
+  cell. The cell reader is now a linear line scan with per-column closing-fence
+  indexes instead of a lazy multi-line regex, so a policy full of unclosed
+  openings parses in milliseconds rather than stalling for minutes.
+  `forge --help` and `forge commit start --help` now list the global
+  options (`--repo`, `--run-id`, `--chain-id`, `--json`, `--verbose`), state
+  that `--run-id` requires `--task`, and note that `--task` is a verb option
+  accepted only after `commit start`, `merge start`, or `journal ingest-chain`.
+- Docs: `docs/updating-forge.md` documents plugin update mechanics and the
+  pin-versus-track strategies for consumer repositories.
+- Typed scope readmission now writes a contiguous batch receipt, and batch recovery can backfill one journal-proven historical receipt gap before clearing an exact landed intent.
+- Commit-chain replay now preserves receipted history, isolates frozen chains, and supports explicit operator tombstones and frozen aborts.
+- Commit-chain ingest now captures every cited evidence file into the run-relative content-addressed store.
+- Activated runs now route scope readmission through the typed scope-change builder.
+- Scope readmission preserves the current admitted set unless `--replace` is explicit, and containment refusals name escaped pathspecs.
+- Run-bound changelog outputs declared by the pinned committed policy are treated as engine-injected gate paths in binding and ingest proofs.
+- Revision-9 golden tests now skip with a stated reason on clean checkouts
+  where the git-excluded origin-machine run journals cannot exist, instead of
+  erroring (found by the CI candidate's binding review).
 
 ## [0.6.9] - 2026-08-29
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import bisect
 import contextlib
 import copy
 import dataclasses
@@ -6892,20 +6893,82 @@ def _parse_regions(raw: bytes) -> dict[str, str]:
     return result
 
 
+_FENCE_OPEN_LINE = re.compile(r"([ \t]*)```(?:bash|sh)\r?")
+_FENCE_CLOSE_LINE = re.compile(r"([ \t]*)```[ \t]*\r?")
+
+
+def _fence_lines(lines: list[str]) -> tuple[list[tuple[int, str]], dict[str, list[int]]]:
+    """Classify fence lines in one linear pass.
+
+    Returns the opening fences as ``(line index, prefix)`` pairs and, for every
+    prefix, the ascending line indexes of the closing fences at exactly that
+    indentation.  A closing fence must sit at the opening fence's exact column.
+    """
+    openings: list[tuple[int, str]] = []
+    closings: dict[str, list[int]] = {}
+    for index, line in enumerate(lines):
+        match = _FENCE_OPEN_LINE.fullmatch(line)
+        if match:
+            openings.append((index, match.group(1)))
+            continue
+        match = _FENCE_CLOSE_LINE.fullmatch(line)
+        if match:
+            closings.setdefault(match.group(1), []).append(index)
+    return openings, closings
+
+
+def _dedent_fenced_cell(cell: str, prefix: str) -> str:
+    """Strip the opening fence's exact indentation from every nonblank cell line.
+
+    An indented fence (for example one nested under a Markdown list item, as
+    ``/forge:init`` writes it) must yield byte-identical cell text to the same
+    fence at column 0.  A nonblank line that does not carry the fence's exact
+    prefix is a misaligned or mixed-indentation cell and is malformed policy.
+    """
+    if not prefix:
+        return cell
+    lines: list[str] = []
+    for line in cell.split("\n"):
+        if not line.strip():
+            # A blank line inside the cell carries no prefix to strip; keep
+            # only its line ending so CRLF cells stay internally consistent.
+            lines.append("\r" if line.endswith("\r") else "")
+            continue
+        if not line.startswith(prefix):
+            raise PolicyError("forge: executable policy row malformed")
+        lines.append(line[len(prefix):])
+    return "\n".join(lines)
+
+
 def _fenced_shell_cells(body: str) -> list[str]:
+    """Return every ``bash``/``sh`` fenced cell of ``body`` as flat cell text.
+
+    A line scan with per-prefix closing-fence indexes keeps parsing linear in
+    the body size; a hostile policy full of unmatched or indented openings
+    cannot stall the reader.  An opening fence that never closes at its own
+    column is skipped, and the search resumes after each closed cell.
+    """
+    lines = body.split("\n")
+    openings, closings = _fence_lines(lines)
     cells: list[str] = []
-    pattern = re.compile(r"^```(?:bash|sh)\r?\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
-    for match in pattern.finditer(body):
-        cell = match.group(1)
-        if cell.endswith("\r\n"):
-            cell = cell[:-2]
-        elif cell.endswith("\n"):
+    resume_after = -1
+    for index, prefix in openings:
+        if index <= resume_after:
+            continue
+        candidates = closings.get(prefix, [])
+        position = bisect.bisect_right(candidates, index)
+        if position == len(candidates):
+            continue
+        close = candidates[position]
+        cell = "\n".join(lines[index + 1 : close])
+        if cell.endswith("\r"):
             cell = cell[:-1]
         if not cell.strip() or "\x00" in cell:
             # The complete fenced cell is one argv element to ``bash -c``;
             # embedded newlines remain bytes inside that one cell.
             raise PolicyError("forge: executable policy row malformed")
-        cells.append(cell)
+        cells.append(_dedent_fenced_cell(cell, prefix))
+        resume_after = close
     return cells
 
 
@@ -7944,8 +8007,31 @@ def _attach_merge_lifecycle_parser(
     abort.add_argument("--reason")
 
 
+GLOBAL_OPTIONS_HELP = """\
+global options (accepted before or after the verb; parsed ahead of argparse):
+  --repo PATH        a directory inside the target repository (default: cwd)
+  --run-id RUN_ID    bind a new chain to this explicitly identified open
+                     orchestration run; `commit start` then requires --task,
+                     and later chain verbs inherit the binding (no --run-id)
+  --chain-id ID      select the chain a shared verb addresses; required by
+                     merge shared verbs and `chain tombstone`
+  --json             machine-readable JSON output
+  --verbose          include diagnostic detail in refusals and receipts
+
+--task TASK_ID is not global: it is a verb option of `commit start`, `merge start`,
+and `journal ingest-chain` (accepted only after the verb) naming the run task the
+chain's gate verifications cite.
+"""
+
+
 def build_parser() -> ContractArgumentParser:
-    parser = ContractArgumentParser(prog="forge", add_help=True)
+    parser = ContractArgumentParser(
+        prog="forge",
+        add_help=True,
+        description="Forge commit and merge gate chain CLI.",
+        epilog=GLOBAL_OPTIONS_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")
     commands.add_parser("verify")
@@ -7955,12 +8041,19 @@ def build_parser() -> ContractArgumentParser:
 
     commit = commands.add_parser("commit")
     commit_commands = commit.add_subparsers(dest="commit_command", required=True)
-    start = commit_commands.add_parser("start")
+    start = commit_commands.add_parser(
+        "start",
+        description="Open a commit chain for explicit target paths.",
+        epilog=GLOBAL_OPTIONS_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     start_target = start.add_mutually_exclusive_group(required=True)
-    start_target.add_argument("--paths", nargs="+")
-    start_target.add_argument("--archive-run-id")
+    start_target.add_argument("--paths", nargs="+", help="explicit target paths")
+    start_target.add_argument("--archive-run-id", help="archive-only chain for this run")
     start.add_argument("--declare-tier", choices=tuple(TIER_RANK))
-    start.add_argument("--task")
+    start.add_argument(
+        "--task", help="run task to bind (required with the global --run-id)"
+    )
     start.add_argument("--legacy-recovered-head")
     start.add_argument("--legacy-approval")
     start.add_argument("--dispense-citation", action="append", default=[])
