@@ -1,0 +1,16 @@
+{
+  "schema": "fr230-test-result/1",
+  "result_id": "fr230-phase-3-merge-last-line",
+  "slot": "merge-last-line",
+  "status": "PASS",
+  "subject_candidate_sha256": "1a72eb3a94ce7ea5e32761ea0bd5fd87503a0340090d2208ee960edd2895634e",
+  "command": [
+    "python3",
+    "-m",
+    "unittest",
+    "tests.test_cli_merge_integration.MergeIntegrationEpochTests.test_each_bounded_epoch_control_is_load_bearing"
+  ],
+  "returncode": 0,
+  "tests_run": 1,
+  "suite_tail": "OK"
+}

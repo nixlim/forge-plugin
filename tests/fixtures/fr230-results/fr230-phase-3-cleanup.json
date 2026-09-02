@@ -1,0 +1,16 @@
+{
+  "schema": "fr230-test-result/1",
+  "result_id": "fr230-phase-3-cleanup",
+  "slot": "cleanup",
+  "status": "PASS",
+  "subject_candidate_sha256": "1a72eb3a94ce7ea5e32761ea0bd5fd87503a0340090d2208ee960edd2895634e",
+  "command": [
+    "python3",
+    "-m",
+    "unittest",
+    "tests.test_cli_merge_integration.MergeIntegrationEpochTests.test_full_epoch_push_and_nonforce_cleanup"
+  ],
+  "returncode": 0,
+  "tests_run": 1,
+  "suite_tail": "OK"
+}

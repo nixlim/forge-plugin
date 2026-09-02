@@ -1,0 +1,109 @@
+{
+  "schema": "fr230-phase3-4-manifest/2",
+  "generation": 1,
+  "phase": "phase-3",
+  "previous_manifest_sha256": null,
+  "artifacts": [
+    {
+      "path": ".forge/evals/tasks/fr223-hook-argv-matcher-v2.md",
+      "sha256": "32b9d5d3559b310505d6c429bff7d867807df9fd2f2523acb25039d3038e318b"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-hook-argv-matcher-v2.result",
+      "sha256": "09a6c264d3c4abdcb411b1659573ef239dad5df6f71760e7f44d8b36d73bf387"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-reason-code-enum-v2.md",
+      "sha256": "286b220b59dfd8106503bf28e609ac3b77552e004d86b72761a40ea26d7aff31"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-reason-code-enum-v2.result",
+      "sha256": "09a6c264d3c4abdcb411b1659573ef239dad5df6f71760e7f44d8b36d73bf387"
+    },
+    {
+      "path": "system/fr223/hook-argv-cases-v2.json",
+      "sha256": "310bfda5efdbfe3c99a1d189c8ff336782f90a79af741c4098ada4ae579bde27"
+    },
+    {
+      "path": "system/fr223/reason-codes-v2.json",
+      "sha256": "6e33be25226111896dc6d6cf621935b414a8a5e1a509adb4ea4daa347c239a28"
+    }
+  ],
+  "v1_artifacts": [
+    {
+      "path": ".forge/evals/tasks/fr223-phase0-v1.manifest.json",
+      "sha256": "7741b877b1ed45047d680a077c5303b2314cd1f3ef0339821bd7105ac9acd5c9"
+    },
+    {
+      "path": "system/fr223/hook-argv-cases-v1.json",
+      "sha256": "1850257d7899a4c7199e9bcbe12ffd39b0905bb44e49d16348c10e438ea05db7"
+    },
+    {
+      "path": "system/fr223/reason-codes-v1.json",
+      "sha256": "3646227d8437789e0407117dc09e00d6116edccb63e89354c746d4b9059c264b"
+    }
+  ],
+  "subjects": {
+    "production": [
+      "scripts/forge/cli.py",
+      "scripts/forge/commit-guard.sh"
+    ],
+    "tests": [
+      "tests/test_cli_merge_integration.py",
+      "tests/test_cli_merge_lifecycle.py",
+      "tests/test_fr223_v2_hook.py",
+      "tests/test_fr230_phase3_manifest.py",
+      "tests/test_revision9_reason_codes.py"
+    ]
+  },
+  "result_bindings": [
+    {
+      "slot": "activated-denial",
+      "status": "pending-phase-4",
+      "result_id": null,
+      "result_sha256": null
+    },
+    {
+      "slot": "cleanup",
+      "status": "PASS",
+      "result_id": "fr230-phase-3-cleanup",
+      "result_sha256": "1ad52f4ca699ee6a68c9dca11388ac87721e92713982c7e90e42e94da196e80a"
+    },
+    {
+      "slot": "merge-last-line",
+      "status": "PASS",
+      "result_id": "fr230-phase-3-merge-last-line",
+      "result_sha256": "94398ee84077a2536805f4c04287a76d202236c02cd86997f1acb77d20282b60"
+    },
+    {
+      "slot": "merge-transition",
+      "status": "PASS",
+      "result_id": "fr230-phase-3-merge-transition",
+      "result_sha256": "5f2cf9e76da2929186c99a3c22cd201f153da33efc017a1753d4ed4b40dffce3"
+    },
+    {
+      "slot": "push",
+      "status": "pending-phase-4",
+      "result_id": null,
+      "result_sha256": null
+    },
+    {
+      "slot": "push-last-line",
+      "status": "pending-phase-4",
+      "result_id": null,
+      "result_sha256": null
+    },
+    {
+      "slot": "re-verification-matrix",
+      "status": "PASS",
+      "result_id": "fr230-phase-3-re-verification-matrix",
+      "result_sha256": "0b508b699390bb3f68df41be9f7ed653f9727f6721f9ecb69b510146dd75c9e4"
+    },
+    {
+      "slot": "recovery",
+      "status": "PASS",
+      "result_id": "fr230-phase-3-recovery",
+      "result_sha256": "067b5a740168012ca415d85b2c92bf6afc8880966c258a3097ec9ca98005282a"
+    }
+  ]
+}
