@@ -32,6 +32,13 @@ Release dates are the UTC dates of the release commits.
 
 ### Added
 
+- Phase-3 slice 5: the dormant bounded-epoch merge finalize, recovery, cleanup,
+  fenced gate execution, and Revision-12 composite bootstrap/run-scope proof
+  engine, including one fenced fetch/name-status/full-patch process group,
+  digest-streamed unbounded patch stdout, bound and unbound `/2` sidecars,
+  reservation-held fence classification, loud conflict-recovery flags,
+  observation-proven rebase recovery, contamination-safe conflict continuation,
+  resumable scope sidecars, final-mode parking, push retry, and remote-tip carry.
 - Spec revision 11: normative authority for the landed coordination fixes
   (replay history admission, operator tombstones, enumeration isolation, ingest
   evidence capture, typed readmission), the bounded receipts-ledger gap repair,

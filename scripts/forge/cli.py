@@ -8,6 +8,8 @@ access, subprocess execution, and argument parsing happen from ``main``.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import contextlib
 import copy
 import dataclasses
@@ -67,7 +69,7 @@ class ReasonCode(str, Enum):
 
 
 class V2ReasonCode(str, Enum):
-    """The complete additive 53-member ``forge-cli/2`` reason union."""
+    """The complete additive 54-member ``forge-cli/2`` reason union."""
 
     AMBIGUOUS_TARGET = "ambiguous-target"
     APPROVAL_REQUIRED = "approval-required"
@@ -116,6 +118,7 @@ class V2ReasonCode(str, Enum):
     REVIEW_VERDICT_INVALID = "review-verdict-invalid"
     RUN_TASK_BINDING_INVALID = "run-task-binding-invalid"
     RUN_TASK_BINDING_REQUIRED = "run-task-binding-required"
+    RUN_SCOPE_EXCEEDED = "run-scope-exceeded"
     SKIP_NOT_PERMITTED = "skip-not-permitted"
     STATE_PRECONDITION = "state-precondition"
     TOKEN_CONSUMED = "token-consumed"
@@ -293,6 +296,7 @@ ZERO_DIGEST = "0" * 64
 COMMON_LOCK_TIMEOUT_SECONDS = 300.0
 COMMON_LOCK_POLL_SECONDS = 0.05
 COMMON_LOCK_RECORD_CAP_BYTES = 16384
+MERGE_SCOPE_BINDING_CAP_BYTES = 16384
 COMMON_LOCK_INTENT_NAME = "agent-rebase.lock.intent"
 COMMON_LOCK_DIRECTORY_NAME = "agent-rebase.lockdir"
 COMMON_LOCK_OWNER_NAME = "owner.json"
@@ -392,6 +396,7 @@ _REQUIRED_COMMON_LOCK_CONTROLS = frozenset(
         "single-deadline",
         "three-topology-recovery",
         "immutable-recovery-reservation",
+        "reservation-held-lifecycle-classification",
         "death-proof-revalidation",
         "reverse-release-order",
         "release-identity-revalidation",
@@ -454,6 +459,26 @@ _REQUIRED_MERGE_LIFECYCLE_CONTROLS = frozenset(
     }
 )
 MERGE_LIFECYCLE_CONTROLS = _REQUIRED_MERGE_LIFECYCLE_CONTROLS
+_REQUIRED_MERGE_INTEGRATION_CONTROLS = frozenset(
+    {
+        "bounded-epoch-budget",
+        "composite-bootstrap-streaming",
+        "conflict-continue-contract",
+        "final-intended-head-mode",
+        "loud-recover-flags",
+        "nonmovement-counter-reset",
+        "sealed-gate-plan",
+        "post-fetch-scope-proof",
+        "observation-first-recovery",
+        "nonforce-cleanup",
+        "push-retry",
+        "rebase-result-proof",
+        "scope-release-clean-status",
+        "scope-sidecar-recovery",
+        "successor-ancestry-observation",
+    }
+)
+MERGE_INTEGRATION_CONTROLS = _REQUIRED_MERGE_INTEGRATION_CONTROLS
 # Slice 8 is the only candidate authorized to flip this switch.  Keeping the
 # grammar construction immediately adjacent to the flag makes dormancy a
 # mechanically testable property rather than a deployment convention.
@@ -504,12 +529,31 @@ _WORKTREE_LOCK_STATE: dict[tuple[str, int], tuple[int, int]] = {}
 
 @contextlib.contextmanager
 def _exclusive_descriptor_lock(
-    lock_key: str, opener: Callable[[], int]
+    lock_key: str,
+    opener: Callable[[], int],
+    *,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> Iterable[None]:
     """Cross-process exclusive lock with safe same-thread re-entry."""
     with _WORKTREE_LOCKS_GUARD:
         local_lock = _WORKTREE_LOCKS.setdefault(lock_key, threading.RLock())
-    with local_lock:
+
+    def wait_for_deadline(stage: str) -> None:
+        if deadline is None:
+            return
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise TimeoutError(f"{stage} exhausted the shared deadline")
+        sleeper(min(COMMON_LOCK_POLL_SECONDS, remaining))
+
+    if deadline is None:
+        local_lock.acquire()
+    else:
+        while not local_lock.acquire(blocking=False):
+            wait_for_deadline("process-local descriptor lock acquisition")
+    try:
         state_key = (lock_key, threading.get_ident())
         with _WORKTREE_LOCKS_GUARD:
             held = _WORKTREE_LOCK_STATE.get(state_key)
@@ -525,7 +569,22 @@ def _exclusive_descriptor_lock(
                 if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
                     raise OSError("lock path is not an owner-controlled regular file")
                 os.fchmod(descriptor, 0o600)
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                if deadline is None:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX)
+                else:
+                    while True:
+                        try:
+                            fcntl.flock(
+                                descriptor,
+                                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                            )
+                            break
+                        except OSError as exc:
+                            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                                raise
+                            wait_for_deadline(
+                                "cross-process descriptor lock acquisition"
+                            )
             except BaseException:
                 os.close(descriptor)
                 raise
@@ -550,6 +609,8 @@ def _exclusive_descriptor_lock(
                     fcntl.flock(current_descriptor, fcntl.LOCK_UN)
                 finally:
                     os.close(current_descriptor)
+    finally:
+        local_lock.release()
 
 # Test seams.  Tests may replace these module globals without touching the real
 # plugin controls or the live repository.
@@ -885,7 +946,7 @@ def reduce_merge_event(
     else:
         _batch, builders, _journal = _coordination_modules()
         try:
-            delta = builders._merge_payload_delta(event, previous)
+            delta = _merge_payload_delta(event, previous, builders=builders)
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("merge transition lacks an explicit state delta")
         assert isinstance(delta, dict)
@@ -918,6 +979,2934 @@ def reduce_merge_event(
             parsed_at + dt.timedelta(seconds=INACTIVE_SECONDS)
         ).isoformat().replace("+00:00", "Z")
     return state
+
+
+def _merge_gate_plan_valid(
+    value: object,
+    *,
+    generation_digest: str | None = None,
+    policy_digest: str | None = None,
+) -> bool:
+    """Validate Revision-10's exact sealed/unsealed epoch plan grammar."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "status",
+        "generation_digest",
+        "policy_digest",
+        "suite",
+        "suite_digest",
+        "cursor",
+        "seal_event_digest",
+    }:
+        return False
+    if value.get("status") == "unsealed":
+        return all(value.get(name) is None for name in set(value) - {"status"})
+    if value.get("status") != "sealed":
+        return False
+    suite = value.get("suite")
+    cursor = value.get("cursor")
+    if (
+        not isinstance(value.get("generation_digest"), str)
+        or SHA256_RE.fullmatch(str(value["generation_digest"])) is None
+        or not isinstance(value.get("policy_digest"), str)
+        or SHA256_RE.fullmatch(str(value["policy_digest"])) is None
+        or not isinstance(suite, list)
+        or type(cursor) is not int
+        or int(cursor) < 0
+        or int(cursor) > len(suite)
+        or not isinstance(value.get("suite_digest"), str)
+        or value.get("suite_digest") != sha256_bytes(canonical_bytes(suite))
+        or not isinstance(value.get("seal_event_digest"), str)
+        or SHA256_RE.fullmatch(str(value["seal_event_digest"])) is None
+        or (
+            generation_digest is not None
+            and value.get("generation_digest") != generation_digest
+        )
+        or (
+            policy_digest is not None
+            and value.get("policy_digest") != policy_digest
+        )
+    ):
+        return False
+    for member in suite:
+        if (
+            not isinstance(member, dict)
+            or set(member) != {"kind", "id"}
+            or member.get("kind") not in {"gate", "scoped-mutation"}
+            or not isinstance(member.get("id"), str)
+            or not member["id"]
+            or (
+                member.get("kind") == "scoped-mutation"
+                and member.get("id") != "scoped-mutation"
+            )
+        ):
+            return False
+    return True
+
+
+def _merge_epoch_valid(state: Mapping[str, Any]) -> bool:
+    integration = state.get("integration")
+    if not isinstance(integration, Mapping):
+        return False
+    epoch = integration.get("epoch")
+    if epoch is None:
+        return True
+    candidate = state.get("candidate")
+    policy = state.get("policy_source")
+    if (
+        not isinstance(epoch, Mapping)
+        or set(epoch)
+        != {
+            "operation_nonce",
+            "generation_digest",
+            "intent_digest",
+            "started_at",
+            "gate_plan",
+        }
+        or not _valid_nonce(epoch.get("operation_nonce"))
+        or not isinstance(epoch.get("generation_digest"), str)
+        or SHA256_RE.fullmatch(str(epoch["generation_digest"])) is None
+        or not isinstance(epoch.get("intent_digest"), str)
+        or SHA256_RE.fullmatch(str(epoch["intent_digest"])) is None
+        or not _valid_utc_second(epoch.get("started_at"))
+        or not isinstance(candidate, Mapping)
+        or epoch.get("generation_digest") != candidate.get("generation_digest")
+        or not isinstance(policy, Mapping)
+        or not _merge_gate_plan_valid(
+            epoch.get("gate_plan"),
+            generation_digest=str(candidate.get("generation_digest", "")),
+            policy_digest=(
+                str(policy.get("digest", ""))
+                if isinstance(epoch.get("gate_plan"), Mapping)
+                and epoch["gate_plan"].get("status") == "sealed"
+                else None
+            ),
+        )
+    ):
+        return False
+    return True
+
+
+def _merge_payload_delta(
+    event: Mapping[str, Any],
+    previous: Mapping[str, Any] | None,
+    *,
+    builders: Any,
+) -> dict[str, Any]:
+    """Reduce the Revision-10 additions without widening legacy payloads."""
+
+    payload = event.get("payload")
+    event_name = event.get("event")
+    if not isinstance(payload, Mapping):
+        raise ValueError("merge transition payload is malformed")
+    generation_digest = event.get("generation_digest")
+    if (
+        event_name == "fetch_intent"
+        and generation_digest is None
+        and "scope_request" in payload
+    ):
+        expected = {
+            "repository",
+            "worktree",
+            "branch",
+            "target",
+            "pre_fetch_head",
+            "policy_digest",
+            "operation_nonce",
+            "attempt",
+            "scope_request",
+        }
+        if previous is None or set(payload) != expected:
+            raise ValueError("merge bootstrap scope intent is malformed")
+        integration = copy.deepcopy(previous.get("integration"))
+        if not isinstance(integration, dict):
+            raise ValueError("merge fetch projection is malformed")
+        integration["intent"] = {"operation": "fetch", **copy.deepcopy(dict(payload))}
+        return {"integration": integration}
+
+    extra_result_members = {"scope_fetch_binding", "scope_proof"}
+    if event_name == "generation_carried_forward":
+        allowed = {
+            "delta",
+            "prior_generation_digest",
+            "successor_generation_digest",
+            "equality_proof",
+        }
+        if "source_event_digest" in payload or "journal_batch" in payload:
+            allowed.update({"source_event_digest", "journal_batch"})
+        if set(payload) != allowed or not isinstance(payload.get("delta"), Mapping):
+            raise ValueError("merge carry-forward payload is malformed")
+        projected = copy.deepcopy(dict(payload["delta"]))
+    elif event_name == "fetch_result" and extra_result_members <= set(payload):
+        allowed = {"delta", *extra_result_members}
+        if "source_event_digest" in payload or "journal_batch" in payload:
+            allowed.update({"source_event_digest", "journal_batch"})
+        if set(payload) != allowed or not isinstance(payload.get("delta"), Mapping):
+            raise ValueError("merge scope fetch result payload is malformed")
+        projected = copy.deepcopy(dict(payload["delta"]))
+    elif event_name in {"epoch_intent", "condition_recorded"} and isinstance(
+        payload.get("delta"), Mapping
+    ):
+        allowed = {"delta"}
+        if event_name == "condition_recorded" and "recovery_proof" in payload:
+            allowed.add("recovery_proof")
+        if "source_event_digest" in payload or "journal_batch" in payload:
+            allowed.update({"source_event_digest", "journal_batch"})
+        if set(payload) != allowed or not isinstance(payload.get("delta"), Mapping):
+            raise ValueError("merge integration intent payload is malformed")
+        projected = copy.deepcopy(dict(payload["delta"]))
+    else:
+        projected = builders._merge_payload_delta(dict(event), previous)
+
+    integration = projected.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, dict) else None
+    if isinstance(epoch, dict):
+        if event_name == "epoch_intent":
+            if epoch.get("intent_digest") is not None:
+                raise ValueError("merge epoch intent digest slot is not null")
+            epoch["intent_digest"] = event.get("digest")
+        plan = epoch.get("gate_plan")
+        if (
+            isinstance(plan, dict)
+            and plan.get("status") == "sealed"
+            and plan.get("seal_event_digest") is None
+        ):
+            if event_name not in {
+                "epoch_intent",
+                "fetch_result",
+                "rebase_result",
+                "generation_carried_forward",
+            }:
+                raise ValueError("merge gate plan has an unauthorized sealer")
+            plan["seal_event_digest"] = event.get("digest")
+    return projected
+
+
+def _merge_bootstrap_classification_pending(
+    state: Mapping[str, Any] | None,
+) -> bool:
+    """Recognize Revision-12's sole complete-but-unclassified generation.
+
+    The shared Revision-9 builder couples a non-null candidate to a populated
+    tier.  Revision 12 deliberately separates those facts across the
+    successful ``fetch_result`` and the later ``generation_refreshed`` event,
+    so this predicate is kept deliberately narrow before the compatibility
+    projection supplies the legacy validator's in-memory tier shape.
+    """
+
+    if not isinstance(state, Mapping):
+        return False
+    candidate = state.get("candidate")
+    policy_source = state.get("policy_source")
+    worktree = state.get("worktree")
+    claim = worktree.get("claim") if isinstance(worktree, Mapping) else None
+    review = state.get("review")
+    integration = state.get("integration")
+    intent = integration.get("intent") if isinstance(integration, Mapping) else None
+    return bool(
+        state.get("state") in {"classifying", "aborted"}
+        and isinstance(candidate, Mapping)
+        and isinstance(policy_source, Mapping)
+        and policy_source.get("commit") == candidate.get("policy_commit")
+        and policy_source.get("digest") == candidate.get("policy_digest")
+        and isinstance(claim, Mapping)
+        and (
+            state.get("state") == "classifying"
+            and claim.get("status") in {"owned", "releasing", "released"}
+            or state.get("state") == "aborted"
+            and claim.get("status") == "released"
+        )
+        and state.get("tier") is None
+        and state.get("steps") == {}
+        and (
+            review == {}
+            or isinstance(review, Mapping)
+            and set(review) == {"iteration"}
+            and type(review.get("iteration")) is int
+            and 0 <= int(review["iteration"]) <= 8
+        )
+        and state.get("approval") == {}
+        and state.get("authorization") == {}
+        and isinstance(integration, Mapping)
+        and integration.get("condition") == "none"
+        and integration.get("primary_condition") == "none"
+        and integration.get("epoch") is None
+        and integration.get("observed") is None
+        and integration.get("pre_rebase") is None
+        and integration.get("conflict") is None
+        and integration.get("push") is None
+        and isinstance(intent, Mapping)
+        and set(intent)
+        == {
+            "operation",
+            "operation_nonce",
+            "attempt",
+            "result",
+            "resolved_tip",
+        }
+        and intent.get("operation") == "fetch-result"
+        and _valid_nonce(intent.get("operation_nonce"))
+        and _valid_positive_int(intent.get("attempt"))
+        and intent.get("result") == "success"
+        and COMMIT_RE.fullmatch(str(intent.get("resolved_tip", ""))) is not None
+        and intent.get("resolved_tip") == candidate.get("remote_tip")
+    )
+
+
+def _merge_revision9_compatibility_view(
+    event: Mapping[str, Any] | None,
+    state: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Project only Revision-10 additive members away for the shared validator."""
+
+    classification_pending = _merge_bootstrap_classification_pending(state)
+    compat_state = copy.deepcopy(dict(state)) if isinstance(state, Mapping) else None
+    if compat_state is not None:
+        if classification_pending:
+            # Validator-only projection.  This value is never durable and is
+            # intentionally not the result of risk classification.
+            if compat_state.get("state") == "classifying":
+                compat_state["state"] = "verifying"
+            compat_state["tier"] = {"control": False, "categories": []}
+        steps = compat_state.get("steps")
+        if isinstance(steps, dict):
+            # Revision 10 gives scoped mutation its own sealed-plan position;
+            # Revision 9 represented the same proof only inside Gate 1.
+            steps.pop("scoped-mutation", None)
+        integration = compat_state.get("integration")
+        if isinstance(integration, dict):
+            epoch = integration.get("epoch")
+            if isinstance(epoch, dict):
+                epoch.pop("gate_plan", None)
+            intent = integration.get("intent")
+            if isinstance(intent, dict):
+                intent.pop("scope_request", None)
+    compat_event = copy.deepcopy(dict(event)) if isinstance(event, Mapping) else None
+    if compat_event is not None and isinstance(compat_event.get("payload"), dict):
+        payload = compat_event["payload"]
+        if compat_event.get("event") == "fetch_intent":
+            payload.pop("scope_request", None)
+        if compat_event.get("event") == "fetch_result":
+            payload.pop("scope_fetch_binding", None)
+            payload.pop("scope_proof", None)
+        if compat_event.get("event") == "generation_carried_forward":
+            payload.pop("prior_generation_digest", None)
+            payload.pop("successor_generation_digest", None)
+            payload.pop("equality_proof", None)
+        if compat_event.get("event") == "condition_recorded":
+            payload.pop("recovery_proof", None)
+        if (
+            classification_pending
+            and compat_event.get("event") == "ownership_release_intent"
+            and payload.get("source_state") == "classifying"
+        ):
+            payload["source_state"] = "verifying"
+        delta = payload.get("delta")
+        if (
+            classification_pending
+            and compat_event.get("event") == "fetch_result"
+            and isinstance(delta, dict)
+        ):
+            # The successful fetch introduces the candidate while the durable
+            # tier remains null.  Mirror only the compatibility state's
+            # validator-only legacy shape in the copied event delta.
+            delta["state"] = "verifying"
+            delta["tier"] = {"control": False, "categories": []}
+        if isinstance(delta, dict) and isinstance(delta.get("steps"), dict):
+            delta["steps"].pop("scoped-mutation", None)
+        if isinstance(delta, dict) and isinstance(delta.get("integration"), dict):
+            epoch = delta["integration"].get("epoch")
+            if isinstance(epoch, dict):
+                epoch.pop("gate_plan", None)
+            intent = delta["integration"].get("intent")
+            if isinstance(intent, dict):
+                intent.pop("scope_request", None)
+    return compat_event, compat_state
+
+
+def _merge_state_shape_valid(
+    builders: Any, state: Mapping[str, Any], chain_id: str
+) -> bool:
+    if not _merge_epoch_valid(state):
+        return False
+    _event, compat = _merge_revision9_compatibility_view(None, state)
+    return bool(
+        compat is not None and builders._state_shape_valid(compat, chain_id, "merge")
+    )
+
+
+def _merge_ingest_state_shape_valid(
+    builders: Any, state: Mapping[str, Any], chain_id: str
+) -> bool:
+    """Accept immutable Revision-9 captures without widening live replay."""
+
+    return bool(
+        _merge_state_shape_valid(builders, state, chain_id)
+        or builders._state_shape_valid(state, chain_id, "merge")
+    )
+
+
+def _merge_ingest_transition_valid(
+    builders: Any,
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+    *,
+    context: MutableMapping[str, Any],
+) -> bool:
+    """Keep captured Revision-9 epochs on their immutable grammar."""
+
+    integration = current.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    if isinstance(epoch, Mapping) and "gate_plan" not in epoch:
+        return bool(
+            builders._merge_transition_valid(
+                event, prior, current, context=context
+            )
+        )
+    return _merge_transition_valid(
+        builders, event, prior, current, context=context
+    )
+
+
+def _merge_plan_position_fact(
+    prior: Mapping[str, Any], current: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    prior_steps = prior.get("steps")
+    current_steps = current.get("steps")
+    if not isinstance(prior_steps, Mapping) or not isinstance(current_steps, Mapping):
+        return None
+    for step_id, current_value in current_steps.items():
+        prior_value = prior_steps.get(step_id)
+        if current_value == prior_value:
+            continue
+        if isinstance(current_value, list) and current_value:
+            fact = current_value[-1]
+            if isinstance(fact, Mapping) and isinstance(
+                fact.get("gate_plan_position"), Mapping
+            ):
+                return fact
+    return None
+
+
+def _merge_carried_gate_steps(
+    steps: object,
+    *,
+    prior_generation_digest: str,
+    successor_generation_digest: str,
+) -> dict[str, Any]:
+    """Build a compatibility projection without rewriting durable gate facts.
+
+    FR-234 retains the predecessor records byte-for-byte.  The shared
+    Revision-9 validator predates that rule and expects current-generation
+    mechanical facts while it validates the next epoch, so this helper is
+    used only on an in-memory compatibility copy.  Fresh successor facts may
+    already be present later in a run list and are left unchanged.
+    """
+
+    if not isinstance(steps, Mapping):
+        raise ValueError("merge carried gate steps are malformed")
+    carried = copy.deepcopy(dict(steps))
+
+    def rebind(value: object) -> None:
+        if isinstance(value, dict):
+            if "generation_digest" in value:
+                if value["generation_digest"] == prior_generation_digest:
+                    value["generation_digest"] = successor_generation_digest
+                elif value["generation_digest"] != successor_generation_digest:
+                    raise ValueError("merge carried gate fact is not predecessor-bound")
+            for member in value.values():
+                rebind(member)
+        elif isinstance(value, list):
+            for member in value:
+                rebind(member)
+
+    rebind(carried)
+    return carried
+
+
+_MERGE_REMOTE_ONLY_IDENTITY_FIELDS = (
+    "remote",
+    "destination_ref",
+    "candidate_head",
+    "diff_sha256",
+    "policy_commit",
+    "policy_digest",
+    "worktree_identity",
+)
+
+
+def _merge_remote_only_equality_proof(
+    candidate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return DM-014's explicit equality witness for a remote-only successor."""
+
+    return {
+        name: copy.deepcopy(candidate.get(name))
+        for name in _MERGE_REMOTE_ONLY_IDENTITY_FIELDS
+    }
+
+
+def _merge_carry_payload_valid(
+    event: Mapping[str, Any],
+    prior_candidate: Mapping[str, Any],
+    carried_candidate: Mapping[str, Any],
+) -> bool:
+    payload = event.get("payload")
+    required = {
+        "delta",
+        "prior_generation_digest",
+        "successor_generation_digest",
+        "equality_proof",
+    }
+    if not isinstance(payload, Mapping):
+        return False
+    members = frozenset(payload)
+    if members not in {
+        frozenset(required),
+        frozenset({*required, "source_event_digest", "journal_batch"}),
+    }:
+        return False
+    proof = payload.get("equality_proof")
+    expected = _merge_remote_only_equality_proof(prior_candidate)
+    return bool(
+        payload.get("prior_generation_digest")
+        == prior_candidate.get("generation_digest")
+        and payload.get("successor_generation_digest")
+        == carried_candidate.get("generation_digest")
+        and proof == expected
+        and proof == _merge_remote_only_equality_proof(carried_candidate)
+    )
+
+
+def _merge_plan_transition_valid(
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+) -> bool:
+    if prior is None:
+        return current.get("integration", {}).get("epoch") is None
+    prior_integration = prior.get("integration")
+    current_integration = current.get("integration")
+    if not isinstance(prior_integration, Mapping) or not isinstance(
+        current_integration, Mapping
+    ):
+        return False
+    before = prior_integration.get("epoch")
+    after = current_integration.get("epoch")
+    event_name = event.get("event")
+    if event_name == "epoch_intent":
+        if not isinstance(after, Mapping) or after == before:
+            return False
+        plan = after.get("gate_plan")
+        normal = (
+            prior.get("state") == "authorized"
+            and current.get("state") == "rebasing"
+            and isinstance(plan, Mapping)
+            and plan.get("status") == "unsealed"
+        )
+        retry = (
+            prior.get("state") == "reverification_failed"
+            and current.get("state") == "reverifying"
+            and isinstance(plan, Mapping)
+            and plan.get("status") == "sealed"
+            and plan.get("seal_event_digest") == event.get("digest")
+        )
+        return bool(
+            (normal or retry)
+            and after.get("intent_digest") == event.get("digest")
+        )
+    if before is None:
+        return after is None
+    if after is None:
+        return event_name in {
+            "generation_refreshed",
+            "generation_carried_forward",
+            "fetch_result",
+            "push_intent",
+            "push_observed",
+            "rebase_result",
+            "reverification_result",
+            "condition_recorded",
+            "ownership_release_intent",
+            "aborted",
+            "closed",
+        }
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+        return False
+    identity_changed = any(
+        before.get(name) != after.get(name)
+        for name in ("operation_nonce", "generation_digest", "intent_digest", "started_at")
+    )
+    if identity_changed:
+        successor = bool(
+            event_name in {"rebase_result", "generation_carried_forward"}
+            and before.get("operation_nonce") == after.get("operation_nonce")
+            and before.get("intent_digest") == after.get("intent_digest")
+            and before.get("started_at") == after.get("started_at")
+            and before.get("gate_plan", {}).get("status") == "unsealed"
+            and after.get("gate_plan", {}).get("status") == "sealed"
+        )
+        if not successor:
+            return False
+    before_plan = before.get("gate_plan")
+    after_plan = after.get("gate_plan")
+    if before_plan == after_plan:
+        return True
+    if not isinstance(before_plan, Mapping) or not isinstance(after_plan, Mapping):
+        return False
+    if (
+        before_plan.get("status") == "unsealed"
+        and after_plan.get("status") == "sealed"
+    ):
+        return bool(
+            event_name
+            in {"fetch_result", "rebase_result", "generation_carried_forward"}
+            and after_plan.get("seal_event_digest") == event.get("digest")
+            and after_plan.get("cursor") == 0
+        )
+    if event_name != "gate_recorded":
+        return False
+    immutable = {
+        "status",
+        "generation_digest",
+        "policy_digest",
+        "suite",
+        "suite_digest",
+        "seal_event_digest",
+    }
+    if any(before_plan.get(name) != after_plan.get(name) for name in immutable):
+        return False
+    cursor = before_plan.get("cursor")
+    suite = before_plan.get("suite")
+    if (
+        type(cursor) is not int
+        or not isinstance(suite, list)
+        or cursor >= len(suite)
+        or after_plan.get("cursor") != cursor + 1
+    ):
+        return False
+    fact = _merge_plan_position_fact(prior, current)
+    position = fact.get("gate_plan_position") if isinstance(fact, Mapping) else None
+    selected = suite[cursor]
+    return bool(
+        isinstance(position, Mapping)
+        and set(position)
+        == {"seal_event_digest", "suite_digest", "cursor", "kind", "id"}
+        and position.get("seal_event_digest") == before_plan.get("seal_event_digest")
+        and position.get("suite_digest") == before_plan.get("suite_digest")
+        and position.get("cursor") == cursor
+        and position.get("kind") == selected.get("kind")
+        and position.get("id") == selected.get("id")
+        and fact.get("gate_intent_digest") is not None
+        and SHA256_RE.fullmatch(str(fact["gate_intent_digest"])) is not None
+        and fact.get("inflight_digest") is not None
+        and SHA256_RE.fullmatch(str(fact["inflight_digest"])) is not None
+    )
+
+
+def _validate_merge_scope_proof(
+    value: object,
+    *,
+    state: Mapping[str, Any],
+    binding: Mapping[str, Any],
+    scope_request: Mapping[str, Any],
+) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "run_id",
+        "task_id",
+        "generation_digest",
+        "remote_tip",
+        "candidate_head",
+        "command_template_digest",
+        "command_digest",
+        "environment_digest",
+        "scope_fetch_binding_digest",
+        "output_digest",
+        "task_files",
+        "admitted_scope",
+        "changed_paths",
+        "out_of_scope_paths",
+        "result",
+        "digest",
+    }:
+        return False
+    candidate = state.get("candidate")
+    body = {name: value[name] for name in value if name != "digest"}
+    containment_valid = False
+    if (
+        _valid_sorted_unique_strings(value.get("changed_paths"))
+        and _valid_sorted_unique_strings(value.get("out_of_scope_paths"))
+        and _valid_sorted_unique_strings(value.get("task_files"))
+        and _valid_sorted_unique_strings(value.get("admitted_scope"))
+    ):
+        try:
+            _batch, _builders, journal = _coordination_modules()
+            expected_out_of_scope = [
+                path
+                for path in value["changed_paths"]
+                if not any(
+                    journal.pathspec_contained(path, pattern)
+                    for pattern in value["task_files"]
+                )
+                or not any(
+                    journal.pathspec_contained(path, pattern)
+                    for pattern in value["admitted_scope"]
+                )
+            ]
+            containment_valid = value["out_of_scope_paths"] == expected_out_of_scope
+        except (OSError, RuntimeError, TypeError, ValueError):
+            containment_valid = False
+    return bool(
+        value.get("schema") == "forge-run-scope-proof/1"
+        and isinstance(candidate, Mapping)
+        and value.get("run_id") == scope_request.get("run_id")
+        and value.get("task_id") == scope_request.get("task_id")
+        and value.get("generation_digest") == candidate.get("generation_digest")
+        and value.get("remote_tip") == candidate.get("remote_tip")
+        and value.get("candidate_head") == candidate.get("candidate_head")
+        and value.get("command_template_digest")
+        == scope_request.get("command_template_digest")
+        == binding.get("command_template_digest")
+        and value.get("command_digest") == binding.get("command_digest")
+        and value.get("environment_digest")
+        == scope_request.get("environment_digest")
+        == binding.get("environment_digest")
+        and value.get("scope_fetch_binding_digest") == binding.get("digest")
+        and SHA256_RE.fullmatch(str(value.get("output_digest", ""))) is not None
+        and value.get("output_digest")
+        == binding.get("child_result", {}).get("output_digest")
+        and value.get("task_files") == scope_request.get("task_files")
+        and value.get("admitted_scope") == scope_request.get("admitted_scope")
+        and _valid_sorted_unique_strings(value.get("changed_paths"))
+        and _valid_sorted_unique_strings(value.get("out_of_scope_paths"))
+        and containment_valid
+        and value.get("result")
+        == ("exceeded" if value["out_of_scope_paths"] else "contained")
+        and value.get("digest") == sha256_bytes(canonical_bytes(body))
+    )
+
+
+def _merge_scope_event_binding_valid(
+    binding: Mapping[str, Any],
+    *,
+    prior: Mapping[str, Any],
+    fetch_intent_digest: str,
+    scope_request: Mapping[str, Any] | None,
+) -> bool:
+    """Revalidate a copied Revision-12 sidecar against replay context."""
+
+    retained = binding.get("retained_inflight")
+    if not isinstance(retained, Mapping):
+        return False
+    try:
+        retained_record = {
+            name: copy.deepcopy(retained[name])
+            for name in (
+                "schema",
+                "owner_kind",
+                "chain_id",
+                "operation",
+                "host",
+                "pid",
+                "pgid",
+                "started_at",
+                "intent_digest",
+                "nonce",
+            )
+        }
+        fence = PublishedLockRecord(
+            path=str(retained["path"]),
+            device=int(retained["device"]),
+            inode=int(retained["inode"]),
+            digest=str(retained["inflight_digest"]),
+            record=retained_record,
+            mode=0o600,
+            links=1,
+        )
+        validator = _merge_scope_binding_validator(
+            prior,
+            fetch_intent_digest=fetch_intent_digest,
+            scope_request=scope_request,
+            fence=fence,
+        )
+        validator(dict(binding))
+    except (KeyError, OSError, TypeError, ValueError, Refusal):
+        return False
+    return True
+
+
+def _merge_scope_transition_valid(
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+) -> bool:
+    """Authenticate Revision-10 scope additions before legacy projection."""
+
+    if prior is None:
+        return True
+    event_name = event.get("event")
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return False
+    if event_name == "fetch_intent":
+        if event.get("generation_digest") is None:
+            if "scope_request" not in payload:
+                # Pre-Revision-10 fixture/events remain replayable; every
+                # newly emitted bootstrap intent includes the additive slot.
+                return True
+            scope_request = payload.get("scope_request")
+        else:
+            delta = payload.get("delta")
+            integration = (
+                delta.get("integration") if isinstance(delta, Mapping) else None
+            )
+            intent = (
+                integration.get("intent")
+                if isinstance(integration, Mapping)
+                else None
+            )
+            scope_request = (
+                intent.get("scope_request")
+                if isinstance(intent, Mapping)
+                else None
+            )
+        if scope_request is None and prior.get("run_binding") is None:
+            # Legacy fixtures remain replayable while all newly produced
+            # bootstrap intents use the Revision-10 exact member.
+            return True
+        try:
+            _validate_merge_scope_request(scope_request, state=current)
+        except (KeyError, TypeError, ValueError):
+            return False
+        return True
+    if event_name != "fetch_result":
+        return True
+    has_binding = "scope_fetch_binding" in payload
+    has_proof = "scope_proof" in payload
+    if not has_binding and not has_proof:
+        return True
+    if has_binding != has_proof:
+        return False
+    scope_request = prior.get("integration", {}).get("intent", {}).get(
+        "scope_request"
+    )
+    sidecar = payload.get("scope_fetch_binding")
+    proof = payload.get("scope_proof")
+    if sidecar is None:
+        return proof is None and (
+            current.get("candidate") is None
+            or current.get("candidate") == prior.get("candidate")
+        )
+    try:
+        binding = _validate_merge_scope_fetch_binding(sidecar)
+    except (KeyError, TypeError, ValueError):
+        return False
+    source_intent_digest = str(binding.get("fetch_intent_digest", ""))
+    if SHA256_RE.fullmatch(source_intent_digest) is None:
+        return False
+    if not _merge_scope_event_binding_valid(
+        binding,
+        prior=prior,
+        fetch_intent_digest=source_intent_digest,
+        scope_request=(
+            scope_request if isinstance(scope_request, Mapping) else None
+        ),
+    ):
+        return False
+    candidate = current.get("candidate")
+    if (
+        binding.get("chain_id") != current.get("chain_id")
+        or (
+            isinstance(candidate, Mapping)
+            and (
+                binding.get("candidate_head")
+                != candidate.get("candidate_head")
+                or binding.get("remote_tip") != candidate.get("remote_tip")
+                or binding.get("full_patch_output_digest")
+                != candidate.get("diff_sha256")
+            )
+        )
+    ):
+        return False
+    if scope_request is None:
+        return bool(
+            binding.get("scope_request_digest") is None
+            and binding.get("command_template_digest") is None
+            and binding.get("command_digest") is None
+            and proof is None
+            and isinstance(candidate, Mapping)
+        )
+    if (
+        binding.get("scope_request_digest")
+        != sha256_bytes(canonical_bytes(scope_request))
+        or binding.get("candidate_head")
+        != scope_request.get("command_template", {}).get("candidate_head")
+    ):
+        return False
+    if proof is None:
+        return current.get("candidate") is None
+    return _validate_merge_scope_proof(
+        proof,
+        state=current,
+        binding=binding,
+        scope_request=scope_request,
+    )
+
+
+def _published_recovery_evidence_valid(
+    value: object,
+    *,
+    path: Path,
+    validator: Callable[[Any], dict[str, Any]],
+) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "path",
+        "device",
+        "inode",
+        "digest",
+        "record",
+    }:
+        return False
+    try:
+        record = validator(copy.deepcopy(value.get("record")))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        value.get("path") == str(path)
+        and _valid_nonnegative_int(value.get("device"))
+        and _valid_nonnegative_int(value.get("inode"))
+        and SHA256_RE.fullmatch(str(value.get("digest", ""))) is not None
+        and value.get("digest") == sha256_bytes(canonical_bytes(record))
+    )
+
+
+def _recovery_event_intent(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    payload = event.get("payload")
+    delta = payload.get("delta") if isinstance(payload, Mapping) else None
+    integration = delta.get("integration") if isinstance(delta, Mapping) else None
+    intent = integration.get("intent") if isinstance(integration, Mapping) else None
+    return intent if isinstance(intent, Mapping) else None
+
+
+def _recovery_value_carries_inflight(value: object, digest: str) -> bool:
+    """Find only an explicitly named child-result fence digest."""
+
+    if isinstance(value, Mapping):
+        return value.get("inflight_digest") == digest or any(
+            _recovery_value_carries_inflight(member, digest)
+            for name, member in value.items()
+            if name != "recovery_proof"
+        )
+    if isinstance(value, list):
+        return any(
+            _recovery_value_carries_inflight(member, digest) for member in value
+        )
+    return False
+
+
+def _classify_merge_recovery_lifecycle(
+    state: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]],
+    *,
+    fence_record: Mapping[str, Any],
+    fence_digest: str,
+) -> str | None:
+    """Recompute the closed lifecycle label from authenticated prefix events."""
+
+    operation = fence_record.get("operation")
+    intent_digest = fence_record.get("intent_digest")
+    chain_id = state.get("chain_id")
+    if (
+        operation
+        not in {
+            "fetch",
+            "tip-resolution",
+            "gate",
+            "remote-observation",
+            "rebase",
+            "continue",
+            "abort",
+            "push",
+            "containment",
+            "worktree-remove",
+            "branch-delete",
+        }
+        or not isinstance(intent_digest, str)
+        or SHA256_RE.fullmatch(intent_digest) is None
+        or SHA256_RE.fullmatch(fence_digest) is None
+    ):
+        return None
+    events = [event for event in history if isinstance(event, Mapping)]
+    by_digest = {
+        str(event.get("digest")): event
+        for event in events
+        if SHA256_RE.fullmatch(str(event.get("digest", ""))) is not None
+    }
+    attributed = by_digest.get(intent_digest)
+    prefix = "fetch" if operation in {"fetch", "tip-resolution"} else str(operation)
+    result_names: set[str]
+    intent_valid = False
+
+    if operation in {"fetch", "tip-resolution"}:
+        intent_valid = bool(
+            attributed is not None and attributed.get("event") == "fetch_intent"
+        )
+        result_names = {"fetch_result"}
+        if not intent_valid:
+            return None
+        fetch_results = [
+            event
+            for event in events
+            if event.get("event") == "fetch_result"
+            and event.get("previous_digest") == intent_digest
+        ]
+        raw_fetch_results: list[Mapping[str, Any]] = []
+        for event in events:
+            if event.get("event") != "condition_recorded":
+                continue
+            payload = event.get("payload")
+            delta = payload.get("delta") if isinstance(payload, Mapping) else None
+            integration = (
+                delta.get("integration") if isinstance(delta, Mapping) else None
+            )
+            observation = (
+                integration.get("intent")
+                if isinstance(integration, Mapping)
+                else None
+            )
+            if (
+                isinstance(observation, Mapping)
+                and observation.get("schema") == _EPOCH_FETCH_OBSERVATION_SCHEMA
+                and observation.get("fetch_intent_event_digest") == intent_digest
+                and observation.get("child_result", {}).get("inflight_digest")
+                == fence_digest
+                and _epoch_fetch_observation_record_valid(state, observation)
+            ):
+                raw_fetch_results.append(event)
+        if len(fetch_results) > 1 or len(raw_fetch_results) > 1:
+            return None
+        if raw_fetch_results:
+            return "fetch-result-persisted"
+        if fetch_results:
+            result_event = fetch_results[0]
+            payload = result_event.get("payload")
+            delta = payload.get("delta") if isinstance(payload, Mapping) else None
+            integration = (
+                delta.get("integration") if isinstance(delta, Mapping) else None
+            )
+            result_intent = (
+                integration.get("intent")
+                if isinstance(integration, Mapping)
+                else None
+            )
+            result = (
+                result_intent.get("result")
+                if isinstance(result_intent, Mapping)
+                else None
+            )
+            binding = (
+                payload.get("scope_fetch_binding")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            proof = (
+                payload.get("scope_proof")
+                if isinstance(payload, Mapping)
+                else None
+            )
+            copied_fence = _recovery_value_carries_inflight(
+                binding, fence_digest
+            )
+            failed_result = bool(
+                result_intent is not None
+                and result_intent.get("operation") == "fetch-result"
+                and result == "failed"
+                and proof is None
+                and (
+                    (binding is None and result_event.get("generation_digest") is None)
+                    or (isinstance(binding, Mapping) and copied_fence)
+                )
+            )
+            successful_result = bool(
+                result_intent is not None
+                and result_intent.get("operation") == "fetch-result"
+                and result == "success"
+                and isinstance(binding, Mapping)
+                and copied_fence
+            )
+            if not (failed_result or successful_result):
+                return None
+            return "fetch-result-persisted"
+    elif operation == "gate":
+        result_names = {"gate_recorded"}
+        result_facts = [
+            event
+            for event in events
+            if event.get("event") == "gate_recorded"
+            and _recovery_value_carries_inflight(event.get("payload"), fence_digest)
+            and any(
+                isinstance(member, Mapping)
+                and member.get("gate_intent_digest") == intent_digest
+                for member in (
+                    event.get("payload", {}).get("delta", {}).get("steps", {}).values()
+                    if isinstance(event.get("payload"), Mapping)
+                    and isinstance(event.get("payload", {}).get("delta"), Mapping)
+                    and isinstance(
+                        event.get("payload", {}).get("delta", {}).get("steps"),
+                        Mapping,
+                    )
+                    else ()
+                )
+            )
+        ]
+        if result_facts:
+            intent_valid = True
+        else:
+            integration = state.get("integration")
+            epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+            plan = epoch.get("gate_plan") if isinstance(epoch, Mapping) else None
+            cursor = plan.get("cursor") if isinstance(plan, Mapping) else None
+            suite = plan.get("suite") if isinstance(plan, Mapping) else None
+            if (
+                isinstance(plan, Mapping)
+                and plan.get("status") == "sealed"
+                and _valid_nonnegative_int(cursor)
+                and isinstance(suite, list)
+                and int(cursor) < len(suite)
+                and isinstance(suite[int(cursor)], Mapping)
+            ):
+                authorizer = (
+                    str(plan.get("seal_event_digest"))
+                    if int(cursor) == 0
+                    else next(
+                        (
+                            str(event.get("digest"))
+                            for event in reversed(events)
+                            if event.get("event") == "gate_recorded"
+                        ),
+                        "",
+                    )
+                )
+                member = suite[int(cursor)]
+                try:
+                    intent_valid = merge_gate_intent_digest(
+                        chain_id=str(chain_id),
+                        epoch_intent_digest=str(epoch.get("intent_digest")),
+                        seal_event_digest=str(plan.get("seal_event_digest")),
+                        generation_digest=str(plan.get("generation_digest")),
+                        policy_digest=str(plan.get("policy_digest")),
+                        suite_digest=str(plan.get("suite_digest")),
+                        cursor=int(cursor),
+                        kind=str(member.get("kind")),
+                        gate_id=str(member.get("id")),
+                        authorizing_event_digest=authorizer,
+                    ) == intent_digest
+                except (TypeError, ValueError):
+                    intent_valid = False
+    elif operation == "remote-observation":
+        result_names = {"condition_recorded", "cleanup_result"}
+        for event in events:
+            intent = _recovery_event_intent(event)
+            if not isinstance(intent, Mapping):
+                continue
+            base = {
+                name: copy.deepcopy(intent.get(name))
+                for name in (
+                    "schema",
+                    "transaction",
+                    "chain_id",
+                    "attempt_identity",
+                    "phase",
+                    "push_intent_digest",
+                )
+            }
+            if (
+                base.get("schema") == "forge-remote-observation-intent/1"
+                and base.get("transaction") == "merge"
+                and base.get("chain_id") == chain_id
+                and base.get("phase") in {"final-prepush", "post-push"}
+                and sha256_bytes(canonical_bytes(base)) == intent_digest
+            ):
+                intent_valid = True
+                break
+        if not intent_valid:
+            # Cleanup reuses its authenticated cleanup_intent event digest for
+            # the read-only remote observation; its result is not yet a durable
+            # chain fact and is therefore always classified pending below.
+            intent_valid = bool(
+                attributed is not None and attributed.get("event") == "cleanup_intent"
+            )
+    elif operation in {"rebase", "continue", "abort"}:
+        result_names = {"rebase_intent"}
+        intent = _recovery_event_intent(attributed) if attributed is not None else None
+        intent_valid = bool(
+            attributed is not None
+            and attributed.get("event") in {"rebase_intent", "condition_recorded"}
+            and isinstance(intent, Mapping)
+            and intent.get("operation") == operation
+        )
+    elif operation == "push":
+        result_names = {"condition_recorded"}
+        intent_valid = bool(
+            attributed is not None and attributed.get("event") == "push_intent"
+        )
+    elif operation in {"worktree-remove", "branch-delete"}:
+        result_names = set()
+        intent_valid = bool(
+            attributed is not None and attributed.get("event") == "cleanup_intent"
+        )
+    else:  # containment
+        result_names = {"condition_recorded", "rebase_intent"}
+        intent_valid = bool(
+            attributed is not None
+            and attributed.get("event")
+            in {"condition_recorded", "fetch_result", "cleanup_intent", "rebase_intent"}
+        )
+        if not intent_valid:
+            intent_valid = any(
+                isinstance(_recovery_event_intent(event), Mapping)
+                and sha256_bytes(
+                    canonical_bytes(dict(_recovery_event_intent(event) or {}))
+                )
+                == intent_digest
+                for event in events
+            )
+    if not intent_valid:
+        return None
+
+    results = [
+        event
+        for event in events
+        if event.get("event") in result_names
+        and _recovery_value_carries_inflight(event.get("payload"), fence_digest)
+    ]
+    if len(results) > 1:
+        return None
+    return f"{prefix}-result-persisted" if results else f"{prefix}-intent-pending"
+
+
+def _merge_recovery_proof_transition_valid(
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+    *,
+    history: Sequence[Mapping[str, Any]] = (),
+) -> bool:
+    """Authenticate the durable reservation-held fence-death carrier."""
+
+    payload = event.get("payload")
+    if event.get("event") != "condition_recorded":
+        return not (
+            isinstance(payload, Mapping) and "recovery_proof" in payload
+        )
+    if not isinstance(payload, Mapping) or "recovery_proof" not in payload:
+        return True
+    proof = payload.get("recovery_proof")
+    if (
+        prior is None
+        or not isinstance(proof, Mapping)
+        or set(payload) != {"delta", "recovery_proof"}
+        or payload.get("delta") != {}
+        or set(proof)
+        != {
+            "schema",
+            "chain_id",
+            "reservation",
+            "fence",
+            "lifecycle",
+            "recorded_at",
+            "digest",
+        }
+        or proof.get("schema") != "forge-merge-fence-recovery-proof/1"
+        or proof.get("chain_id") != current.get("chain_id")
+        or proof.get("recorded_at") != event.get("at")
+        or proof.get("digest")
+        != sha256_bytes(
+            canonical_bytes(
+                {name: copy.deepcopy(value) for name, value in proof.items() if name != "digest"}
+            )
+        )
+    ):
+        return False
+    common_dir = Path(str(current.get("worktree", {}).get("common_dir", "")))
+    reservation = proof.get("reservation")
+    fence = proof.get("fence")
+    lifecycle = proof.get("lifecycle")
+    if not (
+        _published_recovery_evidence_valid(
+            reservation,
+            path=common_dir / COMMON_LOCK_RECOVERY_NAME,
+            validator=_validate_recovery_record,
+        )
+        and isinstance(reservation, Mapping)
+        and isinstance(lifecycle, Mapping)
+        and set(lifecycle)
+        == {
+            "operation",
+            "intent_digest",
+            "classification",
+            "state_digest",
+            "tail_digest",
+        }
+        and isinstance(lifecycle.get("classification"), str)
+        and bool(lifecycle.get("classification"))
+        and lifecycle.get("state_digest")
+        == sha256_bytes(canonical_bytes(dict(prior)))
+        and lifecycle.get("tail_digest") == event.get("previous_digest")
+    ):
+        return False
+    reservation_record = reservation.get("record")
+    if not isinstance(reservation_record, Mapping):
+        return False
+    if fence is None:
+        if not (
+            reservation_record.get("recovery_kind") == "fallback-owner"
+            and reservation_record.get("stale_owner_kind") == "merge"
+            and reservation_record.get("stale_owner_chain_id")
+            == current.get("chain_id")
+            and reservation_record.get("stale_owner_inode") is not None
+            and reservation_record.get("stale_owner_digest") is not None
+            and reservation_record.get("owner_dead_at") is not None
+            and lifecycle.get("operation") is None
+            and lifecycle.get("intent_digest") is None
+            and lifecycle.get("classification") == "owner-death-only"
+        ):
+            return False
+        ignored = {"last_event_at", "inactive_after"}
+        return all(
+            prior.get(name) == current.get(name)
+            for name in MERGE_STATE_KEYS - ignored
+        )
+    if not (
+        _published_recovery_evidence_valid(
+            fence,
+            path=common_dir / COMMON_LOCK_INFLIGHT_NAME,
+            validator=_validate_fence_record,
+        )
+        and isinstance(fence, Mapping)
+    ):
+        return False
+    fence_record = fence.get("record")
+    if not isinstance(fence_record, Mapping):
+        return False
+    recovery_kind = reservation_record.get("recovery_kind")
+    if recovery_kind == "fallback-owner-and-fence":
+        recovery_topology_valid = bool(
+            reservation_record.get("stale_owner_kind") == "merge"
+            and reservation_record.get("stale_owner_chain_id")
+            == current.get("chain_id")
+            and reservation_record.get("stale_owner_inode") is not None
+            and reservation_record.get("stale_owner_digest") is not None
+            and reservation_record.get("owner_dead_at") is not None
+        )
+    elif recovery_kind == "flock-held-dead-fence":
+        recovery_topology_valid = all(
+            reservation_record.get(name) is None
+            for name in (
+                "stale_owner_inode",
+                "stale_owner_digest",
+                "stale_owner_host",
+                "stale_owner_pid",
+                "stale_owner_kind",
+                "stale_owner_chain_id",
+                "owner_dead_at",
+            )
+        )
+    else:
+        recovery_topology_valid = False
+    operation = fence_record.get("operation")
+    label_prefix = (
+        "fetch" if operation in {"fetch", "tip-resolution"} else operation
+    )
+    allowed_classifications = (
+        {
+            f"{label_prefix}-intent-pending",
+            f"{label_prefix}-result-persisted",
+        }
+        if isinstance(label_prefix, str)
+        and label_prefix
+        in {
+            "fetch",
+            "gate",
+            "remote-observation",
+            "rebase",
+            "continue",
+            "abort",
+            "push",
+            "containment",
+            "worktree-remove",
+            "branch-delete",
+        }
+        else set()
+    )
+    if (
+        not recovery_topology_valid
+        or lifecycle.get("operation") != fence_record.get("operation")
+        or lifecycle.get("intent_digest") != fence_record.get("intent_digest")
+        or lifecycle.get("classification") not in allowed_classifications
+        or reservation_record.get("inflight_inode") != fence.get("inode")
+        or reservation_record.get("inflight_digest") != fence.get("digest")
+        or reservation_record.get("inflight_host") != fence_record.get("host")
+        or reservation_record.get("inflight_pgid") != fence_record.get("pgid")
+        or reservation_record.get("inflight_owner_kind")
+        != fence_record.get("owner_kind")
+        or reservation_record.get("inflight_chain_id")
+        != fence_record.get("chain_id")
+        or reservation_record.get("group_dead_at") is None
+        or fence_record.get("owner_kind") != "merge"
+        or fence_record.get("chain_id") != current.get("chain_id")
+    ):
+        return False
+    expected_classification = _classify_merge_recovery_lifecycle(
+        prior,
+        history,
+        fence_record=fence_record,
+        fence_digest=str(fence.get("digest")),
+    )
+    if lifecycle.get("classification") != expected_classification:
+        return False
+    for prior_event in history:
+        prior_payload = prior_event.get("payload")
+        prior_proof = (
+            prior_payload.get("recovery_proof")
+            if isinstance(prior_payload, Mapping)
+            else None
+        )
+        if isinstance(prior_proof, Mapping) and (
+            prior_proof.get("reservation") == reservation
+            or (
+                prior_proof.get("fence") is not None
+                and prior_proof.get("fence") == fence
+            )
+        ):
+            return False
+    ignored = {"last_event_at", "inactive_after"}
+    return all(
+        prior.get(name) == current.get(name)
+        for name in MERGE_STATE_KEYS - ignored
+    )
+
+
+def _epoch_fetch_observation_predecessor_valid(
+    event: Mapping[str, Any],
+    current_intent: Mapping[str, Any],
+    prior_intent: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> bool:
+    """Admit direct adjacency or one exact owner-death recovery carrier."""
+
+    intent_digest = current_intent.get("fetch_intent_event_digest")
+    if event.get("previous_digest") == intent_digest:
+        return True
+    bridge = context.get("recovery_proof_bridge")
+    admitted = context.get("fetch_intent")
+    return bool(
+        isinstance(bridge, Mapping)
+        and isinstance(admitted, Mapping)
+        and event.get("previous_digest") == bridge.get("event_digest")
+        and bridge.get("previous_digest") == intent_digest
+        and bridge.get("operation") is None
+        and bridge.get("intent_digest") is None
+        and bridge.get("classification") == "owner-death-only"
+        and admitted.get("digest") == intent_digest
+        and admitted.get("generation_digest") == event.get("generation_digest")
+        and admitted.get("evidence") == prior_intent
+        and admitted.get("admitted_active") is True
+    )
+
+
+def _recovered_absent_rebase_intent_digest(
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    context: Mapping[str, Any],
+) -> str | None:
+    """Authenticate the observation interposed before an absent rebase result."""
+
+    if (
+        event.get("event") != "rebase_result"
+        or prior is None
+        or _merge_rebase_result_classification(prior) != "absent"
+    ):
+        return None
+    prior_integration = prior.get("integration")
+    prior_intent = (
+        prior_integration.get("intent")
+        if isinstance(prior_integration, Mapping)
+        else None
+    )
+    prior_candidate = prior.get("candidate")
+    replayed = context.get("rebase_intent")
+    candidate = context.get("candidate_observation")
+    evidence = candidate.get("evidence") if isinstance(candidate, Mapping) else None
+    if not (
+        isinstance(prior_intent, Mapping)
+        and isinstance(prior_candidate, Mapping)
+        and isinstance(replayed, Mapping)
+        and isinstance(candidate, Mapping)
+        and isinstance(evidence, Mapping)
+        and isinstance(replayed.get("digest"), str)
+        and replayed.get("evidence") == prior_intent
+        and replayed.get("admitted_active") is True
+        and candidate.get("source_intent") == prior_intent
+        and candidate.get("generation_digest") == event.get("generation_digest")
+        and event.get("generation_digest")
+        == prior_candidate.get("generation_digest")
+        and candidate.get("restore_event_digest")
+        == event.get("previous_digest")
+        and candidate.get("evidence_digest") == evidence.get("evidence_digest")
+        and _merge_candidate_observation_evidence_valid(prior, evidence)
+        and evidence.get("source_intent") == prior_intent
+        and evidence.get("verb") == "merge recover"
+        and evidence.get("classify") is False
+        and evidence.get("remote_tip") == prior_candidate.get("remote_tip")
+        and evidence.get("expected_head")
+        == prior_candidate.get("candidate_head")
+    ):
+        return None
+    return str(replayed["digest"])
+
+
+def _merge_transition_valid(
+    builders: Any,
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+    *,
+    context: MutableMapping[str, Any] | None,
+    history: Sequence[Mapping[str, Any]] = (),
+) -> bool:
+    """Compose strict Revision-10 checks over the shared Revision-9 grammar."""
+
+    chain_id = str(event.get("chain_id", ""))
+    if (
+        not _merge_state_shape_valid(builders, current, chain_id)
+        or (prior is not None and not _merge_state_shape_valid(builders, prior, chain_id))
+        or not _merge_plan_transition_valid(event, prior, current)
+        or not _merge_scope_transition_valid(event, prior, current)
+        or not _merge_recovery_proof_transition_valid(
+            event, prior, current, history=history
+        )
+    ):
+        return False
+    compat_event, compat_current = _merge_revision9_compatibility_view(event, current)
+    _unused, compat_prior = _merge_revision9_compatibility_view(None, prior)
+    if compat_event is None or compat_current is None:
+        return False
+    prior_integration = prior.get("integration") if prior is not None else None
+    current_integration = current.get("integration")
+    gate_nonmovement_reset = bool(
+        event.get("event") == "gate_recorded"
+        and prior is not None
+        and prior.get("state") == "reverifying"
+        and current.get("state") == "reverification_failed"
+        and isinstance(prior_integration, Mapping)
+        and isinstance(current_integration, Mapping)
+        and current_integration.get("remote_movement_count") == 0
+        and all(
+            prior_integration.get(name) == current_integration.get(name)
+            for name in set(prior_integration)
+            - {"epoch", "remote_movement_count"}
+        )
+    )
+    if gate_nonmovement_reset and compat_prior is not None:
+        compat_prior_integration = compat_prior.get("integration")
+        compat_current_integration = compat_current.get("integration")
+        if not isinstance(compat_prior_integration, dict) or not isinstance(
+            compat_current_integration, dict
+        ):
+            return False
+        compat_current_integration["remote_movement_count"] = (
+            compat_prior_integration["remote_movement_count"]
+        )
+        compat_gate_payload = compat_event.get("payload")
+        compat_delta = (
+            compat_gate_payload.get("delta")
+            if isinstance(compat_gate_payload, dict)
+            else None
+        )
+        compat_delta_integration = (
+            compat_delta.get("integration")
+            if isinstance(compat_delta, dict)
+            else None
+        )
+        if not isinstance(compat_delta_integration, dict):
+            return False
+        compat_delta_integration["remote_movement_count"] = (
+            compat_prior_integration["remote_movement_count"]
+        )
+    compat_payload = compat_event.get("payload")
+    if isinstance(compat_payload, dict) and isinstance(
+        compat_payload.get("delta"), dict
+    ):
+        delta = compat_payload["delta"]
+        if "integration" in delta and compat_prior is not None:
+            if delta["integration"] == compat_prior.get("integration"):
+                delta.pop("integration")
+        if (
+            event.get("event") == "generation_refreshed"
+            and _merge_bootstrap_classification_pending(prior)
+            and compat_prior is not None
+        ):
+            # Pending is projected to the legacy verifying/tier shape.  Do
+            # not leave validator-only no-op members in the copied delta.
+            for name in ("state", "tier"):
+                if compat_prior.get(name) == compat_current.get(name):
+                    delta.pop(name, None)
+    trial_context = copy.deepcopy(dict(context)) if context is not None else {}
+    current_epoch = current.get("integration", {}).get("epoch")
+    replayed_epoch = trial_context.get("epoch_intent")
+    if (
+        isinstance(current_epoch, Mapping)
+        and isinstance(current_epoch.get("gate_plan"), Mapping)
+        and current_epoch["gate_plan"].get("status") == "sealed"
+        and isinstance(replayed_epoch, dict)
+        and replayed_epoch.get("digest") == current_epoch.get("intent_digest")
+        and current_epoch.get("generation_digest")
+        != replayed_epoch.get("generation_digest")
+    ):
+        # Revision 10 permits its authenticated sealer to bind the successor
+        # generation while retaining the original epoch-event identity.
+        replayed_epoch["generation_digest"] = current_epoch.get(
+            "generation_digest"
+        )
+    if event.get("event") != "generation_carried_forward" and compat_prior is not None:
+        prior_candidate = compat_prior.get("candidate")
+        current_candidate = compat_current.get("candidate")
+        if (
+            isinstance(prior_candidate, Mapping)
+            and isinstance(current_candidate, Mapping)
+            and prior_candidate == current_candidate
+        ):
+            current_digest = str(current_candidate.get("generation_digest", ""))
+            current_head = current_candidate.get("candidate_head")
+            prior_authorization = compat_prior.get("authorization")
+            current_authorization = compat_current.get("authorization")
+            retained_authority = bool(
+                isinstance(prior_authorization, dict)
+                and isinstance(current_authorization, dict)
+                and prior_authorization == current_authorization
+                and prior_authorization.get("candidate_head") == current_head
+                and prior_authorization.get("review_verdict") == "PASS"
+                and SHA256_RE.fullmatch(
+                    str(prior_authorization.get("generation_digest", ""))
+                )
+                is not None
+                and prior_authorization.get("generation_digest") != current_digest
+            )
+            if retained_authority:
+                prior_digest = str(prior_authorization["generation_digest"])
+                for projection in (compat_prior, compat_current):
+                    projection["steps"] = _merge_carried_gate_steps(
+                        projection.get("steps"),
+                        prior_generation_digest=prior_digest,
+                        successor_generation_digest=current_digest,
+                    )
+                    projection["authorization"] = copy.deepcopy(
+                        projection["authorization"]
+                    )
+                    projection["authorization"][
+                        "generation_digest"
+                    ] = current_digest
+                    approval = projection.get("approval")
+                    if (
+                        isinstance(approval, dict)
+                        and approval.get("purpose") in {"gate-4", "remote-churn"}
+                        and approval.get("candidate") == current_head
+                    ):
+                        projection["approval"] = copy.deepcopy(approval)
+                        projection["approval"]["generation_digest"] = current_digest
+                if isinstance(compat_payload, dict):
+                    compat_delta = compat_payload.get("delta")
+                    if isinstance(compat_delta, dict) and "steps" in compat_delta:
+                        compat_delta["steps"] = _merge_carried_gate_steps(
+                            compat_delta["steps"],
+                            prior_generation_digest=prior_digest,
+                            successor_generation_digest=current_digest,
+                        )
+    shared_pass = bool(
+        builders._merge_transition_valid(
+            compat_event,
+            compat_prior,
+            compat_current,
+            context=trial_context,
+        )
+    )
+    recovery_proof_event = bool(
+        event.get("event") == "condition_recorded"
+        and isinstance(event.get("payload"), Mapping)
+        and "recovery_proof" in event["payload"]
+        and _merge_recovery_proof_transition_valid(
+            event, prior, current, history=history
+        )
+    )
+    if not shared_pass and recovery_proof_event:
+        # The shared Revision-9 grammar has no state-neutral condition carrier.
+        # Revision 12 adds exactly this authenticated proof without changing
+        # any materialized lifecycle member.
+        shared_pass = True
+    if shared_pass and recovery_proof_event:
+        recovery_proof = event.get("payload", {}).get("recovery_proof")
+        lifecycle = (
+            recovery_proof.get("lifecycle")
+            if isinstance(recovery_proof, Mapping)
+            else None
+        )
+        if isinstance(lifecycle, Mapping):
+            trial_context["recovery_proof_bridge"] = {
+                "event_digest": event.get("digest"),
+                "previous_digest": event.get("previous_digest"),
+                "operation": lifecycle.get("operation"),
+                "intent_digest": lifecycle.get("intent_digest"),
+                "classification": lifecycle.get("classification"),
+            }
+        if (
+            isinstance(lifecycle, Mapping)
+            and lifecycle.get("classification") == "fetch-intent-pending"
+            and SHA256_RE.fullmatch(str(lifecycle.get("intent_digest", "")))
+            is not None
+        ):
+            trial_context["bootstrap_recovery_proof"] = {
+                "event_digest": event.get("digest"),
+                "fetch_intent_event_digest": lifecycle.get("intent_digest"),
+            }
+    event_name = event.get("event")
+    epoch_fetch_intent_digest = _epoch_fetch_result_intent_digest(
+        event, prior, current, trial_context
+    )
+    interposed_epoch_fetch = bool(
+        event_name == "fetch_result"
+        and prior is not None
+        and prior.get("state") == "rebasing"
+        and isinstance(trial_context.get("epoch_fetch_observation"), Mapping)
+    )
+    if interposed_epoch_fetch and epoch_fetch_intent_digest is None:
+        return False
+    if not shared_pass and epoch_fetch_intent_digest is not None:
+        bridged_event = copy.deepcopy(compat_event)
+        bridged_event["previous_digest"] = epoch_fetch_intent_digest
+        bridged_current = copy.deepcopy(compat_current)
+        if (
+            prior is not None
+            and prior.get("state") == "rebasing"
+            and current.get("state") == "reverifying"
+        ):
+            bridged_current["state"] = "rebasing"
+            bridged_payload = bridged_event.get("payload")
+            bridged_delta = (
+                bridged_payload.get("delta")
+                if isinstance(bridged_payload, dict)
+                else None
+            )
+            if not isinstance(bridged_delta, dict):
+                return False
+            bridged_delta.pop("state", None)
+        bridged_context = copy.deepcopy(trial_context)
+        for name in (
+            "epoch_fetch_observation",
+            "candidate_observation_active",
+            "candidate_observation",
+            "epoch_ancestry_observation",
+        ):
+            bridged_context.pop(name, None)
+        if builders._merge_transition_valid(
+            bridged_event,
+            compat_prior,
+            bridged_current,
+            context=bridged_context,
+        ):
+            shared_pass = True
+            trial_context = bridged_context
+    replayed_bootstrap = trial_context.get("bootstrap_fetch_observation")
+    bootstrap_candidate = trial_context.get("candidate_observation")
+    bootstrap_evidence = (
+        replayed_bootstrap.get("evidence")
+        if isinstance(replayed_bootstrap, Mapping)
+        and isinstance(replayed_bootstrap.get("evidence"), Mapping)
+        else None
+    )
+    bootstrap_result_predecessor = bool(
+        isinstance(bootstrap_evidence, Mapping)
+        and (
+            event.get("previous_digest")
+            == replayed_bootstrap.get("restore_event_digest")
+            or (
+                isinstance(bootstrap_candidate, Mapping)
+                and bootstrap_candidate.get("source_intent")
+                == bootstrap_evidence.get("source_intent")
+                and event.get("previous_digest")
+                == bootstrap_candidate.get("restore_event_digest")
+            )
+        )
+    )
+    if (
+        not shared_pass
+        and event_name == "fetch_result"
+        and prior is not None
+        and isinstance(replayed_bootstrap, Mapping)
+        and isinstance(replayed_bootstrap.get("evidence"), Mapping)
+        and prior.get("integration", {}).get("intent")
+        == replayed_bootstrap["evidence"].get("source_intent")
+        and bootstrap_result_predecessor
+    ):
+        bridged_event = copy.deepcopy(compat_event)
+        bridged_event["previous_digest"] = replayed_bootstrap.get(
+            "fetch_intent_event_digest"
+        )
+        bridged_context = copy.deepcopy(trial_context)
+        for name in (
+            "bootstrap_fetch_observation",
+            "candidate_observation_active",
+            "candidate_observation",
+        ):
+            bridged_context.pop(name, None)
+        if builders._merge_transition_valid(
+            bridged_event,
+            compat_prior,
+            compat_current,
+            context=bridged_context,
+        ):
+            shared_pass = True
+            trial_context = bridged_context
+    recovery_bridge = trial_context.get("bootstrap_recovery_proof")
+    if (
+        not shared_pass
+        and event_name == "fetch_result"
+        and prior is not None
+        and isinstance(recovery_bridge, Mapping)
+        and event.get("previous_digest") == recovery_bridge.get("event_digest")
+        and prior.get("integration", {}).get("intent", {}).get("operation")
+        == "fetch"
+    ):
+        bridged_event = copy.deepcopy(compat_event)
+        bridged_event["previous_digest"] = recovery_bridge.get(
+            "fetch_intent_event_digest"
+        )
+        bridged_context = copy.deepcopy(trial_context)
+        bridged_context.pop("bootstrap_recovery_proof", None)
+        if builders._merge_transition_valid(
+            bridged_event,
+            compat_prior,
+            compat_current,
+            context=bridged_context,
+        ):
+            shared_pass = True
+            trial_context = bridged_context
+    raw_result = trial_context.get("rebase_raw_result")
+    replayed_rebase_intent = trial_context.get("rebase_intent")
+    if (
+        not shared_pass
+        and event_name in {"rebase_conflict", "rebase_result"}
+        and prior is not None
+        and isinstance(raw_result, Mapping)
+        and isinstance(replayed_rebase_intent, Mapping)
+        and raw_result.get("digest") == event.get("previous_digest")
+        and raw_result.get("intent_digest") == replayed_rebase_intent.get("digest")
+        and raw_result.get("generation_digest") == event.get("generation_digest")
+        and raw_result.get("evidence") == prior.get("integration", {}).get("intent")
+        and _merge_rebase_result_classification(prior) in {"success", "failed"}
+    ):
+        bridged_event = copy.deepcopy(compat_event)
+        bridged_event["previous_digest"] = replayed_rebase_intent["digest"]
+        bridged_context = copy.deepcopy(trial_context)
+        bridged_context.pop("rebase_raw_result", None)
+        if builders._merge_transition_valid(
+            bridged_event,
+            compat_prior,
+            compat_current,
+            context=bridged_context,
+        ):
+            shared_pass = True
+            trial_context = bridged_context
+    recovered_absent_rebase_intent = _recovered_absent_rebase_intent_digest(
+        event, prior, trial_context
+    )
+    if not shared_pass and recovered_absent_rebase_intent is not None:
+        bridged_event = copy.deepcopy(compat_event)
+        bridged_event["previous_digest"] = recovered_absent_rebase_intent
+        bridged_context = copy.deepcopy(trial_context)
+        for name in (
+            "candidate_observation_active",
+            "candidate_observation",
+            "recovery_proof_bridge",
+        ):
+            bridged_context.pop(name, None)
+        if builders._merge_transition_valid(
+            bridged_event,
+            compat_prior,
+            compat_current,
+            context=bridged_context,
+        ):
+            shared_pass = True
+            trial_context = bridged_context
+    if (
+        shared_pass
+        and event_name == "rebase_result"
+        and prior is not None
+        and prior.get("state") == current.get("state") == "rebasing"
+        and prior.get("candidate") == current.get("candidate")
+        and _merge_rebase_result_classification(current) in {"success", "failed"}
+        and isinstance(trial_context.get("rebase_intent"), Mapping)
+    ):
+        trial_context["rebase_raw_result"] = {
+            "digest": event.get("digest"),
+            "intent_digest": trial_context["rebase_intent"].get("digest"),
+            "generation_digest": event.get("generation_digest"),
+            "evidence": copy.deepcopy(current.get("integration", {}).get("intent")),
+        }
+    if not shared_pass:
+        direct_retry = bool(
+            event_name == "epoch_intent"
+            and prior is not None
+            and prior.get("state") == "reverification_failed"
+            and current.get("state") == "reverifying"
+        )
+        fact = _merge_plan_position_fact(prior or {}, current)
+        scoped_position = bool(
+            event_name == "gate_recorded"
+            and isinstance(fact, Mapping)
+            and fact.get("gate_plan_position", {}).get("kind") == "scoped-mutation"
+            and prior is not None
+            and prior.get("state") == current.get("state") == "reverifying"
+        )
+        payload = event.get("payload")
+        prior_push = (
+            prior_integration.get("push")
+            if isinstance(prior_integration, Mapping)
+            else None
+        )
+        current_push = (
+            current_integration.get("push")
+            if isinstance(current_integration, Mapping)
+            else None
+        )
+        scope_exceeded_result = bool(
+            event_name == "fetch_result"
+            and prior is not None
+            and current.get("candidate") is not None
+            and current.get("state") == "classifying"
+            and isinstance(payload, Mapping)
+            and isinstance(payload.get("scope_proof"), Mapping)
+            and payload["scope_proof"].get("result") == "exceeded"
+        )
+        sealed_fetch_to_reverify = bool(
+            event_name == "fetch_result"
+            and epoch_fetch_intent_digest is None
+            and prior is not None
+            and prior.get("state") == "rebasing"
+            and current.get("state") == "reverifying"
+            and isinstance(current_integration, Mapping)
+            and isinstance(current_integration.get("epoch"), Mapping)
+            and current_integration["epoch"].get("gate_plan", {}).get("status")
+            == "sealed"
+        )
+        sealed_rebase_successor = bool(
+            event_name == "rebase_result"
+            and prior is not None
+            and prior.get("state") in {"rebasing", "rebase_conflict"}
+            and current.get("state") == "reverifying"
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and isinstance(prior_integration.get("epoch"), Mapping)
+            and isinstance(current_integration.get("epoch"), Mapping)
+            and prior_integration["epoch"].get("gate_plan", {}).get("status")
+            == "unsealed"
+            and current_integration["epoch"].get("gate_plan", {}).get("status")
+            == "sealed"
+            and prior.get("candidate") != current.get("candidate")
+        )
+        observation_intent = bool(
+            event_name == "condition_recorded"
+            and prior is not None
+            and prior.get("state") == current.get("state")
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and current_integration.get("condition")
+            == prior_integration.get("condition")
+            and current_integration.get("primary_condition")
+            == prior_integration.get("primary_condition")
+            and isinstance(current_integration.get("intent"), Mapping)
+            and current_integration["intent"].get("schema")
+            == "forge-remote-observation-intent/1"
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration) - {"intent"}
+            )
+        )
+        push_result_recorded = bool(
+            event_name == "condition_recorded"
+            and prior is not None
+            and prior.get("state") == current.get("state") == "pushing"
+            and isinstance(prior_push, Mapping)
+            and isinstance(current_push, Mapping)
+            and prior_push.get("result") is None
+            and isinstance(current_push.get("result"), Mapping)
+            and all(
+                prior_push.get(name) == current_push.get(name)
+                for name in set(prior_push) - {"result"}
+            )
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration) - {"push"}
+            )
+        )
+        event_at = builders._utc_value(event.get("at"))
+        prior_deadline = (
+            builders._utc_value(prior.get("inactive_after"))
+            if prior is not None
+            else None
+        )
+        current_deadline = builders._utc_value(current.get("inactive_after"))
+        active_event = bool(
+            event_at is not None
+            and prior_deadline is not None
+            and current_deadline is not None
+            and event_at < prior_deadline
+            and current.get("last_event_at") == event.get("at")
+            and current_deadline == event_at + dt.timedelta(hours=24)
+        )
+        delta = payload.get("delta") if isinstance(payload, Mapping) else None
+        plain_delta = bool(
+            isinstance(payload, Mapping)
+            and set(payload) == {"delta"}
+            and isinstance(delta, Mapping)
+        )
+        candidate_observation_progress = bool(
+            event_name == "condition_recorded"
+            and prior is not None
+            and prior.get("state") == current.get("state")
+            and plain_delta
+            and delta == {"integration": current_integration}
+            and all(
+                prior.get(name) == current.get(name)
+                for name in MERGE_STATE_KEYS
+                - {"last_event_at", "inactive_after", "integration"}
+            )
+            and _merge_candidate_observation_transition_valid(prior, current)
+        )
+        bootstrap_fetch_observation = bool(
+            event_name == "condition_recorded"
+            and prior is not None
+            and prior.get("state") == current.get("state") == "classifying"
+            and plain_delta
+            and delta == {"integration": current_integration}
+            and all(
+                prior.get(name) == current.get(name)
+                for name in MERGE_STATE_KEYS
+                - {"last_event_at", "inactive_after", "integration"}
+            )
+            and _bootstrap_fetch_observation_transition_valid(prior, current)
+        )
+        stable_push_boundary = bool(
+            prior is not None
+            and all(
+                prior.get(name) == current.get(name)
+                for name in MERGE_STATE_KEYS
+                - {
+                    "last_event_at",
+                    "inactive_after",
+                    "state",
+                    "review",
+                    "approval",
+                    "authorization",
+                    "integration",
+                }
+            )
+        )
+        replayed_push = trial_context.get("push_intent")
+        current_intent = (
+            current_integration.get("intent")
+            if isinstance(current_integration, Mapping)
+            else None
+        )
+        prior_intent = (
+            prior_integration.get("intent")
+            if isinstance(prior_integration, Mapping)
+            else None
+        )
+        replayed_fetch_observation = trial_context.get("epoch_fetch_observation")
+        replayed_candidate_observation = trial_context.get(
+            "candidate_observation"
+        )
+        epoch_fetch_observation = bool(
+            event_name == "condition_recorded"
+            and prior is not None
+            and prior.get("state") == current.get("state") == "rebasing"
+            and active_event
+            and plain_delta
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and isinstance(prior_intent, Mapping)
+            and prior_intent.get("operation") == "fetch"
+            and isinstance(current_intent, Mapping)
+            and _epoch_fetch_observation_record_valid(current, current_intent)
+            and _epoch_fetch_observation_predecessor_valid(
+                event, current_intent, prior_intent, trial_context
+            )
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration) - {"intent"}
+            )
+            and all(
+                prior.get(name) == current.get(name)
+                for name in MERGE_STATE_KEYS
+                - {"last_event_at", "inactive_after", "integration"}
+            )
+            and delta == {"integration": current_integration}
+            and isinstance(replayed_epoch, Mapping)
+            and replayed_epoch.get("digest")
+            == current_integration.get("epoch", {}).get("intent_digest")
+            and replayed_epoch.get("generation_digest")
+            == current.get("candidate", {}).get("generation_digest")
+        )
+        ancestry_intent_transition = bool(
+            isinstance(current_intent, Mapping)
+            and current_intent.get("phase") == "intent"
+            and _epoch_ancestry_record_valid(current, current_intent)
+            and isinstance(prior_intent, Mapping)
+            and _epoch_fetch_observation_record_valid(prior or {}, prior_intent)
+            and _epoch_fetch_observation_passed(prior_intent)
+            and isinstance(replayed_fetch_observation, Mapping)
+            and current_intent.get("fetch_observation_event_digest")
+            == replayed_fetch_observation.get("digest")
+            and replayed_fetch_observation.get("evidence") == prior_intent
+            and isinstance(replayed_candidate_observation, Mapping)
+            and replayed_candidate_observation.get("source_intent")
+            == prior_intent
+            and current_intent.get("candidate_observation_digest")
+            == replayed_candidate_observation.get("evidence_digest")
+            and event.get("previous_digest")
+            == replayed_candidate_observation.get("restore_event_digest")
+            and prior is not None
+            and prior.get("state") == current.get("state") == "rebasing"
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration) - {"intent"}
+            )
+        )
+        ancestry_result_transition = bool(
+            isinstance(prior_intent, Mapping)
+            and prior_intent.get("phase") == "intent"
+            and _epoch_ancestry_record_valid(prior or {}, prior_intent)
+            and isinstance(current_intent, Mapping)
+            and current_intent.get("phase") == "result"
+            and _epoch_ancestry_record_valid(current, current_intent)
+            and current_intent.get("intent_event_digest")
+            == event.get("previous_digest")
+            and all(
+                prior_intent.get(name) == current_intent.get(name)
+                for name in set(prior_intent) - {"phase", "recorded_at"}
+            )
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration) - {"intent", "epoch"}
+            )
+            and isinstance(prior_integration.get("epoch"), Mapping)
+            and isinstance(current_integration.get("epoch"), Mapping)
+            and all(
+                prior_integration["epoch"].get(name)
+                == current_integration["epoch"].get(name)
+                for name in set(prior_integration["epoch"])
+            )
+            and current_integration["epoch"].get("gate_plan", {}).get("status")
+            == "unsealed"
+            and prior is not None
+            and prior.get("state") == current.get("state") == "rebasing"
+        )
+        epoch_ancestry_progress = bool(
+            event_name == "condition_recorded"
+            and prior is not None
+            and active_event
+            and plain_delta
+            and all(
+                prior.get(name) == current.get(name)
+                for name in MERGE_STATE_KEYS
+                - {"last_event_at", "inactive_after", "integration"}
+            )
+            and (ancestry_intent_transition or ancestry_result_transition)
+            and isinstance(replayed_epoch, Mapping)
+            and replayed_epoch.get("digest")
+            == current_integration.get("epoch", {}).get("intent_digest")
+            and replayed_epoch.get("generation_digest")
+            == current.get("candidate", {}).get("generation_digest")
+            and delta
+            == {"integration": current_integration}
+        )
+        post_push_observation_intent = bool(
+            isinstance(current_intent, Mapping)
+            and set(current_intent)
+            == {
+                "schema",
+                "transaction",
+                "chain_id",
+                "attempt_identity",
+                "phase",
+                "push_intent_digest",
+            }
+            and current_intent.get("schema")
+            == "forge-remote-observation-intent/1"
+            and current_intent.get("transaction") == "merge"
+            and current_intent.get("chain_id") == current.get("chain_id")
+            and current_intent.get("phase") == "post-push"
+            and isinstance(current_epoch, Mapping)
+            and current_intent.get("attempt_identity")
+            == current_epoch.get("intent_digest")
+            and isinstance(replayed_push, Mapping)
+            and current_intent.get("push_intent_digest")
+            == replayed_push.get("digest")
+        )
+        observation_progress = bool(
+            event_name == "condition_recorded"
+            and stable_push_boundary
+            and prior is not None
+            and prior.get("state") == current.get("state")
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration) - {"intent"}
+            )
+            and _remote_observation_progress_transition_valid(prior, current)
+            and isinstance(current_intent, Mapping)
+            and (
+                current_intent.get("stage") != "containment-intent"
+                or active_event
+            )
+            and isinstance(replayed_epoch, Mapping)
+            and replayed_epoch.get("digest")
+            == current_integration.get("epoch", {}).get("intent_digest")
+            and replayed_epoch.get("generation_digest")
+            == current.get("candidate", {}).get("generation_digest")
+            and (
+                (
+                    current_intent.get("phase") == "final-prepush"
+                    and replayed_epoch.get("push_consumed") is False
+                    and current_intent.get("push_intent_digest") is None
+                )
+                or (
+                    current_intent.get("phase") == "post-push"
+                    and replayed_epoch.get("push_consumed") is True
+                    and isinstance(replayed_push, Mapping)
+                    and current_intent.get("push_intent_digest")
+                    == replayed_push.get("digest")
+                )
+            )
+            and plain_delta
+            and delta == {"integration": current_integration}
+        )
+        push_result = (
+            current_push.get("result")
+            if isinstance(current_push, Mapping)
+            else None
+        )
+        normalized_old_tip_observation = bool(
+            event_name == "push_observed"
+            and active_event
+            and stable_push_boundary
+            and prior is not None
+            and prior.get("state") == current.get("state") == "pushing"
+            and prior.get("review") == current.get("review")
+            and prior.get("approval") == current.get("approval")
+            and prior.get("authorization") == current.get("authorization")
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and isinstance(prior_push, Mapping)
+            and prior_push == current_push
+            and isinstance(push_result, Mapping)
+            and push_result.get("classification")
+            in {"outcome-unknown", "non-fast-forward"}
+            and isinstance(replayed_epoch, Mapping)
+            and replayed_epoch.get("digest")
+            == current_integration.get("epoch", {}).get("intent_digest")
+            and replayed_epoch.get("generation_digest")
+            == current.get("candidate", {}).get("generation_digest")
+            and replayed_epoch.get("push_consumed") is True
+            and post_push_observation_intent
+            and _merge_old_tip_all_false(current)
+            and current_integration.get("condition") == "none"
+            and current_integration.get("primary_condition") == "none"
+            and current_integration.get("remote_movement_count") == 0
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration)
+                - {"condition", "primary_condition", "observed"}
+            )
+            and plain_delta
+            and delta == {"integration": current_integration}
+        )
+
+        retry_epoch = (
+            prior_integration.get("epoch")
+            if isinstance(prior_integration, Mapping)
+            else None
+        )
+        retry_plan = (
+            retry_epoch.get("gate_plan")
+            if isinstance(retry_epoch, Mapping)
+            else None
+        )
+        retry_intent = (
+            prior_integration.get("intent")
+            if isinstance(prior_integration, Mapping)
+            else None
+        )
+        replayed_retry_observation = trial_context.get("push_retry_observation")
+        preceding_retry_observation = (
+            replayed_retry_observation.get("previous")
+            if isinstance(replayed_retry_observation, Mapping)
+            else None
+        )
+        prior_observed = (
+            prior_integration.get("observed")
+            if isinstance(prior_integration, Mapping)
+            else None
+        )
+        retry_attempts = (
+            prior_push.get("attempted_heads")
+            if isinstance(prior_push, Mapping)
+            else None
+        )
+        current_attempts = (
+            current_push.get("attempted_heads")
+            if isinstance(current_push, Mapping)
+            else None
+        )
+        candidate = current.get("candidate")
+        authorization = current.get("authorization")
+        review = current.get("review")
+        verdict = review.get("verdict") if isinstance(review, Mapping) else None
+        tier = current.get("tier")
+        approval = current.get("approval")
+        current_authority = bool(
+            isinstance(candidate, Mapping)
+            and isinstance(authorization, Mapping)
+            and authorization.get("candidate_head")
+            == candidate.get("candidate_head")
+            and authorization.get("generation_digest")
+            == candidate.get("generation_digest")
+            and isinstance(verdict, Mapping)
+            and verdict.get("verdict") == "PASS"
+            and (
+                not isinstance(tier, Mapping)
+                or tier.get("control") is not True
+                or (
+                    isinstance(approval, Mapping)
+                    and approval.get("purpose") == "gate-4"
+                    and approval.get("candidate")
+                    == candidate.get("candidate_head")
+                    and approval.get("generation_digest")
+                    == candidate.get("generation_digest")
+                )
+            )
+        )
+        retry_push_intent = bool(
+            event_name == "push_intent"
+            and active_event
+            and stable_push_boundary
+            and prior is not None
+            and prior.get("state") == current.get("state") == "pushing"
+            and prior.get("review") == current.get("review")
+            and prior.get("approval") == current.get("approval")
+            and prior.get("authorization") == current.get("authorization")
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and isinstance(prior_push, Mapping)
+            and (
+                prior_push.get("result") is None
+                or isinstance(prior_push.get("result"), Mapping)
+            )
+            and isinstance(current_push, Mapping)
+            and isinstance(retry_epoch, Mapping)
+            and current_epoch == retry_epoch
+            and isinstance(retry_plan, Mapping)
+            and retry_plan.get("status") == "sealed"
+            and retry_plan.get("cursor") == len(retry_plan.get("suite", []))
+            and isinstance(replayed_epoch, Mapping)
+            and replayed_epoch.get("digest") == retry_epoch.get("intent_digest")
+            and replayed_epoch.get("generation_digest")
+            == retry_epoch.get("generation_digest")
+            and replayed_epoch.get("push_consumed") is True
+            and isinstance(retry_intent, Mapping)
+            and set(retry_intent)
+            == {
+                "schema",
+                "transaction",
+                "chain_id",
+                "attempt_identity",
+                "phase",
+                "push_intent_digest",
+            }
+            and retry_intent.get("schema")
+            == "forge-remote-observation-intent/1"
+            and retry_intent.get("transaction") == "merge"
+            and retry_intent.get("chain_id") == prior.get("chain_id")
+            and retry_intent.get("attempt_identity")
+            == retry_epoch.get("intent_digest")
+            and retry_intent.get("phase") == "post-push"
+            and retry_intent.get("push_intent_digest")
+            == (
+                replayed_push.get("digest")
+                if isinstance(replayed_push, Mapping)
+                else None
+            )
+            and isinstance(replayed_retry_observation, Mapping)
+            and set(replayed_retry_observation)
+            == {
+                "digest",
+                "generation_digest",
+                "push_intent_digest",
+                "inflight_digest",
+                "old_tip_all_false",
+                "previous",
+            }
+            and replayed_retry_observation.get("generation_digest")
+            == retry_epoch.get("generation_digest")
+            and replayed_retry_observation.get("push_intent_digest")
+            == retry_intent.get("push_intent_digest")
+            and isinstance(prior_observed, Mapping)
+            and replayed_retry_observation.get("inflight_digest")
+            == prior_observed.get("inflight_digest")
+            and replayed_retry_observation.get("old_tip_all_false") is True
+            and isinstance(preceding_retry_observation, Mapping)
+            and set(preceding_retry_observation)
+            == {
+                "digest",
+                "push_intent_digest",
+                "inflight_digest",
+                "old_tip_all_false",
+            }
+            and preceding_retry_observation.get("push_intent_digest")
+            == retry_intent.get("push_intent_digest")
+            and preceding_retry_observation.get("old_tip_all_false") is True
+            and replayed_retry_observation.get("digest")
+            != preceding_retry_observation.get("digest")
+            and replayed_retry_observation.get("inflight_digest")
+            != preceding_retry_observation.get("inflight_digest")
+            and _merge_old_tip_all_false(prior)
+            and current_authority
+            and current_integration.get("condition") == "none"
+            and current_integration.get("primary_condition") == "none"
+            and current_integration.get("remote_movement_count") == 0
+            and current_integration.get("observed") is None
+            and isinstance(current_intent, Mapping)
+            and set(current_intent) == {"operation", "operation_nonce", "attempt"}
+            and current_intent.get("operation") == "push"
+            and current_intent.get("operation_nonce")
+            == retry_epoch.get("operation_nonce")
+            and isinstance(retry_attempts, list)
+            and isinstance(current_attempts, list)
+            and current_attempts
+            == [*retry_attempts, candidate.get("candidate_head")]
+            and current_intent.get("attempt") == len(current_attempts)
+            and current_push.get("expected_old_tip")
+            == candidate.get("remote_tip")
+            and current_push.get("intended_head")
+            == candidate.get("candidate_head")
+            and current_push.get("destination_ref")
+            == candidate.get("destination_ref")
+            and current_push.get("intended_at") == event.get("at")
+            and current_push.get("result") is None
+            and current_push.get("landed_head") == prior_push.get("landed_head")
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration)
+                - {
+                    "condition",
+                    "primary_condition",
+                    "intent",
+                    "observed",
+                    "push",
+                }
+            )
+            and plain_delta
+            and delta == {"integration": current_integration}
+        )
+
+        invalid_mode_intent = (
+            current_integration.get("intent")
+            if isinstance(current_integration, Mapping)
+            else None
+        )
+        prior_plan = (
+            prior_integration.get("epoch", {}).get("gate_plan")
+            if isinstance(prior_integration, Mapping)
+            and isinstance(prior_integration.get("epoch"), Mapping)
+            else None
+        )
+        prior_mode_intent = (
+            prior_integration.get("intent")
+            if isinstance(prior_integration, Mapping)
+            else None
+        )
+        prior_mode_observed = (
+            prior_integration.get("observed")
+            if isinstance(prior_integration, Mapping)
+            else None
+        )
+        prior_iteration = (
+            prior.get("review", {}).get("iteration")
+            if prior is not None and isinstance(prior.get("review"), Mapping)
+            else None
+        )
+        expected_invalid_delta = (
+            {
+                name: current.get(name)
+                for name in (
+                    "state",
+                    "review",
+                    "approval",
+                    "authorization",
+                    "integration",
+                )
+                if prior is not None and prior.get(name) != current.get(name)
+            }
+            if prior is not None
+            else {}
+        )
+        invalid_final_mode_park = bool(
+            event_name == "reverification_result"
+            and active_event
+            and stable_push_boundary
+            and prior is not None
+            and prior.get("state") in {"rebasing", "reverifying"}
+            and current.get("state") == "revising"
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and prior_integration.get("condition") == "none"
+            and prior_integration.get("primary_condition") == "none"
+            and isinstance(prior_plan, Mapping)
+            and prior_plan.get("status") == "sealed"
+            and prior_plan.get("cursor") == len(prior_plan.get("suite", []))
+            and isinstance(replayed_epoch, Mapping)
+            and replayed_epoch.get("digest")
+            == prior_integration.get("epoch", {}).get("intent_digest")
+            and replayed_epoch.get("generation_digest")
+            == prior_integration.get("epoch", {}).get("generation_digest")
+            and replayed_epoch.get("push_consumed") is False
+            and isinstance(prior_mode_intent, Mapping)
+            and set(prior_mode_intent)
+            == {
+                "schema",
+                "transaction",
+                "chain_id",
+                "attempt_identity",
+                "phase",
+                "push_intent_digest",
+            }
+            and prior_mode_intent.get("schema")
+            == "forge-remote-observation-intent/1"
+            and prior_mode_intent.get("transaction") == "merge"
+            and prior_mode_intent.get("chain_id") == prior.get("chain_id")
+            and prior_mode_intent.get("attempt_identity")
+            == prior_integration.get("epoch", {}).get("intent_digest")
+            and prior_mode_intent.get("phase") == "final-prepush"
+            and prior_mode_intent.get("push_intent_digest") is None
+            and isinstance(prior_mode_observed, Mapping)
+            and prior_mode_observed.get("exists") is True
+            and prior_mode_observed.get("oid")
+            == current.get("candidate", {}).get("remote_tip")
+            and current_integration.get("epoch") is None
+            and current_integration.get("condition") == "none"
+            and current_integration.get("primary_condition") == "none"
+            and current_integration.get("remote_movement_count") == 0
+            and isinstance(invalid_mode_intent, Mapping)
+            and set(invalid_mode_intent)
+            == {
+                "schema",
+                "operation",
+                "candidate_head",
+                "manifest_digest",
+                "result",
+                "recorded_at",
+            }
+            and invalid_mode_intent.get("schema")
+            == "forge-history-mutation-mode-result/1"
+            and invalid_mode_intent.get("operation") == "history-mutation-mode"
+            and invalid_mode_intent.get("candidate_head")
+            == candidate.get("candidate_head")
+            and SHA256_RE.fullmatch(
+                str(invalid_mode_intent.get("manifest_digest", ""))
+            )
+            is not None
+            and invalid_mode_intent.get("result") == "invalid"
+            and builders._utc_value(invalid_mode_intent.get("recorded_at"))
+            is not None
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration)
+                - {
+                    "condition",
+                    "primary_condition",
+                    "remote_movement_count",
+                    "epoch",
+                    "intent",
+                }
+            )
+            and current.get("review")
+            == ({"iteration": prior_iteration} if type(prior_iteration) is int else {})
+            and current.get("approval") == {}
+            and current.get("authorization") == {}
+            and plain_delta
+            and delta == expected_invalid_delta
+        )
+        parked_completed_plan = bool(
+            event_name == "reverification_result"
+            and prior is not None
+            and prior.get("state") == "reverifying"
+            and current.get("state") == "reviewing"
+            and isinstance(prior_integration, Mapping)
+            and isinstance(prior_integration.get("epoch"), Mapping)
+            and isinstance(
+                prior_integration["epoch"].get("gate_plan"), Mapping
+            )
+            and prior_integration["epoch"]["gate_plan"].get("status")
+            == "sealed"
+            and prior_integration["epoch"]["gate_plan"].get("cursor")
+            == len(prior_integration["epoch"]["gate_plan"].get("suite", []))
+            and isinstance(current_integration, Mapping)
+            and current_integration.get("epoch") is None
+            and current.get("steps") == prior.get("steps")
+        )
+        prior_candidate = prior.get("candidate") if prior is not None else None
+        carried_candidate = current.get("candidate")
+        prior_review = prior.get("review") if prior is not None else None
+        prior_iteration = (
+            prior_review.get("iteration")
+            if isinstance(prior_review, Mapping)
+            else None
+        )
+        gate_tuple_reclassified = bool(
+            event_name == "generation_refreshed"
+            and prior is not None
+            and prior.get("state") == "reverifying"
+            and current.get("state") == "verifying"
+            and isinstance(prior_candidate, Mapping)
+            and isinstance(carried_candidate, Mapping)
+            and carried_candidate.get("generation")
+            == int(prior_candidate.get("generation", 0)) + 1
+            and carried_candidate != prior_candidate
+            and isinstance(prior_integration, Mapping)
+            and isinstance(prior_integration.get("epoch"), Mapping)
+            and isinstance(current_integration, Mapping)
+            and current_integration.get("epoch") is None
+            and current_integration.get("condition") == "none"
+            and current_integration.get("primary_condition") == "none"
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration)
+                - {
+                    "condition",
+                    "primary_condition",
+                    "epoch",
+                    "remote_movement_count",
+                }
+            )
+            and current_integration.get("remote_movement_count") == 0
+            and current.get("steps") == {}
+            and current.get("review")
+            == ({"iteration": prior_iteration} if type(prior_iteration) is int else {})
+            and current.get("approval") == {}
+            and current.get("authorization") == {}
+        )
+        remote_only_carry = bool(
+            event_name == "generation_carried_forward"
+            and prior is not None
+            and prior.get("state") in {"rebasing", "reverifying"}
+            and current.get("state") in {"authorized", "awaiting_approval"}
+            and isinstance(prior_candidate, Mapping)
+            and isinstance(carried_candidate, Mapping)
+            and carried_candidate.get("remote_tip")
+            != prior_candidate.get("remote_tip")
+            and all(
+                carried_candidate.get(name) == prior_candidate.get(name)
+                for name in _MERGE_REMOTE_ONLY_IDENTITY_FIELDS
+            )
+            and carried_candidate.get("generation")
+            == int(prior_candidate.get("generation", 0)) + 1
+            and prior.get("tier") == current.get("tier")
+            and prior.get("policy_source") == current.get("policy_source")
+            and current.get("steps") == prior.get("steps")
+            and prior.get("review") == current.get("review")
+            and prior.get("approval") == current.get("approval")
+            and prior.get("authorization") == current.get("authorization")
+            and isinstance(prior_integration, Mapping)
+            and isinstance(current_integration, Mapping)
+            and current_integration.get("epoch") is None
+            and current_integration.get("primary_condition") == "none"
+            and current_integration.get("condition")
+            in {"remote-moved", "remote-churn"}
+            and current_integration.get("remote_movement_count")
+            == int(prior_integration.get("remote_movement_count", 0)) + 1
+            and isinstance(current_integration.get("observed"), Mapping)
+            and current_integration["observed"].get("exists") is True
+            and current_integration["observed"].get("oid")
+            == carried_candidate.get("remote_tip")
+            and all(
+                prior_integration.get(name) == current_integration.get(name)
+                for name in set(prior_integration)
+                - {"condition", "epoch", "remote_movement_count", "observed"}
+            )
+            and _merge_carry_payload_valid(
+                event, prior_candidate, carried_candidate
+            )
+        )
+        if not (
+            direct_retry
+            or scoped_position
+            or scope_exceeded_result
+            or sealed_fetch_to_reverify
+            or sealed_rebase_successor
+            or observation_intent
+            or candidate_observation_progress
+            or bootstrap_fetch_observation
+            or epoch_fetch_observation
+            or observation_progress
+            or epoch_ancestry_progress
+            or push_result_recorded
+            or normalized_old_tip_observation
+            or retry_push_intent
+            or invalid_final_mode_park
+            or parked_completed_plan
+            or gate_tuple_reclassified
+            or remote_only_carry
+        ):
+            return False
+        if normalized_old_tip_observation or retry_push_intent:
+            _require_merge_integration_control("push-retry")
+        if candidate_observation_progress:
+            _require_merge_integration_control("observation-first-recovery")
+            observation_record = (
+                current_intent
+                if _merge_candidate_observation_record_valid(
+                    current, current_intent
+                )
+                else prior_intent
+                if prior is not None
+                and _merge_candidate_observation_record_valid(
+                    prior, prior_intent
+                )
+                else None
+            )
+            if not isinstance(observation_record, Mapping):
+                return False
+            active = trial_context.get("candidate_observation_active")
+            if (
+                isinstance(current_intent, Mapping)
+                and current_intent.get("schema")
+                == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+                and current_intent.get("stage") == "intent"
+            ):
+                step_names = _merge_candidate_observation_step_names(
+                    current,
+                    remote_tip=str(current_intent.get("remote_tip", "")),
+                    expected_head=str(current_intent.get("expected_head", "")),
+                    classify=current_intent.get("classify"),
+                    declared_tier=current_intent.get("declared_tier"),
+                )
+                if step_names is None:
+                    return False
+                if current_intent.get("step") == step_names[0]:
+                    active = {
+                        "observation_binding": current_intent.get(
+                            "observation_binding"
+                        ),
+                        "steps": [],
+                    }
+                    trial_context["candidate_observation_active"] = active
+                elif (
+                    not isinstance(active, Mapping)
+                    or active.get("observation_binding")
+                    != current_intent.get("observation_binding")
+                    or not isinstance(active.get("steps"), list)
+                    or len(active["steps"]) >= len(step_names)
+                    or current_intent.get("step")
+                    != step_names[len(active["steps"])]
+                ):
+                    return False
+            elif (
+                isinstance(current_intent, Mapping)
+                and current_intent.get("schema")
+                == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+                and current_intent.get("stage") == "result"
+            ):
+                if (
+                    not isinstance(active, Mapping)
+                    or active.get("observation_binding")
+                    != current_intent.get("observation_binding")
+                    or not isinstance(active.get("steps"), list)
+                ):
+                    return False
+                active_steps = copy.deepcopy(active["steps"])
+                active_steps.append(copy.deepcopy(dict(current_intent)))
+                evidence = _merge_candidate_observation_evidence(
+                    current, active_steps
+                )
+                trial_context["candidate_observation_active"] = {
+                    "observation_binding": current_intent.get(
+                        "observation_binding"
+                    ),
+                    "steps": active_steps,
+                }
+                if evidence is not None:
+                    trial_context["candidate_observation"] = {
+                        "event_digest": event.get("digest"),
+                        "generation_digest": event.get("generation_digest"),
+                        "source_intent": copy.deepcopy(
+                            current_intent.get("source_intent")
+                        ),
+                        "evidence": evidence,
+                        "evidence_digest": evidence["evidence_digest"],
+                    }
+            elif (
+                isinstance(prior_intent, Mapping)
+                and prior_intent.get("schema")
+                == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+                and prior_intent.get("stage") == "result"
+                and current_intent == prior_intent.get("source_intent")
+            ):
+                completed = trial_context.get("candidate_observation")
+                if (
+                    isinstance(completed, dict)
+                    and completed.get("event_digest")
+                    == event.get("previous_digest")
+                ):
+                    completed["restore_event_digest"] = event.get("digest")
+        if bootstrap_fetch_observation:
+            _require_merge_integration_control("post-fetch-scope-proof")
+            selected_bootstrap = (
+                current_intent
+                if _bootstrap_fetch_observation_record_valid(
+                    current, current_intent
+                )
+                else prior_intent
+                if prior is not None
+                and _bootstrap_fetch_observation_record_valid(
+                    prior, prior_intent
+                )
+                else None
+            )
+            if not isinstance(selected_bootstrap, Mapping):
+                return False
+            if _bootstrap_fetch_observation_record_valid(
+                current, current_intent
+            ):
+                trial_context["bootstrap_fetch_observation"] = {
+                    "digest": event.get("digest"),
+                    "generation_digest": event.get("generation_digest"),
+                    "evidence": copy.deepcopy(current_intent),
+                    "fetch_intent_event_digest": current_intent.get(
+                        "fetch_intent_event_digest"
+                    ),
+                }
+            else:
+                retained_bootstrap = trial_context.get(
+                    "bootstrap_fetch_observation"
+                )
+                if (
+                    isinstance(retained_bootstrap, dict)
+                    and retained_bootstrap.get("evidence") == prior_intent
+                ):
+                    retained_bootstrap["restore_event_digest"] = event.get(
+                        "digest"
+                    )
+        if epoch_fetch_observation or epoch_ancestry_progress:
+            _require_merge_integration_control("successor-ancestry-observation")
+        if invalid_final_mode_park:
+            _require_merge_integration_control("final-intended-head-mode")
+        if context is not None and direct_retry:
+            trial_context["epoch_intent"] = {
+                "digest": event.get("digest"),
+                "generation_digest": event.get("generation_digest"),
+                "push_consumed": False,
+            }
+        if context is not None and retry_push_intent:
+            trial_context["push_intent"] = {
+                "digest": event.get("digest"),
+                "generation_digest": event.get("generation_digest"),
+                "evidence": copy.deepcopy(current_intent),
+                "admitted_active": True,
+            }
+        if context is not None and epoch_fetch_observation:
+            trial_context["epoch_fetch_observation"] = {
+                "digest": event.get("digest"),
+                "generation_digest": event.get("generation_digest"),
+                "evidence": copy.deepcopy(current_intent),
+            }
+        if (
+            context is not None
+            and ancestry_result_transition
+            and isinstance(current_intent, Mapping)
+        ):
+            trial_context["epoch_ancestry_observation"] = {
+                "digest": event.get("digest"),
+                "generation_digest": event.get("generation_digest"),
+                "evidence": copy.deepcopy(current_intent),
+            }
+        if invalid_final_mode_park:
+            trial_context.pop("epoch_intent", None)
+        if gate_tuple_reclassified:
+            trial_context.pop("epoch_intent", None)
+    if context is not None and event_name == "push_intent":
+        trial_context.pop("push_retry_observation", None)
+    elif context is not None and event_name == "push_observed":
+        accepted_integration = current.get("integration")
+        accepted_intent = (
+            accepted_integration.get("intent")
+            if isinstance(accepted_integration, Mapping)
+            else None
+        )
+        accepted_observed = (
+            accepted_integration.get("observed")
+            if isinstance(accepted_integration, Mapping)
+            else None
+        )
+        if (
+            isinstance(accepted_intent, Mapping)
+            and accepted_intent.get("phase") == "post-push"
+            and isinstance(accepted_observed, Mapping)
+        ):
+            previous_observation = trial_context.get("push_retry_observation")
+            previous_evidence = None
+            if (
+                isinstance(previous_observation, Mapping)
+                and previous_observation.get("push_intent_digest")
+                == accepted_intent.get("push_intent_digest")
+            ):
+                previous_evidence = {
+                    name: previous_observation.get(name)
+                    for name in (
+                        "digest",
+                        "push_intent_digest",
+                        "inflight_digest",
+                        "old_tip_all_false",
+                    )
+                }
+            trial_context["push_retry_observation"] = {
+                "digest": event.get("digest"),
+                "generation_digest": event.get("generation_digest"),
+                "push_intent_digest": accepted_intent.get("push_intent_digest"),
+                "inflight_digest": accepted_observed.get("inflight_digest"),
+                "old_tip_all_false": _merge_old_tip_all_false(current),
+                "previous": previous_evidence,
+            }
+    if context is not None and epoch_fetch_intent_digest is not None:
+        for name in (
+            "epoch_fetch_observation",
+            "candidate_observation_active",
+            "candidate_observation",
+            "epoch_ancestry_observation",
+            "recovery_proof_bridge",
+        ):
+            trial_context.pop(name, None)
+    if context is not None:
+        context.clear()
+        context.update(trial_context)
+    return True
 
 
 def _authorize_chain_batch(**arguments: Any) -> object:
@@ -1798,7 +4787,12 @@ def _merge_ingest_record_templates(
         )
 
     if event_name in {"review_attached", "generation_carried_forward"}:
-        review = builders._review_binding_for_state(current)
+        authority_state = (
+            prior
+            if event_name == "generation_carried_forward" and prior is not None
+            else current
+        )
+        review = builders._review_binding_for_state(authority_state)
         if (
             isinstance(review, dict)
             and review.get("verdict") in {"PASS", "BLOCK"}
@@ -1845,13 +4839,18 @@ def _merge_ingest_record_templates(
         "approval_recorded",
         "generation_carried_forward",
     }:
-        approval = current.get("approval")
-        candidate = current.get("candidate")
+        authority_state = (
+            prior
+            if event_name == "generation_carried_forward" and prior is not None
+            else current
+        )
+        approval = authority_state.get("approval")
+        candidate = authority_state.get("candidate")
         if (
             isinstance(approval, dict)
             and isinstance(candidate, dict)
             and approval.get("purpose") == "gate-4"
-            and approval.get("chain_id") == current.get("chain_id")
+            and approval.get("chain_id") == authority_state.get("chain_id")
             and approval.get("candidate") == candidate.get("candidate_head")
             and approval.get("generation_digest")
             == candidate.get("generation_digest")
@@ -2260,7 +5259,8 @@ def _verify_and_build_merge_ingest_records(
     _require_ingest_proof("monotonic-transitions", completed_proofs)
     merge_context: dict[str, object] = {}
     for event, prior_state, event_state in events:
-        if not builders._merge_transition_valid(
+        if not _merge_ingest_transition_valid(
+            builders,
             event,
             prior_state,
             event_state,
@@ -2571,7 +5571,7 @@ def _verify_and_build_ingest_records(
         except FrozenError as exc:
             raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
     elif family == "merge":
-        if not builders._state_shape_valid(materialized, chain_id, "merge"):
+        if not _merge_ingest_state_shape_valid(builders, materialized, chain_id):
             raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
     else:
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
@@ -2677,7 +5677,7 @@ def _verify_and_build_ingest_records(
                     builders.INGEST_PROOF_INVALID
                 ) from exc
             if (
-                not builders._state_shape_valid(next_state, chain_id, "merge")
+                not _merge_ingest_state_shape_valid(builders, next_state, chain_id)
             ):
                 raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
         replayed = copy.deepcopy(next_state)
@@ -4240,6 +7240,24 @@ def _require_merge_lifecycle_control(name: str) -> None:
         )
 
 
+def _require_merge_integration_control(name: str) -> None:
+    if (
+        name not in _REQUIRED_MERGE_INTEGRATION_CONTROLS
+        or name not in MERGE_INTEGRATION_CONTROLS
+    ):
+        raise FrozenError(
+            f"merge integration control is unavailable: {name}",
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+
+
+def _reset_merge_nonmovement_counter(integration: dict[str, Any]) -> None:
+    """End a non-remote-only epoch without retaining a churn streak."""
+
+    _require_merge_integration_control("nonmovement-counter-reset")
+    integration["remote_movement_count"] = 0
+
+
 def validate_merge_state(
     state: Any, chain_id: str | None = None
 ) -> dict[str, Any]:
@@ -4275,7 +7293,7 @@ def validate_merge_state(
     if (
         MERGE_STATE_KEYS != builders._MERGE_STATE_KEYS
         or MERGE_EVENT_NAMES != builders._MERGE_EVENT_NAMES
-        or not builders._state_shape_valid(state, actual_id, "merge")
+        or not _merge_state_shape_valid(builders, state, actual_id)
     ):
         raise FrozenError(
             "materialized merge state is invalid",
@@ -4448,12 +7466,14 @@ def _replay_merge_event_bytes(
                 observed=str(exc),
                 schema=REVISION9_OUTPUT_SCHEMA,
             ) from exc
-        if not builders._state_shape_valid(current, chain_id, "merge") or not (
-            builders._merge_transition_valid(
+        if not _merge_state_shape_valid(builders, current, chain_id) or not (
+            _merge_transition_valid(
+                builders,
                 event,
                 prior,
                 current,
                 context=context,
+                history=tuple(events),
             )
         ):
             raise FrozenError(
@@ -4788,65 +7808,65 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
     seen_singletons: set[str] = set()
     index = 0
     while index < len(argv):
-        token = argv[index]
-        if token == "--":
+        argument = argv[index]
+        if argument == "--":
             remaining.extend(argv[index:])
             break
-        if token in verb_value_options:
+        if argument in verb_value_options:
             if index + 1 < len(argv):
                 value = argv[index + 1]
                 if value.startswith("-"):
-                    remaining.append(f"{token}={value}")
+                    remaining.append(f"{argument}={value}")
                 else:
-                    remaining.extend((token, value))
+                    remaining.extend((argument, value))
                 index += 2
             else:
-                remaining.append(token)
+                remaining.append(argument)
                 index += 1
-        elif token == "--json":
+        elif argument == "--json":
             options.json = True
             index += 1
-        elif token == "--verbose":
+        elif argument == "--verbose":
             options.verbose = True
             index += 1
-        elif token in {"--chain-id", "--repo", "--run-id"}:
-            if token in seen_singletons:
+        elif argument in {"--chain-id", "--repo", "--run-id"}:
+            if argument in seen_singletons:
                 raise Refusal(
                     Revision9ReasonCode.OPTION_DUPLICATE,
-                    f"forge: CLI option refused — duplicate {token}",
-                    expected=f"exactly one nonempty {token}",
-                    observed=f"duplicate {token}",
-                    remediation=f"remove the duplicate {token} and retry",
+                    f"forge: CLI option refused — duplicate {argument}",
+                    expected=f"exactly one nonempty {argument}",
+                    observed=f"duplicate {argument}",
+                    remediation=f"remove the duplicate {argument} and retry",
                 )
-            seen_singletons.add(token)
+            seen_singletons.add(argument)
             if index + 1 >= len(argv):
                 raise Refusal(
                     ReasonCode.STATE_PRECONDITION,
-                    f"invalid CLI invocation: {token} requires a value",
-                    observed=token,
+                    f"invalid CLI invocation: {argument} requires a value",
+                    observed=argument,
                     remediation="forge status",
                 )
             value = argv[index + 1]
             if value == "":
                 raise Refusal(
                     Revision9ReasonCode.OPTION_EMPTY,
-                    f"forge: CLI option refused — empty {token}",
-                    expected=f"one nonempty value for {token}",
-                    observed=f"empty {token}",
-                    remediation=f"supply a nonempty {token} value",
+                    f"forge: CLI option refused — empty {argument}",
+                    expected=f"one nonempty value for {argument}",
+                    observed=f"empty {argument}",
+                    remediation=f"supply a nonempty {argument} value",
                 )
-            if token == "--chain-id":
+            if argument == "--chain-id":
                 options.chain_id = value
-            elif token == "--repo":
+            elif argument == "--repo":
                 options.repo = value
             else:
                 options.run_id = value
             index += 2
         elif any(
-            token.startswith(f"{name}=")
+            argument.startswith(f"{name}=")
             for name in ("--chain-id", "--repo", "--run-id")
         ):
-            name, _, value = token.partition("=")
+            name, _, value = argument.partition("=")
             if name in seen_singletons:
                 raise Refusal(
                     Revision9ReasonCode.OPTION_DUPLICATE,
@@ -4872,7 +7892,7 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
                 options.run_id = value
             index += 1
         else:
-            remaining.append(token)
+            remaining.append(argument)
             index += 1
     if options.chain_id and not CHAIN_ID_RE.fullmatch(options.chain_id):
         raise Refusal(
@@ -4896,7 +7916,7 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
 def _attach_merge_lifecycle_parser(
     commands: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    """Attach only the slice-4 merge verbs; later slices own the rest."""
+    """Attach the dormant phase-3 merge lifecycle grammar."""
 
     _require_merge_lifecycle_control("dormant-parser-gate")
     merge = commands.add_parser("merge")
@@ -4913,6 +7933,13 @@ def _attach_merge_lifecycle_parser(
     gate_run.add_argument("gate_id")
     approve = merge_commands.add_parser("approve")
     approve.add_argument("--candidate", required=True)
+    merge_commands.add_parser("finalize")
+    recover = merge_commands.add_parser("recover")
+    recover_mode = recover.add_mutually_exclusive_group()
+    recover_mode.add_argument("--continue", dest="continue_rebase", action="store_true")
+    recover_mode.add_argument("--abort-rebase", action="store_true")
+    recover.add_argument("--paths", nargs="+")
+    merge_commands.add_parser("cleanup")
     abort = merge_commands.add_parser("abort")
     abort.add_argument("--reason")
 
@@ -5079,6 +8106,29 @@ def _validate_revision9_cross_options(
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
         return
+    if MERGE_LIFECYCLE_ACTIVE and args.command == "merge":
+        if options.chain_id is None:
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge shared verb refused — explicit --chain-id is required",
+                expected="one exact merge chain identity",
+                observed="missing chain identity",
+                remediation="rerun with --chain-id <chain-id>",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if args.merge_command == "recover":
+            continuing = bool(getattr(args, "continue_rebase", False))
+            paths = getattr(args, "paths", None)
+            if continuing != bool(paths):
+                raise Refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge recover refused — --continue requires --paths and --paths requires --continue",
+                    expected="--continue --paths <path>... or neither",
+                    observed="incomplete conflict-resolution tuple",
+                    remediation="retry with the exact recover surface",
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+        return
     if args.command != "commit" or args.commit_command != "start":
         return
     task = args.task
@@ -5189,6 +8239,16 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
             return merge_engine.gate_run(args.gate_id)
         if args.merge_command == "approve":
             return merge_engine.approve(args.candidate)
+        if args.merge_command == "finalize":
+            return merge_engine.finalize()
+        if args.merge_command == "recover":
+            return merge_engine.recover(
+                continue_rebase=args.continue_rebase,
+                paths=args.paths,
+                abort_rebase=args.abort_rebase,
+            )
+        if args.merge_command == "cleanup":
+            return merge_engine.cleanup_chain()
         if args.merge_command == "abort":
             return merge_engine.abort(args.reason)
     if args.command == "verify":
@@ -5843,13 +8903,24 @@ class _ChainStoragePrimitives:
             yield
 
     @contextlib.contextmanager
-    def event_lock(self, chain_id: str) -> Iterable[None]:
+    def event_lock(
+        self,
+        chain_id: str,
+        *,
+        deadline: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> Iterable[None]:
         """Serialize event-tail reads/appends and their materialized replace."""
         self.ensure_root()
         self._validate_id(chain_id)
         name = f".{chain_id}.events.lock"
         with _exclusive_descriptor_lock(
-            str(self.root / name), lambda: self._open_lock_descriptor(name)
+            str(self.root / name),
+            lambda: self._open_lock_descriptor(name),
+            deadline=deadline,
+            clock=clock,
+            sleeper=sleeper,
         ):
             yield
 
@@ -7473,6 +10544,13 @@ def _build_merge_chain_journal_records(
         raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
 
     introduced = _merge_gate_event_fact(prior, current)
+    if (
+        introduced is not None
+        and isinstance(introduced[1], Mapping)
+        and isinstance(introduced[1].get("gate_plan_position"), Mapping)
+        and introduced[1]["gate_plan_position"].get("kind") == "scoped-mutation"
+    ):
+        return ()
     required_gate_ids = frozenset(
         {introduced[0]} if introduced is not None else set()
     )
@@ -7684,6 +10762,50 @@ class MergeChainStore(_ChainStoragePrimitives):
         self, replay: MergeReplayResult
     ) -> dict[str, Any]:
         binding = replay.state.get("run_binding")
+        revision10 = any(
+            isinstance(event.get("payload"), Mapping)
+            and (
+                "scope_request" in event["payload"]
+                or "scope_fetch_binding" in event["payload"]
+                or (
+                    isinstance(event["payload"].get("delta"), Mapping)
+                    and isinstance(
+                        event["payload"]["delta"].get("integration"), Mapping
+                    )
+                    and isinstance(
+                        event["payload"]["delta"]["integration"].get("epoch"),
+                        Mapping,
+                    )
+                    and "gate_plan"
+                    in event["payload"]["delta"]["integration"]["epoch"]
+                )
+            )
+            for event in replay.events
+        )
+        if revision10:
+            if isinstance(binding, Mapping):
+                try:
+                    snapshot = _prove_merge_run_task_binding(
+                        Path(str(binding["repository"])),
+                        self.common_root,
+                        str(binding["run_id"]),
+                        str(binding["task_id"]),
+                        str(binding["policy_digest"]),
+                    )
+                except (KeyError, OSError, Refusal, ValueError) as exc:
+                    raise FrozenError(
+                        "merge binding authority replay failed",
+                        chain_id=str(replay.state["chain_id"]),
+                        observed=str(exc),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    ) from exc
+                if snapshot.binding != dict(binding):
+                    raise FrozenError(
+                        "merge binding authority replay changed",
+                        chain_id=str(replay.state["chain_id"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+            return copy.deepcopy(replay.state)
         register_coordination_seams()
         _batch, builders, journal = _coordination_modules()
         try:
@@ -7887,12 +11009,14 @@ class MergeChainStore(_ChainStoragePrimitives):
         validation_context = (
             copy.deepcopy(replay.context) if replay is not None else {}
         )
-        if not builders._state_shape_valid(current, chain_id, "merge") or not (
-            builders._merge_transition_valid(
+        if not _merge_state_shape_valid(builders, current, chain_id) or not (
+            _merge_transition_valid(
+                builders,
                 event,
                 copy.deepcopy(previous_state),
                 current,
                 context=validation_context,
+                history=(replay.events if replay is not None else ()),
             )
         ):
             raise FrozenError(
@@ -7959,19 +11083,36 @@ class MergeChainStore(_ChainStoragePrimitives):
         session: str | None,
         initial: bool,
         drain: bool,
+        lease: ChainLease | None = None,
     ) -> dict[str, Any]:
         for control in self._TRANSITION_CONTROLS:
             _require_merge_store_control(control)
         self.ensure_root()
-        lease = acquire_chain_lease(
+        owned_lease = lease is None
+        active_lease = lease or acquire_chain_lease(
             self.root,
             chain_id=chain_id,
             session=self._session(session),
         )
+        if active_lease.chain_id != chain_id:
+            raise FrozenError(
+                "merge transition lease names another chain",
+                chain_id=chain_id,
+                observed=active_lease.chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        exclusion = getattr(active_lease, "_exclusion", None)
+        event_lock_arguments: dict[str, Any] = {}
+        if isinstance(exclusion, RecoveryReservation):
+            event_lock_arguments = {
+                "deadline": exclusion.deadline,
+                "clock": exclusion.clock,
+                "sleeper": exclusion.sleeper,
+            }
         records: tuple[dict[str, Any], ...] = ()
         pending_outbox: dict[str, Any] | None = None
         try:
-            with self.event_lock(chain_id):
+            with self.event_lock(chain_id, **event_lock_arguments):
                 replay: MergeReplayResult | None = None
                 if initial:
                     if self._root_entry_exists(
@@ -8017,14 +11158,14 @@ class MergeChainStore(_ChainStoragePrimitives):
                     at=at,
                 )
                 _require_merge_store_control("event-before-state")
-                lease.before_event_append()
+                active_lease.before_event_append()
                 self._append_event_bytes(
                     chain_id,
                     canonical_bytes(event) + b"\n",
                     initial=initial,
                 )
                 self._boundary("merge-event-appended")
-                lease.before_state_replace()
+                active_lease.before_state_replace()
                 self._atomic_state(current)
                 self._boundary("merge-state-replaced")
                 with self.root_descriptor() as root:
@@ -8036,8 +11177,9 @@ class MergeChainStore(_ChainStoragePrimitives):
                     str(event["digest"]),
                 )
         finally:
-            lease.release()
-            self._boundary("merge-chain-serialization-released")
+            if owned_lease:
+                active_lease.release()
+                self._boundary("merge-chain-serialization-released")
         if pending_outbox is not None and drain:
             _require_merge_store_control("post-serialization-journal-drain")
             receipt = _drain_chain_batch_capability(
@@ -8050,6 +11192,7 @@ class MergeChainStore(_ChainStoragePrimitives):
                 current,
                 receipt,
                 session=session,
+                lease=lease,
             )
         return current
 
@@ -8059,6 +11202,7 @@ class MergeChainStore(_ChainStoragePrimitives):
         receipt: Mapping[str, Any],
         *,
         session: str | None,
+        lease: ChainLease | None = None,
     ) -> dict[str, Any]:
         for control in (
             "lease-tail-authentication",
@@ -8077,13 +11221,29 @@ class MergeChainStore(_ChainStoragePrimitives):
                 chain_id=chain_id,
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
-        lease = acquire_chain_lease(
+        owned_lease = lease is None
+        active_lease = lease or acquire_chain_lease(
             self.root,
             chain_id=chain_id,
             session=self._session(session),
         )
+        if active_lease.chain_id != chain_id:
+            raise FrozenError(
+                "merge receipt lease names another chain",
+                chain_id=chain_id,
+                observed=active_lease.chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        exclusion = getattr(active_lease, "_exclusion", None)
+        event_lock_arguments: dict[str, Any] = {}
+        if isinstance(exclusion, RecoveryReservation):
+            event_lock_arguments = {
+                "deadline": exclusion.deadline,
+                "clock": exclusion.clock,
+                "sleeper": exclusion.sleeper,
+            }
         try:
-            with self.event_lock(chain_id):
+            with self.event_lock(chain_id, **event_lock_arguments):
                 replay = self._read_replay_locked(chain_id)
                 self._require_tail_version(
                     snapshot,
@@ -8126,25 +11286,27 @@ class MergeChainStore(_ChainStoragePrimitives):
                 )
                 _batch, builders, _journal = _coordination_modules()
                 context = copy.deepcopy(replay.context)
-                if not builders._state_shape_valid(
-                    current, chain_id, "merge"
-                ) or not builders._merge_transition_valid(
+                if not _merge_state_shape_valid(
+                    builders, current, chain_id
+                ) or not _merge_transition_valid(
+                    builders,
                     event,
                     replay.state,
                     current,
                     context=context,
+                    history=replay.events,
                 ):
                     raise FrozenError(
                         "merge journal receipt transition is invalid",
                         chain_id=chain_id,
                         schema=REVISION9_OUTPUT_SCHEMA,
                     )
-                lease.before_event_append()
+                active_lease.before_event_append()
                 self._append_event_bytes(
                     chain_id, canonical_bytes(event) + b"\n", initial=False
                 )
                 self._boundary("merge-receipt-appended")
-                lease.before_state_replace()
+                active_lease.before_state_replace()
                 self._atomic_state(current)
                 self._boundary("merge-receipt-state-replaced")
                 self._remember_version(
@@ -8153,7 +11315,8 @@ class MergeChainStore(_ChainStoragePrimitives):
                     str(event["digest"]),
                 )
         finally:
-            lease.release()
+            if owned_lease:
+                active_lease.release()
         return current
 
     def create(
@@ -8214,6 +11377,71 @@ class MergeChainStore(_ChainStoragePrimitives):
                 initial=False,
                 drain=True,
             )
+
+    def transition_locked(
+        self,
+        snapshot: dict[str, Any],
+        event_name: str,
+        payload: Mapping[str, Any],
+        *,
+        generation_digest: str | None,
+        lease: ChainLease,
+        at: str | None = None,
+        session: str | None = None,
+    ) -> dict[str, Any]:
+        """Append while an outer journal/common-lock/chain-lease epoch is held."""
+
+        validate_merge_state(snapshot, str(snapshot.get("chain_id", "")))
+        chain_id = str(snapshot["chain_id"])
+        if self.chain_family(chain_id) != "merge":
+            raise FrozenError(
+                "merge transition routed to a non-merge family",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return self._write_transition_with_outer(
+            snapshot,
+            chain_id=chain_id,
+            event_name=event_name,
+            generation_digest=generation_digest,
+            payload=payload,
+            at=at or iso_z(),
+            session=session,
+            initial=False,
+            drain=True,
+            lease=lease,
+        )
+
+    def load_locked(self, chain_id: str, *, lease: ChainLease) -> dict[str, Any]:
+        """Re-read one current projection while its external lease is owned."""
+
+        self._validate_id(chain_id)
+        if lease.chain_id != chain_id or self.chain_family(chain_id) != "merge":
+            raise FrozenError(
+                "merge locked load has a mismatched family or lease",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        lease._revalidate("locked-load")
+        exclusion = getattr(lease, "_exclusion", None)
+        event_lock_arguments: dict[str, Any] = {}
+        if isinstance(exclusion, RecoveryReservation):
+            event_lock_arguments = {
+                "deadline": exclusion.deadline,
+                "clock": exclusion.clock,
+                "sleeper": exclusion.sleeper,
+            }
+        with self.event_lock(chain_id, **event_lock_arguments):
+            replay = self._read_replay_locked(chain_id)
+            if self._projection_status(replay)[0] != "current":
+                raise FrozenError(
+                    "merge projection is stale inside a locked epoch",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            state = self._resolve_replayed_projection(replay)
+            self._remember_version(state, replay.tail_sequence, replay.tail_digest)
+            return state
 
     def recover_pending_outbox(
         self, chain_id: str, *, session: str | None = None
@@ -9024,17 +12252,78 @@ def _opaque_path_evidence_at(parent: int, name: str, path: Path) -> dict[str, An
 class RecoveryReservation:
     common_dir: Path
     identity: PublishedLockRecord
+    deadline: float
+    clock: Callable[[], float] = dataclasses.field(
+        repr=False, compare=False
+    )
+    sleeper: Callable[[float], None] = dataclasses.field(
+        repr=False, compare=False
+    )
 
     @property
     def record(self) -> dict[str, Any]:
         return copy.deepcopy(self.identity.record)
 
-    def matches_chain(self, chain_id: str) -> bool:
+    def assert_current(self, operation: str) -> None:
+        """Revalidate this exact reservation inside its original deadline."""
+
+        _require_deadline_open(self.deadline, self.clock, operation)
+        canonical, common = _open_owned_directory(self.common_dir)
+        try:
+            _revalidate_record_at(
+                common,
+                COMMON_LOCK_RECOVERY_NAME,
+                canonical / COMMON_LOCK_RECOVERY_NAME,
+                self.identity,
+                _validate_recovery_record,
+            )
+        finally:
+            os.close(common)
+
+    def remaining_timeout(self, operation: str) -> float:
+        self.assert_current(operation)
+        remaining = self.deadline - self.clock()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"{operation} exhausted the shared common-lock deadline"
+            )
+        return remaining
+
+    def affected_merge_chain(self) -> str:
+        """Return the reservation's one affected merge chain, or fail closed."""
+
         record = self.identity.record
-        return chain_id in {
-            record.get("stale_owner_chain_id"),
-            record.get("inflight_chain_id"),
+        identities = [
+            (record.get("stale_owner_kind"), record.get("stale_owner_chain_id")),
+            (record.get("inflight_owner_kind"), record.get("inflight_chain_id")),
+        ]
+        chains = {
+            str(selected_chain)
+            for kind, selected_chain in identities
+            if kind is not None or selected_chain is not None
+            if kind == "merge"
+            and isinstance(selected_chain, str)
+            and CHAIN_ID_RE.fullmatch(selected_chain) is not None
         }
+        populated = [
+            (kind, selected_chain)
+            for kind, selected_chain in identities
+            if kind is not None or selected_chain is not None
+        ]
+        if not populated or len(chains) != 1 or any(
+            kind != "merge" or selected_chain not in chains
+            for kind, selected_chain in populated
+        ):
+            raise OSError(
+                "recovery reservation does not identify one affected merge chain"
+            )
+        return next(iter(chains))
+
+    def matches_chain(self, chain_id: str) -> bool:
+        try:
+            return self.affected_merge_chain() == chain_id
+        except OSError:
+            return False
 
 
 def _new_owner_record(
@@ -9287,6 +12576,10 @@ def _publish_recovery_reservation(
     common_dir: Path,
     record: Mapping[str, Any],
     boundary: Callable[[str], None] | None,
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
 ) -> RecoveryReservation | None:
     _require_common_lock_control("immutable-recovery-reservation")
     temporary, temporary_identity = _create_private_record_at(
@@ -9333,7 +12626,13 @@ def _publish_recovery_reservation(
         os.fsync(common)
         if boundary is not None:
             boundary("recovery-temp-unlinked")
-        return RecoveryReservation(common_dir, canonical)
+        return RecoveryReservation(
+            common_dir,
+            canonical,
+            deadline,
+            clock,
+            sleeper,
+        )
     except BaseException as exc:
         if isinstance(exc, CommonLockBoundaryCrash):
             raise
@@ -9477,6 +12776,82 @@ def _persist_recovery_proof(
     recorder(copy.deepcopy(dict(proof)))
 
 
+def _recovery_classification_receipt_valid(
+    value: object,
+    *,
+    reservation: RecoveryReservation,
+    fence: PublishedLockRecord | None,
+) -> bool:
+    """Validate the exact receipt returned by transactional classification."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema",
+        "chain_id",
+        "chain_store",
+        "reservation_digest",
+        "fence_digest",
+        "proof_digest",
+        "event_digest",
+    }:
+        return False
+    try:
+        selected_chain = reservation.affected_merge_chain()
+    except OSError:
+        return False
+    fields_valid = bool(
+        value.get("schema") == "forge-merge-fence-recovery-receipt/1"
+        and value.get("chain_id") == selected_chain
+        and isinstance(value.get("chain_store"), str)
+        and os.path.isabs(str(value.get("chain_store")))
+        and value.get("reservation_digest") == reservation.identity.digest
+        and value.get("fence_digest")
+        == (fence.digest if fence is not None else None)
+        and SHA256_RE.fullmatch(str(value.get("proof_digest", ""))) is not None
+        and SHA256_RE.fullmatch(str(value.get("event_digest", ""))) is not None
+    )
+    if not fields_valid:
+        return False
+    try:
+        chain_store = Path(str(value["chain_store"]))
+        store = MergeChainStore(chain_store.parent.parent)
+        if Path(os.path.realpath(store.root)) != Path(
+            os.path.realpath(chain_store)
+        ):
+            return False
+        reservation.assert_current(
+            "reservation-held recovery receipt validation"
+        )
+        with store.event_lock(
+            selected_chain,
+            deadline=reservation.deadline,
+            clock=reservation.clock,
+            sleeper=reservation.sleeper,
+        ):
+            replay = store._read_replay_locked(selected_chain)
+        if replay.tail_digest != value.get("event_digest") or not replay.events:
+            return False
+        retained_event = replay.events[-1]
+        retained_payload = retained_event.get("payload")
+        retained_proof = (
+            retained_payload.get("recovery_proof")
+            if isinstance(retained_payload, Mapping)
+            else None
+        )
+        return bool(
+            retained_event.get("event") == "condition_recorded"
+            and retained_event.get("digest") == value.get("event_digest")
+            and isinstance(retained_proof, Mapping)
+            and retained_proof.get("digest") == value.get("proof_digest")
+            and retained_proof.get("chain_id") == selected_chain
+            and retained_proof.get("reservation")
+            == reservation.identity.evidence()
+            and retained_proof.get("fence")
+            == (fence.evidence() if fence is not None else None)
+        )
+    except (FrozenError, OSError, ValueError):
+        return False
+
+
 class CommonRebaseLock:
     """One long-lived FR-235 portable owner and optional secondary flock."""
 
@@ -9547,13 +12922,8 @@ class CommonRebaseLock:
             raise OSError("common rebase lock lost its secondary flock descriptor")
         if _reservation_evidence(self._common, self.common_dir) is not None:
             raise OSError("common rebase lock has an unresolved recovery reservation")
-        fence = _record_at_if_present(
-            self._common,
-            COMMON_LOCK_INFLIGHT_NAME,
-            self.common_dir / COMMON_LOCK_INFLIGHT_NAME,
-            _validate_fence_record,
-        )
-        if fence is not None and not allow_fence:
+        fence_present = _common_fence_path_present(self._common)
+        if fence_present and not allow_fence:
             raise OSError("common rebase lock has an unresolved in-flight fence")
 
     def recover_owned_fence(
@@ -9561,8 +12931,11 @@ class CommonRebaseLock:
         fence: PublishedLockRecord,
         *,
         persist_proof: Callable[[dict[str, Any]], Any] | None = None,
+        lifecycle_classifier: (
+            Callable[[RecoveryReservation, PublishedLockRecord | None], Any] | None
+        ) = None,
     ) -> None:
-        """Release only a recorded, proven-dead fence under this owner."""
+        """Classify and release a proven-dead fence under one reservation."""
 
         release_was_pending = self._release_pending
         if release_was_pending:
@@ -9585,30 +12958,70 @@ class CommonRebaseLock:
             raise OSError("in-flight fence does not belong to this common-lock owner")
         if self._group_probe(int(current.record["pgid"])) != "dead":
             raise OSError("in-flight process group is live or unprovable")
-        proof = _fence_death_proof(current, group_dead_at=iso_z())
         recorder = (
             persist_proof
             if persist_proof is not None
             else self._recovery_recorder
         )
-        _persist_recovery_proof(
-            proof,
+        _require_recovery_proof_recorder(
+            (str(current.record["owner_kind"]),),
             recorder,
-            owner_kinds=(str(current.record["owner_kind"]),),
             no_transaction_record=self._no_transaction_record,
         )
-        if self._group_probe(int(current.record["pgid"])) != "dead":
-            raise OSError("in-flight process group death could not be re-proved")
-        _unlink_revalidated_record_at(
-            self._common,
-            COMMON_LOCK_INFLIGHT_NAME,
-            self.common_dir / COMMON_LOCK_INFLIGHT_NAME,
-            current,
-            _validate_fence_record,
-        )
-        os.fsync(self._common)
-        self._unresolved_fence = None
-        self._emit_boundary("fence-recovered")
+        classifier = lifecycle_classifier
+        reservation: RecoveryReservation | None = None
+        try:
+            reservation = _publish_recovery_reservation(
+                self._common,
+                self.common_dir,
+                _recovery_record(
+                    "flock-held-dead-fence",
+                    stale_owner=None,
+                    inflight=current,
+                    host=str(self.owner.record["host"]),
+                    pid=int(self.owner.record["pid"]),
+                    now=utc_now,
+                ),
+                self._boundary,
+                deadline=self.deadline,
+                clock=self._clock,
+                sleeper=self._sleeper,
+            )
+            if reservation is None:
+                raise OSError("another recovery reservation won publication")
+            _clear_reserved_fence(
+                self._common,
+                self.common_dir,
+                reservation,
+                group_probe=self._group_probe,
+                deadline=self.deadline,
+                clock=self._clock,
+                boundary=self._boundary,
+                recovery_recorder=recorder,
+                no_transaction_record=self._no_transaction_record,
+                lifecycle_classifier=classifier,
+            )
+            _clear_owned_reservation(
+                self._common, self.common_dir, reservation, self._boundary
+            )
+            reservation = None
+            self._unresolved_fence = None
+            self._emit_boundary("fence-recovered")
+        except BaseException as exc:
+            if isinstance(exc, CommonLockBoundaryCrash):
+                raise
+            if reservation is not None:
+                if self._no_transaction_record:
+                    try:
+                        _clear_owned_reservation(
+                            self._common,
+                            self.common_dir,
+                            reservation,
+                            boundary=None,
+                        )
+                    except (OSError, ValueError):
+                        pass
+            raise
 
     def release(self) -> None:
         if self._released:
@@ -9621,13 +13034,7 @@ class CommonRebaseLock:
         try:
             if self._unresolved_fence is not None:
                 raise OSError("an unresolved fenced process permits only fence recovery")
-            fence = _record_at_if_present(
-                self._common,
-                COMMON_LOCK_INFLIGHT_NAME,
-                self.common_dir / COMMON_LOCK_INFLIGHT_NAME,
-                _validate_fence_record,
-            )
-            if fence is not None:
+            if _common_fence_path_present(self._common):
                 raise OSError("in-flight fence remains at common-lock release")
             _require_common_lock_control("reverse-release-order")
             if not self._flock_released:
@@ -9763,6 +13170,27 @@ def _read_fence_for_recovery(
         )
 
 
+def _common_fence_path_present(common: int) -> bool:
+    """Observe only whether the physical fence name exists.
+
+    Revision 12 permits an ordinary contender to notice that the reserved
+    name is occupied, but not to open, parse, probe, classify, or clear the
+    occupant.  In particular this check runs before portable/flock
+    publication so an ordinary refusal is byte preserving for every lock
+    artifact.
+    """
+
+    try:
+        os.stat(
+            COMMON_LOCK_INFLIGHT_NAME,
+            dir_fd=common,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _recover_stale_portable_owner(
     common: int,
     common_dir: Path,
@@ -9777,8 +13205,10 @@ def _recover_stale_portable_owner(
     boundary: Callable[[str], None] | None,
     recovery_recorder: Callable[[dict[str, Any]], Any] | None,
     no_transaction_record: bool,
+    proof_already_persisted: bool = False,
 ) -> None:
     _require_common_lock_control("death-proof-revalidation")
+    reservation.assert_current("stale-owner reservation revalidation")
     canonical_reservation = _revalidate_record_at(
         common,
         COMMON_LOCK_RECOVERY_NAME,
@@ -9814,6 +13244,7 @@ def _recover_stale_portable_owner(
         recovery_recorder,
         owner_kinds=(str(stale.record["owner_kind"]),),
         no_transaction_record=no_transaction_record,
+        proof_already_persisted=proof_already_persisted,
     )
     if current_inflight is not None:
         _persist_recovery_proof(
@@ -9824,10 +13255,11 @@ def _recover_stale_portable_owner(
             recovery_recorder,
             owner_kinds=(str(current_inflight.record["owner_kind"]),),
             no_transaction_record=no_transaction_record,
+            proof_already_persisted=proof_already_persisted,
         )
     if pid_probe(int(stale.record["pid"])) != "dead":
         raise OSError("stale portable owner PID became live or unprovable")
-    _require_deadline_open(deadline, clock, "stale-owner release")
+    reservation.assert_current("stale-owner release")
     _release_portable_identity(
         common,
         common_dir,
@@ -9851,19 +13283,17 @@ def _clear_reserved_fence(
     boundary: Callable[[str], None] | None,
     recovery_recorder: Callable[[dict[str, Any]], Any] | None,
     no_transaction_record: bool,
+    lifecycle_classifier: (
+        Callable[[RecoveryReservation, PublishedLockRecord | None], Any] | None
+    ),
+    classification_already_performed: bool = False,
     proof_already_persisted: bool = False,
 ) -> None:
     _require_common_lock_control("death-proof-revalidation")
     record = reservation.identity.record
     if record.get("inflight_inode") is None:
         return
-    _revalidate_record_at(
-        common,
-        COMMON_LOCK_RECOVERY_NAME,
-        common_dir / COMMON_LOCK_RECOVERY_NAME,
-        reservation.identity,
-        _validate_recovery_record,
-    )
+    reservation.assert_current("reservation-held fence inspection")
     fence = _read_owned_record_at(
         common,
         COMMON_LOCK_INFLIGHT_NAME,
@@ -9880,6 +13310,37 @@ def _clear_reserved_fence(
     if group_probe(int(fence.record["pgid"])) != "dead":
         raise OSError("in-flight group death could not be re-proved")
     _require_deadline_open(deadline, clock, "in-flight group death proof")
+    _require_common_lock_control("reservation-held-lifecycle-classification")
+    if not classification_already_performed:
+        if lifecycle_classifier is None:
+            raise OSError(
+                "reservation-held lifecycle classification is required before fence clearing"
+            )
+        reservation.assert_current(
+            "reservation-held lifecycle classification"
+        )
+        classification_result = lifecycle_classifier(reservation, fence)
+        receipt_valid = _recovery_classification_receipt_valid(
+            classification_result,
+            reservation=reservation,
+            fence=fence,
+        )
+        if not no_transaction_record and not receipt_valid:
+            raise OSError(
+                "reservation-held lifecycle classification did not return its exact durable receipt"
+            )
+        if receipt_valid:
+            proof_already_persisted = True
+    reservation.assert_current("reservation-held fence revalidation")
+    _revalidate_record_at(
+        common,
+        COMMON_LOCK_INFLIGHT_NAME,
+        common_dir / COMMON_LOCK_INFLIGHT_NAME,
+        fence,
+        _validate_fence_record,
+    )
+    if boundary is not None:
+        boundary("recovery-fence-lifecycle-classified")
     if proof_already_persisted:
         _persist_recovery_proof(
             record,
@@ -9906,7 +13367,7 @@ def _clear_reserved_fence(
         )
     if group_probe(int(fence.record["pgid"])) != "dead":
         raise OSError("in-flight group became live or unprovable")
-    _require_deadline_open(deadline, clock, "in-flight fence release")
+    reservation.assert_current("in-flight fence release")
     _unlink_revalidated_record_at(
         common,
         COMMON_LOCK_INFLIGHT_NAME,
@@ -9937,6 +13398,9 @@ def acquire_common_lock(
     flock_impl: Callable[[int, int], Any] = fcntl.flock,
     admission_recheck: Callable[[], bool] | None = None,
     recovery_recorder: Callable[[dict[str, Any]], Any] | None = None,
+    recovery_classifier: (
+        Callable[[RecoveryReservation, PublishedLockRecord | None], Any] | None
+    ) = None,
     no_transaction_record: bool = False,
     boundary: Callable[[str], None] | None = None,
 ) -> CommonRebaseLock:
@@ -9948,6 +13412,12 @@ def acquire_common_lock(
         raise ValueError("common-lock timeout must be positive")
     if recovery_recorder is not None and not callable(recovery_recorder):
         raise ValueError("common-lock recovery recorder must be callable")
+    if recovery_classifier is not None and not callable(recovery_classifier):
+        raise ValueError("common-lock recovery classifier must be callable")
+    if recovery_classifier is not None and operation != "recover":
+        raise ValueError(
+            "common-lock recovery classifier requires an explicit recovery operation"
+        )
     if not isinstance(no_transaction_record, bool):
         raise ValueError("common-lock no-transaction opt-out must be boolean")
     local_host = host or socket.gethostname()
@@ -9973,11 +13443,14 @@ def acquire_common_lock(
             )
         except OSError as exc:
             raise ValueError(str(exc)) from exc
+    lifecycle_classifier = recovery_classifier
     flock_enabled = hasattr(fcntl, "flock") if use_flock is None else use_flock
     canonical, common = _open_owned_directory(common_dir)
     deadline = clock() + float(timeout)
     last_evidence: dict[str, Any] = {"common_dir": str(canonical)}
     reservation: RecoveryReservation | None = None
+    classified_reservation_digest: str | None = None
+    proof_persisted_reservation_digest: str | None = None
     portable: PublishedLockRecord | None = None
     flock_descriptor: int | None = None
     try:
@@ -9993,6 +13466,28 @@ def acquire_common_lock(
                 if not _sleep_with_deadline(deadline, clock, sleeper):
                     raise CommonLockUnavailable(last_evidence)
                 continue
+            if operation != "recover":
+                try:
+                    fence_name_present = _common_fence_path_present(common)
+                except OSError as exc:
+                    fence_name_present = True
+                    last_evidence = {
+                        "common_dir": str(canonical),
+                        "detail": (
+                            "surviving in-flight fence requires explicit "
+                            f"recovery: {exc}"
+                        ),
+                    }
+                if fence_name_present:
+                    last_evidence = {
+                        **last_evidence,
+                        "detail": (
+                            "surviving in-flight fence requires explicit recovery"
+                        ),
+                    }
+                    if not _sleep_with_deadline(deadline, clock, sleeper):
+                        raise CommonLockUnavailable(last_evidence)
+                    continue
             inspection = _inspect_common_lock_fd(common, canonical)
             last_evidence = inspection.evidence(canonical)
             if inspection.topology == "free":
@@ -10026,10 +13521,29 @@ def acquire_common_lock(
                     last_evidence["detail"] = "portable owner host is foreign"
                 elif pid_probe(int(stale.record["pid"])) != "dead":
                     last_evidence["detail"] = "portable owner PID is live or unprovable"
-                else:
-                    fence, fence_error, fence_evidence = _read_fence_for_recovery(
-                        common, canonical
+                elif (
+                    operation != "recover"
+                    and stale.record.get("owner_kind") == "merge"
+                ):
+                    last_evidence["detail"] = (
+                        "stale merge portable owner requires explicit recovery"
                     )
+                elif operation != "recover" and _common_fence_path_present(
+                    common
+                ):
+                    last_evidence["detail"] = (
+                        "surviving in-flight fence requires explicit recovery"
+                    )
+                else:
+                    if operation == "recover":
+                        fence, fence_error, fence_evidence = (
+                            _read_fence_for_recovery(common, canonical)
+                        )
+                    else:
+                        # Ordinary legacy-owner recovery is admitted only
+                        # after the presence-only check above.  It never opens,
+                        # parses, probes, classifies, or clears a fence.
+                        fence, fence_error, fence_evidence = None, None, None
                     recovery_kind = "fallback-owner"
                     if fence_error is not None:
                         last_evidence["detail"] = f"in-flight fence is unprovable: {fence_error}"
@@ -10047,9 +13561,24 @@ def acquire_common_lock(
                     if fence_error is None and (
                         fence is None or recovery_kind == "fallback-owner-and-fence"
                     ):
-                        _require_deadline_open(
-                            deadline, clock, "stale-owner and fence proof"
-                        )
+                        if (
+                            operation != "recover"
+                            and stale.record.get("owner_kind") == "merge"
+                        ):
+                            # A dead portable owner is still transaction
+                            # evidence.  Ordinary acquisition has no authority
+                            # to classify or remove it (with or without a
+                            # surviving fence); explicit recovery must first
+                            # publish the immutable reservation and durable
+                            # lifecycle/death proof.
+                            last_evidence["detail"] = (
+                                "stale portable owner requires explicit recovery"
+                            )
+                            if not _sleep_with_deadline(
+                                deadline, clock, sleeper
+                            ):
+                                raise CommonLockUnavailable(last_evidence)
+                            continue
                         _require_recovery_proof_recorder(
                             (
                                 str(stale.record["owner_kind"]),
@@ -10062,6 +13591,9 @@ def acquire_common_lock(
                             recovery_recorder,
                             no_transaction_record=no_transaction_record,
                         )
+                        _require_deadline_open(
+                            deadline, clock, "stale-owner and fence proof"
+                        )
                         record = _recovery_record(
                             recovery_kind,
                             stale_owner=stale,
@@ -10071,12 +13603,95 @@ def acquire_common_lock(
                             now=now,
                         )
                         reservation = _publish_recovery_reservation(
-                            common, canonical, record, boundary
+                            common,
+                            canonical,
+                            record,
+                            boundary,
+                            deadline=deadline,
+                            clock=clock,
+                            sleeper=sleeper,
                         )
                         if reservation is not None:
                             _require_deadline_open(
                                 deadline, clock, "recovery reservation publication"
                             )
+                            try:
+                                transactional_recovery = bool(
+                                    stale.record.get("owner_kind")
+                                    in {"merge", "push"}
+                                    or (
+                                        fence is not None
+                                        and fence.record.get("owner_kind")
+                                        in {"merge", "push"}
+                                    )
+                                )
+                                if not transactional_recovery and fence is None:
+                                    classification_result = None
+                                else:
+                                    _require_common_lock_control(
+                                        "reservation-held-lifecycle-classification"
+                                    )
+                                    if lifecycle_classifier is None:
+                                        raise OSError(
+                                            "reservation-held lifecycle classification is required before stale-owner recovery"
+                                        )
+                                    reservation.assert_current(
+                                        "reservation-held lifecycle classification"
+                                    )
+                                    classification_result = lifecycle_classifier(
+                                        reservation, fence
+                                    )
+                                    if (
+                                        transactional_recovery
+                                        and not no_transaction_record
+                                        and not (
+                                            _recovery_classification_receipt_valid(
+                                                classification_result,
+                                                reservation=reservation,
+                                                fence=fence,
+                                            )
+                                        )
+                                    ):
+                                        raise OSError(
+                                            "reservation-held lifecycle classification did not return its exact durable receipt"
+                                        )
+                            except BaseException as classification_error:
+                                if isinstance(
+                                    classification_error,
+                                    CommonLockBoundaryCrash,
+                                ):
+                                    raise
+                                if no_transaction_record:
+                                    _clear_owned_reservation(
+                                        common,
+                                        canonical,
+                                        reservation,
+                                        boundary=None,
+                                    )
+                                    reservation = None
+                                if isinstance(classification_error, FrozenError):
+                                    raise
+                                raise CommonLockUnavailable(
+                                    {
+                                        **last_evidence,
+                                        "detail": str(classification_error),
+                                    }
+                                ) from classification_error
+                            classified_reservation_digest = (
+                                reservation.identity.digest
+                            )
+                            if _recovery_classification_receipt_valid(
+                                classification_result,
+                                reservation=reservation,
+                                fence=fence,
+                            ):
+                                proof_persisted_reservation_digest = (
+                                    reservation.identity.digest
+                                )
+                            if fence is not None and boundary is not None:
+                                boundary(
+                                    "recovery-fence-lifecycle-classified"
+                                )
                             _recover_stale_portable_owner(
                                 common,
                                 canonical,
@@ -10090,6 +13705,10 @@ def acquire_common_lock(
                                 boundary=boundary,
                                 recovery_recorder=recovery_recorder,
                                 no_transaction_record=no_transaction_record,
+                                proof_already_persisted=(
+                                    proof_persisted_reservation_digest
+                                    == reservation.identity.digest
+                                ),
                             )
                             continue
             if portable is None:
@@ -10111,9 +13730,24 @@ def acquire_common_lock(
                 _require_deadline_open(
                     deadline, clock, "in-flight admission inspection"
                 )
-                fence, fence_error, fence_evidence = _read_fence_for_recovery(
-                    common, canonical
-                )
+                if operation != "recover":
+                    if _common_fence_path_present(common):
+                        raise OSError(
+                            "surviving in-flight fence requires explicit recovery"
+                        )
+                    fence, fence_error, fence_evidence = None, None, None
+                else:
+                    if (
+                        reservation is None
+                        and flock_descriptor is None
+                        and _common_fence_path_present(common)
+                    ):
+                        raise OSError(
+                            "outer-owner-absent fence recovery requires the secondary flock"
+                        )
+                    fence, fence_error, fence_evidence = _read_fence_for_recovery(
+                        common, canonical
+                    )
                 if fence_error is not None:
                     raise OSError(
                         canonical_bytes(
@@ -10135,12 +13769,18 @@ def acquire_common_lock(
                             boundary=boundary,
                             recovery_recorder=recovery_recorder,
                             no_transaction_record=no_transaction_record,
-                            proof_already_persisted=str(
-                                reservation.identity.record.get("recovery_kind")
-                            ).startswith("fallback-"),
+                            lifecycle_classifier=lifecycle_classifier,
+                            classification_already_performed=(
+                                classified_reservation_digest
+                                == reservation.identity.digest
+                            ),
+                            proof_already_persisted=(
+                                proof_persisted_reservation_digest
+                                == reservation.identity.digest
+                            ),
                         )
                     elif (
-                        flock_enabled
+                        operation == "recover"
                         and flock_descriptor is not None
                         and _fence_matches_owner(fence, portable)
                         and fence.record.get("host") == local_host
@@ -10163,7 +13803,13 @@ def acquire_common_lock(
                             no_transaction_record=no_transaction_record,
                         )
                         reservation = _publish_recovery_reservation(
-                            common, canonical, record, boundary
+                            common,
+                            canonical,
+                            record,
+                            boundary,
+                            deadline=deadline,
+                            clock=clock,
+                            sleeper=sleeper,
                         )
                         if reservation is None:
                             raise OSError("another recovery reservation won publication")
@@ -10177,6 +13823,7 @@ def acquire_common_lock(
                             boundary=boundary,
                             recovery_recorder=recovery_recorder,
                             no_transaction_record=no_transaction_record,
+                            lifecycle_classifier=lifecycle_classifier,
                         )
                     else:
                         raise OSError("in-flight fence is live, mismatched, or unrecoverable")
@@ -10186,6 +13833,8 @@ def acquire_common_lock(
                     )
                     _clear_owned_reservation(common, canonical, reservation, boundary)
                     reservation = None
+                    classified_reservation_digest = None
+                    proof_persisted_reservation_digest = None
                 if admission_recheck is not None and not admission_recheck():
                     raise OSError("locked admission recheck did not pass")
                 if clock() >= deadline:
@@ -10206,15 +13855,26 @@ def acquire_common_lock(
                     no_transaction_record=no_transaction_record,
                 )
             except BaseException as exc:
-                if isinstance(exc, (CommonLockBoundaryCrash, CommonLockUnavailable)):
+                if isinstance(exc, CommonLockBoundaryCrash):
                     raise
                 last_evidence = {
                     "common_dir": str(canonical),
                     "owner": portable.evidence(),
                     "error": str(exc),
                 }
-                if reservation is not None:
-                    raise CommonLockUnavailable(last_evidence) from exc
+                if reservation is not None and (
+                    no_transaction_record or owner_kind not in {"merge", "push"}
+                ):
+                    try:
+                        _clear_owned_reservation(
+                            common, canonical, reservation, boundary=None
+                        )
+                        reservation = None
+                    except (OSError, ValueError) as reservation_error:
+                        last_evidence["reservation_release_error"] = str(
+                            reservation_error
+                        )
+                        raise CommonLockUnavailable(last_evidence) from reservation_error
                 if flock_descriptor is not None:
                     try:
                         flock_impl(flock_descriptor, fcntl.LOCK_UN)
@@ -10234,6 +13894,12 @@ def acquire_common_lock(
                     last_evidence["release_error"] = str(release_error)
                     raise CommonLockUnavailable(last_evidence) from release_error
                 portable = None
+                if isinstance(exc, FrozenError):
+                    raise
+                if isinstance(exc, CommonLockUnavailable):
+                    raise
+                if reservation is not None:
+                    raise CommonLockUnavailable(last_evidence) from exc
                 if not _sleep_with_deadline(deadline, clock, sleeper):
                     raise CommonLockUnavailable(last_evidence) from exc
     except BaseException as exc:
@@ -10261,11 +13927,13 @@ class ChainLease:
         directory_descriptor: int,
         identity: PublishedLockRecord,
         boundary: Callable[[str], None] | None,
+        exclusion: CommonRebaseLock | RecoveryReservation | None,
     ) -> None:
         self.chains_dir = chains_dir
         self._directory = directory_descriptor
         self.identity = identity
         self._boundary = boundary
+        self._exclusion = exclusion
         self._released = False
 
     @property
@@ -10284,6 +13952,12 @@ class ChainLease:
         _require_common_lock_control("chain-lease-write-revalidation")
         if self._released or self._directory < 0:
             raise OSError("chain lease is already released")
+        if self._exclusion is not None and not _lease_exclusion_is_current(
+            self._exclusion, self.chain_id
+        ):
+            raise OSError(
+                "chain lease lost its repository-wide recovery exclusion"
+            )
         _revalidate_record_at(
             self._directory,
             self.path.name,
@@ -10313,6 +13987,7 @@ class ChainLease:
             return
         _require_common_lock_control("chain-lease-write-revalidation")
         try:
+            self._revalidate("release")
             _unlink_revalidated_record_at(
                 self._directory,
                 self.path.name,
@@ -10353,21 +14028,109 @@ def _lease_exclusion_is_current(
     if isinstance(exclusion, RecoveryReservation):
         if not exclusion.matches_chain(chain_id):
             return False
-        canonical, common = _open_owned_directory(exclusion.common_dir)
         try:
-            _revalidate_record_at(
-                common,
-                COMMON_LOCK_RECOVERY_NAME,
-                canonical / COMMON_LOCK_RECOVERY_NAME,
-                exclusion.identity,
-                _validate_recovery_record,
-            )
+            exclusion.assert_current("chain lease recovery exclusion")
             return True
-        except (OSError, ValueError):
+        except (OSError, TimeoutError, ValueError):
             return False
-        finally:
-            os.close(common)
     return False
+
+
+def _lease_reclaim_authority_is_current(
+    exclusion: CommonRebaseLock | RecoveryReservation | None,
+    chain_id: str,
+) -> bool:
+    """Require bare-recover authority, not merely an ordinary held lock."""
+
+    if isinstance(exclusion, RecoveryReservation):
+        return _lease_exclusion_is_current(exclusion, chain_id)
+    if isinstance(exclusion, CommonRebaseLock):
+        return bool(
+            exclusion.owner.record.get("operation") == "recover"
+            and _lease_exclusion_is_current(exclusion, chain_id)
+        )
+    return False
+
+
+def _repository_recovery_reservation_present(chains_dir: Path) -> bool:
+    """Observe only the repository-wide reservation name from a lease path."""
+
+    try:
+        (chains_dir.parent.parent / COMMON_LOCK_RECOVERY_NAME).lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _reconcile_merge_projection_for_lease_reclaim(
+    chains_dir: Path,
+    chain_id: str,
+    *,
+    exclusion: CommonRebaseLock | RecoveryReservation,
+    repair_with: ChainLease | None,
+    deadline: float,
+    clock: Callable[[], float],
+    sleeper: Callable[[float], None],
+) -> None:
+    """Authenticate event truth and repair only after the new lease exists."""
+
+    events_path = chains_dir / f"{chain_id}.events.jsonl"
+    state_path = chains_dir / f"{chain_id}.json"
+    try:
+        events_path.lstat()
+        events_exists = True
+    except FileNotFoundError:
+        events_exists = False
+    try:
+        state_path.lstat()
+        state_exists = True
+    except FileNotFoundError:
+        state_exists = False
+    if not events_exists and not state_exists:
+        # Low-level lock-mechanism tests deliberately have no transaction.
+        if (
+            isinstance(exclusion, CommonRebaseLock)
+            and exclusion._no_transaction_record
+        ):
+            return
+        raise FrozenError(
+            "stale merge lease lacks event/state evidence for reconciliation",
+            chain_id=chain_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    common_root = chains_dir.parent.parent
+    store = MergeChainStore(common_root)
+    if Path(os.path.realpath(store.root)) != chains_dir:
+        raise FrozenError(
+            "stale merge lease storage identity is not canonical",
+            chain_id=chain_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    with store.event_lock(
+        chain_id,
+        deadline=deadline,
+        clock=clock,
+        sleeper=sleeper,
+    ):
+        replay = store._read_replay_locked(chain_id)
+        status, _raw = store._projection_status(replay)
+        if status not in {"current", "stale", "missing"}:
+            raise FrozenError(
+                "stale merge lease projection cannot be reconciled",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if repair_with is not None and status != "current":
+            repair_with.before_state_replace()
+            store._atomic_state(replay.state)
+            store._boundary("merge-replay-state-replaced")
+            replay = store._read_replay_locked(chain_id)
+            if store._projection_status(replay)[0] != "current":
+                raise FrozenError(
+                    "stale merge lease projection repair did not stabilize",
+                    chain_id=chain_id,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
 
 
 def acquire_chain_lease(
@@ -10409,8 +14172,19 @@ def acquire_chain_lease(
         }
     )
     path = canonical / f"{chain_id}.lock"
-    deadline = clock() + float(timeout)
+    if isinstance(exclusion, RecoveryReservation):
+        if exclusion.affected_merge_chain() != chain_id:
+            raise ValueError(
+                "recovery reservation does not bind the requested chain lease"
+            )
+        clock = exclusion.clock
+        sleeper = exclusion.sleeper
+        deadline = exclusion.deadline
+        exclusion.assert_current("chain lease acquisition")
+    else:
+        deadline = clock() + float(timeout)
     last_evidence: dict[str, Any] = {"path": str(path)}
+    reclaimed_stale = False
     try:
         while True:
             if clock() >= deadline:
@@ -10435,11 +14209,31 @@ def acquire_chain_lease(
                     existing.record.get("host") == local_host
                     and pid_probe(int(existing.record["pid"])) == "dead"
                 )
-                if stale and _lease_exclusion_is_current(exclusion, chain_id):
+                if stale and _lease_reclaim_authority_is_current(
+                    exclusion, chain_id
+                ):
                     _require_common_lock_control("death-proof-revalidation")
                     if pid_probe(int(existing.record["pid"])) != "dead":
                         last_evidence["detail"] = "lease PID death could not be re-proved"
                     else:
+                        assert exclusion is not None
+                        _reconcile_merge_projection_for_lease_reclaim(
+                            canonical,
+                            chain_id,
+                            exclusion=exclusion,
+                            repair_with=None,
+                            deadline=deadline,
+                            clock=clock,
+                            sleeper=sleeper,
+                        )
+                        if not _lease_exclusion_is_current(exclusion, chain_id):
+                            raise OSError(
+                                "repository exclusion changed during stale lease reconciliation"
+                            )
+                        if pid_probe(int(existing.record["pid"])) != "dead":
+                            raise OSError(
+                                "lease PID death changed after reconciliation"
+                            )
                         _unlink_revalidated_record_at(
                             directory,
                             path.name,
@@ -10450,11 +14244,27 @@ def acquire_chain_lease(
                         os.fsync(directory)
                         if boundary is not None:
                             boundary("chain-lease-stale-reclaimed")
+                        reclaimed_stale = True
                         continue
                 else:
                     last_evidence["detail"] = (
                         "lease owner is live/foreign/unprovable or repository exclusion is absent"
                     )
+                if not _sleep_with_deadline(deadline, clock, sleeper):
+                    raise ChainLeaseUnavailable(chain_id, last_evidence)
+                continue
+            if exclusion is not None and not _lease_exclusion_is_current(
+                exclusion, chain_id
+            ):
+                raise OSError(
+                    "repository exclusion changed before chain lease publication"
+                )
+            if exclusion is None and _repository_recovery_reservation_present(
+                canonical
+            ):
+                last_evidence["detail"] = (
+                    "repository recovery reservation excludes ordinary lease publication"
+                )
                 if not _sleep_with_deadline(deadline, clock, sleeper):
                     raise ChainLeaseUnavailable(chain_id, last_evidence)
                 continue
@@ -10468,6 +14278,19 @@ def acquire_chain_lease(
             )
             try:
                 try:
+                    if exclusion is not None and not _lease_exclusion_is_current(
+                        exclusion, chain_id
+                    ):
+                        raise OSError(
+                            "repository exclusion changed before chain lease publication"
+                        )
+                    if (
+                        exclusion is None
+                        and _repository_recovery_reservation_present(canonical)
+                    ):
+                        raise OSError(
+                            "repository recovery reservation appeared before chain lease publication"
+                        )
                     _publish_no_replace_link(
                         directory, temporary, directory, path.name
                     )
@@ -10504,12 +14327,24 @@ def acquire_chain_lease(
                 os.fsync(directory)
                 if boundary is not None:
                     boundary("chain-lease-temp-unlinked")
-                return ChainLease(
+                acquired = ChainLease(
                     chains_dir=canonical,
                     directory_descriptor=directory,
                     identity=canonical_identity,
                     boundary=boundary,
+                    exclusion=exclusion,
                 )
+                if reclaimed_stale:
+                    _reconcile_merge_projection_for_lease_reclaim(
+                        canonical,
+                        chain_id,
+                        exclusion=exclusion,
+                        repair_with=acquired,
+                        deadline=deadline,
+                        clock=clock,
+                        sleeper=sleeper,
+                    )
+                return acquired
             except BaseException as exc:
                 if isinstance(exc, (CommonLockBoundaryCrash, ChainLeaseUnavailable)):
                     raise
@@ -10538,6 +14373,7 @@ class FencedProcessResult:
     authorized: bool
     fence_digest: str
     fence_inode: int
+    metadata: Mapping[str, Any] | None = None
 
     def evidence(self) -> dict[str, Any]:
         return {
@@ -11181,6 +15017,9 @@ def run_fenced_command(
     group_probe: Callable[[int], str] | None = None,
     signal_group: Callable[[int, int], Any] = os.killpg,
     verbose: bool = False,
+    result_transform: (
+        Callable[[FencedProcessResult], FencedProcessResult] | None
+    ) = None,
 ) -> FencedProcessResult:
     """Authorize exactly one child through FR-236's durable start-pipe fence."""
 
@@ -11195,7 +15034,11 @@ def run_fenced_command(
         raise ValueError("phase5 ownership cannot publish an FR-236 fence")
     if not SHA256_RE.fullmatch(intent_digest):
         raise ValueError("fenced intent digest must be a lowercase SHA-256")
-    if not callable(intent_validator) or not callable(persist_result):
+    if (
+        not callable(intent_validator)
+        or not callable(persist_result)
+        or (result_transform is not None and not callable(result_transform))
+    ):
         raise ValueError("fenced command requires intent and result persistence callbacks")
     if (
         not isinstance(timeout, (int, float))
@@ -11414,6 +15257,10 @@ def run_fenced_command(
             fence_digest=fence.digest,
             fence_inode=fence.inode,
         )
+        if result_transform is not None:
+            result = result_transform(result)
+            if not isinstance(result, FencedProcessResult):
+                raise TypeError("fenced result transform returned a malformed result")
         lock._emit_boundary("fence-before-result")
         persist_result(result)
         lock._emit_boundary("fence-result-persisted")
@@ -13164,13 +17011,13 @@ def _authorization_problem(state: Mapping[str, Any]) -> Refusal | None:
             remediation=_forge_command(state, "status"),
             chain=state,
         )
-    token = authorization.get("token")
-    if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+    authorization_nonce = authorization.get("token")
+    if not isinstance(authorization_nonce, str) or re.fullmatch(r"[0-9a-f]{32}", authorization_nonce) is None:
         return Refusal(
             ReasonCode.EVIDENCE_INCOMPLETE,
             "authorization record has no valid 32-hex token",
             expected="token=32 lowercase hexadecimal characters",
-            observed=str(token),
+            observed=str(authorization_nonce),
             remediation=_forge_command(state, "verify"),
             chain=state,
         )
@@ -13488,6 +17335,86 @@ class MergeCandidateGeneration:
     scope: MergeScopeResult | None
 
 
+@dataclasses.dataclass(frozen=True)
+class MergeBootstrapClassification:
+    """Durable candidate inputs awaiting post-common-lock classification."""
+
+    candidate: dict[str, Any]
+    scope: MergeScopeResult | None
+    full_patch_output_digest: str
+    scope_proof_digest: str | None = None
+    fetch_result_event_digest: str | None = None
+    verb: str = "merge start"
+
+
+def _materialize_merge_candidate_tuple(
+    admission: MergeAdmission,
+    remote_tip: str,
+    *,
+    generation: int,
+    diff_output_digest: str,
+) -> dict[str, Any]:
+    """Construct DM-014's complete immutable generation without a subprocess."""
+
+    if (
+        COMMIT_RE.fullmatch(remote_tip) is None
+        or not _valid_positive_int(generation)
+        or SHA256_RE.fullmatch(diff_output_digest) is None
+    ):
+        raise ValueError("merge candidate tuple inputs are malformed")
+    preimage: dict[str, Any] = {
+        "remote": "origin",
+        "destination_ref": admission.target["destination_ref"],
+        "remote_tip": remote_tip,
+        "candidate_head": admission.candidate_head,
+        "diff_sha256": diff_output_digest,
+        "policy_commit": admission.candidate_head,
+        "policy_digest": admission.policy.digest,
+        "worktree_identity": copy.deepcopy(admission.worktree_identity),
+        "generation": generation,
+    }
+    return {
+        **preimage,
+        "generation_digest": sha256_bytes(canonical_bytes(preimage)),
+    }
+
+
+_MERGE_CANDIDATE_IDENTITY_FIELDS = (
+    "remote",
+    "destination_ref",
+    "remote_tip",
+    "candidate_head",
+    "diff_sha256",
+    "policy_commit",
+    "policy_digest",
+    "worktree_identity",
+)
+
+
+def _retain_or_advance_merge_candidate(
+    admission: MergeAdmission,
+    remote_tip: str,
+    *,
+    prior_candidate: object,
+    generation: int,
+    diff_output_digest: str,
+) -> dict[str, Any]:
+    """Retain an identical generation or materialize its exact successor."""
+
+    proposed = _materialize_merge_candidate_tuple(
+        admission,
+        remote_tip,
+        generation=generation,
+        diff_output_digest=diff_output_digest,
+    )
+    if isinstance(prior_candidate, Mapping) and all(
+        prior_candidate.get(name) == proposed.get(name)
+        for name in _MERGE_CANDIDATE_IDENTITY_FIELDS
+    ):
+        return copy.deepcopy(dict(prior_candidate))
+    return proposed
+
+
 def _merge_refusal(
     reason: V2ReasonCode,
     message: str,
@@ -13571,6 +17498,22 @@ def _parse_plugin_manifest(raw: bytes) -> str:
     return default_branch
 
 
+def _parse_history_mutation_mode(raw: bytes) -> str:
+    """Return DM-015's canonical committed mode, rejecting every invalid form."""
+
+    _parse_plugin_manifest(raw)
+    text = raw.decode("utf-8")
+    rows = [
+        row
+        for row in text.splitlines()
+        if row.startswith("history_mutation_mode:")
+    ]
+    if not rows:
+        return "legacy-v1"
+    # ``_parse_plugin_manifest`` already proved singleton placement and value.
+    return rows[0].split(": ", 1)[1]
+
+
 def _absolute_git_path(repository: Repository, argument: str) -> Path:
     for argv in (
         ["rev-parse", "--path-format=absolute", argument],
@@ -13595,10 +17538,9 @@ def _absolute_git_path(repository: Repository, argument: str) -> Path:
     raise OSError(f"Git did not resolve {argument}")
 
 
-def _registered_worktrees(repository: Repository) -> tuple[dict[str, str], ...]:
-    process = repository.git(["worktree", "list", "--porcelain", "-z"])
+def _parse_registered_worktrees(raw: bytes) -> tuple[dict[str, str], ...]:
     records: list[dict[str, str]] = []
-    for block in process.stdout.split(b"\0\0"):
+    for block in raw.split(b"\0\0"):
         if not block:
             continue
         record: dict[str, str] = {}
@@ -13621,6 +17563,11 @@ def _registered_worktrees(repository: Repository) -> tuple[dict[str, str], ...]:
             raise OSError("Git worktree inventory is incomplete")
         records.append(record)
     return tuple(records)
+
+
+def _registered_worktrees(repository: Repository) -> tuple[dict[str, str], ...]:
+    process = repository.git(["worktree", "list", "--porcelain", "-z"])
+    return _parse_registered_worktrees(process.stdout)
 
 
 def _merge_worktree_status(
@@ -13671,6 +17618,654 @@ def _merge_worktree_status(
             remediation="restore the source worktree to exact clean status",
         )
     return status.stdout
+
+
+def _merge_rebase_action(state: Mapping[str, Any]) -> str | None:
+    integration = state.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    pre_rebase = (
+        integration.get("pre_rebase") if isinstance(integration, Mapping) else None
+    )
+    if not isinstance(epoch, Mapping) or not isinstance(pre_rebase, Mapping):
+        return None
+    nonce = epoch.get("operation_nonce")
+    generation_digest = pre_rebase.get("generation_digest")
+    if not _valid_nonce(nonce) or SHA256_RE.fullmatch(str(generation_digest or "")) is None:
+        return None
+    return (
+        f"forge-merge-rebase:{state.get('chain_id')}:"
+        f"{generation_digest}:{nonce}"
+    )
+
+
+def _read_merge_git_metadata(path: Path, *, cap: int = 4096) -> bytes:
+    """Read one no-follow, owner-controlled Git metadata file under a fixed cap."""
+
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or opened.st_size < 0
+            or opened.st_size > cap
+        ):
+            raise OSError("Git metadata is not a bounded owner-controlled regular file")
+        raw = os.read(descriptor, cap + 1)
+        if len(raw) != opened.st_size:
+            raise OSError("Git metadata changed while it was read")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _merge_owned_rebase_metadata(state: Mapping[str, Any]) -> bool:
+    """Prove that the sole live rebase directory belongs to this chain epoch."""
+
+    _require_merge_integration_control("rebase-result-proof")
+    integration = state.get("integration")
+    pre_rebase = (
+        integration.get("pre_rebase") if isinstance(integration, Mapping) else None
+    )
+    intent = integration.get("intent") if isinstance(integration, Mapping) else None
+    action = _merge_rebase_action(state)
+    if (
+        not isinstance(pre_rebase, Mapping)
+        or not isinstance(intent, Mapping)
+        or action is None
+        or intent.get("operation") not in {"rebase", "continue", "rebase-result"}
+        or intent.get("operation_nonce")
+        != state.get("integration", {}).get("epoch", {}).get("operation_nonce")
+        or intent.get("branch") != state.get("branch")
+        or intent.get("generation_digest") != pre_rebase.get("generation_digest")
+        or intent.get("pre_operation_head") != pre_rebase.get("head")
+        or intent.get("fetched_tip") != pre_rebase.get("fetched_tip")
+        or intent.get("reflog_action") != action
+    ):
+        return False
+    git_dir = Path(str(state.get("worktree", {}).get("git_dir", "")))
+    live: list[Path] = []
+    for name in ("rebase-merge", "rebase-apply"):
+        path = git_dir / name
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        live.append(path)
+    if len(live) != 1:
+        return False
+    for name in (
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "sequencer",
+    ):
+        try:
+            os.lstat(git_dir / name)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        return False
+    try:
+        directory = os.lstat(live[0])
+        if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid():
+            return False
+        head_name = _read_merge_git_metadata(live[0] / "head-name")
+        original_head = _read_merge_git_metadata(live[0] / "orig-head")
+        onto = _read_merge_git_metadata(live[0] / "onto")
+    except OSError:
+        return False
+    return bool(
+        head_name == f"{state.get('branch')}\n".encode("utf-8")
+        and original_head == f"{pre_rebase.get('head')}\n".encode("ascii")
+        and onto == f"{pre_rebase.get('fetched_tip')}\n".encode("ascii")
+    )
+
+
+def _require_loud_merge_recovery_mode(
+    state: Mapping[str, Any],
+    *,
+    continue_rebase: bool,
+    abort_rebase: bool,
+) -> None:
+    """Refuse explicit conflict modes outside the exact owned conflict tuple."""
+
+    _require_merge_integration_control("loud-recover-flags")
+    if not (continue_rebase or abort_rebase):
+        return
+    actual = str(state.get("state"))
+    if actual == "rebase_conflict" and _merge_owned_rebase_metadata(state):
+        return
+    raise _merge_refusal(
+        V2ReasonCode.STATE_PRECONDITION,
+        (
+            "forge: merge recover refused — explicit conflict recovery requires "
+            f"the exact owned rebase_conflict state (actual state: {actual})"
+        ),
+        expected="the exact owned rebase_conflict state and Git metadata tuple",
+        observed=actual,
+        remediation=f"forge merge recover --chain-id {state.get('chain_id')}",
+        chain=state,
+    )
+
+
+def _merge_conflict_path_is_canonical(path: str) -> bool:
+    """Reject every path form that could alter Git's pathspec interpretation."""
+
+    return bool(
+        path
+        and not path.startswith(("/", ":"))
+        and all(part not in {"", ".", ".."} for part in path.split("/"))
+    )
+
+
+def _parse_merge_conflict_paths(raw: bytes) -> tuple[str, ...]:
+    if not raw or not raw.endswith(b"\0") or len(raw) > OUTPUT_CAP_BYTES:
+        raise ValueError("conflict path output is not bounded NUL-delimited data")
+    fields = raw[:-1].split(b"\0")
+    if not fields or any(not field for field in fields):
+        raise ValueError("conflict path output contains an empty record")
+    paths: list[str] = []
+    for field in fields:
+        try:
+            path = field.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("conflict path is not UTF-8") from exc
+        if not _merge_conflict_path_is_canonical(path):
+            raise ValueError("conflict path is not canonical repository-relative data")
+        paths.append(path)
+    if len(set(paths)) != len(paths):
+        raise ValueError("conflict path output contains a duplicate")
+    return tuple(sorted(paths, key=lambda value: value.encode("utf-8")))
+
+
+def _normalize_merge_conflict_paths(paths: Sequence[str]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for path in paths:
+        if not isinstance(path, str) or "\0" in path:
+            raise ValueError("conflict path contains invalid bytes")
+        try:
+            encoded = path.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("conflict path is not UTF-8") from exc
+        if not encoded or not _merge_conflict_path_is_canonical(path):
+            raise ValueError("conflict path is not canonical repository-relative data")
+        normalized.append(path)
+    if not normalized or len(set(normalized)) != len(normalized):
+        raise ValueError("conflict path set is empty or contains a duplicate")
+    return tuple(sorted(normalized, key=lambda value: value.encode("utf-8")))
+
+
+def _merge_nonconflict_index_bytes(raw: bytes, paths: Sequence[str]) -> bytes:
+    if len(raw) > OUTPUT_CAP_BYTES or (raw and not raw.endswith(b"\0")):
+        raise ValueError("index baseline is not NUL-delimited")
+    excluded = {path.encode("utf-8") for path in paths}
+    kept: list[bytes] = []
+    for record in raw[:-1].split(b"\0") if raw else ():
+        header, separator, path = record.partition(b"\t")
+        if not separator or not header or not path:
+            raise ValueError("index baseline record is malformed")
+        if path not in excluded:
+            kept.append(record + b"\0")
+    return b"".join(kept)
+
+
+def _merge_nonconflict_status_bytes(raw: bytes, paths: Sequence[str]) -> bytes:
+    if len(raw) > OUTPUT_CAP_BYTES or (raw and not raw.endswith(b"\0")):
+        raise ValueError("status baseline is not NUL-delimited")
+    excluded = {path.encode("utf-8") for path in paths}
+    fields = raw[:-1].split(b"\0") if raw else []
+    kept: list[bytes] = []
+    index = 0
+    while index < len(fields):
+        first = fields[index]
+        if len(first) < 4 or first[2:3] != b" ":
+            raise ValueError("status baseline record is malformed")
+        record_fields = [first]
+        record_paths = [first[3:]]
+        renamed = first[0:1] in {b"R", b"C"} or first[1:2] in {b"R", b"C"}
+        if renamed:
+            index += 1
+            if index >= len(fields) or not fields[index]:
+                raise ValueError("status rename/copy record is incomplete")
+            record_fields.append(fields[index])
+            record_paths.append(fields[index])
+        if not any(path in excluded for path in record_paths):
+            kept.append(b"\0".join(record_fields) + b"\0")
+        index += 1
+    return b"".join(kept)
+
+
+def _observe_merge_conflict(
+    unmerged_raw: bytes, index_raw: bytes, status_raw: bytes
+) -> dict[str, Any] | None:
+    """Parse an exact bounded U-set and its non-conflict byte baselines."""
+
+    _require_merge_integration_control("conflict-continue-contract")
+    try:
+        paths = _parse_merge_conflict_paths(unmerged_raw)
+        index_bytes = _merge_nonconflict_index_bytes(index_raw, paths)
+        status_bytes = _merge_nonconflict_status_bytes(status_raw, paths)
+    except ValueError:
+        return None
+    return {
+        "authorized_paths": list(paths),
+        "index_baseline_digest": sha256_bytes(index_bytes),
+        "status_baseline_digest": sha256_bytes(status_bytes),
+    }
+
+
+def _observe_merge_post_add(
+    paths: Sequence[str], unmerged_raw: bytes, index_raw: bytes, status_raw: bytes
+) -> dict[str, str] | None:
+    """Parse unchanged non-conflict bytes and the full post-add image."""
+
+    _require_merge_integration_control("conflict-continue-contract")
+    try:
+        authorized_paths = _normalize_merge_conflict_paths(paths)
+    except (TypeError, ValueError):
+        return None
+    if (
+        any(len(raw) > OUTPUT_CAP_BYTES for raw in (unmerged_raw, index_raw, status_raw))
+        or unmerged_raw != b""
+    ):
+        return None
+    try:
+        index_bytes = _merge_nonconflict_index_bytes(index_raw, ())
+        status_bytes = _merge_nonconflict_status_bytes(status_raw, ())
+        nonconflict_index = _merge_nonconflict_index_bytes(index_raw, authorized_paths)
+        nonconflict_status = _merge_nonconflict_status_bytes(status_raw, authorized_paths)
+    except ValueError:
+        return None
+    return {
+        "index_digest": sha256_bytes(index_bytes),
+        "status_digest": sha256_bytes(status_bytes),
+        "nonconflict_index_digest": sha256_bytes(nonconflict_index),
+        "nonconflict_status_digest": sha256_bytes(nonconflict_status),
+    }
+
+
+def _merge_conflict_record(
+    state: Mapping[str, Any], observation: Mapping[str, Any], *,
+    inflight_digest: str, output_digest: str,
+) -> dict[str, Any]:
+    integration = state["integration"]
+    epoch = integration["epoch"]
+    pre_rebase = integration["pre_rebase"]
+    return {
+        "operation_nonce": epoch["operation_nonce"],
+        "pre_operation_head": pre_rebase["head"],
+        "fetched_tip": pre_rebase["fetched_tip"],
+        "generation_digest": pre_rebase["generation_digest"],
+        "reflog_action": _merge_rebase_action(state),
+        "authorized_paths": copy.deepcopy(observation["authorized_paths"]),
+        "index_baseline_digest": observation["index_baseline_digest"],
+        "status_baseline_digest": observation["status_baseline_digest"],
+        "inflight_digest": inflight_digest,
+        "output_digest": output_digest,
+        "recorded_at": iso_z(),
+    }
+
+
+def _merge_conflict_record_matches(
+    state: Mapping[str, Any], observation: Mapping[str, Any]
+) -> bool:
+    conflict = state.get("integration", {}).get("conflict")
+    pre_rebase = state.get("integration", {}).get("pre_rebase")
+    epoch = state.get("integration", {}).get("epoch")
+    return bool(
+        isinstance(conflict, Mapping)
+        and isinstance(pre_rebase, Mapping)
+        and isinstance(epoch, Mapping)
+        and conflict.get("operation_nonce") == epoch.get("operation_nonce")
+        and conflict.get("pre_operation_head") == pre_rebase.get("head")
+        and conflict.get("fetched_tip") == pre_rebase.get("fetched_tip")
+        and conflict.get("generation_digest") == pre_rebase.get("generation_digest")
+        and conflict.get("reflog_action") == _merge_rebase_action(state)
+        and conflict.get("authorized_paths") == observation.get("authorized_paths")
+        and conflict.get("index_baseline_digest")
+        == observation.get("index_baseline_digest")
+        and conflict.get("status_baseline_digest")
+        == observation.get("status_baseline_digest")
+    )
+
+
+def _merge_rebase_result_classification(state: Mapping[str, Any]) -> str:
+    """Classify only a nonce/generation-bound raw result or its absent intent."""
+
+    integration = state.get("integration")
+    pre_rebase = (
+        integration.get("pre_rebase") if isinstance(integration, Mapping) else None
+    )
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    intent = integration.get("intent") if isinstance(integration, Mapping) else None
+    action = _merge_rebase_action(state)
+    if (
+        not isinstance(pre_rebase, Mapping)
+        or not isinstance(epoch, Mapping)
+        or not isinstance(intent, Mapping)
+        or action is None
+        or intent.get("operation_nonce") != epoch.get("operation_nonce")
+        or intent.get("pre_operation_head") != pre_rebase.get("head")
+        or intent.get("fetched_tip") != pre_rebase.get("fetched_tip")
+        or intent.get("branch") != state.get("branch")
+        or intent.get("generation_digest") != pre_rebase.get("generation_digest")
+        or intent.get("reflog_action") != action
+    ):
+        return "foreign"
+    if intent.get("operation") in {"rebase", "continue"}:
+        return "absent"
+    raw_fields = {
+        "operation",
+        "operation_nonce",
+        "result",
+        "pre_operation_head",
+        "fetched_tip",
+        "branch",
+        "generation_digest",
+        "reflog_action",
+        "exit",
+        "inflight_digest",
+        "output_digest",
+        "launch_failed",
+        "timed_out",
+        "output_limit_exceeded",
+        "group_survived",
+        "recorded_at",
+    }
+    if (
+        intent.get("operation") != "rebase-result"
+        or set(intent) != raw_fields
+        or (
+            intent.get("exit") is not None
+            and type(intent.get("exit")) is not int
+        )
+        or any(
+            type(intent.get(name)) is not bool
+            for name in (
+                "launch_failed",
+                "timed_out",
+                "output_limit_exceeded",
+                "group_survived",
+            )
+        )
+        or SHA256_RE.fullmatch(str(intent.get("inflight_digest", ""))) is None
+        or SHA256_RE.fullmatch(str(intent.get("output_digest", ""))) is None
+        or not _valid_utc_second(intent.get("recorded_at"))
+    ):
+        return "foreign"
+    succeeded = bool(
+        intent.get("exit") == 0
+        and intent.get("launch_failed") is False
+        and intent.get("timed_out") is False
+        and intent.get("output_limit_exceeded") is False
+        and intent.get("group_survived") is False
+    )
+    if intent.get("result") != ("success" if succeeded else "failed"):
+        return "foreign"
+    if intent.get("group_survived") is True:
+        return "foreign"
+    return "success" if succeeded else "failed"
+
+
+def _merge_rebase_result_failed(state: Mapping[str, Any]) -> bool:
+    return _merge_rebase_result_classification(state) == "failed"
+
+
+def _merge_branch_reflog_proves_integrated(
+    state: Mapping[str, Any], observed_head: str
+) -> bool:
+    action = _merge_rebase_action(state)
+    integration = state.get("integration")
+    pre_rebase = (
+        integration.get("pre_rebase") if isinstance(integration, Mapping) else None
+    )
+    if action is None or not isinstance(pre_rebase, Mapping):
+        return False
+    common_dir = Path(str(state.get("worktree", {}).get("common_dir", "")))
+    branch = str(state.get("branch", ""))
+    branch_parts = branch.split("/")
+    if (
+        not branch.startswith("refs/heads/")
+        or any(part in {"", ".", ".."} for part in branch_parts)
+        or "\\" in branch
+        or "\x00" in branch
+    ):
+        return False
+    path = common_dir / "logs" / Path(*branch_parts)
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid():
+                return False
+            start = max(0, before.st_size - OUTPUT_CAP_BYTES)
+            os.lseek(descriptor, start, os.SEEK_SET)
+            raw = os.read(descriptor, OUTPUT_CAP_BYTES + 1)
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return False
+    try:
+        rebound = os.lstat(path)
+    except OSError:
+        return False
+    if (
+        before.st_dev != after.st_dev
+        or before.st_ino != after.st_ino
+        or before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+        or before.st_ctime_ns != after.st_ctime_ns
+        or rebound.st_dev != after.st_dev
+        or rebound.st_ino != after.st_ino
+        or rebound.st_size != after.st_size
+        or rebound.st_mtime_ns != after.st_mtime_ns
+        or rebound.st_ctime_ns != after.st_ctime_ns
+        or not stat.S_ISREG(rebound.st_mode)
+        or rebound.st_uid != os.geteuid()
+        or len(raw) > OUTPUT_CAP_BYTES
+        or not raw.endswith(b"\n")
+    ):
+        return False
+    if start:
+        _partial, separator, raw = raw.partition(b"\n")
+        if not separator:
+            return False
+    lines = raw.splitlines()
+    selected: list[tuple[str, str]] = []
+    prefix = action.encode("utf-8")
+    for line in reversed(lines):
+        metadata, separator, message = line.partition(b"\t")
+        if not separator or not message.startswith(prefix):
+            break
+        fields = metadata.split(b" ", 2)
+        if len(fields) < 2:
+            return False
+        try:
+            old = fields[0].decode("ascii")
+            new = fields[1].decode("ascii")
+        except UnicodeDecodeError:
+            return False
+        if COMMIT_RE.fullmatch(old) is None or COMMIT_RE.fullmatch(new) is None:
+            return False
+        selected.append((old, new))
+    if not selected:
+        return False
+    chronological = list(reversed(selected))
+    return bool(
+        chronological[0][0] == pre_rebase.get("head")
+        and chronological[-1][1] == observed_head
+        and all(
+            left[1] == right[0]
+            for left, right in zip(chronological, chronological[1:])
+        )
+    )
+
+
+def _merge_rebase_integrated_observation_binding(
+    state: Mapping[str, Any], source_intent: Mapping[str, Any]
+) -> str | None:
+    integration = state.get("integration")
+    pre_rebase = (
+        integration.get("pre_rebase") if isinstance(integration, Mapping) else None
+    )
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    action = _merge_rebase_action(state)
+    if (
+        not isinstance(pre_rebase, Mapping)
+        or not isinstance(epoch, Mapping)
+        or action is None
+        or _merge_rebase_result_classification(
+            {
+                **state,
+                "integration": {
+                    **dict(integration),
+                    "intent": copy.deepcopy(dict(source_intent)),
+                },
+            }
+        )
+        == "foreign"
+    ):
+        return None
+    return sha256_bytes(
+        canonical_bytes(
+            {
+                "schema": "forge-merge-integrated-observation-binding/1",
+                "chain_id": state.get("chain_id"),
+                "operation_nonce": epoch.get("operation_nonce"),
+                "generation_digest": pre_rebase.get("generation_digest"),
+                "pre_operation_head": pre_rebase.get("head"),
+                "fetched_tip": pre_rebase.get("fetched_tip"),
+                "branch": state.get("branch"),
+                "reflog_action": action,
+                "source_intent": copy.deepcopy(dict(source_intent)),
+            }
+        )
+    )
+
+
+def _merge_rebase_operation_metadata_absent(state: Mapping[str, Any]) -> bool:
+    git_dir = Path(str(state.get("worktree", {}).get("git_dir", "")))
+    for name in (
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+    ):
+        try:
+            os.lstat(git_dir / name)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        return False
+    return True
+
+
+def _merge_rebase_integrated_predicate(
+    state: Mapping[str, Any], observation: Mapping[str, Any]
+) -> bool:
+    """Validate only a completed, fenced integrated-result observation."""
+
+    _require_merge_integration_control("rebase-result-proof")
+    integration = state.get("integration")
+    pre_rebase = (
+        integration.get("pre_rebase") if isinstance(integration, Mapping) else None
+    )
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    source_intent = (
+        integration.get("intent") if isinstance(integration, Mapping) else None
+    )
+    steps = observation.get("steps") if isinstance(observation, Mapping) else None
+    expected_binding = (
+        _merge_rebase_integrated_observation_binding(state, source_intent)
+        if isinstance(source_intent, Mapping)
+        else None
+    )
+    if (
+        not isinstance(pre_rebase, Mapping)
+        or not isinstance(epoch, Mapping)
+        or not isinstance(observation, Mapping)
+        or expected_binding is None
+        or set(observation)
+        != {
+            "schema",
+            "observation_binding",
+            "operation_nonce",
+            "generation_digest",
+            "pre_operation_head",
+            "fetched_tip",
+            "branch",
+            "observed_head",
+            "status_digest",
+            "status_empty",
+            "fetched_tip_ancestor",
+            "steps",
+            "evidence_digest",
+        }
+        or observation.get("schema") != "forge-merge-integrated-observation/1"
+        or observation.get("observation_binding") != expected_binding
+        or observation.get("operation_nonce") != epoch.get("operation_nonce")
+        or observation.get("generation_digest")
+        != pre_rebase.get("generation_digest")
+        or observation.get("pre_operation_head") != pre_rebase.get("head")
+        or observation.get("fetched_tip") != pre_rebase.get("fetched_tip")
+        or observation.get("branch") != state.get("branch")
+        or COMMIT_RE.fullmatch(str(observation.get("observed_head", ""))) is None
+        or observation.get("status_digest") != sha256_bytes(b"")
+        or observation.get("status_empty") is not True
+        or observation.get("fetched_tip_ancestor") is not True
+        or not isinstance(steps, Mapping)
+        or set(steps) != {"branch", "head", "status", "ancestry"}
+        or any(
+            not isinstance(step, Mapping)
+            or set(step)
+            != {"intent_digest", "inflight_digest", "output_digest", "exit"}
+            or SHA256_RE.fullmatch(str(step.get("intent_digest", ""))) is None
+            or SHA256_RE.fullmatch(str(step.get("inflight_digest", ""))) is None
+            or SHA256_RE.fullmatch(str(step.get("output_digest", ""))) is None
+            or type(step.get("exit")) is not int
+            for step in steps.values()
+        )
+        or observation.get("evidence_digest")
+        != sha256_bytes(
+            canonical_bytes(
+                {
+                    name: copy.deepcopy(value)
+                    for name, value in observation.items()
+                    if name != "evidence_digest"
+                }
+            )
+        )
+        or _merge_rebase_result_classification(state) not in {"absent", "success"}
+        or not _merge_rebase_operation_metadata_absent(state)
+    ):
+        return False
+    return bool(
+        steps["branch"].get("exit") == 0
+        and steps["head"].get("exit") == 0
+        and steps["status"].get("exit") == 0
+        and steps["ancestry"].get("exit") == 0
+        and _merge_branch_reflog_proves_integrated(
+            state, str(observation["observed_head"])
+        )
+    )
 
 
 def _prove_merge_run_task_binding(
@@ -13971,6 +18566,1087 @@ def _merge_scope_environment() -> dict[str, str]:
     return environment
 
 
+def _merge_scope_environment_contract() -> dict[str, Any]:
+    return {
+        "unset_prefixes": ["GIT_CONFIG_"],
+        "unset_names": sorted(_MERGE_SCOPE_UNSET),
+        "overlay": dict(sorted(_MERGE_SCOPE_OVERLAY.items())),
+    }
+
+
+@dataclasses.dataclass(frozen=True)
+class _GitNoLazyFetchQualification:
+    """Invocation-local proof that the selected Git accepts no-lazy-fetch."""
+
+    executable_path: str
+    resolved_path: str
+    device: int
+    inode: int
+    mode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    environment_digest: str
+    argv: tuple[str, ...]
+    output: bytes
+    output_digest: str
+
+
+def _git_environment_digest(environment: Mapping[str, str]) -> str:
+    """Digest an environment without assuming all OS bytes are Unicode."""
+
+    digest = hashlib.sha256()
+    for name in sorted(environment, key=os.fsencode):
+        encoded_name = os.fsencode(name)
+        encoded_value = os.fsencode(environment[name])
+        digest.update(len(encoded_name).to_bytes(8, "big"))
+        digest.update(encoded_name)
+        digest.update(len(encoded_value).to_bytes(8, "big"))
+        digest.update(encoded_value)
+    return digest.hexdigest()
+
+
+def _git_executable_qualification(
+    cwd: Path, environment: Mapping[str, str]
+) -> tuple[str, str, int, int, int, int, int, int]:
+    """Resolve the exact PATH-selected Git executable and stable stat tuple."""
+
+    search_path = environment.get("PATH", os.defpath)
+    for member in search_path.split(os.pathsep):
+        directory = cwd if member == "" else Path(member)
+        if not directory.is_absolute():
+            directory = cwd / directory
+        executable_path = os.path.abspath(os.fspath(directory / "git"))
+        try:
+            if not os.access(executable_path, os.X_OK):
+                continue
+            resolved = Path(executable_path).resolve(strict=True)
+            observed = os.stat(resolved, follow_symlinks=False)
+        except OSError:
+            continue
+        if not stat.S_ISREG(observed.st_mode):
+            continue
+        return (
+            executable_path,
+            str(resolved),
+            observed.st_dev,
+            observed.st_ino,
+            stat.S_IMODE(observed.st_mode),
+            observed.st_size,
+            observed.st_mtime_ns,
+            observed.st_ctime_ns,
+        )
+    raise OSError("Git executable is unavailable on the qualified PATH")
+
+
+def _qualify_git_no_lazy_fetch(
+    cwd: Path, *, verbose: bool = False
+) -> _GitNoLazyFetchQualification:
+    """Prove before lock admission that this invocation's Git accepts the control."""
+
+    environment = _merge_scope_environment()
+    before = _git_executable_qualification(cwd, environment)
+    argv = ["git", "--no-lazy-fetch", "--version"]
+    result = run_bounded(
+        argv,
+        cwd=cwd,
+        env=environment,
+        timeout=min(COMMAND_TIMEOUT_SECONDS, COMMON_LOCK_TIMEOUT_SECONDS),
+        cap=OUTPUT_CAP_BYTES,
+        verbose=verbose,
+    )
+    after = _git_executable_qualification(cwd, environment)
+    if (
+        before != after
+        or result.argv != argv
+        or type(result.returncode) is not int
+        or result.returncode != 0
+        or result.timed_out is not False
+        or result.output_limit is not False
+        or not isinstance(result.output, bytes)
+        or result.output_digest != sha256_bytes(result.output)
+        or re.fullmatch(rb"git version [0-9][ -~]*\n", result.output) is None
+    ):
+        raise OSError("Git does not support the required no-lazy-fetch control")
+    return _GitNoLazyFetchQualification(
+        executable_path=before[0],
+        resolved_path=before[1],
+        device=before[2],
+        inode=before[3],
+        mode=before[4],
+        size=before[5],
+        mtime_ns=before[6],
+        ctime_ns=before[7],
+        environment_digest=_git_environment_digest(environment),
+        argv=tuple(argv),
+        output=result.output,
+        output_digest=result.output_digest,
+    )
+
+
+def _require_git_no_lazy_fetch_qualification(
+    qualification: object,
+    cwd: Path,
+    environment: Mapping[str, str],
+) -> None:
+    """Rebind an invocation-local qualification immediately before use."""
+
+    if not isinstance(qualification, _GitNoLazyFetchQualification):
+        raise OSError("Git no-lazy-fetch qualification is unavailable")
+    expected = (
+        qualification.executable_path,
+        qualification.resolved_path,
+        qualification.device,
+        qualification.inode,
+        qualification.mode,
+        qualification.size,
+        qualification.mtime_ns,
+        qualification.ctime_ns,
+    )
+    if (
+        qualification.argv != ("git", "--no-lazy-fetch", "--version")
+        or re.fullmatch(rb"git version [0-9][ -~]*\n", qualification.output)
+        is None
+        or qualification.output_digest != sha256_bytes(qualification.output)
+        or qualification.environment_digest != _git_environment_digest(environment)
+        or _git_executable_qualification(cwd, environment) != expected
+    ):
+        raise OSError("qualified Git executable or environment changed")
+
+
+def _merge_scope_request(admission: MergeAdmission) -> dict[str, Any] | None:
+    snapshot = admission.run_task
+    if snapshot is None:
+        return None
+    template = {
+        "schema": "forge-run-scope-command-template/1",
+        "worktree": str(admission.worktree),
+        "candidate_head": admission.candidate_head,
+        "remote_tip_source": "scope_fetch_binding.remote_tip",
+    }
+    return {
+        "run_id": snapshot.binding["run_id"],
+        "task_id": snapshot.binding["task_id"],
+        "task_files": list(snapshot.task_files),
+        "admitted_scope": list(snapshot.admitted_scope),
+        "command_template": template,
+        "command_template_digest": sha256_bytes(canonical_bytes(template)),
+        "environment_digest": sha256_bytes(
+            canonical_bytes(_merge_scope_environment_contract())
+        ),
+    }
+
+
+def _valid_sorted_unique_strings(value: object) -> bool:
+    return bool(
+        isinstance(value, list)
+        and all(isinstance(item, str) for item in value)
+        and value
+        == sorted(set(value), key=lambda item: item.encode("utf-8"))
+    )
+
+
+def _validate_merge_scope_request(
+    value: object,
+    *,
+    state: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    binding = state.get("run_binding")
+    if binding is None:
+        if value is not None:
+            raise ValueError("unbound merge scope request is not null")
+        return None
+    if not isinstance(binding, Mapping) or not isinstance(value, dict) or set(value) != {
+        "run_id",
+        "task_id",
+        "task_files",
+        "admitted_scope",
+        "command_template",
+        "command_template_digest",
+        "environment_digest",
+    }:
+        raise ValueError("run-bound merge scope request is malformed")
+    template = value.get("command_template")
+    candidate = state.get("candidate")
+    intent = state.get("integration", {}).get("intent")
+    expected_head = (
+        intent.get("pre_fetch_head")
+        if isinstance(intent, Mapping)
+        else candidate.get("candidate_head")
+        if isinstance(candidate, Mapping)
+        else None
+    )
+    if (
+        value.get("run_id") != binding.get("run_id")
+        or value.get("task_id") != binding.get("task_id")
+        or not _valid_sorted_unique_strings(value.get("task_files"))
+        or not _valid_sorted_unique_strings(value.get("admitted_scope"))
+        or not isinstance(template, dict)
+        or set(template)
+        != {"schema", "worktree", "candidate_head", "remote_tip_source"}
+        or template.get("schema") != "forge-run-scope-command-template/1"
+        or template.get("worktree") != state.get("worktree", {}).get("path")
+        or template.get("candidate_head") != expected_head
+        or template.get("remote_tip_source")
+        != "scope_fetch_binding.remote_tip"
+        or value.get("command_template_digest")
+        != sha256_bytes(canonical_bytes(template))
+        or value.get("environment_digest")
+        != sha256_bytes(canonical_bytes(_merge_scope_environment_contract()))
+    ):
+        raise ValueError("run-bound merge scope request binding is invalid")
+    return copy.deepcopy(value)
+
+
+def _merge_scope_child_result(
+    fence: PublishedLockRecord,
+    result: FencedProcessResult,
+    *,
+    resolved_tip: str,
+) -> dict[str, Any]:
+    record = fence.record
+    return {
+        "operation": record["operation"],
+        "intent_digest": record["intent_digest"],
+        "inflight_digest": fence.digest,
+        "host": record["host"],
+        "pid": record["pid"],
+        "pgid": record["pgid"],
+        "exit": result.returncode,
+        "output_digest": result.output_digest,
+        "launch_failed": result.launch_failed,
+        "timed_out": result.timed_out,
+        "output_limit_exceeded": result.output_limit,
+        "group_dead_at": iso_z(),
+        "resolved_tip": resolved_tip,
+        "recorded_at": iso_z(),
+    }
+
+
+def _merge_retained_inflight(fence: PublishedLockRecord) -> dict[str, Any]:
+    return {
+        "path": fence.path,
+        "device": fence.device,
+        "inode": fence.inode,
+        "inflight_digest": fence.digest,
+        **copy.deepcopy(fence.record),
+    }
+
+
+def _validate_merge_scope_fetch_binding(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "chain_id",
+        "fetch_intent_digest",
+        "scope_request_digest",
+        "candidate_head",
+        "remote_tip",
+        "command_template_digest",
+        "command_digest",
+        "full_patch_command_digest",
+        "full_patch_output_digest",
+        "environment_digest",
+        "publication",
+        "retained_inflight",
+        "child_result",
+        "recorded_at",
+        "digest",
+    }:
+        raise ValueError("scope-fetch binding has an invalid key set")
+    body = {name: value[name] for name in value if name != "digest"}
+    publication = value.get("publication")
+    retained = value.get("retained_inflight")
+    child = value.get("child_result")
+    retained_keys = {
+        "path",
+        "device",
+        "inode",
+        "inflight_digest",
+        "schema",
+        "owner_kind",
+        "chain_id",
+        "operation",
+        "host",
+        "pid",
+        "pgid",
+        "started_at",
+        "intent_digest",
+        "nonce",
+    }
+    if not isinstance(retained, dict) or set(retained) != retained_keys:
+        raise ValueError("scope-fetch retained fence is malformed")
+    retained_record = {
+        name: copy.deepcopy(retained[name])
+        for name in (
+            "schema",
+            "owner_kind",
+            "chain_id",
+            "operation",
+            "host",
+            "pid",
+            "pgid",
+            "started_at",
+            "intent_digest",
+            "nonce",
+        )
+    }
+    try:
+        _validate_fence_record(retained_record)
+    except ValueError as exc:
+        raise ValueError("scope-fetch retained fence record is invalid") from exc
+    bound = value.get("scope_request_digest") is not None
+    nullable_scope_members = (
+        value.get("scope_request_digest"),
+        value.get("command_template_digest"),
+        value.get("command_digest"),
+    )
+    if (
+        value.get("schema") != "forge-run-scope-fetch-binding/2"
+        or not isinstance(value.get("chain_id"), str)
+        or CHAIN_ID_RE.fullmatch(str(value["chain_id"])) is None
+        or any(
+            not isinstance(value.get(name), str)
+            or SHA256_RE.fullmatch(value[name]) is None
+            for name in (
+                "fetch_intent_digest",
+                "full_patch_command_digest",
+                "full_patch_output_digest",
+                "environment_digest",
+                "digest",
+            )
+        )
+        or (
+            bound
+            and any(
+                not isinstance(member, str)
+                or SHA256_RE.fullmatch(member) is None
+                for member in nullable_scope_members
+            )
+        )
+        or (not bound and nullable_scope_members != (None, None, None))
+        or not isinstance(value.get("candidate_head"), str)
+        or COMMIT_RE.fullmatch(value["candidate_head"]) is None
+        or not isinstance(value.get("remote_tip"), str)
+        or COMMIT_RE.fullmatch(value["remote_tip"]) is None
+        or not _valid_utc_second(value.get("recorded_at"))
+        or not isinstance(publication, dict)
+        or set(publication)
+        != {"canonical_path", "temporary_path", "device", "inode"}
+        or not isinstance(publication.get("canonical_path"), str)
+        or publication.get("temporary_path")
+        != f"{publication.get('canonical_path')}.tmp-{retained.get('nonce') if isinstance(retained, Mapping) else ''}"
+        or not _valid_nonnegative_int(publication.get("device"))
+        or not _valid_nonnegative_int(publication.get("inode"))
+        or not isinstance(retained.get("path"), str)
+        or not Path(str(retained["path"])).is_absolute()
+        or Path(str(retained["path"])).name != COMMON_LOCK_INFLIGHT_NAME
+        or not _valid_nonnegative_int(retained.get("device"))
+        or not _valid_nonnegative_int(retained.get("inode"))
+        or retained.get("inflight_digest")
+        != sha256_bytes(canonical_bytes(retained_record))
+        or retained.get("schema") != "forge-rebase-inflight/1"
+        or retained.get("owner_kind") != "merge"
+        or retained.get("chain_id") != value.get("chain_id")
+        or retained.get("operation") not in {"fetch", "tip-resolution"}
+        or retained.get("intent_digest") != value.get("fetch_intent_digest")
+        or not isinstance(retained.get("inflight_digest"), str)
+        or SHA256_RE.fullmatch(retained["inflight_digest"]) is None
+        or not isinstance(child, dict)
+        or set(child)
+        != {
+            "operation",
+            "intent_digest",
+            "inflight_digest",
+            "host",
+            "pid",
+            "pgid",
+            "exit",
+            "output_digest",
+            "launch_failed",
+            "timed_out",
+            "output_limit_exceeded",
+            "group_dead_at",
+            "resolved_tip",
+            "recorded_at",
+        }
+        or any(
+            child.get(name) != retained.get(name)
+            for name in (
+                "operation",
+                "intent_digest",
+                "inflight_digest",
+                "host",
+                "pid",
+                "pgid",
+            )
+        )
+        or not _valid_nonnegative_int(child.get("exit"))
+        or child.get("exit") != 0
+        or child.get("launch_failed") is not False
+        or child.get("timed_out") is not False
+        or child.get("output_limit_exceeded") is not False
+        or not isinstance(child.get("output_digest"), str)
+        or SHA256_RE.fullmatch(child["output_digest"]) is None
+        or not _valid_utc_second(child.get("group_dead_at"))
+        or not _valid_utc_second(child.get("recorded_at"))
+        or child.get("resolved_tip") != value.get("remote_tip")
+        or (
+            bound
+            and child.get("output_digest")
+            != value.get("child_result", {}).get("output_digest")
+        )
+        or (
+            not bound
+            and child.get("output_digest") != sha256_bytes(b"")
+        )
+        or value.get("digest") != sha256_bytes(canonical_bytes(body))
+    ):
+        raise ValueError("scope-fetch binding fields are invalid")
+    return copy.deepcopy(value)
+
+
+@dataclasses.dataclass(frozen=True)
+class MergeScopeBindingInspection:
+    """One of FR-236's four admissible deterministic-name topologies."""
+
+    topology: str
+    canonical: PublishedLockRecord | None
+    temporary: PublishedLockRecord | None
+
+
+def _merge_scope_binding_names(
+    chain_id: str, fetch_intent_digest: str, fence: PublishedLockRecord
+) -> tuple[str, str, str, str]:
+    canonical_name = f"scope-fetch-{fetch_intent_digest}-{fence.digest}.json"
+    temporary_name = f"{canonical_name}.tmp-{fence.record['nonce']}"
+    canonical_path = f".forge/chains/{chain_id}/{canonical_name}"
+    temporary_path = f"{canonical_path}.tmp-{fence.record['nonce']}"
+    return canonical_name, temporary_name, canonical_path, temporary_path
+
+
+def _merge_scope_binding_validator(
+    state: Mapping[str, Any],
+    *,
+    fetch_intent_digest: str,
+    scope_request: Mapping[str, Any] | None,
+    fence: PublishedLockRecord,
+    result: FencedProcessResult | None = None,
+) -> Callable[[Any], dict[str, Any]]:
+    """Bind strict sidecar bytes to the authenticated intent and live fence."""
+
+    chain_id = str(state["chain_id"])
+    _validate_fence_record(fence.record)
+    if scope_request is not None:
+        _validate_merge_scope_request(dict(scope_request), state=state)
+    canonical_name, _temporary_name, canonical_path, temporary_path = (
+        _merge_scope_binding_names(chain_id, fetch_intent_digest, fence)
+    )
+    del canonical_name
+    intent = state.get("integration", {}).get("intent")
+    expected_head = (
+        intent.get("pre_fetch_head") if isinstance(intent, Mapping) else None
+    )
+    retained = _merge_retained_inflight(fence)
+
+    def validate(value: Any) -> dict[str, Any]:
+        binding = _validate_merge_scope_fetch_binding(value)
+        worktree = Path(str(state["worktree"]["path"]))
+        command = (
+            _merge_scope_argv(
+                worktree,
+                str(binding["remote_tip"]),
+                str(binding["candidate_head"]),
+            )
+            if scope_request is not None
+            else None
+        )
+        full_patch_command = _merge_full_patch_argv(
+            worktree,
+            str(binding["remote_tip"]),
+            str(binding["candidate_head"]),
+        )
+        child = binding["child_result"]
+        metadata = result.metadata if result is not None else None
+        if (
+            fence.record.get("owner_kind") != "merge"
+            or fence.record.get("chain_id") != chain_id
+            or fence.record.get("operation") not in {"fetch", "tip-resolution"}
+            or fence.record.get("intent_digest") != fetch_intent_digest
+            or fence.digest != sha256_bytes(canonical_bytes(fence.record))
+            or binding.get("chain_id") != chain_id
+            or binding.get("fetch_intent_digest") != fetch_intent_digest
+            or binding.get("scope_request_digest")
+            != (
+                sha256_bytes(canonical_bytes(dict(scope_request)))
+                if scope_request is not None
+                else None
+            )
+            or binding.get("candidate_head") != expected_head
+            or binding.get("command_template_digest")
+            != (
+                scope_request.get("command_template_digest")
+                if scope_request is not None
+                else None
+            )
+            or binding.get("environment_digest")
+            != sha256_bytes(canonical_bytes(_merge_scope_environment_contract()))
+            or binding.get("command_digest")
+            != (
+                sha256_bytes(canonical_bytes(command))
+                if command is not None
+                else None
+            )
+            or binding.get("full_patch_command_digest")
+            != sha256_bytes(canonical_bytes(full_patch_command))
+            or binding.get("publication", {}).get("canonical_path")
+            != canonical_path
+            or binding.get("publication", {}).get("temporary_path")
+            != temporary_path
+            or binding.get("retained_inflight") != retained
+            or retained.get("path")
+            != str(
+                Path(str(state["worktree"]["common_dir"]))
+                / COMMON_LOCK_INFLIGHT_NAME
+            )
+            or retained.get("device") != fence.device
+            or retained.get("inode") != fence.inode
+            or (
+                result is not None
+                and (
+                    child.get("exit") != result.returncode
+                    or child.get("output_digest") != result.output_digest
+                    or child.get("launch_failed") != result.launch_failed
+                    or child.get("timed_out") != result.timed_out
+                    or child.get("output_limit_exceeded") != result.output_limit
+                    or not isinstance(metadata, Mapping)
+                    or binding.get("full_patch_output_digest")
+                    != metadata.get("full_patch", {}).get("output_digest")
+                )
+            )
+        ):
+            raise ValueError("scope-fetch binding diverges from its authenticated context")
+        return binding
+
+    return validate
+
+
+def _unlink_merge_scope_temporary_at(
+    parent: int,
+    name: str,
+    absolute_path: Path,
+    expected: PublishedLockRecord,
+    validator: Callable[[Any], dict[str, Any]],
+) -> None:
+    """Remove only the strict-valid recorded two-link publication inode."""
+
+    _require_common_lock_control("release-identity-revalidation")
+    current = _revalidate_record_at(
+        parent, name, absolute_path, expected, validator
+    )
+    if current.links != 2:
+        raise OSError("scope-fetch temporary no longer has exactly two links")
+    os.unlink(name, dir_fd=parent)
+
+
+def _classify_merge_scope_binding_at(
+    store: MergeChainStore,
+    state: Mapping[str, Any],
+    parent: int,
+    *,
+    fetch_intent_digest: str,
+    scope_request: Mapping[str, Any] | None,
+    fence: PublishedLockRecord,
+    result: FencedProcessResult | None = None,
+) -> MergeScopeBindingInspection:
+    chain_id = str(state["chain_id"])
+    canonical_name, temporary_name, _canonical_path, _temporary_path = (
+        _merge_scope_binding_names(chain_id, fetch_intent_digest, fence)
+    )
+    artifact_root = store.root / chain_id
+    validator = _merge_scope_binding_validator(
+        state,
+        fetch_intent_digest=fetch_intent_digest,
+        scope_request=scope_request,
+        fence=fence,
+        result=result,
+    )
+    canonical = _record_at_if_present(
+        parent, canonical_name, artifact_root / canonical_name, validator
+    )
+    temporary = _record_at_if_present(
+        parent, temporary_name, artifact_root / temporary_name, validator
+    )
+    for record in (canonical, temporary):
+        if record is not None and (
+            record.device != record.record["publication"]["device"]
+            or record.inode != record.record["publication"]["inode"]
+        ):
+            raise OSError("scope-fetch publication identity does not match its inode")
+    if canonical is None and temporary is None:
+        return MergeScopeBindingInspection("absent", None, None)
+    if canonical is None and temporary is not None and temporary.links == 1:
+        return MergeScopeBindingInspection("temporary-one-link", None, temporary)
+    if (
+        canonical is not None
+        and temporary is not None
+        and canonical.links == temporary.links == 2
+        and _same_published_record(canonical, temporary)
+    ):
+        return MergeScopeBindingInspection("same-inode-two-link", canonical, temporary)
+    if canonical is not None and canonical.links == 1 and temporary is None:
+        return MergeScopeBindingInspection("canonical-one-link", canonical, None)
+    raise OSError("scope-fetch deterministic names have an inadmissible topology")
+
+
+def _classify_merge_scope_binding(
+    store: MergeChainStore,
+    state: Mapping[str, Any],
+    *,
+    fetch_intent_digest: str,
+    scope_request: Mapping[str, Any] | None,
+    fence: PublishedLockRecord,
+) -> MergeScopeBindingInspection:
+    """Classify the deterministic sidecar names without changing either name."""
+
+    _require_merge_integration_control("scope-sidecar-recovery")
+    chain_id = str(state["chain_id"])
+    canonical_name, _temporary, _path, _temporary_path = (
+        _merge_scope_binding_names(chain_id, fetch_intent_digest, fence)
+    )
+    try:
+        with store.artifact_parent_descriptor(
+            chain_id, canonical_name, create=False
+        ) as (parent, _name):
+            return _classify_merge_scope_binding_at(
+                store,
+                state,
+                parent,
+                fetch_intent_digest=fetch_intent_digest,
+                scope_request=scope_request,
+                fence=fence,
+            )
+    except FileNotFoundError:
+        return MergeScopeBindingInspection("absent", None, None)
+    except FrozenError:
+        raise
+    except (OSError, ValueError, Refusal) as exc:
+        raise FrozenError(
+            "merge scope-fetch sidecar topology is divergent",
+            chain_id=chain_id,
+            observed=str(exc),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+
+
+def _resume_merge_scope_binding(
+    store: MergeChainStore,
+    state: Mapping[str, Any],
+    *,
+    fetch_intent_digest: str,
+    scope_request: Mapping[str, Any] | None,
+    fence: PublishedLockRecord,
+) -> dict[str, Any] | None:
+    """Resume only FR-236's admitted link/unlink publication suffix."""
+
+    _require_merge_integration_control("scope-sidecar-recovery")
+    chain_id = str(state["chain_id"])
+    canonical_name, temporary_name, _path, _temporary_path = (
+        _merge_scope_binding_names(chain_id, fetch_intent_digest, fence)
+    )
+    artifact_root = store.root / chain_id
+    validator = _merge_scope_binding_validator(
+        state,
+        fetch_intent_digest=fetch_intent_digest,
+        scope_request=scope_request,
+        fence=fence,
+    )
+    try:
+        with store.artifact_parent_descriptor(
+            chain_id, canonical_name, create=False
+        ) as (parent, _name):
+            inspection = _classify_merge_scope_binding_at(
+                store,
+                state,
+                parent,
+                fetch_intent_digest=fetch_intent_digest,
+                scope_request=scope_request,
+                fence=fence,
+            )
+            if inspection.topology == "absent":
+                return None
+            if inspection.topology == "temporary-one-link":
+                assert inspection.temporary is not None
+                current_temp = _revalidate_record_at(
+                    parent,
+                    temporary_name,
+                    artifact_root / temporary_name,
+                    inspection.temporary,
+                    validator,
+                )
+                if current_temp.links != 1:
+                    raise OSError("scope-fetch temporary link count changed")
+                _publish_no_replace_link(
+                    parent, temporary_name, parent, canonical_name
+                )
+                os.fsync(parent)
+                inspection = _classify_merge_scope_binding_at(
+                    store,
+                    state,
+                    parent,
+                    fetch_intent_digest=fetch_intent_digest,
+                    scope_request=scope_request,
+                    fence=fence,
+                )
+            if inspection.topology == "same-inode-two-link":
+                assert inspection.temporary is not None
+                _unlink_merge_scope_temporary_at(
+                    parent,
+                    temporary_name,
+                    artifact_root / temporary_name,
+                    inspection.temporary,
+                    validator,
+                )
+                os.fsync(parent)
+                inspection = _classify_merge_scope_binding_at(
+                    store,
+                    state,
+                    parent,
+                    fetch_intent_digest=fetch_intent_digest,
+                    scope_request=scope_request,
+                    fence=fence,
+                )
+            if inspection.topology != "canonical-one-link" or inspection.canonical is None:
+                raise OSError("scope-fetch publication did not reach its final topology")
+            return copy.deepcopy(inspection.canonical.record)
+    except FrozenError:
+        raise
+    except (OSError, ValueError, Refusal) as exc:
+        raise FrozenError(
+            "merge scope-fetch sidecar recovery is divergent",
+            chain_id=chain_id,
+            observed=str(exc),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+
+
+def _discover_merge_scope_fence_from_sidecar(
+    store: MergeChainStore,
+    state: Mapping[str, Any],
+    *,
+    fetch_intent_digest: str,
+) -> PublishedLockRecord | None:
+    """Recover cleared fence identity only from the current intent's sidecar.
+
+    A common-lock recovery may have durably proved death and cleared the
+    canonical fence before the chain lease is reacquired.  The immutable
+    sidecar deliberately carries the complete original fence record and
+    physical identity, so recovery can reconstruct that evidence without a
+    tracking ref, FETCH_HEAD, or remote query.  No matching deterministic name
+    means the normative both-absent pre-publication window.
+    """
+
+    chain_id = str(state["chain_id"])
+    prefix = f"scope-fetch-{fetch_intent_digest}-"
+    pattern = re.compile(
+        rf"^{re.escape(prefix)}([0-9a-f]{{64}})\.json(?:\.tmp-([0-9a-f]{{32}}))?$"
+    )
+    try:
+        with store.artifact_parent_descriptor(
+            chain_id, f"{prefix}{'0' * 64}.json", create=False
+        ) as (parent, _name):
+            related = sorted(
+                name for name in os.listdir(parent) if name.startswith(prefix)
+            )
+            if not related:
+                return None
+            matches = [(name, pattern.fullmatch(name)) for name in related]
+            if any(match is None for _name, match in matches):
+                raise OSError("current scope-fetch intent has a conflicting artifact name")
+            digests = {str(match.group(1)) for _name, match in matches if match}
+            if len(digests) != 1:
+                raise OSError("current scope-fetch intent names multiple fence digests")
+            fence_digest = next(iter(digests))
+            candidate_name = related[0]
+            observed = _read_owned_record_at(
+                parent,
+                candidate_name,
+                store.root / chain_id / candidate_name,
+                _validate_merge_scope_fetch_binding,
+                cap=MERGE_SCOPE_BINDING_CAP_BYTES,
+            )
+    except FileNotFoundError:
+        return None
+    except FrozenError:
+        raise
+    except (OSError, ValueError, Refusal) as exc:
+        raise FrozenError(
+            "merge scope-fetch fence evidence is divergent",
+            chain_id=chain_id,
+            observed=str(exc),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+    retained = observed.record["retained_inflight"]
+    record = {
+        name: copy.deepcopy(retained[name])
+        for name in (
+            "schema",
+            "owner_kind",
+            "chain_id",
+            "operation",
+            "host",
+            "pid",
+            "pgid",
+            "started_at",
+            "intent_digest",
+            "nonce",
+        )
+    }
+    try:
+        _validate_fence_record(record)
+        if (
+            retained.get("inflight_digest") != fence_digest
+            or retained.get("inflight_digest")
+            != sha256_bytes(canonical_bytes(record))
+            or retained.get("intent_digest") != fetch_intent_digest
+            or retained.get("chain_id") != chain_id
+            or retained.get("owner_kind") != "merge"
+            or retained.get("operation") not in {"fetch", "tip-resolution"}
+        ):
+            raise ValueError("embedded retained fence does not bind the current intent")
+    except ValueError as exc:
+        raise FrozenError(
+            "merge scope-fetch retained fence is divergent",
+            chain_id=chain_id,
+            observed=str(exc),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        ) from exc
+    recovered = PublishedLockRecord(
+        path=str(retained["path"]),
+        device=int(retained["device"]),
+        inode=int(retained["inode"]),
+        digest=fence_digest,
+        record=record,
+        mode=0o600,
+        links=1,
+    )
+    canonical_name, temporary_name, _canonical_path, _temporary_path = (
+        _merge_scope_binding_names(chain_id, fetch_intent_digest, recovered)
+    )
+    if not set(related) <= {canonical_name, temporary_name}:
+        raise FrozenError(
+            "merge scope-fetch deterministic names diverge from retained fence",
+            chain_id=chain_id,
+            observed=canonical_bytes(related).decode("utf-8"),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    return recovered
+
+
+def _publish_merge_scope_binding(
+    store: MergeChainStore,
+    state: Mapping[str, Any],
+    *,
+    fetch_intent_digest: str,
+    scope_request: Mapping[str, Any] | None,
+    remote_tip: str,
+    fence: PublishedLockRecord,
+    result: FencedProcessResult,
+) -> dict[str, Any]:
+    """Publish FR-231's inode-bound immutable sidecar while the fence lives."""
+
+    _require_merge_integration_control("post-fetch-scope-proof")
+    _require_merge_integration_control("composite-bootstrap-streaming")
+    chain_id = str(state["chain_id"])
+    candidate_head = str(state["integration"]["intent"]["pre_fetch_head"])
+    worktree = Path(str(state["worktree"]["path"]))
+    command = (
+        _merge_scope_argv(worktree, remote_tip, candidate_head)
+        if scope_request is not None
+        else None
+    )
+    full_patch_command = _merge_full_patch_argv(
+        worktree, remote_tip, candidate_head
+    )
+    metadata = result.metadata
+    if (
+        not isinstance(metadata, Mapping)
+        or not isinstance(metadata.get("full_patch"), Mapping)
+        or SHA256_RE.fullmatch(
+            str(metadata["full_patch"].get("output_digest", ""))
+        )
+        is None
+    ):
+        raise ValueError("composite full-patch digest is unavailable")
+    canonical_name = (
+        f"scope-fetch-{fetch_intent_digest}-{fence.digest}.json"
+    )
+    relative = f".forge/chains/{chain_id}/{canonical_name}"
+    temporary_name = f"{canonical_name}.tmp-{fence.record['nonce']}"
+    temporary_relative = f"{relative}.tmp-{fence.record['nonce']}"
+    with store.artifact_parent_descriptor(
+        chain_id, canonical_name, create=True
+    ) as (parent, name):
+        for candidate_name in (name, temporary_name):
+            try:
+                os.stat(candidate_name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise FileExistsError(candidate_name)
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=parent,
+        )
+        opened = os.fstat(descriptor)
+        try:
+            if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+                raise OSError("scope-fetch temporary is not owner-controlled and regular")
+            os.fchmod(descriptor, 0o600)
+            body = {
+                "schema": "forge-run-scope-fetch-binding/2",
+                "chain_id": chain_id,
+                "fetch_intent_digest": fetch_intent_digest,
+                "scope_request_digest": (
+                    sha256_bytes(canonical_bytes(dict(scope_request)))
+                    if scope_request is not None
+                    else None
+                ),
+                "candidate_head": candidate_head,
+                "remote_tip": remote_tip,
+                "command_template_digest": (
+                    scope_request["command_template_digest"]
+                    if scope_request is not None
+                    else None
+                ),
+                "command_digest": (
+                    sha256_bytes(canonical_bytes(command))
+                    if command is not None
+                    else None
+                ),
+                "full_patch_command_digest": sha256_bytes(
+                    canonical_bytes(full_patch_command)
+                ),
+                "full_patch_output_digest": str(
+                    metadata["full_patch"]["output_digest"]
+                ),
+                "environment_digest": sha256_bytes(
+                    canonical_bytes(_merge_scope_environment_contract())
+                ),
+                "publication": {
+                    "canonical_path": relative,
+                    "temporary_path": temporary_relative,
+                    "device": opened.st_dev,
+                    "inode": opened.st_ino,
+                },
+                "retained_inflight": _merge_retained_inflight(fence),
+                "child_result": _merge_scope_child_result(
+                    fence, result, resolved_tip=remote_tip
+                ),
+                "recorded_at": iso_z(),
+            }
+            record = {**body, "digest": sha256_bytes(canonical_bytes(body))}
+            validated = _validate_merge_scope_fetch_binding(record)
+            encoded = canonical_bytes(validated)
+            _write_all(descriptor, encoded)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        temporary = _read_owned_record_at(
+            parent,
+            temporary_name,
+            store.artifact_dir(chain_id) / temporary_name,
+            _validate_merge_scope_fetch_binding,
+            cap=MERGE_SCOPE_BINDING_CAP_BYTES,
+        )
+        if (
+            temporary.device != opened.st_dev
+            or temporary.inode != opened.st_ino
+            or temporary.links != 1
+        ):
+            raise OSError("scope-fetch temporary identity changed")
+        _publish_no_replace_link(parent, temporary_name, parent, name)
+        os.fsync(parent)
+        canonical = _read_owned_record_at(
+            parent,
+            name,
+            store.artifact_dir(chain_id) / name,
+            _validate_merge_scope_fetch_binding,
+            cap=MERGE_SCOPE_BINDING_CAP_BYTES,
+        )
+        linked_temp = _read_owned_record_at(
+            parent,
+            temporary_name,
+            store.artifact_dir(chain_id) / temporary_name,
+            _validate_merge_scope_fetch_binding,
+            cap=MERGE_SCOPE_BINDING_CAP_BYTES,
+        )
+        if (
+            not _same_published_record(canonical, linked_temp)
+            or canonical.links != 2
+            or linked_temp.links != 2
+        ):
+            raise OSError("scope-fetch published names do not share two links")
+        _unlink_merge_scope_temporary_at(
+            parent,
+            temporary_name,
+            store.artifact_dir(chain_id) / temporary_name,
+            linked_temp,
+            _validate_merge_scope_fetch_binding,
+        )
+        os.fsync(parent)
+        final = _read_owned_record_at(
+            parent,
+            name,
+            store.artifact_dir(chain_id) / name,
+            _validate_merge_scope_fetch_binding,
+            cap=MERGE_SCOPE_BINDING_CAP_BYTES,
+        )
+        if final.links != 1:
+            raise OSError("scope-fetch canonical sidecar does not have one link")
+        try:
+            os.stat(temporary_name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise OSError("scope-fetch temporary survived final publication")
+        return copy.deepcopy(final.record)
+
+
+def _merge_scope_proof(
+    admission: MergeAdmission,
+    candidate: Mapping[str, Any],
+    scope: MergeScopeResult,
+    binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    snapshot = admission.run_task
+    if snapshot is None:
+        raise ValueError("scope proof requires an immutable run/task snapshot")
+    body = {
+        "schema": "forge-run-scope-proof/1",
+        "run_id": snapshot.binding["run_id"],
+        "task_id": snapshot.binding["task_id"],
+        "generation_digest": candidate["generation_digest"],
+        "remote_tip": candidate["remote_tip"],
+        "candidate_head": candidate["candidate_head"],
+        "command_template_digest": binding["command_template_digest"],
+        "command_digest": binding["command_digest"],
+        "environment_digest": binding["environment_digest"],
+        "scope_fetch_binding_digest": binding["digest"],
+        "output_digest": scope.output_digest,
+        "task_files": list(snapshot.task_files),
+        "admitted_scope": list(snapshot.admitted_scope),
+        "changed_paths": list(scope.changed_paths),
+        "out_of_scope_paths": list(scope.out_of_scope_paths),
+        "result": scope.result,
+    }
+    return {**body, "digest": sha256_bytes(canonical_bytes(body))}
+
+
 def _merge_scope_argv(worktree: Path, remote_tip: str, candidate_head: str) -> list[str]:
     return [
         "git",
@@ -14004,6 +19680,502 @@ def _merge_scope_argv(worktree: Path, remote_tip: str, candidate_head: str) -> l
         f"{remote_tip}...{candidate_head}",
         "--",
     ]
+
+
+def _merge_full_patch_argv(
+    worktree: Path, remote_tip: str, candidate_head: str
+) -> list[str]:
+    """Return Revision-12's exact fixed-object full-patch argv."""
+
+    return [
+        "git",
+        "--no-pager",
+        "--no-replace-objects",
+        "-c",
+        "core.quotePath=false",
+        "-c",
+        "color.ui=false",
+        "-c",
+        "diff.renames=copies",
+        "-c",
+        "diff.renameLimit=0",
+        "-c",
+        "diff.algorithm=myers",
+        "-C",
+        str(worktree),
+        "diff",
+        "--patch",
+        "--no-color",
+        "-O/dev/null",
+        "--find-renames=50%",
+        "--find-copies=50%",
+        "--find-copies-harder",
+        "-l0",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=none",
+        "--diff-filter=ACDMRTUXB",
+        f"{remote_tip}...{candidate_head}",
+        "--",
+    ]
+
+
+_MERGE_BOOTSTRAP_CHILD_SOURCE = (
+    "import importlib.util,sys;"
+    "p=sys.argv[1];"
+    "s=importlib.util.spec_from_file_location('forge_bootstrap_child',p);"
+    "m=importlib.util.module_from_spec(s);"
+    "sys.modules[s.name]=m;"
+    "s.loader.exec_module(m);"
+    "raise SystemExit(m._merge_bootstrap_child_main(sys.argv[2]))"
+)
+
+
+def _merge_bootstrap_child_main(encoded_payload: str) -> int:
+    """Execute the Revision-12 composite child protocol.
+
+    This entry point runs only inside the already fenced, isolated process
+    group.  Full-patch stdout is fed directly into SHA-256 and is never added
+    to a bytearray, protocol record, diagnostic, or parent pipe.
+    """
+
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(encoded_payload.encode("ascii")))
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        os.write(1, canonical_bytes({"schema": "forge-bootstrap-composite-error/1", "error": str(exc)}))
+        return 2
+    cap = int(payload.get("cap", OUTPUT_CAP_BYTES))
+    worktree = Path(str(payload["worktree"]))
+    candidate_head = str(payload["candidate_head"])
+    supplied_tip = payload.get("remote_tip")
+    run_bound = payload.get("run_bound") is True
+
+    def stop(process: subprocess.Popen[bytes]) -> None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=FENCED_CHILD_STOP_GRACE_SECONDS)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=FENCED_CHILD_REAP_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+
+    def run_constituent(
+        argv: Sequence[str], *, retain_stdout: bool, stream_stdout: bool
+    ) -> tuple[dict[str, Any], bytes]:
+        direct_argv = [str(value) for value in argv]
+        stdout_digest = hashlib.sha256()
+        stderr_digest = hashlib.sha256()
+        stdout_total = 0
+        stderr_total = 0
+        kept = bytearray()
+        try:
+            process = subprocess.Popen(
+                direct_argv,
+                cwd=worktree,
+                env=dict(os.environ),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=False,
+            )
+        except OSError:
+            return (
+                {
+                    "argv": direct_argv,
+                    "exit": None,
+                    "output_digest": hashlib.sha256(b"").hexdigest(),
+                    "stderr_digest": hashlib.sha256(b"").hexdigest(),
+                    "launch_failed": True,
+                    "output_limit_exceeded": False,
+                },
+                b"",
+            )
+        assert process.stdout is not None and process.stderr is not None
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        limited = False
+        try:
+            while selector.get_map():
+                for key, _mask in selector.select(0.05):
+                    chunk = os.read(key.fileobj.fileno(), 8192)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    if key.data == "stdout":
+                        stdout_digest.update(chunk)
+                        stdout_total += len(chunk)
+                        if retain_stdout and len(kept) < cap:
+                            kept.extend(chunk[: cap - len(kept)])
+                        if not stream_stdout and stdout_total > cap:
+                            limited = True
+                    else:
+                        stderr_digest.update(chunk)
+                        stderr_total += len(chunk)
+                    if (
+                        stderr_total > cap
+                        if stream_stdout
+                        else stdout_total + stderr_total > cap
+                    ):
+                        limited = True
+                    if limited:
+                        stop(process)
+                        break
+                if limited:
+                    break
+            if not limited:
+                returncode = process.wait()
+            else:
+                returncode = process.returncode
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+        return (
+            {
+                "argv": direct_argv,
+                "exit": returncode,
+                "output_digest": stdout_digest.hexdigest(),
+                "stderr_digest": stderr_digest.hexdigest(),
+                "launch_failed": False,
+                "output_limit_exceeded": limited,
+            },
+            bytes(kept),
+        )
+
+    def passed(record: Mapping[str, Any]) -> bool:
+        return bool(
+            record.get("exit") == 0
+            and record.get("launch_failed") is False
+            and record.get("output_limit_exceeded") is False
+        )
+
+    fetch_argv = payload.get("fetch_argv")
+    if not isinstance(fetch_argv, list):
+        return 2
+    constituent_order: list[str] = ["fetch"]
+    fetch, _fetch_output = run_constituent(
+        [str(value) for value in fetch_argv],
+        retain_stdout=False,
+        stream_stdout=False,
+    )
+    resolved_tip: str | None = None
+    if passed(fetch):
+        if isinstance(supplied_tip, str):
+            resolved_tip = supplied_tip
+        else:
+            try:
+                raw = Path(str(payload["git_dir"]), "FETCH_HEAD").read_bytes()
+                rows = raw.splitlines()
+                oid = rows[0].split(b"\t", 1)[0].decode("ascii")
+                if (
+                    len(raw) > MERGE_SCOPE_BINDING_CAP_BYTES
+                    or not raw.endswith(b"\n")
+                    or len(rows) != 1
+                    or COMMIT_RE.fullmatch(oid) is None
+                ):
+                    raise ValueError("invalid FETCH_HEAD")
+                resolved_tip = oid
+            except (OSError, UnicodeError, ValueError, IndexError):
+                fetch = {**fetch, "exit": 1}
+
+    scope: dict[str, Any] | None = None
+    changed_paths: list[str] | None = None
+    if passed(fetch) and resolved_tip is not None and run_bound:
+        constituent_order.append("name-status")
+        scope_argv = _merge_scope_argv(worktree, resolved_tip, candidate_head)
+        scope, scope_output = run_constituent(
+            scope_argv, retain_stdout=True, stream_stdout=False
+        )
+        if passed(scope):
+            try:
+                fields = scope_output.split(b"\0")[:-1] if scope_output else []
+                if scope_output and not scope_output.endswith(b"\0"):
+                    raise ValueError("unterminated name-status output")
+                parsed: list[str] = []
+                index = 0
+                while index < len(fields):
+                    status_value = fields[index].decode("ascii")
+                    index += 1
+                    count = 2 if re.fullmatch(r"[RC](?:100|[0-9]{1,2})", status_value) else 1
+                    if count == 1 and re.fullmatch(r"[ADMTUXB]", status_value) is None:
+                        raise ValueError("invalid name-status code")
+                    if index + count > len(fields):
+                        raise ValueError("missing name-status path")
+                    for raw_path in fields[index : index + count]:
+                        path_value = raw_path.decode("utf-8")
+                        if path_value.startswith("/") or any(
+                            part in {"", ".", ".."} for part in path_value.split("/")
+                        ):
+                            raise ValueError("invalid name-status path")
+                        parsed.append(path_value)
+                    index += count
+                changed_paths = sorted(set(parsed), key=lambda value: value.encode("utf-8"))
+            except (UnicodeError, ValueError):
+                scope = {**scope, "exit": 1}
+                changed_paths = None
+
+    full_patch: dict[str, Any] | None = None
+    if (
+        passed(fetch)
+        and resolved_tip is not None
+        and (scope is None or passed(scope))
+    ):
+        constituent_order.append("full-patch")
+        full_patch, _never_retained = run_constituent(
+            _merge_full_patch_argv(worktree, resolved_tip, candidate_head),
+            retain_stdout=False,
+            stream_stdout=True,
+        )
+    protocol = {
+        "schema": "forge-bootstrap-composite-result/1",
+        "constituent_order": constituent_order,
+        "environment_digest": _git_environment_digest(os.environ),
+        "resolved_tip": resolved_tip,
+        "fetch": fetch,
+        "scope": scope,
+        "scope_changed_paths": changed_paths,
+        "full_patch": full_patch,
+    }
+    encoded = canonical_bytes(protocol)
+    if len(encoded) > OUTPUT_CAP_BYTES:
+        return 3
+    os.write(1, encoded)
+    return 0
+
+
+def _merge_bootstrap_child_argv(
+    admission: MergeAdmission,
+    *,
+    fetch_argv: Sequence[str],
+    remote_tip: str | None,
+) -> list[str]:
+    payload = {
+        "schema": "forge-bootstrap-composite-request/1",
+        "worktree": str(admission.worktree),
+        "git_dir": str(admission.worktree_identity["git_dir"]),
+        "candidate_head": admission.candidate_head,
+        "remote_tip": remote_tip,
+        "run_bound": admission.run_task is not None,
+        "fetch_argv": list(fetch_argv),
+        "cap": OUTPUT_CAP_BYTES,
+    }
+    encoded = base64.urlsafe_b64encode(canonical_bytes(payload)).decode("ascii")
+    return [
+        sys.executable,
+        "-c",
+        _MERGE_BOOTSTRAP_CHILD_SOURCE,
+        str(Path(__file__).resolve()),
+        encoded,
+    ]
+
+
+def _decode_merge_bootstrap_result(
+    raw: FencedProcessResult,
+    *,
+    run_bound: bool,
+    fetch_argv: Sequence[str] | None = None,
+    worktree: Path | None = None,
+    candidate_head: str | None = None,
+    environment_digest: str | None = None,
+) -> FencedProcessResult:
+    """Authenticate the bounded protocol and expose one composite result."""
+
+    zero_digest = hashlib.sha256(b"").hexdigest()
+    if (
+        raw.returncode != 0
+        or raw.launch_failed
+        or raw.timed_out
+        or raw.output_limit
+        or raw.group_survived
+    ):
+        return dataclasses.replace(raw, output=b"", output_digest=zero_digest)
+    try:
+        protocol = json.loads(raw.output)
+        if (
+            not isinstance(protocol, dict)
+            or set(protocol)
+            != {
+                "schema",
+                "constituent_order",
+                "environment_digest",
+                "resolved_tip",
+                "fetch",
+                "scope",
+                "scope_changed_paths",
+                "full_patch",
+            }
+            or protocol.get("schema") != "forge-bootstrap-composite-result/1"
+        ):
+            raise ValueError("composite result envelope is malformed")
+        observed_environment_digest = protocol.get("environment_digest")
+        if (
+            not isinstance(observed_environment_digest, str)
+            or SHA256_RE.fullmatch(observed_environment_digest) is None
+            or (
+                environment_digest is not None
+                and observed_environment_digest != environment_digest
+            )
+        ):
+            raise ValueError("composite environment diverges from its exact contract")
+
+        def constituent(value: Any, label: str) -> dict[str, Any]:
+            if not isinstance(value, dict) or set(value) != {
+                "argv",
+                "exit",
+                "output_digest",
+                "stderr_digest",
+                "launch_failed",
+                "output_limit_exceeded",
+            }:
+                raise ValueError(f"{label} result is malformed")
+            argv = value.get("argv")
+            if (
+                not isinstance(argv, list)
+                or not argv
+                or not all(
+                    isinstance(item, str) and "\x00" not in item for item in argv
+                )
+                or (
+                    value.get("exit") is not None
+                    and (
+                        not isinstance(value.get("exit"), int)
+                        or isinstance(value.get("exit"), bool)
+                    )
+                )
+                or any(
+                    not isinstance(value.get(name), str)
+                    or SHA256_RE.fullmatch(str(value[name])) is None
+                    for name in ("output_digest", "stderr_digest")
+                )
+                or type(value.get("launch_failed")) is not bool
+                or type(value.get("output_limit_exceeded")) is not bool
+            ):
+                raise ValueError(f"{label} result fields are malformed")
+            return value
+
+        def passed(record: Mapping[str, Any]) -> bool:
+            return bool(
+                record.get("exit") == 0
+                and record.get("launch_failed") is False
+                and record.get("output_limit_exceeded") is False
+            )
+
+        order = protocol.get("constituent_order")
+        if not isinstance(order, list) or not all(
+            isinstance(label, str) for label in order
+        ):
+            raise ValueError("composite constituent order is malformed")
+        fetch = constituent(protocol.get("fetch"), "fetch")
+        if fetch_argv is not None and fetch.get("argv") != list(fetch_argv):
+            raise ValueError("composite fetch argv diverges from admission")
+        resolved_tip = protocol.get("resolved_tip")
+        scope: dict[str, Any] | None = None
+        patch: dict[str, Any] | None = None
+        records: list[dict[str, Any]] = [fetch]
+        expected_order = ["fetch"]
+
+        if passed(fetch):
+            if (
+                not isinstance(resolved_tip, str)
+                or COMMIT_RE.fullmatch(resolved_tip) is None
+            ):
+                raise ValueError("composite resolved tip is malformed")
+            if worktree is None or candidate_head is None:
+                raise ValueError("composite argv context is unavailable")
+            if run_bound:
+                expected_order.append("name-status")
+                scope = constituent(protocol.get("scope"), "name-status")
+                records.append(scope)
+                if scope.get("argv") != _merge_scope_argv(
+                    worktree, resolved_tip, candidate_head
+                ):
+                    raise ValueError("composite name-status argv diverges")
+                paths = protocol.get("scope_changed_paths")
+                if passed(scope):
+                    _batch, _builders, journal = _coordination_modules()
+                    if not _valid_sorted_unique_strings(paths) or not all(
+                        journal._valid_scope_item(path) for path in paths
+                    ):
+                        raise ValueError("scope changed-path set is malformed")
+                elif paths is not None:
+                    raise ValueError("failed name-status invented changed paths")
+            elif (
+                protocol.get("scope") is not None
+                or protocol.get("scope_changed_paths") is not None
+            ):
+                raise ValueError("unbound composite invented a scope constituent")
+
+            if scope is None or passed(scope):
+                expected_order.append("full-patch")
+                patch = constituent(protocol.get("full_patch"), "full-patch")
+                records.append(patch)
+                if patch.get("argv") != _merge_full_patch_argv(
+                    worktree, resolved_tip, candidate_head
+                ):
+                    raise ValueError("composite full-patch argv diverges")
+            elif protocol.get("full_patch") is not None:
+                raise ValueError("full-patch ran after failed name-status")
+        else:
+            if resolved_tip is not None:
+                raise ValueError("failed fetch invented a resolved tip")
+            if (
+                protocol.get("scope") is not None
+                or protocol.get("scope_changed_paths") is not None
+                or protocol.get("full_patch") is not None
+            ):
+                raise ValueError("a constituent ran after failed fetch")
+
+        if order != expected_order:
+            raise ValueError("composite constituent order diverges")
+        complete = bool(
+            expected_order[-1] == "full-patch" and all(passed(record) for record in records)
+        )
+        slot_digest = str(scope["output_digest"]) if scope is not None else zero_digest
+        return dataclasses.replace(
+            raw,
+            returncode=(
+                0
+                if complete
+                else next(
+                    (
+                        int(record["exit"])
+                        for record in records
+                        if isinstance(record.get("exit"), int)
+                        and record.get("exit") != 0
+                    ),
+                    1,
+                )
+            ),
+            output=b"",
+            output_digest=slot_digest,
+            output_limit=any(
+                record.get("output_limit_exceeded") is True for record in records
+            ),
+            launch_failed=any(
+                record.get("launch_failed") is True for record in records
+            ),
+            metadata=copy.deepcopy(protocol),
+        )
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        return dataclasses.replace(
+            raw,
+            returncode=1,
+            output=b"",
+            output_digest=zero_digest,
+            launch_failed=True,
+            metadata={"protocol_error": str(exc)},
+        )
 
 
 def _parse_merge_scope_output(raw: bytes) -> tuple[str, ...]:
@@ -14103,16 +20275,87 @@ def _derive_merge_scope(
             for pattern in snapshot.admitted_scope
         )
     )
-    environment_contract = {
-        "unset_prefixes": ["GIT_CONFIG_"],
-        "unset_names": sorted(_MERGE_SCOPE_UNSET),
-        "overlay": dict(sorted(_MERGE_SCOPE_OVERLAY.items())),
-    }
     return MergeScopeResult(
         argv=tuple(argv),
         command_digest=sha256_bytes(canonical_bytes(argv)),
-        environment_digest=sha256_bytes(canonical_bytes(environment_contract)),
+        environment_digest=sha256_bytes(
+            canonical_bytes(_merge_scope_environment_contract())
+        ),
         output_digest=process.output_digest,
+        changed_paths=changed_paths,
+        out_of_scope_paths=out_of_scope,
+        result="exceeded" if out_of_scope else "contained",
+    )
+
+
+_DERIVE_MERGE_SCOPE = object()
+
+
+def _merge_scope_from_candidate_observation(
+    admission: MergeAdmission, observation: Mapping[str, Any]
+) -> MergeScopeResult | None:
+    snapshot = admission.run_task
+    if snapshot is None:
+        return None
+    synthetic_state = {
+        "chain_id": observation.get("chain_id"),
+        "repository": str(admission.repository),
+        "worktree": copy.deepcopy(admission.worktree_identity),
+        "branch": admission.branch,
+        "target": copy.deepcopy(admission.target),
+        "run_binding": copy.deepcopy(snapshot.binding),
+        "candidate": (
+            {"generation_digest": observation.get("generation_digest")}
+            if observation.get("generation_digest") is not None
+            else None
+        ),
+    }
+    outputs = _merge_candidate_observation_outputs(
+        synthetic_state, observation
+    )
+    if outputs is None or "scope" not in outputs:
+        raise _merge_refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: merge start refused — durable run/task scope evidence is unavailable",
+        )
+    try:
+        changed_paths = _parse_merge_scope_output(outputs["scope"])
+    except ValueError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: merge start refused — durable run/task scope evidence is malformed",
+            observed=str(exc),
+        ) from exc
+    _batch, _builders, journal = _coordination_modules()
+    out_of_scope = tuple(
+        path
+        for path in changed_paths
+        if not any(
+            journal.pathspec_contained(path, pattern)
+            for pattern in snapshot.task_files
+        )
+        or not any(
+            journal.pathspec_contained(path, pattern)
+            for pattern in snapshot.admitted_scope
+        )
+    )
+    argv = _merge_scope_argv(
+        admission.worktree,
+        str(observation["remote_tip"]),
+        admission.candidate_head,
+    )
+    scope_record = next(
+        record
+        for record in observation["steps"]
+        if record.get("step") == "scope"
+    )
+    return MergeScopeResult(
+        argv=tuple(argv),
+        command_digest=sha256_bytes(canonical_bytes(argv)),
+        environment_digest=sha256_bytes(
+            canonical_bytes(_merge_scope_environment_contract())
+        ),
+        output_digest=str(scope_record["child_result"]["output_digest"]),
         changed_paths=changed_paths,
         out_of_scope_paths=out_of_scope,
         result="exceeded" if out_of_scope else "contained",
@@ -14125,11 +20368,22 @@ def bind_merge_candidate_generation(
     remote_tip: str,
     *,
     generation: int = 1,
+    scope_result: MergeScopeResult | None | object = _DERIVE_MERGE_SCOPE,
+    fixed_tip_bound: bool = False,
+    observation: Mapping[str, Any] | None = None,
+    diff_output_digest: str | None = None,
 ) -> MergeCandidateGeneration:
     """Bind one fixed fetched base to the exact DM-014 generation tuple."""
 
     _require_merge_adapter_control("admission-and-generation")
-    if COMMIT_RE.fullmatch(remote_tip) is None or generation <= 0:
+    if (
+        COMMIT_RE.fullmatch(remote_tip) is None
+        or generation <= 0
+        or (
+            diff_output_digest is not None
+            and SHA256_RE.fullmatch(diff_output_digest) is None
+        )
+    ):
         raise _merge_refusal(
             V2ReasonCode.FETCH_FAILED,
             "forge: merge start refused — fetched target tip is invalid",
@@ -14137,46 +20391,108 @@ def bind_merge_candidate_generation(
             observed=remote_tip,
         )
     candidate_repo = Repository(admission.worktree)
-    resolved_tip = candidate_repo.git(
-        ["rev-parse", "--verify", f"{remote_tip}^{{commit}}"], check=False
-    )
-    if (
-        resolved_tip.returncode != 0
-        or resolved_tip.stdout.decode("ascii", "replace").strip() != remote_tip
-    ):
-        raise _merge_refusal(
-            V2ReasonCode.FETCH_FAILED,
-            "forge: merge start refused — fetched target tip is invalid",
-            expected="a locally available full fixed commit object ID",
-            observed=remote_tip,
+    observed_paths: tuple[str, ...] | None = None
+    classifier_output: bytes | None = None
+    if observation is not None:
+        observation_generation = observation.get("generation_digest")
+        observation_state: dict[str, Any] = {
+            "chain_id": observation.get("chain_id"),
+            "repository": str(admission.repository),
+            "worktree": copy.deepcopy(admission.worktree_identity),
+            "branch": admission.branch,
+            "target": copy.deepcopy(admission.target),
+            "run_binding": (
+                copy.deepcopy(admission.run_task.binding)
+                if admission.run_task is not None
+                else None
+            ),
+            "candidate": (
+                {"generation_digest": observation_generation}
+                if observation_generation is not None
+                else None
+            ),
+        }
+        if (
+            observation.get("expected_head") != admission.candidate_head
+            or observation.get("remote_tip") != remote_tip
+            or observation.get("classify") is not True
+            or observation.get("declared_tier") != admission.declared_tier
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: merge start refused — candidate observation is not generation-bound",
+                expected="one complete generation-bound classification observation",
+                observed=str(observation.get("evidence_digest")),
+            )
+        (
+            candidate_repo,
+            observed_policy,
+            observed_paths,
+            diff,
+            classifier_output,
+        ) = _parse_merge_candidate_observation(
+            observation_state,
+            observation,
+            verb=str(observation.get("verb", "merge start")),
+            require_current_generation=False,
         )
-    if candidate_repo.head() != admission.candidate_head:
+        if (
+            observed_policy.sha != admission.policy.sha
+            or observed_policy.digest != admission.policy.digest
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.CANDIDATE_STALE,
+                "forge: merge start refused — committed candidate policy changed",
+                expected=admission.policy.digest,
+                observed=observed_policy.digest,
+            )
+    elif not fixed_tip_bound:
+        resolved_tip = candidate_repo.git(
+            ["rev-parse", "--verify", f"{remote_tip}^{{commit}}"], check=False
+        )
+        if (
+            resolved_tip.returncode != 0
+            or resolved_tip.stdout.decode("ascii", "replace").strip() != remote_tip
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.FETCH_FAILED,
+                "forge: merge start refused — fetched target tip is invalid",
+                expected="a locally available full fixed commit object ID",
+                observed=remote_tip,
+            )
+    if observation is None and candidate_repo.head() != admission.candidate_head:
         raise _merge_refusal(
             V2ReasonCode.CANDIDATE_STALE,
             "forge: merge start refused — candidate HEAD changed after admission",
             expected=admission.candidate_head,
             observed=candidate_repo.head(),
         )
-    _merge_worktree_status(
-        candidate_repo, Path(admission.worktree_identity["git_dir"])
-    )
-    try:
-        diff = candidate_repo.git(
-            ["diff", f"{remote_tip}...{admission.candidate_head}"]
-        ).stdout
-    except OSError as exc:
-        raise _merge_refusal(
-            V2ReasonCode.EVIDENCE_INCOMPLETE,
-            "forge: merge start refused — fixed candidate diff is unavailable",
-            expected=f"git diff {remote_tip}...{admission.candidate_head}",
-            observed=str(exc),
-        ) from exc
+    if observation is None:
+        _merge_worktree_status(
+            candidate_repo, Path(admission.worktree_identity["git_dir"])
+        )
+        if diff_output_digest is None:
+            try:
+                diff = candidate_repo.git(
+                    ["diff", f"{remote_tip}...{admission.candidate_head}"]
+                ).stdout
+            except OSError as exc:
+                raise _merge_refusal(
+                    V2ReasonCode.EVIDENCE_INCOMPLETE,
+                    "forge: merge start refused — fixed candidate diff is unavailable",
+                    expected=f"git diff {remote_tip}...{admission.candidate_head}",
+                    observed=str(exc),
+                ) from exc
     generation_preimage: dict[str, Any] = {
         "remote": "origin",
         "destination_ref": admission.target["destination_ref"],
         "remote_tip": remote_tip,
         "candidate_head": admission.candidate_head,
-        "diff_sha256": sha256_bytes(diff),
+        "diff_sha256": (
+            diff_output_digest
+            if diff_output_digest is not None
+            else sha256_bytes(diff)
+        ),
         "policy_commit": admission.candidate_head,
         "policy_digest": admission.policy.digest,
         "worktree_identity": copy.deepcopy(admission.worktree_identity),
@@ -14189,9 +20505,19 @@ def bind_merge_candidate_generation(
     # FR-231 requires the run-bound scope proof before classification.  The
     # lifecycle adapter invokes this function immediately after its fenced
     # fixed-tip fetch; this pure adapter must not reverse those two judgments.
-    scope = _derive_merge_scope(admission, remote_tip)
+    scope = (
+        _merge_scope_from_candidate_observation(admission, observation)
+        if observation is not None and scope_result is _DERIVE_MERGE_SCOPE
+        else _derive_merge_scope(admission, remote_tip)
+        if scope_result is _DERIVE_MERGE_SCOPE
+        else scope_result
+    )
+    if scope is not None and not isinstance(scope, MergeScopeResult):
+        raise TypeError("merge scope override is malformed")
     if scope is not None:
         changed_paths = scope.changed_paths
+    elif observed_paths is not None:
+        changed_paths = observed_paths
     else:
         try:
             names = candidate_repo.git(
@@ -14228,46 +20554,48 @@ def bind_merge_candidate_generation(
                 "forge: merge start refused — candidate paths are not UTF-8",
                 observed=str(exc),
             ) from exc
-    argv = [
-        sys.executable,
-        str(ctx.helper("risk_tier.py")),
-        "--repo",
-        str(admission.worktree),
-        "--policy-sha",
-        admission.candidate_head,
-        "--range",
-        f"{remote_tip}...{admission.candidate_head}",
-    ]
-    if admission.declared_tier is not None:
-        argv.extend(["--declared-tier", admission.declared_tier])
+    if classifier_output is None:
+        argv = [
+            sys.executable,
+            str(ctx.helper("risk_tier.py")),
+            "--repo",
+            str(admission.worktree),
+            "--policy-sha",
+            admission.candidate_head,
+            "--range",
+            f"{remote_tip}...{admission.candidate_head}",
+        ]
+        if admission.declared_tier is not None:
+            argv.extend(["--declared-tier", admission.declared_tier])
+        try:
+            process = run_bounded(
+                argv,
+                cwd=admission.worktree,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=ctx.options.verbose,
+            )
+        except OSError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: merge start refused — risk-tier classification did not pass",
+                expected="risk_tier.py --range to launch within the fixed bounds",
+                observed=str(exc),
+            ) from exc
+        if (
+            process.returncode != 0
+            or process.timed_out
+            or process.output_limit
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: merge start refused — risk-tier classification did not pass",
+                expected="risk_tier.py --range exit 0 within the fixed bounds",
+                observed=f"exit={process.returncode}",
+            )
+        classifier_output = process.output
     try:
-        process = run_bounded(
-            argv,
-            cwd=admission.worktree,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
-            verbose=ctx.options.verbose,
-        )
-    except OSError as exc:
-        raise _merge_refusal(
-            V2ReasonCode.EVIDENCE_INCOMPLETE,
-            "forge: merge start refused — risk-tier classification did not pass",
-            expected="risk_tier.py --range to launch within the fixed bounds",
-            observed=str(exc),
-        ) from exc
-    if (
-        process.returncode != 0
-        or process.timed_out
-        or process.output_limit
-    ):
-        raise _merge_refusal(
-            V2ReasonCode.EVIDENCE_INCOMPLETE,
-            "forge: merge start refused — risk-tier classification did not pass",
-            expected="risk_tier.py --range exit 0 within the fixed bounds",
-            observed=f"exit={process.returncode}",
-        )
-    try:
-        evidence = json.loads(process.output)
+        evidence = json.loads(classifier_output)
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise _merge_refusal(
             V2ReasonCode.EVIDENCE_INCOMPLETE,
@@ -14291,6 +20619,14 @@ def bind_merge_candidate_generation(
     control = False
     classified_paths: list[str] = []
     for path_evidence in evidence["paths"]:
+        path_tier = (
+            path_evidence.get("path_tier")
+            if isinstance(path_evidence, dict)
+            and "path_tier" in path_evidence
+            else path_evidence.get("tier")
+            if isinstance(path_evidence, dict)
+            else None
+        )
         if (
             not isinstance(path_evidence, dict)
             or not isinstance(path_evidence.get("path"), str)
@@ -14299,7 +20635,12 @@ def bind_merge_candidate_generation(
                 isinstance(value, str) and value
                 for value in path_evidence["categories"]
             )
-            or path_evidence.get("tier") not in TIER_RANK
+            or path_tier not in TIER_RANK
+            or (
+                "path_tier" in path_evidence
+                and "tier" in path_evidence
+                and path_evidence.get("path_tier") != path_evidence.get("tier")
+            )
             or type(path_evidence.get("control_floor")) is not bool
         ):
             raise _merge_refusal(
@@ -14414,10 +20755,21 @@ def _observe_current_merge_candidate(
     state: Mapping[str, Any],
     *,
     verb: str,
+    observation: Mapping[str, Any] | None = None,
 ) -> tuple[Repository, Policy, tuple[str, ...]]:
     """Recompute every FR-233 post-executable generation member."""
 
     _require_merge_adapter_control("admission-and-generation")
+    if observation is not None:
+        repository, policy, changed_paths, _diff, _classifier = (
+            _parse_merge_candidate_observation(
+                state,
+                observation,
+                verb=verb,
+                require_current_generation=True,
+            )
+        )
+        return repository, policy, changed_paths
     candidate = state.get("candidate")
     worktree = state.get("worktree")
     target = state.get("target")
@@ -14935,6 +21287,68 @@ def _merge_event_digest(
     return str(matches[-1]) if matches and SHA256_RE.fullmatch(str(matches[-1])) else None
 
 
+def _merge_epoch_fetch_observation_digest(
+    store: MergeChainStore, chain_id: str, evidence: object
+) -> str | None:
+    """Resolve one raw epoch-fetch fact only from authenticated event replay."""
+
+    if not isinstance(evidence, Mapping):
+        return None
+    with store.event_lock(chain_id):
+        replay = store._read_replay_locked(chain_id)
+    matches: list[object] = []
+    for index, event in enumerate(replay.events):
+        direct_predecessor = bool(
+            isinstance(event, Mapping)
+            and event.get("previous_digest")
+            == evidence.get("fetch_intent_event_digest")
+        )
+        previous_event = replay.events[index - 1] if index else None
+        previous_payload = (
+            previous_event.get("payload")
+            if isinstance(previous_event, Mapping)
+            else None
+        )
+        recovery_proof = (
+            previous_payload.get("recovery_proof")
+            if isinstance(previous_payload, Mapping)
+            else None
+        )
+        lifecycle = (
+            recovery_proof.get("lifecycle")
+            if isinstance(recovery_proof, Mapping)
+            else None
+        )
+        owner_death_predecessor = bool(
+            isinstance(event, Mapping)
+            and isinstance(previous_event, Mapping)
+            and isinstance(lifecycle, Mapping)
+            and event.get("previous_digest") == previous_event.get("digest")
+            and previous_event.get("previous_digest")
+            == evidence.get("fetch_intent_event_digest")
+            and lifecycle.get("operation") is None
+            and lifecycle.get("intent_digest") is None
+            and lifecycle.get("classification") == "owner-death-only"
+        )
+        if (
+            not isinstance(event, Mapping)
+            or event.get("event") != "condition_recorded"
+            or not (direct_predecessor or owner_death_predecessor)
+        ):
+            continue
+        payload = event.get("payload")
+        delta = payload.get("delta") if isinstance(payload, Mapping) else None
+        integration = delta.get("integration") if isinstance(delta, Mapping) else None
+        if (
+            isinstance(integration, Mapping)
+            and integration.get("intent") == evidence
+        ):
+            matches.append(event.get("digest"))
+    if len(matches) != 1 or SHA256_RE.fullmatch(str(matches[0])) is None:
+        return None
+    return str(matches[0])
+
+
 def _merge_released_predecessor(
     store: MergeChainStore,
     claim_path: Path,
@@ -15194,24 +21608,21 @@ def _merge_inactive(state: Mapping[str, Any]) -> bool:
 
 
 def _merge_unpublished_claim_absent(
-    state: Mapping[str, Any], store: MergeChainStore | None = None
+    state: Mapping[str, Any], store: MergeChainStore
 ) -> bool:
     try:
         path = Path(str(state["worktree"]["claim"]["path"]))
-        if store is None:
-            os.lstat(path)
-        else:
-            identity = {
-                name: str(state["worktree"][name])
-                for name in ("path", "git_dir", "common_dir")
-            }
-            _digest, expected_name, expected_path = _merge_claim_identity(
-                store, identity
-            )
-            if path != expected_path or path.name != expected_name:
-                return False
-            with _merge_owner_directory(store) as (owners, _owners_path):
-                os.stat(path.name, dir_fd=owners, follow_symlinks=False)
+        identity = {
+            name: str(state["worktree"][name])
+            for name in ("path", "git_dir", "common_dir")
+        }
+        _digest, expected_name, expected_path = _merge_claim_identity(
+            store, identity
+        )
+        if path != expected_path or path.name != expected_name:
+            return False
+        with _merge_owner_directory(store) as (owners, _owners_path):
+            os.stat(path.name, dir_fd=owners, follow_symlinks=False)
     except FileNotFoundError:
         return True
     except (KeyError, TypeError, OSError, ValueError):
@@ -15263,6 +21674,26 @@ def _merge_containment(
     return "all-false", tuple(flags)
 
 
+def _merge_old_tip_all_false(state: Mapping[str, Any]) -> bool:
+    """Match one authoritative present-old-tip, all-attempts-absent fact."""
+
+    integration = state.get("integration")
+    if not isinstance(integration, Mapping):
+        return False
+    push = integration.get("push")
+    observed = integration.get("observed")
+    containment, vector = _merge_containment(state)
+    return bool(
+        isinstance(push, Mapping)
+        and isinstance(observed, Mapping)
+        and observed.get("exists") is True
+        and observed.get("oid") == push.get("expected_old_tip")
+        and containment == "all-false"
+        and vector
+        and all(flag is False for flag in vector)
+    )
+
+
 def _merge_has_attempt(state: Mapping[str, Any]) -> bool:
     integration = state.get("integration")
     push = integration.get("push") if isinstance(integration, Mapping) else None
@@ -15306,11 +21737,1950 @@ def _merge_process_unresolved(
     )
 
 
+@dataclasses.dataclass
+class _MergeEpochBudget:
+    fetches: int = 0
+    rebases: int = 0
+    suites: int = 0
+    pushes: int = 0
+    pre_observations: int = 0
+    post_observations: int = 0
+
+    def consume(self, member: str) -> None:
+        _require_merge_integration_control("bounded-epoch-budget")
+        limits = {
+            "fetches": 1,
+            "rebases": 1,
+            "suites": 1,
+            "pushes": 1,
+            "pre_observations": 1,
+            "post_observations": 1,
+        }
+        if member not in limits:
+            raise ValueError(f"unknown merge epoch budget member: {member}")
+        value = int(getattr(self, member)) + 1
+        if value > limits[member]:
+            raise FrozenError(
+                f"merge epoch exceeded its {member.replace('_', '-')} budget",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        setattr(self, member, value)
+
+
+def _merge_epoch_suite(
+    state: Mapping[str, Any], policy: Policy
+) -> list[dict[str, str]]:
+    ordered = list(_merge_gate_suite(state, policy))
+    if not ordered or ordered[0] != "gate-1":
+        raise FrozenError(
+            "merge Gate 1 is missing from the deterministic epoch suite",
+            chain_id=str(state.get("chain_id") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    suite = [
+        {"kind": "gate", "id": "gate-1"},
+        {"kind": "scoped-mutation", "id": "scoped-mutation"},
+    ]
+    for gate_id in ordered[1:]:
+        repeats = len(policy.stack_commands) if gate_id.startswith("stack:") else 1
+        suite.extend({"kind": "gate", "id": gate_id} for _index in range(repeats))
+    return suite
+
+
+def _remote_observation_intent(
+    state: Mapping[str, Any], *, phase: str, push_intent_digest: str | None = None
+) -> dict[str, Any]:
+    if phase not in {"final-prepush", "post-push"}:
+        raise ValueError("remote observation phase is invalid")
+    integration = state.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    if not isinstance(epoch, Mapping):
+        raise FrozenError(
+            "remote observation lacks an active merge epoch",
+            chain_id=str(state.get("chain_id") or "") or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    if phase == "final-prepush" and push_intent_digest is not None:
+        raise ValueError("final-prepush observation cannot cite push intent")
+    if phase == "post-push" and (
+        push_intent_digest is None
+        or SHA256_RE.fullmatch(push_intent_digest) is None
+    ):
+        raise ValueError("post-push observation requires its exact push intent")
+    return {
+        "schema": "forge-remote-observation-intent/1",
+        "transaction": "merge",
+        "chain_id": state["chain_id"],
+        "attempt_identity": epoch["intent_digest"],
+        "phase": phase,
+        "push_intent_digest": push_intent_digest,
+    }
+
+
+def _remote_observation_heads(state: Mapping[str, Any]) -> list[str]:
+    integration = state.get("integration")
+    push = integration.get("push") if isinstance(integration, Mapping) else None
+    attempts = push.get("attempted_heads") if isinstance(push, Mapping) else None
+    if isinstance(attempts, list) and attempts:
+        return [str(head) for head in attempts]
+    candidate = state.get("candidate")
+    if not isinstance(candidate, Mapping):
+        raise ValueError("remote observation candidate is unavailable")
+    return [str(candidate["candidate_head"])]
+
+
+def _remote_observation_fetch_argv(state: Mapping[str, Any]) -> list[str]:
+    return [
+        "git",
+        "--no-pager",
+        "-C",
+        str(state["worktree"]["path"]),
+        "fetch",
+        "--no-tags",
+        "--quiet",
+        "origin",
+        str(state["target"]["destination_ref"]),
+    ]
+
+
+def _remote_containment_argv(
+    state: Mapping[str, Any], head: str, tip: str
+) -> list[str]:
+    return [
+        "git",
+        "--no-pager",
+        "--no-replace-objects",
+        "-C",
+        str(state["worktree"]["path"]),
+        "merge-base",
+        "--is-ancestor",
+        head,
+        tip,
+    ]
+
+
+_EPOCH_FETCH_OBSERVATION_SCHEMA = "forge-epoch-fetch-observation/1"
+
+
+def _epoch_fetch_observation_record_valid(
+    state: Mapping[str, Any], value: object
+) -> bool:
+    """Validate the non-sealing result of an epoch's fenced fetch child."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema",
+        "chain_id",
+        "epoch_intent_digest",
+        "operation_nonce",
+        "generation_digest",
+        "fetch_intent_event_digest",
+        "target",
+        "argv",
+        "child_result",
+        "recorded_at",
+    }:
+        return False
+    integration = state.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    plan = epoch.get("gate_plan") if isinstance(epoch, Mapping) else None
+    candidate = state.get("candidate")
+    expected_argv = [
+        "git",
+        "--no-pager",
+        "-C",
+        str(state.get("worktree", {}).get("path", "")),
+        "fetch",
+        "--no-tags",
+        "--quiet",
+        "origin",
+        str(state.get("target", {}).get("destination_ref", "")),
+    ]
+    if (
+        value.get("schema") != _EPOCH_FETCH_OBSERVATION_SCHEMA
+        or value.get("chain_id") != state.get("chain_id")
+        or not isinstance(epoch, Mapping)
+        or not isinstance(plan, Mapping)
+        or plan.get("status") != "unsealed"
+        or value.get("epoch_intent_digest") != epoch.get("intent_digest")
+        or value.get("operation_nonce") != epoch.get("operation_nonce")
+        or not isinstance(candidate, Mapping)
+        or value.get("generation_digest") != candidate.get("generation_digest")
+        or value.get("generation_digest") != epoch.get("generation_digest")
+        or SHA256_RE.fullmatch(str(value.get("fetch_intent_event_digest", "")))
+        is None
+        or value.get("target") != state.get("target")
+        or value.get("argv") != expected_argv
+        or not _valid_utc_second(value.get("recorded_at"))
+    ):
+        return False
+    child = value.get("child_result")
+    if not isinstance(child, Mapping) or set(child) != {
+        "authorized",
+        "exit",
+        "inflight_digest",
+        "output_digest",
+        "launch_failed",
+        "timed_out",
+        "output_limit_exceeded",
+        "group_survived",
+    }:
+        return False
+    return bool(
+        type(child.get("authorized")) is bool
+        and (child.get("exit") is None or type(child.get("exit")) is int)
+        and SHA256_RE.fullmatch(str(child.get("inflight_digest", ""))) is not None
+        and SHA256_RE.fullmatch(str(child.get("output_digest", ""))) is not None
+        and all(
+            type(child.get(name)) is bool
+            for name in (
+                "launch_failed",
+                "timed_out",
+                "output_limit_exceeded",
+                "group_survived",
+            )
+        )
+    )
+
+
+def _epoch_fetch_observation_passed(value: Mapping[str, Any]) -> bool:
+    child = value.get("child_result")
+    return bool(
+        isinstance(child, Mapping)
+        and child.get("authorized") is True
+        and child.get("exit") == 0
+        and child.get("launch_failed") is False
+        and child.get("timed_out") is False
+        and child.get("output_limit_exceeded") is False
+        and child.get("group_survived") is False
+    )
+
+
+def _epoch_fetch_result_intent_digest(
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> str | None:
+    """Authenticate an interposed raw-fetch/observation result chain.
+
+    The shared Revision-9 grammar expects ``fetch_result`` to immediately
+    follow ``fetch_intent``.  Revision 10 first retains the fenced child's raw
+    result and, when the fetched tip is unchanged, the separately fenced
+    candidate and carried-successor observations.  This helper proves that
+    complete chain and returns the original intent digest for an in-memory
+    compatibility bridge; it never relaxes the shared validator.
+    """
+
+    if event.get("event") != "fetch_result" or prior is None:
+        return None
+
+    def follows_authenticated_result(
+        result_digest: object,
+        *,
+        operation: str,
+    ) -> bool:
+        if event.get("previous_digest") == result_digest:
+            return True
+        bridge = context.get("recovery_proof_bridge")
+        return bool(
+            isinstance(result_digest, str)
+            and isinstance(bridge, Mapping)
+            and event.get("previous_digest") == bridge.get("event_digest")
+            and bridge.get("previous_digest") == result_digest
+            and (
+                bridge.get("operation") == operation
+                and bridge.get("classification")
+                == f"{operation}-result-persisted"
+                or bridge.get("operation") is None
+                and bridge.get("intent_digest") is None
+                and bridge.get("classification") == "owner-death-only"
+            )
+        )
+
+    admitted = context.get("fetch_intent")
+    raw = context.get("epoch_fetch_observation")
+    if not isinstance(admitted, Mapping) or not isinstance(raw, Mapping):
+        return None
+    admitted_evidence = admitted.get("evidence")
+    raw_evidence = raw.get("evidence")
+    prior_candidate = prior.get("candidate")
+    prior_integration = prior.get("integration")
+    current_integration = current.get("integration")
+    current_result = (
+        current_integration.get("intent")
+        if isinstance(current_integration, Mapping)
+        else None
+    )
+    if (
+        not isinstance(admitted_evidence, Mapping)
+        or not isinstance(raw_evidence, Mapping)
+        or not isinstance(prior_candidate, Mapping)
+        or not isinstance(prior_integration, Mapping)
+        or not isinstance(current_integration, Mapping)
+        or not isinstance(current_result, Mapping)
+        or set(current_result)
+        != {
+            "operation",
+            "operation_nonce",
+            "attempt",
+            "result",
+            "resolved_tip",
+        }
+        or current_result.get("operation") != "fetch-result"
+        or current_result.get("operation_nonce")
+        != admitted_evidence.get("operation_nonce")
+        or current_result.get("attempt") != admitted_evidence.get("attempt")
+        or admitted_evidence.get("operation") != "fetch"
+        or raw.get("generation_digest") != event.get("generation_digest")
+        or raw.get("generation_digest")
+        != prior_candidate.get("generation_digest")
+        or raw_evidence.get("fetch_intent_event_digest")
+        != admitted.get("digest")
+        or raw_evidence.get("operation_nonce")
+        != admitted_evidence.get("operation_nonce")
+        or raw_evidence.get("target") != admitted_evidence.get("target")
+        or not _epoch_fetch_observation_record_valid(prior, raw_evidence)
+    ):
+        return None
+
+    passed = _epoch_fetch_observation_passed(raw_evidence)
+    if current_result.get("result") != ("success" if passed else "failed"):
+        return None
+    if not passed:
+        if (
+            current_result.get("resolved_tip") is not None
+            or not follows_authenticated_result(
+                raw.get("digest"), operation="fetch"
+            )
+            or current.get("state") != "authorized"
+            or current_integration.get("epoch") is not None
+        ):
+            return None
+        return str(admitted.get("digest"))
+
+    fetched_tip = current_result.get("resolved_tip")
+    if not isinstance(fetched_tip, str) or COMMIT_RE.fullmatch(fetched_tip) is None:
+        return None
+    unchanged = fetched_tip == prior_candidate.get("remote_tip")
+    before_epoch = prior_integration.get("epoch")
+    after_epoch = current_integration.get("epoch")
+    before_plan = (
+        before_epoch.get("gate_plan") if isinstance(before_epoch, Mapping) else None
+    )
+    after_plan = (
+        after_epoch.get("gate_plan") if isinstance(after_epoch, Mapping) else None
+    )
+    if (
+        not isinstance(before_plan, Mapping)
+        or before_plan.get("status") != "unsealed"
+        or not isinstance(after_plan, Mapping)
+    ):
+        return None
+    if not unchanged:
+        if (
+            not follows_authenticated_result(
+                raw.get("digest"), operation="fetch"
+            )
+            or after_plan != before_plan
+            or current.get("state") != prior.get("state")
+            or current.get("state") != "rebasing"
+        ):
+            return None
+        return str(admitted.get("digest"))
+
+    candidate_observation = context.get("candidate_observation")
+    if not isinstance(candidate_observation, Mapping):
+        return None
+    observation = candidate_observation.get("evidence")
+    if (
+        not _merge_candidate_observation_evidence_valid(prior, observation)
+        or candidate_observation.get("generation_digest")
+        != prior_candidate.get("generation_digest")
+        or candidate_observation.get("source_intent") != raw_evidence
+        or candidate_observation.get("evidence_digest")
+        != observation.get("evidence_digest")
+        or observation.get("source_intent") != raw_evidence
+        or observation.get("remote_tip") != fetched_tip
+        or observation.get("expected_head")
+        != prior_candidate.get("candidate_head")
+        or observation.get("classify") is not True
+    ):
+        return None
+
+    authorization = prior.get("authorization")
+    carried = bool(
+        isinstance(authorization, Mapping)
+        and authorization.get("candidate_head")
+        == prior_candidate.get("candidate_head")
+        and authorization.get("review_verdict") == "PASS"
+        and SHA256_RE.fullmatch(
+            str(authorization.get("generation_digest", ""))
+        )
+        is not None
+        and authorization.get("generation_digest")
+        != prior_candidate.get("generation_digest")
+    )
+    if carried:
+        ancestry = context.get("epoch_ancestry_observation")
+        ancestry_evidence = (
+            ancestry.get("evidence") if isinstance(ancestry, Mapping) else None
+        )
+        if (
+            not isinstance(ancestry, Mapping)
+            or not isinstance(ancestry_evidence, Mapping)
+            or ancestry.get("generation_digest")
+            != prior_candidate.get("generation_digest")
+            or not follows_authenticated_result(
+                ancestry.get("digest"), operation="containment"
+            )
+            or not _epoch_ancestry_record_valid(prior, ancestry_evidence)
+            or ancestry_evidence.get("phase") != "result"
+            or ancestry_evidence.get("fetch_observation_event_digest")
+            != raw.get("digest")
+            or ancestry_evidence.get("candidate_observation_digest")
+            != candidate_observation.get("evidence_digest")
+        ):
+            return None
+        contained = ancestry_evidence.get("child_result", {}).get("contained")
+        if contained is True:
+            if (
+                after_plan.get("status") != "sealed"
+                or current.get("state")
+                != ("reverifying" if after_plan.get("suite") else "rebasing")
+            ):
+                return None
+        elif contained is False or contained is None:
+            if after_plan != before_plan or current.get("state") != "rebasing":
+                return None
+        else:
+            return None
+    else:
+        if (
+            not isinstance(authorization, Mapping)
+            or authorization.get("candidate_head")
+            != prior_candidate.get("candidate_head")
+            or authorization.get("review_verdict") != "PASS"
+            or authorization.get("generation_digest")
+            != prior_candidate.get("generation_digest")
+            or event.get("previous_digest")
+            != candidate_observation.get("restore_event_digest")
+            or after_plan.get("status") != "sealed"
+            or current.get("state")
+            != ("reverifying" if after_plan.get("suite") else "rebasing")
+        ):
+            return None
+    return str(admitted.get("digest"))
+
+
+def _epoch_ancestry_record_valid(
+    state: Mapping[str, Any], value: object
+) -> bool:
+    """Validate the fenced carried-generation ancestry intent or result."""
+
+    if not isinstance(value, Mapping):
+        return False
+    base_fields = {
+        "schema",
+        "chain_id",
+        "epoch_intent_digest",
+        "operation_nonce",
+        "generation_digest",
+        "fetch_observation_event_digest",
+        "candidate_observation_digest",
+        "fetched_tip",
+        "candidate_head",
+        "argv",
+        "phase",
+        "recorded_at",
+    }
+    phase = value.get("phase")
+    if set(value) != (
+        base_fields
+        if phase == "intent"
+        else {*base_fields, "intent_event_digest", "child_result"}
+    ):
+        return False
+    integration = state.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    plan = epoch.get("gate_plan") if isinstance(epoch, Mapping) else None
+    candidate = state.get("candidate")
+    authorization = state.get("authorization")
+    if (
+        value.get("schema") != "forge-epoch-ancestry-intent/1"
+        or phase not in {"intent", "result"}
+        or value.get("chain_id") != state.get("chain_id")
+        or not isinstance(epoch, Mapping)
+        or value.get("epoch_intent_digest") != epoch.get("intent_digest")
+        or value.get("operation_nonce") != epoch.get("operation_nonce")
+        or value.get("generation_digest") != epoch.get("generation_digest")
+        or not isinstance(plan, Mapping)
+        or plan.get("status") != "unsealed"
+        or not isinstance(candidate, Mapping)
+        or value.get("generation_digest") != candidate.get("generation_digest")
+        or value.get("fetched_tip") != candidate.get("remote_tip")
+        or value.get("candidate_head") != candidate.get("candidate_head")
+        or not isinstance(authorization, Mapping)
+        or authorization.get("candidate_head") != candidate.get("candidate_head")
+        or authorization.get("review_verdict") != "PASS"
+        or SHA256_RE.fullmatch(str(authorization.get("generation_digest", "")))
+        is None
+        or authorization.get("generation_digest") == candidate.get("generation_digest")
+        or SHA256_RE.fullmatch(str(value.get("fetch_observation_event_digest", "")))
+        is None
+        or SHA256_RE.fullmatch(str(value.get("candidate_observation_digest", "")))
+        is None
+        or value.get("argv")
+        != _remote_containment_argv(
+            state, str(value.get("fetched_tip")), str(value.get("candidate_head"))
+        )
+        or not _valid_utc_second(value.get("recorded_at"))
+    ):
+        return False
+    if phase == "intent":
+        return True
+    if SHA256_RE.fullmatch(str(value.get("intent_event_digest", ""))) is None:
+        return False
+    child = value.get("child_result")
+    if not isinstance(child, Mapping) or set(child) != {
+        "authorized",
+        "exit",
+        "inflight_digest",
+        "output_digest",
+        "launch_failed",
+        "timed_out",
+        "output_limit_exceeded",
+        "group_survived",
+        "contained",
+    }:
+        return False
+    exit_code = child.get("exit")
+    ordinary = bool(
+        child.get("authorized") is True
+        and type(exit_code) is int
+        and exit_code in {0, 1}
+        and child.get("launch_failed") is False
+        and child.get("timed_out") is False
+        and child.get("output_limit_exceeded") is False
+        and child.get("group_survived") is False
+    )
+    return bool(
+        type(child.get("authorized")) is bool
+        and (exit_code is None or type(exit_code) is int)
+        and SHA256_RE.fullmatch(str(child.get("inflight_digest", ""))) is not None
+        and SHA256_RE.fullmatch(str(child.get("output_digest", ""))) is not None
+        and type(child.get("launch_failed")) is bool
+        and type(child.get("timed_out")) is bool
+        and type(child.get("output_limit_exceeded")) is bool
+        and type(child.get("group_survived")) is bool
+        and child.get("contained") == ((exit_code == 0) if ordinary else None)
+    )
+
+
+def _remote_containment_evidence_valid(
+    state: Mapping[str, Any], value: object, *, head: str, tip: str
+) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "head",
+        "tip",
+        "argv",
+        "authorized",
+        "exit",
+        "inflight_digest",
+        "output_digest",
+        "launch_failed",
+        "timed_out",
+        "output_limit_exceeded",
+        "group_survived",
+        "contained",
+    }:
+        return False
+    exit_code = value.get("exit")
+    ordinary = bool(
+        value.get("authorized") is True
+        and type(exit_code) is int
+        and exit_code in {0, 1}
+        and value.get("launch_failed") is False
+        and value.get("timed_out") is False
+        and value.get("output_limit_exceeded") is False
+        and value.get("group_survived") is False
+    )
+    return bool(
+        value.get("head") == head
+        and value.get("tip") == tip
+        and value.get("argv") == _remote_containment_argv(state, head, tip)
+        and type(value.get("authorized")) is bool
+        and (exit_code is None or type(exit_code) is int)
+        and SHA256_RE.fullmatch(str(value.get("inflight_digest", ""))) is not None
+        and SHA256_RE.fullmatch(str(value.get("output_digest", ""))) is not None
+        and type(value.get("launch_failed")) is bool
+        and type(value.get("timed_out")) is bool
+        and type(value.get("output_limit_exceeded")) is bool
+        and type(value.get("group_survived")) is bool
+        and value.get("contained")
+        == ((exit_code == 0) if ordinary else None)
+    )
+
+
+def _remote_observation_progress_valid(
+    state: Mapping[str, Any], value: object
+) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema",
+        "transaction",
+        "chain_id",
+        "attempt_identity",
+        "phase",
+        "push_intent_digest",
+        "stage",
+        "fetch_result",
+        "heads",
+        "cursor",
+        "head",
+        "argv",
+        "completed",
+        "recorded_at",
+    }:
+        return False
+    integration = state.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    phase = value.get("phase")
+    push_intent_digest = value.get("push_intent_digest")
+    if (
+        value.get("schema") != "forge-remote-observation-progress/1"
+        or value.get("transaction") != "merge"
+        or value.get("chain_id") != state.get("chain_id")
+        or not isinstance(epoch, Mapping)
+        or value.get("attempt_identity") != epoch.get("intent_digest")
+        or phase not in {"final-prepush", "post-push"}
+        or (
+            phase == "final-prepush" and push_intent_digest is not None
+        )
+        or (
+            phase == "post-push"
+            and SHA256_RE.fullmatch(str(push_intent_digest or "")) is None
+        )
+        or not _valid_utc_second(value.get("recorded_at"))
+    ):
+        return False
+    heads = value.get("heads")
+    expected_heads = _remote_observation_heads(state)
+    if heads != expected_heads:
+        return False
+    fetch = value.get("fetch_result")
+    if not isinstance(fetch, Mapping) or set(fetch) != {
+        "argv",
+        "authorized",
+        "exit",
+        "exists",
+        "oid",
+        "inflight_digest",
+        "output_digest",
+        "launch_failed",
+        "timed_out",
+        "output_limit_exceeded",
+        "group_survived",
+    }:
+        return False
+    exists = fetch.get("exists")
+    oid = fetch.get("oid")
+    exit_code = fetch.get("exit")
+    if (
+        fetch.get("argv") != _remote_observation_fetch_argv(state)
+        or fetch.get("authorized") is not True
+        or (exit_code is not None and type(exit_code) is not int)
+        or (exists is not True and exists is not False and exists is not None)
+        or (
+            exists is True
+            and (
+                not isinstance(oid, str) or COMMIT_RE.fullmatch(oid) is None
+            )
+        )
+        or (exists is not True and oid is not None)
+        or SHA256_RE.fullmatch(str(fetch.get("inflight_digest", ""))) is None
+        or SHA256_RE.fullmatch(str(fetch.get("output_digest", ""))) is None
+        or type(fetch.get("launch_failed")) is not bool
+        or type(fetch.get("timed_out")) is not bool
+        or type(fetch.get("output_limit_exceeded")) is not bool
+        or type(fetch.get("group_survived")) is not bool
+    ):
+        return False
+    completed = value.get("completed")
+    if not isinstance(completed, list) or len(completed) > len(expected_heads):
+        return False
+    tip = str(oid or "")
+    if any(
+        not _remote_containment_evidence_valid(
+            state, evidence, head=expected_heads[index], tip=tip
+        )
+        for index, evidence in enumerate(completed)
+    ):
+        return False
+    stage = value.get("stage")
+    cursor = value.get("cursor")
+    head = value.get("head")
+    argv = value.get("argv")
+    if stage == "fetch-result":
+        return bool(
+            cursor == 0
+            and head is None
+            and argv is None
+            and completed == []
+        )
+    if exists is not True or type(cursor) is not int:
+        return False
+    if stage == "containment-intent":
+        return bool(
+            cursor == len(completed)
+            and cursor < len(expected_heads)
+            and head == expected_heads[cursor]
+            and argv == _remote_containment_argv(state, str(head), tip)
+            and all(item.get("contained") is not None for item in completed)
+        )
+    if stage == "containment-result":
+        return bool(
+            completed
+            and cursor == len(completed) - 1
+            and cursor < len(expected_heads)
+            and head == expected_heads[cursor]
+            and argv == _remote_containment_argv(state, str(head), tip)
+            and completed[-1].get("head") == head
+        )
+    return False
+
+
+def _remote_observation_progress_transition_valid(
+    prior: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool:
+    prior_integration = prior.get("integration")
+    current_integration = current.get("integration")
+    if not isinstance(prior_integration, Mapping) or not isinstance(
+        current_integration, Mapping
+    ):
+        return False
+    prior_intent = prior_integration.get("intent")
+    current_intent = current_integration.get("intent")
+    if not _remote_observation_progress_valid(current, current_intent):
+        return False
+    assert isinstance(current_intent, Mapping)
+    stage = current_intent.get("stage")
+    identity_fields = {
+        "schema",
+        "transaction",
+        "chain_id",
+        "attempt_identity",
+        "phase",
+        "push_intent_digest",
+        "fetch_result",
+        "heads",
+    }
+    if stage == "fetch-result":
+        return bool(
+            isinstance(prior_intent, Mapping)
+            and set(prior_intent)
+            == {
+                "schema",
+                "transaction",
+                "chain_id",
+                "attempt_identity",
+                "phase",
+                "push_intent_digest",
+            }
+            and prior_intent.get("schema")
+            == "forge-remote-observation-intent/1"
+            and all(
+                prior_intent.get(name) == current_intent.get(name)
+                for name in {
+                    "transaction",
+                    "chain_id",
+                    "attempt_identity",
+                    "phase",
+                    "push_intent_digest",
+                }
+            )
+        )
+    if not _remote_observation_progress_valid(prior, prior_intent):
+        return False
+    assert isinstance(prior_intent, Mapping)
+    if any(prior_intent.get(name) != current_intent.get(name) for name in identity_fields):
+        return False
+    if stage == "containment-intent":
+        return bool(
+            prior_intent.get("stage") in {"fetch-result", "containment-result"}
+            and prior_intent.get("completed") == current_intent.get("completed")
+            and current_intent.get("cursor")
+            == len(current_intent.get("completed", []))
+        )
+    if stage == "containment-result":
+        prior_completed = prior_intent.get("completed")
+        current_completed = current_intent.get("completed")
+        return bool(
+            prior_intent.get("stage") == "containment-intent"
+            and prior_intent.get("cursor") == current_intent.get("cursor")
+            and prior_intent.get("head") == current_intent.get("head")
+            and prior_intent.get("argv") == current_intent.get("argv")
+            and isinstance(prior_completed, list)
+            and isinstance(current_completed, list)
+            and current_completed[:-1] == prior_completed
+        )
+    return False
+
+
+_MERGE_CANDIDATE_OBSERVATION_SCHEMA = "forge-merge-candidate-observation/1"
+_MERGE_CANDIDATE_OBSERVATION_EVIDENCE_SCHEMA = (
+    "forge-merge-candidate-observation-evidence/1"
+)
+_BOOTSTRAP_FETCH_OBSERVATION_SCHEMA = "forge-bootstrap-fetch-observation/1"
+
+
+def _bootstrap_fetch_observation_record_valid(
+    state: Mapping[str, Any], value: object
+) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema",
+        "chain_id",
+        "generation_digest",
+        "source_intent",
+        "operation",
+        "fetch_intent_event_digest",
+        "argv",
+        "resolved_tip",
+        "child_result",
+        "recorded_at",
+    }:
+        return False
+    candidate = state.get("candidate")
+    generation_digest = (
+        candidate.get("generation_digest")
+        if isinstance(candidate, Mapping)
+        else None
+    )
+    source = value.get("source_intent")
+    child = value.get("child_result")
+    operation = value.get("operation")
+    argv = value.get("argv")
+    worktree = state.get("worktree")
+    target = state.get("target")
+    resolved_tip = value.get("resolved_tip")
+    expected_fetch_argv = (
+        [
+            "git",
+            "--no-pager",
+            "-C",
+            str(worktree.get("path", "")),
+            "fetch",
+            "--no-tags",
+            "--quiet",
+            "origin",
+            str(target.get("destination_ref", "")),
+        ]
+        if isinstance(worktree, Mapping) and isinstance(target, Mapping)
+        else None
+    )
+    tip_argv = bool(
+        isinstance(worktree, Mapping)
+        and isinstance(argv, list)
+        and len(argv) == 7
+        and argv[:6]
+        == [
+            "git",
+            "--no-pager",
+            "-C",
+            str(worktree.get("path", "")),
+            "cat-file",
+            "-e",
+        ]
+    )
+    tip_argument = argv[-1] if tip_argv else ""
+    requested_tip = (
+        tip_argument.removesuffix("^{commit}")
+        if tip_argument.endswith("^{commit}")
+        else ""
+    )
+    if (
+        value.get("schema") != _BOOTSTRAP_FETCH_OBSERVATION_SCHEMA
+        or value.get("chain_id") != state.get("chain_id")
+        or value.get("generation_digest") != generation_digest
+        or not isinstance(source, Mapping)
+        or source.get("operation") != "fetch"
+        or not _valid_nonce(source.get("operation_nonce"))
+        or not _valid_positive_int(source.get("attempt"))
+        or operation not in {"fetch", "tip-resolution"}
+        or not isinstance(argv, list)
+        or not argv
+        or not all(isinstance(member, str) and member for member in argv)
+        or SHA256_RE.fullmatch(
+            str(value.get("fetch_intent_event_digest", ""))
+        )
+        is None
+        or not _valid_utc_second(value.get("recorded_at"))
+        or not isinstance(child, Mapping)
+        or set(child)
+        != {
+            "authorized",
+            "exit",
+            "inflight_digest",
+            "output_digest",
+            "launch_failed",
+            "timed_out",
+            "output_limit_exceeded",
+            "group_survived",
+        }
+    ):
+        return False
+    child_valid = bool(
+        type(child.get("authorized")) is bool
+        and (child.get("exit") is None or type(child.get("exit")) is int)
+        and SHA256_RE.fullmatch(str(child.get("inflight_digest", "")))
+        is not None
+        and SHA256_RE.fullmatch(str(child.get("output_digest", ""))) is not None
+        and all(
+            type(child.get(name)) is bool
+            for name in (
+                "launch_failed",
+                "timed_out",
+                "output_limit_exceeded",
+                "group_survived",
+            )
+        )
+    )
+    if not child_valid:
+        return False
+    child_passed = bool(
+        child.get("authorized") is True
+        and child.get("exit") == 0
+        and child.get("launch_failed") is False
+        and child.get("timed_out") is False
+        and child.get("output_limit_exceeded") is False
+        and child.get("group_survived") is False
+    )
+    if operation == "fetch":
+        argv_valid = argv == expected_fetch_argv
+    else:
+        argv_valid = bool(
+            tip_argv
+            and COMMIT_RE.fullmatch(requested_tip) is not None
+        )
+    return bool(
+        argv_valid
+        and (
+            resolved_tip is None
+            or isinstance(resolved_tip, str)
+            and COMMIT_RE.fullmatch(resolved_tip) is not None
+        )
+        and (
+            not child_passed
+            or operation != "tip-resolution"
+            or resolved_tip == requested_tip
+        )
+    )
+
+
+def _bootstrap_fetch_observation_transition_valid(
+    prior: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool:
+    prior_integration = prior.get("integration")
+    current_integration = current.get("integration")
+    if not isinstance(prior_integration, Mapping) or not isinstance(
+        current_integration, Mapping
+    ):
+        return False
+    prior_intent = prior_integration.get("intent")
+    current_intent = current_integration.get("intent")
+    if any(
+        prior_integration.get(name) != current_integration.get(name)
+        for name in (set(prior_integration) | set(current_integration)) - {"intent"}
+    ):
+        return False
+    if _bootstrap_fetch_observation_record_valid(current, current_intent):
+        assert isinstance(current_intent, Mapping)
+        return bool(
+            isinstance(prior_intent, Mapping)
+            and prior_intent.get("operation") == "fetch"
+            and current_intent.get("source_intent") == prior_intent
+        )
+    return bool(
+        _bootstrap_fetch_observation_record_valid(prior, prior_intent)
+        and isinstance(prior_intent, Mapping)
+        and current_intent == prior_intent.get("source_intent")
+    )
+
+
+def _merge_candidate_observation_step_specs(
+    state: Mapping[str, Any],
+    *,
+    remote_tip: str,
+    expected_head: str,
+    classify: bool,
+    declared_tier: str | None,
+) -> tuple[tuple[str, Path, list[str]], ...] | None:
+    """Return the closed direct-argv observation program for one candidate."""
+
+    worktree = state.get("worktree")
+    target = state.get("target")
+    if not isinstance(worktree, Mapping) or not isinstance(target, Mapping):
+        return None
+    worktree_path = Path(str(worktree.get("path", "")))
+    repository_path = Path(str(state.get("repository", "")))
+    manifest_commit = str(target.get("manifest_commit", ""))
+    if (
+        not worktree_path.is_absolute()
+        or not repository_path.is_absolute()
+        or COMMIT_RE.fullmatch(remote_tip) is None
+        or COMMIT_RE.fullmatch(expected_head) is None
+        or COMMIT_RE.fullmatch(manifest_commit) is None
+        or type(classify) is not bool
+        or (declared_tier is not None and declared_tier not in TIER_RANK)
+    ):
+        return None
+    range_value = f"{remote_tip}...{expected_head}"
+    steps: list[tuple[str, Path, list[str]]] = [
+        (
+            "worktrees",
+            repository_path,
+            ["git", "--no-pager", "worktree", "list", "--porcelain", "-z"],
+        ),
+        (
+            "identity",
+            worktree_path,
+            [
+                "git",
+                "--no-pager",
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-dir",
+                "--git-common-dir",
+                "--show-toplevel",
+                "HEAD",
+            ],
+        ),
+        (
+            "branch",
+            worktree_path,
+            ["git", "--no-pager", "symbolic-ref", "-q", "HEAD"],
+        ),
+        (
+            "status",
+            worktree_path,
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ],
+        ),
+        (
+            "main-head",
+            repository_path,
+            ["git", "--no-pager", "rev-parse", "--verify", "HEAD"],
+        ),
+        (
+            "manifest",
+            repository_path,
+            [
+                "git",
+                "--no-pager",
+                "cat-file",
+                "blob",
+                f"{manifest_commit}:.forge-manifest",
+            ],
+        ),
+        (
+            "policy",
+            worktree_path,
+            [
+                "git",
+                "--no-pager",
+                "cat-file",
+                "blob",
+                f"{expected_head}:forge-project.md",
+            ],
+        ),
+        (
+            "origin",
+            worktree_path,
+            ["git", "--no-pager", "remote", "get-url", "origin"],
+        ),
+        (
+            "tip",
+            worktree_path,
+            [
+                "git",
+                "--no-pager",
+                "rev-parse",
+                "--verify",
+                f"{remote_tip}^{{commit}}",
+            ],
+        ),
+        (
+            "diff",
+            worktree_path,
+            [
+                "git",
+                "--no-pager",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                range_value,
+                "--",
+            ],
+        ),
+        (
+            "names",
+            worktree_path,
+            [
+                "git",
+                "--no-pager",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--name-only",
+                "-z",
+                "--diff-filter=ACDMRTUXB",
+                range_value,
+                "--",
+            ],
+        ),
+    ]
+    if isinstance(state.get("run_binding"), Mapping):
+        steps.append(
+            (
+                "scope",
+                worktree_path,
+                _merge_scope_argv(worktree_path, remote_tip, expected_head),
+            )
+        )
+    if classify:
+        classifier = [
+            sys.executable,
+            str(SCRIPT_DIR / "risk_tier.py"),
+            "--repo",
+            str(worktree_path),
+            "--policy-sha",
+            expected_head,
+            "--range",
+            range_value,
+        ]
+        if declared_tier is not None:
+            classifier.extend(["--declared-tier", declared_tier])
+        steps.append(("classifier", worktree_path, classifier))
+    return tuple(steps)
+
+
+def _merge_candidate_observation_step_names(
+    state: Mapping[str, Any],
+    *,
+    remote_tip: str,
+    expected_head: str,
+    classify: bool,
+    declared_tier: str | None,
+) -> tuple[str, ...] | None:
+    specs = _merge_candidate_observation_step_specs(
+        state,
+        remote_tip=remote_tip,
+        expected_head=expected_head,
+        classify=classify,
+        declared_tier=declared_tier,
+    )
+    return tuple(name for name, _cwd, _argv in specs) if specs is not None else None
+
+
+def _merge_candidate_observation_binding(
+    state: Mapping[str, Any],
+    source_intent: object,
+    *,
+    verb: str,
+    remote_tip: str,
+    expected_head: str,
+    classify: bool,
+    declared_tier: str | None,
+) -> str | None:
+    candidate = state.get("candidate")
+    generation_digest = (
+        candidate.get("generation_digest") if isinstance(candidate, Mapping) else None
+    )
+    if (
+        not isinstance(verb, str)
+        or not verb
+        or COMMIT_RE.fullmatch(remote_tip) is None
+        or COMMIT_RE.fullmatch(expected_head) is None
+        or type(classify) is not bool
+        or (
+            declared_tier is not None
+            and declared_tier not in TIER_RANK
+        )
+        or (
+            generation_digest is not None
+            and SHA256_RE.fullmatch(str(generation_digest)) is None
+        )
+    ):
+        return None
+    return sha256_bytes(
+        canonical_bytes(
+            {
+                "schema": "forge-merge-candidate-observation-binding/1",
+                "chain_id": state.get("chain_id"),
+                "generation_digest": generation_digest,
+                "source_intent": copy.deepcopy(source_intent),
+                "verb": verb,
+                "remote_tip": remote_tip,
+                "expected_head": expected_head,
+                "classify": classify,
+                "declared_tier": declared_tier,
+            }
+        )
+    )
+
+
+def _merge_candidate_observation_record_valid(
+    state: Mapping[str, Any], value: object
+) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    base_keys = {
+        "schema",
+        "chain_id",
+        "generation_digest",
+        "source_intent",
+        "verb",
+        "remote_tip",
+        "expected_head",
+        "classify",
+        "declared_tier",
+        "observation_binding",
+        "stage",
+        "step",
+        "cwd",
+        "argv",
+        "started_at",
+    }
+    stage = value.get("stage")
+    expected_keys = (
+        base_keys
+        if stage == "intent"
+        else {*base_keys, "child_result", "recorded_at"}
+        if stage == "result"
+        else set()
+    )
+    candidate = state.get("candidate")
+    generation_digest = (
+        candidate.get("generation_digest") if isinstance(candidate, Mapping) else None
+    )
+    binding = _merge_candidate_observation_binding(
+        state,
+        value.get("source_intent"),
+        verb=str(value.get("verb", "")),
+        remote_tip=str(value.get("remote_tip", "")),
+        expected_head=str(value.get("expected_head", "")),
+        classify=value.get("classify") if type(value.get("classify")) is bool else False,
+        declared_tier=(
+            value.get("declared_tier")
+            if isinstance(value.get("declared_tier"), str)
+            else None
+        ),
+    )
+    specs = _merge_candidate_observation_step_specs(
+        state,
+        remote_tip=str(value.get("remote_tip", "")),
+        expected_head=str(value.get("expected_head", "")),
+        classify=value.get("classify") if type(value.get("classify")) is bool else False,
+        declared_tier=(
+            value.get("declared_tier")
+            if isinstance(value.get("declared_tier"), str)
+            else None
+        ),
+    )
+    expected_step = next(
+        (
+            (str(cwd), argv)
+            for name, cwd, argv in (specs or ())
+            if name == value.get("step")
+        ),
+        None,
+    )
+    if (
+        set(value) != expected_keys
+        or value.get("schema") != _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+        or value.get("chain_id") != state.get("chain_id")
+        or value.get("generation_digest") != generation_digest
+        or type(value.get("classify")) is not bool
+        or (
+            value.get("declared_tier") is not None
+            and value.get("declared_tier") not in TIER_RANK
+        )
+        or binding is None
+        or value.get("observation_binding") != binding
+        or expected_step is None
+        or value.get("cwd") != expected_step[0]
+        or value.get("argv") != expected_step[1]
+        or not isinstance(value.get("step"), str)
+        or not value.get("step")
+        or not isinstance(value.get("argv"), list)
+        or not value.get("argv")
+        or not all(isinstance(member, str) and member for member in value["argv"])
+        or not _valid_utc_second(value.get("started_at"))
+    ):
+        return False
+    if stage == "intent":
+        return True
+    child = value.get("child_result")
+    if not isinstance(child, Mapping) or set(child) != {
+        "authorized",
+        "exit",
+        "inflight_digest",
+        "output_digest",
+        "stored_output_digest",
+        "output_b64",
+        "launch_failed",
+        "timed_out",
+        "output_limit_exceeded",
+        "group_survived",
+    }:
+        return False
+    try:
+        output = base64.b64decode(str(child.get("output_b64", "")), validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    return bool(
+        type(child.get("authorized")) is bool
+        and (child.get("exit") is None or type(child.get("exit")) is int)
+        and SHA256_RE.fullmatch(str(child.get("inflight_digest", ""))) is not None
+        and SHA256_RE.fullmatch(str(child.get("output_digest", ""))) is not None
+        and len(output) <= OUTPUT_CAP_BYTES
+        and SHA256_RE.fullmatch(str(child.get("stored_output_digest", "")))
+        is not None
+        and sha256_bytes(output) == child.get("stored_output_digest")
+        and all(
+            type(child.get(name)) is bool
+            for name in (
+                "launch_failed",
+                "timed_out",
+                "output_limit_exceeded",
+                "group_survived",
+            )
+        )
+        and _valid_utc_second(value.get("recorded_at"))
+    )
+
+
+def _merge_candidate_observation_transition_valid(
+    prior: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool:
+    prior_integration = prior.get("integration")
+    current_integration = current.get("integration")
+    if not isinstance(prior_integration, Mapping) or not isinstance(
+        current_integration, Mapping
+    ):
+        return False
+    prior_intent = prior_integration.get("intent")
+    current_intent = current_integration.get("intent")
+    if any(
+        prior_integration.get(name) != current_integration.get(name)
+        for name in (set(prior_integration) | set(current_integration)) - {"intent"}
+    ):
+        return False
+    prior_observation = _merge_candidate_observation_record_valid(
+        prior, prior_intent
+    )
+    current_observation = _merge_candidate_observation_record_valid(
+        current, current_intent
+    )
+    if current_observation:
+        assert isinstance(current_intent, Mapping)
+        if current_intent.get("stage") == "intent":
+            return bool(
+                not prior_observation
+                and current_intent.get("source_intent") == prior_intent
+            )
+        if not prior_observation or not isinstance(prior_intent, Mapping):
+            return False
+        return bool(
+            prior_intent.get("stage") == "intent"
+            and all(
+                prior_intent.get(name) == current_intent.get(name)
+                for name in set(prior_intent) - {"stage"}
+            )
+        )
+    return bool(
+        prior_observation
+        and isinstance(prior_intent, Mapping)
+        and prior_intent.get("stage") == "result"
+        and current_intent == prior_intent.get("source_intent")
+    )
+
+
+def _merge_candidate_observation_evidence(
+    state: Mapping[str, Any],
+    records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Build the pure, digest-bound view of already durable child results."""
+
+    if not records:
+        return None
+    first = records[0]
+    binding = first.get("observation_binding")
+    names = _merge_candidate_observation_step_names(
+        state,
+        remote_tip=str(first.get("remote_tip", "")),
+        expected_head=str(first.get("expected_head", "")),
+        classify=first.get("classify") if type(first.get("classify")) is bool else False,
+        declared_tier=(
+            first.get("declared_tier")
+            if isinstance(first.get("declared_tier"), str)
+            else None
+        ),
+    )
+    if names is None or tuple(record.get("step") for record in records) != names:
+        return None
+    normalized: list[dict[str, Any]] = []
+    for record in records:
+        if (
+            not _merge_candidate_observation_record_valid(state, record)
+            or record.get("stage") != "result"
+            or record.get("observation_binding") != binding
+            or any(
+                record.get(name) != first.get(name)
+                for name in (
+                    "chain_id",
+                    "generation_digest",
+                    "source_intent",
+                    "verb",
+                    "remote_tip",
+                    "expected_head",
+                    "classify",
+                    "declared_tier",
+                )
+            )
+        ):
+            return None
+        normalized.append(copy.deepcopy(dict(record)))
+    evidence: dict[str, Any] = {
+        "schema": _MERGE_CANDIDATE_OBSERVATION_EVIDENCE_SCHEMA,
+        "chain_id": first.get("chain_id"),
+        "generation_digest": first.get("generation_digest"),
+        "source_intent": copy.deepcopy(first.get("source_intent")),
+        "verb": first.get("verb"),
+        "remote_tip": first.get("remote_tip"),
+        "expected_head": first.get("expected_head"),
+        "classify": first.get("classify"),
+        "declared_tier": first.get("declared_tier"),
+        "observation_binding": binding,
+        "steps": normalized,
+    }
+    evidence["evidence_digest"] = sha256_bytes(canonical_bytes(evidence))
+    return evidence
+
+
+def _merge_candidate_observation_evidence_valid(
+    state: Mapping[str, Any], value: object
+) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema",
+        "chain_id",
+        "generation_digest",
+        "source_intent",
+        "verb",
+        "remote_tip",
+        "expected_head",
+        "classify",
+        "declared_tier",
+        "observation_binding",
+        "steps",
+        "evidence_digest",
+    }:
+        return False
+    steps = value.get("steps")
+    rebuilt = (
+        _merge_candidate_observation_evidence(state, steps)
+        if isinstance(steps, list)
+        and all(isinstance(record, Mapping) for record in steps)
+        else None
+    )
+    return bool(rebuilt is not None and dict(value) == rebuilt)
+
+
+def _merge_candidate_observation_outputs(
+    state: Mapping[str, Any], value: object
+) -> dict[str, bytes] | None:
+    if not _merge_candidate_observation_evidence_valid(state, value):
+        return None
+    assert isinstance(value, Mapping)
+    outputs: dict[str, bytes] = {}
+    for record in value["steps"]:
+        child = record["child_result"]
+        try:
+            output = base64.b64decode(child["output_b64"], validate=True)
+        except (ValueError, binascii.Error):
+            return None
+        if (
+            child.get("authorized") is not True
+            or child.get("exit") != 0
+            or child.get("launch_failed") is not False
+            or child.get("timed_out") is not False
+            or child.get("output_limit_exceeded") is not False
+            or child.get("group_survived") is not False
+        ):
+            return None
+        outputs[str(record["step"])] = output
+    return outputs
+
+
+def _parse_merge_candidate_observation(
+    state: Mapping[str, Any],
+    value: object,
+    *,
+    verb: str,
+    require_current_generation: bool,
+) -> tuple[Repository, Policy, tuple[str, ...], bytes, bytes | None]:
+    """Consume only authenticated durable bytes; this function launches nothing."""
+
+    outputs = _merge_candidate_observation_outputs(state, value)
+    if outputs is None or not isinstance(value, Mapping) or value.get("verb") != verb:
+        raise _merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            f"forge: {verb} refused — candidate observation evidence is invalid",
+            chain=state,
+        )
+    worktree = state.get("worktree")
+    target = state.get("target")
+    if not isinstance(worktree, Mapping) or not isinstance(target, Mapping):
+        raise FrozenError(
+            "merge candidate observation lacks its recorded identity",
+            chain_id=str(state.get("chain_id", "")) or None,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    expected_head = str(value.get("expected_head", ""))
+    remote_tip = str(value.get("remote_tip", ""))
+    identity = outputs["identity"]
+    try:
+        identity_lines = identity.decode("utf-8").splitlines(keepends=True)
+    except UnicodeDecodeError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — recorded worktree identity is invalid",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    if (
+        len(identity_lines) != 4
+        or any(not line.endswith("\n") or "\r" in line for line in identity_lines)
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — recorded worktree identity is invalid",
+            observed="malformed combined rev-parse output",
+            chain=state,
+        )
+    git_dir_raw, common_dir_raw, root_raw, head_raw = (
+        line.removesuffix("\n") for line in identity_lines
+    )
+    if COMMIT_RE.fullmatch(head_raw) is None:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — recorded worktree HEAD is invalid",
+            observed=head_raw,
+            chain=state,
+        )
+    observed_identity = {
+        "path": os.path.realpath(root_raw),
+        "git_dir": os.path.realpath(git_dir_raw),
+        "common_dir": os.path.realpath(common_dir_raw),
+    }
+    expected_identity = {
+        name: str(worktree.get(name, ""))
+        for name in ("path", "git_dir", "common_dir")
+    }
+    if observed_identity != expected_identity:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — recorded worktree identity changed",
+            expected=canonical_bytes(expected_identity).decode("utf-8"),
+            observed=canonical_bytes(observed_identity).decode("utf-8"),
+            chain=state,
+        )
+    try:
+        inventory = _parse_registered_worktrees(outputs["worktrees"])
+    except OSError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — registered worktree inventory is invalid",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    matches = [
+        entry
+        for entry in inventory
+        if os.path.realpath(str(entry.get("worktree", "")))
+        == expected_identity["path"]
+    ]
+    if (
+        len(matches) != 1
+        or not inventory
+        or os.path.realpath(str(inventory[0].get("worktree", "")))
+        == expected_identity["path"]
+        or matches[0].get("HEAD") != head_raw
+        or matches[0].get("branch") != state.get("branch")
+        or outputs["branch"] != f"{state.get('branch')}\n".encode("utf-8")
+    ):
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — recorded worktree registration changed",
+            expected="one exact registered non-main worktree/branch/HEAD tuple",
+            observed=str(matches),
+            chain=state,
+        )
+    if head_raw != expected_head:
+        raise _merge_refusal(
+            V2ReasonCode.CANDIDATE_STALE,
+            f"forge: {verb} refused — candidate HEAD is stale",
+            expected=expected_head,
+            observed=head_raw,
+            chain=state,
+        )
+    if outputs["status"] != b"":
+        raise _merge_refusal(
+            V2ReasonCode.DIRTY_WORKTREE,
+            f"forge: {verb} refused — source worktree is not clean",
+            expected="zero exact status bytes",
+            observed=outputs["status"].decode("utf-8", "replace"),
+            chain=state,
+        )
+    for marker in (
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+    ):
+        try:
+            os.lstat(Path(expected_identity["git_dir"]) / marker)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise _merge_refusal(
+                V2ReasonCode.WORKTREE_INVALID,
+                f"forge: {verb} refused — Git operation metadata is unreadable",
+                observed=str(exc),
+                chain=state,
+            ) from exc
+        raise _merge_refusal(
+            V2ReasonCode.DIRTY_WORKTREE,
+            f"forge: {verb} refused — source worktree is not clean",
+            observed=f"in-progress Git operation: {marker}",
+            chain=state,
+        )
+    main_head = outputs["main-head"]
+    manifest_commit = str(target.get("manifest_commit", ""))
+    if main_head != f"{manifest_commit}\n".encode("ascii"):
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            f"forge: {verb} refused — fixed merge target changed",
+            expected=manifest_commit,
+            observed=main_head.decode("ascii", "replace").strip(),
+            chain=state,
+        )
+    try:
+        default_branch = _parse_plugin_manifest(outputs["manifest"])
+    except (UnicodeError, ValueError) as exc:
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            f"forge: {verb} refused — committed target manifest is invalid",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    observed_target = {
+        "remote": "origin",
+        "destination_ref": f"refs/heads/{default_branch}",
+        "manifest_commit": manifest_commit,
+    }
+    if observed_target != dict(target) or not outputs["origin"].strip():
+        raise _merge_refusal(
+            V2ReasonCode.PUSH_TARGET_INVALID,
+            f"forge: {verb} refused — fixed merge target changed",
+            expected=canonical_bytes(dict(target)).decode("utf-8"),
+            observed=canonical_bytes(observed_target).decode("utf-8"),
+            chain=state,
+        )
+    try:
+        policy = parse_policy(expected_head, outputs["policy"])
+    except (PolicyError, UnicodeError) as exc:
+        raise _merge_refusal(
+            V2ReasonCode.POLICY_UNREADABLE,
+            f"forge: {verb} refused — committed candidate policy is unreadable: {exc}",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    if outputs["tip"] != f"{remote_tip}\n".encode("ascii"):
+        raise _merge_refusal(
+            V2ReasonCode.FETCH_FAILED,
+            f"forge: {verb} refused — fetched target tip is invalid",
+            expected=remote_tip,
+            observed=outputs["tip"].decode("ascii", "replace").strip(),
+            chain=state,
+        )
+    try:
+        changed_paths = tuple(
+            sorted(
+                {
+                    item.decode("utf-8")
+                    for item in outputs["names"].split(b"\0")
+                    if item
+                },
+                key=lambda path: path.encode("utf-8"),
+            )
+        )
+    except UnicodeDecodeError as exc:
+        raise _merge_refusal(
+            V2ReasonCode.WORKTREE_INVALID,
+            f"forge: {verb} refused — candidate paths are not UTF-8",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    if require_current_generation:
+        candidate = state.get("candidate")
+        policy_source = state.get("policy_source")
+        if not isinstance(candidate, Mapping) or not isinstance(
+            policy_source, Mapping
+        ):
+            raise FrozenError(
+                "merge candidate tuple is unavailable",
+                chain_id=str(state.get("chain_id", "")) or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if (
+            policy.sha != policy_source.get("commit")
+            or policy.digest != policy_source.get("digest")
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.CANDIDATE_STALE,
+                f"forge: {verb} refused — committed candidate policy changed",
+                expected=str(policy_source.get("digest")),
+                observed=policy.digest,
+                chain=state,
+            )
+        preimage = {
+            "remote": "origin",
+            "destination_ref": str(target["destination_ref"]),
+            "remote_tip": remote_tip,
+            "candidate_head": expected_head,
+            "diff_sha256": sha256_bytes(outputs["diff"]),
+            "policy_commit": policy.sha,
+            "policy_digest": policy.digest,
+            "worktree_identity": observed_identity,
+            "generation": candidate.get("generation"),
+        }
+        observed_candidate = {
+            **preimage,
+            "generation_digest": sha256_bytes(canonical_bytes(preimage)),
+        }
+        if observed_candidate != dict(candidate):
+            raise _merge_refusal(
+                V2ReasonCode.CANDIDATE_STALE,
+                f"forge: {verb} refused — merge generation tuple is stale",
+                expected=str(candidate.get("generation_digest")),
+                observed=observed_candidate["generation_digest"],
+                chain=state,
+            )
+    return (
+        Repository(Path(expected_identity["path"])),
+        policy,
+        changed_paths,
+        outputs["diff"],
+        outputs.get("classifier"),
+    )
+
+
 class MergeEngine:
     """Dormant merge-family target for explicit shared CLI verbs."""
 
     def __init__(self, ctx: CommandContext) -> None:
         self.ctx = ctx
+        self._git_no_lazy_fetch_qualification: (
+            _GitNoLazyFetchQualification | None
+        ) = None
+
+    @staticmethod
+    def _final_mode_unavailable(
+        state: Mapping[str, Any], observed: str
+    ) -> Refusal:
+        return _merge_refusal(
+            V2ReasonCode.REBASE_LOCK_UNAVAILABLE,
+            "forge: merge finalize refused — final intended HEAD mode is unavailable",
+            expected="a complete bounded read of the candidate .forge-manifest blob",
+            observed=observed,
+            remediation=f"forge merge recover --chain-id {state['chain_id']}",
+            chain=state,
+        )
+
+    def _prepare_git_no_lazy_fetch_qualification(
+        self, state: Mapping[str, Any]
+    ) -> None:
+        """Qualify and rebind Git before this invocation publishes its lock."""
+
+        _require_merge_integration_control("final-intended-head-mode")
+        self._git_no_lazy_fetch_qualification = None
+        worktree = Path(str(state["worktree"]["path"]))
+        try:
+            qualification = _qualify_git_no_lazy_fetch(
+                worktree, verbose=self.ctx.options.verbose
+            )
+            _require_git_no_lazy_fetch_qualification(
+                qualification, worktree, _merge_scope_environment()
+            )
+        except OSError as exc:
+            raise self._final_mode_unavailable(state, str(exc)) from exc
+        self._git_no_lazy_fetch_qualification = qualification
+
+    def _prepare_bootstrap_git_no_lazy_fetch_qualification(
+        self,
+        admission: MergeAdmission,
+        *,
+        verb: str,
+    ) -> None:
+        """Qualify the exact Git selected by the composite before locking."""
+
+        _require_merge_integration_control("composite-bootstrap-streaming")
+        self._git_no_lazy_fetch_qualification = None
+        try:
+            qualification = _qualify_git_no_lazy_fetch(
+                admission.worktree,
+                verbose=self.ctx.options.verbose,
+            )
+            _require_git_no_lazy_fetch_qualification(
+                qualification,
+                admission.worktree,
+                _merge_scope_environment(),
+            )
+        except OSError as exc:
+            run_bound = admission.run_task is not None
+            raise _merge_refusal(
+                (
+                    V2ReasonCode.RUN_TASK_BINDING_INVALID
+                    if run_bound
+                    else V2ReasonCode.FETCH_FAILED
+                ),
+                (
+                    f"forge: {verb} refused — run/task scope derivation is invalid"
+                    if run_bound
+                    else f"forge: {verb} refused — fixed target fetch failed"
+                ),
+                expected="Git with proven GIT_NO_LAZY_FETCH support",
+                observed=str(exc),
+            ) from exc
+        self._git_no_lazy_fetch_qualification = qualification
+
+    @classmethod
+    def _recover_can_reach_final_mode(
+        cls,
+        state: Mapping[str, Any],
+        *,
+        continue_rebase: bool,
+        abort_rebase: bool,
+    ) -> bool:
+        """Select only recovery tuples that can invoke ``_run_epoch_push``.
+
+        Release, bootstrap, foreign-state, and conflict reconciliation are
+        observation-only in this invocation.  A raw rebase observation also
+        either restores, conflicts, or creates a generation whose authority is
+        cleared, so it cannot reach the final-mode read before parking.
+
+        Explicit conflict modes never receive a push-capable qualification.
+        The legacy router can ignore those flags outside the conflict state;
+        withholding the token makes any such route fail closed at the final
+        read rather than authorizing a push.
+        """
+
+        if continue_rebase or abort_rebase:
+            return False
+        integration = state.get("integration")
+        claim = state.get("worktree", {}).get("claim")
+        if (
+            not isinstance(integration, Mapping)
+            or not isinstance(claim, Mapping)
+            or claim.get("status") != "owned"
+            or integration.get("condition")
+            in {"foreign-git-state", "lock-release-failed"}
+            or integration.get("primary_condition") != "none"
+            or _merge_inactive(state)
+            or not cls._current_merge_authority(state)
+        ):
+            return False
+        state_name = state.get("state")
+        plan = integration.get("epoch")
+        gate_plan = plan.get("gate_plan") if isinstance(plan, Mapping) else None
+        if state_name == "pushing":
+            push = integration.get("push")
+            result = push.get("result") if isinstance(push, Mapping) else None
+            return bool(
+                _merge_old_tip_all_false(state)
+                and isinstance(push, Mapping)
+                and (result is None or isinstance(result, Mapping))
+                and isinstance(gate_plan, Mapping)
+                and gate_plan.get("status") == "sealed"
+                and type(gate_plan.get("cursor")) is int
+                and isinstance(gate_plan.get("suite"), list)
+                and gate_plan["cursor"] == len(gate_plan["suite"])
+            )
+        if state_name == "reverification_failed":
+            return True
+        if state_name == "reverifying":
+            return bool(
+                isinstance(gate_plan, Mapping)
+                and gate_plan.get("status") == "sealed"
+            )
+        if state_name == "authorized":
+            return integration.get("condition") in {
+                "fetch-failed",
+                "remote-moved",
+                "non-fast-forward",
+            }
+        if state_name != "rebasing":
+            return False
+        intent = integration.get("intent")
+        if (
+            isinstance(intent, Mapping)
+            and intent.get("schema") == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+            and isinstance(intent.get("source_intent"), Mapping)
+        ):
+            intent = intent["source_intent"]
+        if isinstance(intent, Mapping) and intent.get("schema") == (
+            _EPOCH_FETCH_OBSERVATION_SCHEMA
+        ):
+            return _epoch_fetch_observation_passed(intent)
+        if isinstance(intent, Mapping) and intent.get("schema") == (
+            "forge-epoch-ancestry-intent/1"
+        ):
+            phase = intent.get("phase")
+            return bool(
+                phase == "intent"
+                or phase == "result"
+                and intent.get("child_result", {}).get("contained") is True
+            )
+        if isinstance(gate_plan, Mapping) and gate_plan.get("status") == "sealed":
+            return True
+        if not isinstance(intent, Mapping):
+            return intent is None
+        if intent.get("operation") in {"rebase", "rebase-result"}:
+            return False
+        if (
+            intent.get("operation") == "continue"
+            and isinstance(intent.get("phase"), str)
+            and str(intent["phase"]).startswith("forge-conflict-observation:")
+        ):
+            return False
+        if (
+            intent.get("operation") == "fetch-result"
+            and intent.get("result") == "success"
+        ):
+            return False
+        return intent.get("operation") == "fetch"
 
     @property
     def store(self) -> MergeChainStore:
@@ -15344,6 +23714,36 @@ class MergeEngine:
             state = self.store.recover_pending_outbox(chain_id)
         return state
 
+    def _read_only_recovery_flag_state(self) -> dict[str, Any]:
+        """Read replay truth without repairing bytes before a loud-flag refusal."""
+
+        if self.ctx.options.run_id is not None:
+            raise _merge_refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: merge transition refused — later verbs inherit the immutable run/task binding",
+                expected="no --run-id or --task after merge start",
+                observed=self.ctx.options.run_id,
+                remediation="retry with only the recorded --chain-id",
+            )
+        chain_id = self.ctx.options.chain_id
+        if chain_id is None:
+            raise Refusal(
+                ReasonCode.STATE_PRECONDITION,
+                "forge: merge shared verb refused — explicit --chain-id is required",
+                remediation="forge status --chain-id <id>",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        self.store._validate_id(chain_id)
+        if self.store.chain_family(chain_id) != "merge":
+            raise FrozenError(
+                "merge store refused a commit-family chain",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        with self.store.event_lock(chain_id):
+            replay = self.store._read_replay_locked(chain_id)
+            return self.store._resolve_replayed_projection(replay)
+
     def _halt(self, state: Mapping[str, Any]) -> None:
         _require_merge_adapter_control("halt")
         worktree = state.get("worktree")
@@ -15351,6 +23751,7 @@ class MergeEngine:
             Path(str(worktree["path"]))
             if isinstance(worktree, Mapping)
             and isinstance(worktree.get("path"), str)
+            and Path(str(worktree["path"])).exists()
             else self.ctx.repo.root
         )
         _run_halt(
@@ -15359,6 +23760,798 @@ class MergeEngine:
             scope="merge",
             cwd=candidate_root,
         )
+
+    def _record_common_release_failure(
+        self, chain_id: str, failure: CommonLockReleaseFailure
+    ) -> dict[str, Any] | None:
+        """Preserve durable primary truth before exposing a release refusal."""
+
+        try:
+            current = self.store.load(chain_id)
+        except (FrozenError, OSError, Refusal):
+            return None
+        integration = current.get("integration")
+        if not isinstance(integration, dict):
+            return None
+        if integration.get("condition") == "lock-release-failed":
+            return current
+        updated = copy.deepcopy(integration)
+        updated.update(
+            {
+                "condition": "lock-release-failed",
+                "primary_condition": integration.get("condition", "none"),
+            }
+        )
+        generation = current.get("candidate")
+        recorded = self.store.transition(
+            current,
+            "lock_release_result",
+            {"delta": {"integration": updated}},
+            generation_digest=(
+                str(generation["generation_digest"])
+                if isinstance(generation, Mapping)
+                else None
+            ),
+            at=iso_z(),
+        )
+        failure.chain = recorded
+        failure.remediation = f"forge merge recover --chain-id {chain_id}"
+        failure.next_required_step = failure.remediation
+        return recorded
+
+    @contextlib.contextmanager
+    def _recording_common_lock(
+        self,
+        common_dir: Path,
+        *,
+        chain_id: str,
+        operation: str,
+    ) -> Iterable[CommonRebaseLock]:
+        def event_intent(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
+            payload = event.get("payload")
+            delta = payload.get("delta") if isinstance(payload, Mapping) else None
+            integration = (
+                delta.get("integration") if isinstance(delta, Mapping) else None
+            )
+            intent = (
+                integration.get("intent")
+                if isinstance(integration, Mapping)
+                else None
+            )
+            return intent if isinstance(intent, Mapping) else None
+
+        def carries_fence_digest(value: object, digest: str) -> bool:
+            if isinstance(value, Mapping):
+                if value.get("inflight_digest") == digest:
+                    return True
+                return any(
+                    carries_fence_digest(member, digest)
+                    for member in value.values()
+                )
+            if isinstance(value, list):
+                return any(carries_fence_digest(member, digest) for member in value)
+            return False
+
+        def lifecycle_classification(
+            state: Mapping[str, Any],
+            replay: MergeReplayResult,
+            fence: PublishedLockRecord,
+        ) -> str:
+            operation_name = str(fence.record["operation"])
+            intent_digest = str(fence.record["intent_digest"])
+            events = [
+                event for event in replay.events if isinstance(event, Mapping)
+            ]
+            by_digest = {
+                str(event.get("digest")): event
+                for event in events
+                if SHA256_RE.fullmatch(str(event.get("digest", ""))) is not None
+            }
+            attributed = by_digest.get(intent_digest)
+            result_persisted = any(
+                carries_fence_digest(event.get("payload"), fence.digest)
+                for event in events
+            )
+
+            if operation_name in {"fetch", "tip-resolution"}:
+                if attributed is None or attributed.get("event") != "fetch_intent":
+                    raise FrozenError(
+                        "reserved fetch fence diverges from chain lifecycle",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                attributed_payload = attributed.get("payload")
+                if not isinstance(attributed_payload, Mapping):
+                    raise FrozenError(
+                        "reserved fetch intent payload is malformed",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                if attributed.get("generation_digest") is None:
+                    request = attributed_payload.get("scope_request")
+                    if request is not None and not isinstance(request, Mapping):
+                        raise FrozenError(
+                            "reserved bootstrap scope request is malformed",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    classification_state = copy.deepcopy(dict(state))
+                    classification_integration = copy.deepcopy(
+                        classification_state.get("integration")
+                    )
+                    if not isinstance(classification_integration, dict):
+                        raise FrozenError(
+                            "reserved bootstrap integration is malformed",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    classification_integration["intent"] = {
+                        "operation": "fetch",
+                        **copy.deepcopy(dict(attributed_payload)),
+                    }
+                    classification_state["integration"] = classification_integration
+                    inspection = _classify_merge_scope_binding(
+                        self.store,
+                        classification_state,
+                        fetch_intent_digest=intent_digest,
+                        scope_request=(
+                            request if isinstance(request, Mapping) else None
+                        ),
+                        fence=fence,
+                    )
+                    result_events = [
+                        event
+                        for event in events
+                        if event.get("event") == "fetch_result"
+                        and event.get("previous_digest") == intent_digest
+                    ]
+                    if not result_events:
+                        current_intent = state.get("integration", {}).get("intent")
+                        if (
+                            state.get("state") != "classifying"
+                            or not isinstance(current_intent, Mapping)
+                            or current_intent.get("operation") != "fetch"
+                        ):
+                            raise FrozenError(
+                                "reserved bootstrap fence lacks its pending lifecycle",
+                                chain_id=chain_id,
+                                schema=REVISION9_OUTPUT_SCHEMA,
+                            )
+                    elif len(result_events) == 1:
+                        copied = result_events[0].get("payload", {}).get(
+                            "scope_fetch_binding"
+                        )
+                        current_intent = state.get("integration", {}).get("intent")
+                        if (
+                            not isinstance(current_intent, Mapping)
+                            or current_intent.get("operation") != "fetch-result"
+                            or (copied is None and inspection.topology != "absent")
+                            or (
+                                isinstance(copied, Mapping)
+                                and (
+                                    inspection.topology != "canonical-one-link"
+                                    or inspection.canonical is None
+                                    or inspection.canonical.record != copied
+                                )
+                            )
+                            or (
+                                copied is not None
+                                and not isinstance(copied, Mapping)
+                            )
+                        ):
+                            raise FrozenError(
+                                "reserved bootstrap result diverges from its sidecar",
+                                chain_id=chain_id,
+                                schema=REVISION9_OUTPUT_SCHEMA,
+                            )
+                    else:
+                        raise FrozenError(
+                            "reserved bootstrap fence has multiple lifecycle results",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                return (
+                    "fetch-result-persisted"
+                    if result_persisted
+                    else "fetch-intent-pending"
+                )
+
+            if operation_name == "gate":
+                gate_result = any(
+                    event.get("event") == "gate_recorded"
+                    and carries_fence_digest(event.get("payload"), fence.digest)
+                    and carries_fence_digest(event.get("payload"), intent_digest)
+                    for event in events
+                )
+                if not gate_result:
+                    integration = state.get("integration")
+                    epoch = (
+                        integration.get("epoch")
+                        if isinstance(integration, Mapping)
+                        else None
+                    )
+                    plan = epoch.get("gate_plan") if isinstance(epoch, Mapping) else None
+                    if not isinstance(plan, Mapping) or plan.get("status") != "sealed":
+                        raise FrozenError(
+                            "reserved gate fence lacks a sealed cursor",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    cursor = plan.get("cursor")
+                    suite = plan.get("suite")
+                    if (
+                        not _valid_nonnegative_int(cursor)
+                        or not isinstance(suite, list)
+                        or int(cursor) >= len(suite)
+                        or not isinstance(suite[int(cursor)], Mapping)
+                    ):
+                        raise FrozenError(
+                            "reserved gate fence cursor is malformed",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    authorizer = (
+                        str(plan.get("seal_event_digest"))
+                        if int(cursor) == 0
+                        else next(
+                            (
+                                str(event.get("digest"))
+                                for event in reversed(events)
+                                if event.get("event") == "gate_recorded"
+                            ),
+                            "",
+                        )
+                    )
+                    member = suite[int(cursor)]
+                    expected = merge_gate_intent_digest(
+                        chain_id=chain_id,
+                        epoch_intent_digest=str(epoch.get("intent_digest")),
+                        seal_event_digest=str(plan.get("seal_event_digest")),
+                        generation_digest=str(plan.get("generation_digest")),
+                        policy_digest=str(plan.get("policy_digest")),
+                        suite_digest=str(plan.get("suite_digest")),
+                        cursor=int(cursor),
+                        kind=str(member.get("kind")),
+                        gate_id=str(member.get("id")),
+                        authorizing_event_digest=authorizer,
+                    )
+                    if expected != intent_digest:
+                        raise FrozenError(
+                            "reserved gate fence diverges from the sealed cursor",
+                            chain_id=chain_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                return "gate-result-persisted" if gate_result else "gate-intent-pending"
+
+            if operation_name == "remote-observation":
+                matched = False
+                for event in events:
+                    intent = event_intent(event)
+                    if not isinstance(intent, Mapping):
+                        continue
+                    base = {
+                        name: copy.deepcopy(intent.get(name))
+                        for name in (
+                            "schema",
+                            "transaction",
+                            "chain_id",
+                            "attempt_identity",
+                            "phase",
+                            "push_intent_digest",
+                        )
+                    }
+                    base["schema"] = "forge-remote-observation-intent/1"
+                    if (
+                        base.get("transaction") == "merge"
+                        and base.get("chain_id") == chain_id
+                        and base.get("phase") in {"final-prepush", "post-push"}
+                        and sha256_bytes(canonical_bytes(base)) == intent_digest
+                    ):
+                        matched = True
+                        break
+                if not matched:
+                    raise FrozenError(
+                        "reserved remote-observation fence lacks its exact phase intent",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+            elif operation_name in {"rebase", "continue", "abort"}:
+                expected_intents = {
+                    "rebase": {"rebase"},
+                    "continue": {"continue"},
+                    "abort": {"abort"},
+                }[operation_name]
+                intent = event_intent(attributed) if attributed is not None else None
+                if (
+                    attributed is None
+                    or attributed.get("event")
+                    not in {"rebase_intent", "condition_recorded"}
+                    or not isinstance(intent, Mapping)
+                    or intent.get("operation") not in expected_intents
+                ):
+                    raise FrozenError(
+                        f"reserved {operation_name} fence lacks its exact intent",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+            elif operation_name == "push":
+                if attributed is None or attributed.get("event") != "push_intent":
+                    raise FrozenError(
+                        "reserved push fence lacks its exact intent",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+            elif operation_name in {"worktree-remove", "branch-delete"}:
+                if attributed is None or attributed.get("event") != "cleanup_intent":
+                    raise FrozenError(
+                        f"reserved {operation_name} fence lacks its cleanup intent",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+            elif operation_name == "containment":
+                matched = bool(
+                    attributed is not None
+                    and attributed.get("event")
+                    in {"condition_recorded", "fetch_result", "cleanup_intent"}
+                )
+                if not matched:
+                    matched = any(
+                        isinstance(event_intent(event), Mapping)
+                        and sha256_bytes(
+                            canonical_bytes(dict(event_intent(event) or {}))
+                        )
+                        == intent_digest
+                        for event in events
+                    )
+                if not matched:
+                    raise FrozenError(
+                        "reserved containment fence lacks its exact read intent",
+                        chain_id=chain_id,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+            else:
+                raise FrozenError(
+                    "reserved merge fence operation is not recoverable",
+                    chain_id=chain_id,
+                    observed=operation_name,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            return (
+                f"{operation_name}-result-persisted"
+                if result_persisted
+                else f"{operation_name}-intent-pending"
+            )
+
+        def classify_reserved_fence(
+            reservation: RecoveryReservation,
+            fence: PublishedLockRecord | None,
+        ) -> dict[str, Any]:
+            """Classify and durably record death while reservation-held."""
+
+            _require_common_lock_control(
+                "reservation-held-lifecycle-classification"
+            )
+            selected_chain = reservation.affected_merge_chain()
+            if fence is not None and (
+                fence.record.get("owner_kind") != "merge"
+                or fence.record.get("chain_id") != selected_chain
+            ):
+                raise FrozenError(
+                    "reserved merge fence does not belong to the requested chain",
+                    chain_id=selected_chain,
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            reservation.assert_current(
+                "merge lifecycle recovery before chain lease"
+            )
+            with acquire_chain_lease(
+                self.store.root,
+                chain_id=selected_chain,
+                session=self.store._session(None),
+                exclusion=reservation,
+                timeout=reservation.remaining_timeout(
+                    "reservation-held chain lease acquisition"
+                ),
+                clock=reservation.clock,
+                sleeper=reservation.sleeper,
+            ) as lease:
+                state = self.store.load_locked(selected_chain, lease=lease)
+                with self.store.event_lock(
+                    selected_chain,
+                    deadline=reservation.deadline,
+                    clock=reservation.clock,
+                    sleeper=reservation.sleeper,
+                ):
+                    replay = self.store._read_replay_locked(selected_chain)
+                if fence is None:
+                    classification = "owner-death-only"
+                else:
+                    # Bootstrap recovery additionally authenticates the
+                    # surviving sidecar topology.  Its return value is not
+                    # authoritative: all persisted lifecycle labels come from
+                    # the same pure prefix-history classifier used by replay.
+                    if fence.record.get("operation") in {
+                        "fetch",
+                        "tip-resolution",
+                    }:
+                        lifecycle_classification(state, replay, fence)
+                    classification = _classify_merge_recovery_lifecycle(
+                        state,
+                        replay.events,
+                        fence_record=fence.record,
+                        fence_digest=fence.digest,
+                    )
+                    if classification is None:
+                        raise FrozenError(
+                            "reserved merge fence lifecycle is not uniquely classifiable",
+                            chain_id=selected_chain,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                recorded_at = iso_z()
+                unsigned = {
+                    "schema": "forge-merge-fence-recovery-proof/1",
+                    "chain_id": selected_chain,
+                    "reservation": reservation.identity.evidence(),
+                    "fence": fence.evidence() if fence is not None else None,
+                    "lifecycle": {
+                        "operation": (
+                            fence.record.get("operation")
+                            if fence is not None
+                            else None
+                        ),
+                        "intent_digest": (
+                            fence.record.get("intent_digest")
+                            if fence is not None
+                            else None
+                        ),
+                        "classification": classification,
+                        "state_digest": sha256_bytes(canonical_bytes(state)),
+                        "tail_digest": replay.tail_digest,
+                    },
+                    "recorded_at": recorded_at,
+                }
+                proof = {
+                    **unsigned,
+                    "digest": sha256_bytes(canonical_bytes(unsigned)),
+                }
+                current = self._epoch_transition(
+                    state,
+                    lease,
+                    "condition_recorded",
+                    {"delta": {}, "recovery_proof": proof},
+                    at=recorded_at,
+                )
+                reservation.assert_current(
+                    "merge lifecycle recovery after proof append"
+                )
+                with self.store.event_lock(
+                    selected_chain,
+                    deadline=reservation.deadline,
+                    clock=reservation.clock,
+                    sleeper=reservation.sleeper,
+                ):
+                    retained = self.store._read_replay_locked(selected_chain)
+                tail_payload = retained.events[-1].get("payload")
+                if (
+                    current != retained.state
+                    or not isinstance(tail_payload, Mapping)
+                    or tail_payload.get("recovery_proof") != proof
+                ):
+                    raise FrozenError(
+                        "merge fence recovery proof was not durably retained",
+                        chain_id=selected_chain,
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                proof_event_digest = str(retained.events[-1]["digest"])
+            reservation.assert_current(
+                "merge lifecycle recovery receipt"
+            )
+            return {
+                "schema": "forge-merge-fence-recovery-receipt/1",
+                "chain_id": selected_chain,
+                "chain_store": str(self.store.root),
+                "reservation_digest": reservation.identity.digest,
+                "fence_digest": fence.digest if fence is not None else None,
+                "proof_digest": str(proof["digest"]),
+                "event_digest": proof_event_digest,
+            }
+
+        def unexpected_split_recovery_proof(_proof: dict[str, Any]) -> None:
+            raise OSError(
+                "reservation lifecycle and death proof were not persisted atomically"
+            )
+
+        lock = acquire_common_lock(
+            common_dir,
+            owner_kind="merge",
+            chain_id=chain_id,
+            operation=operation,
+            no_transaction_record=operation != "recover",
+            recovery_recorder=(
+                unexpected_split_recovery_proof
+                if operation == "recover"
+                else None
+            ),
+            recovery_classifier=(
+                classify_reserved_fence if operation == "recover" else None
+            ),
+        )
+        try:
+            with lock as acquired:
+                yield acquired
+        except CommonLockReleaseFailure as exc:
+            self._record_common_release_failure(chain_id, exc)
+            raise
+
+    def _candidate_observation_transition(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease | None,
+        integration: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = {"delta": {"integration": copy.deepcopy(dict(integration))}}
+        generation = state.get("candidate")
+        generation_digest = (
+            str(generation["generation_digest"])
+            if isinstance(generation, Mapping)
+            else None
+        )
+        if lease is not None:
+            return self._epoch_transition(
+                state,
+                lease,
+                "condition_recorded",
+                payload,
+                generation_digest=generation_digest,
+            )
+        return self.store.transition(
+            state,
+            "condition_recorded",
+            payload,
+            generation_digest=generation_digest,
+            at=iso_z(),
+        )
+
+    def _restore_candidate_observation_intent_locked(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease | None,
+    ) -> tuple[dict[str, Any], object, bool]:
+        integration = state.get("integration")
+        intent = integration.get("intent") if isinstance(integration, Mapping) else None
+        if not (
+            isinstance(intent, Mapping)
+            and intent.get("schema") == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+        ):
+            return state, copy.deepcopy(intent), True
+        if not _merge_candidate_observation_record_valid(state, intent):
+            return state, None, False
+        restored = copy.deepcopy(dict(integration))
+        source_intent = copy.deepcopy(intent.get("source_intent"))
+        restored["intent"] = source_intent
+        return (
+            self._candidate_observation_transition(state, lease, restored),
+            source_intent,
+            True,
+        )
+
+    def _restore_bootstrap_fetch_observation_locked(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease | None,
+    ) -> tuple[dict[str, Any], bool]:
+        integration = state.get("integration")
+        intent = integration.get("intent") if isinstance(integration, Mapping) else None
+        if not (
+            isinstance(intent, Mapping)
+            and intent.get("schema") == _BOOTSTRAP_FETCH_OBSERVATION_SCHEMA
+        ):
+            return state, True
+        if not _bootstrap_fetch_observation_record_valid(state, intent):
+            return state, False
+        restored = copy.deepcopy(dict(integration))
+        restored["intent"] = copy.deepcopy(intent.get("source_intent"))
+        return self._candidate_observation_transition(state, lease, restored), True
+
+    def _run_candidate_observation_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease | None,
+        *,
+        verb: str,
+        remote_tip: str,
+        expected_head: str,
+        classify: bool,
+        declared_tier: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Run the closed candidate proof as separately fenced durable reads."""
+
+        _require_merge_integration_control("observation-first-recovery")
+        state, source_intent, restored = (
+            self._restore_candidate_observation_intent_locked(state, lease)
+        )
+        if not restored:
+            raise FrozenError(
+                "merge candidate observation intent is malformed",
+                chain_id=str(state.get("chain_id", "")) or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        specs = _merge_candidate_observation_step_specs(
+            state,
+            remote_tip=remote_tip,
+            expected_head=expected_head,
+            classify=classify,
+            declared_tier=declared_tier,
+        )
+        binding = _merge_candidate_observation_binding(
+            state,
+            source_intent,
+            verb=verb,
+            remote_tip=remote_tip,
+            expected_head=expected_head,
+            classify=classify,
+            declared_tier=declared_tier,
+        )
+        if specs is None or binding is None:
+            raise FrozenError(
+                "merge candidate observation request is malformed",
+                chain_id=str(state.get("chain_id", "")) or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        records: list[dict[str, Any]] = []
+        environment = _merge_scope_environment()
+        environment.pop("FORGE_SESSION_PID", None)
+
+        def restore_source() -> None:
+            nonlocal state
+            integration = copy.deepcopy(state["integration"])
+            integration["intent"] = copy.deepcopy(source_intent)
+            state = self._candidate_observation_transition(
+                state, lease, integration
+            )
+
+        for step, cwd, argv in specs:
+            started_at = iso_z()
+            generation = state.get("candidate")
+            record: dict[str, Any] = {
+                "schema": _MERGE_CANDIDATE_OBSERVATION_SCHEMA,
+                "chain_id": state["chain_id"],
+                "generation_digest": (
+                    generation.get("generation_digest")
+                    if isinstance(generation, Mapping)
+                    else None
+                ),
+                "source_intent": copy.deepcopy(source_intent),
+                "verb": verb,
+                "remote_tip": remote_tip,
+                "expected_head": expected_head,
+                "classify": classify,
+                "declared_tier": declared_tier,
+                "observation_binding": binding,
+                "stage": "intent",
+                "step": step,
+                "cwd": str(cwd),
+                "argv": list(argv),
+                "started_at": started_at,
+            }
+            integration = copy.deepcopy(state["integration"])
+            integration["intent"] = copy.deepcopy(record)
+            state = self._candidate_observation_transition(
+                state, lease, integration
+            )
+            intent_digest = self._tail_event_digest(
+                state, "condition_recorded"
+            )
+
+            def intent_current(expected: Mapping[str, Any] = record) -> bool:
+                try:
+                    current = (
+                        self.store.load_locked(
+                            str(state["chain_id"]), lease=lease
+                        )
+                        if lease is not None
+                        # The common lock and journal-outer transaction make
+                        # this invocation's just-persisted projection the
+                        # sole mutable value.  Reloading here can observe its
+                        # own not-yet-drained outbox descriptor.
+                        else state
+                    )
+                except (FrozenError, OSError, Refusal):
+                    return False
+                return bool(
+                    current.get("integration", {}).get("intent") == expected
+                    and _merge_event_digest(
+                        self.store,
+                        str(current["chain_id"]),
+                        "condition_recorded",
+                    )
+                    == intent_digest
+                )
+
+            def persist_observation(result: FencedProcessResult) -> None:
+                nonlocal state
+                durable = {
+                    **copy.deepcopy(record),
+                    "stage": "result",
+                    "child_result": {
+                        "authorized": result.authorized,
+                        "exit": result.returncode,
+                        "inflight_digest": result.fence_digest,
+                        "output_digest": result.output_digest,
+                        "stored_output_digest": sha256_bytes(result.output),
+                        "output_b64": base64.b64encode(result.output).decode(
+                            "ascii"
+                        ),
+                        "launch_failed": result.launch_failed,
+                        "timed_out": result.timed_out,
+                        "output_limit_exceeded": result.output_limit,
+                        "group_survived": result.group_survived,
+                    },
+                    "recorded_at": iso_z(),
+                }
+                updated = copy.deepcopy(state["integration"])
+                updated["intent"] = durable
+                state = self._candidate_observation_transition(
+                    state, lease, updated
+                )
+
+            result = run_fenced_command(
+                lock,
+                operation="containment",
+                intent_digest=intent_digest,
+                intent_validator=intent_current,
+                argv=argv,
+                cwd=cwd,
+                persist_result=persist_observation,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+            durable = state.get("integration", {}).get("intent")
+            complete = bool(
+                isinstance(durable, Mapping)
+                and _merge_candidate_observation_record_valid(state, durable)
+                and durable.get("stage") == "result"
+                and durable.get("step") == step
+                and durable.get("observation_binding") == binding
+                and durable.get("child_result", {}).get("authorized") is True
+                and durable.get("child_result", {}).get("exit") == 0
+                and durable.get("child_result", {}).get("launch_failed") is False
+                and durable.get("child_result", {}).get("timed_out") is False
+                and durable.get("child_result", {}).get("output_limit_exceeded")
+                is False
+                and durable.get("child_result", {}).get("group_survived") is False
+                and durable.get("child_result", {}).get("inflight_digest")
+                == result.fence_digest
+                and durable.get("child_result", {}).get("output_digest")
+                == result.output_digest
+            )
+            if not complete:
+                restore_source()
+                raise _merge_refusal(
+                    V2ReasonCode.EVIDENCE_INCOMPLETE,
+                    f"forge: {verb} refused — candidate observation did not complete",
+                    expected=f"one complete exit-0 {step} observation",
+                    observed=(
+                        f"exit={result.returncode}, launch={result.launch_failed}, "
+                        f"timeout={result.timed_out}, output_limit={result.output_limit}, "
+                        f"group_survived={result.group_survived}"
+                    ),
+                    chain=state,
+                )
+            records.append(copy.deepcopy(dict(durable)))
+            restore_source()
+
+        evidence = _merge_candidate_observation_evidence(state, records)
+        if evidence is None:
+            raise FrozenError(
+                "merge candidate observation evidence is incomplete",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return state, evidence
 
     def start(
         self,
@@ -15468,6 +24661,7 @@ class MergeEngine:
                 updated = copy.deepcopy(integration)
                 updated["condition"] = "foreign-git-state"
                 updated["primary_condition"] = "none"
+                _reset_merge_nonmovement_counter(updated)
                 generation = state.get("candidate")
                 current = self.store.transition(
                     state,
@@ -15652,7 +24846,11 @@ class MergeEngine:
         current = self.store.transition(
             state,
             "fetch_result",
-            {"delta": {"integration": integration}},
+            {
+                "delta": {"integration": integration},
+                "scope_fetch_binding": None,
+                "scope_proof": None,
+            },
             generation_digest=None,
             at=iso_z(),
         )
@@ -15665,6 +24863,669 @@ class MergeEngine:
             chain=current,
             evidence_refs=refusal.evidence_refs,
         )
+
+    @staticmethod
+    def _bootstrap_fetch_argv(
+        admission: MergeAdmission, remote_tip: str | None
+    ) -> tuple[str, list[str]]:
+        if remote_tip is not None:
+            return (
+                "tip-resolution",
+                [
+                    "git",
+                    "--no-pager",
+                    "-C",
+                    str(admission.worktree),
+                    "cat-file",
+                    "-e",
+                    f"{remote_tip}^{{commit}}",
+                ],
+            )
+        return (
+            "fetch",
+            [
+                "git",
+                "--no-pager",
+                "-C",
+                str(admission.worktree),
+                "fetch",
+                "--no-tags",
+                "--quiet",
+                "origin",
+                admission.target["destination_ref"],
+            ],
+        )
+
+    @staticmethod
+    def _resolved_fetch_tip(
+        admission: MergeAdmission, supplied: str | None
+    ) -> str:
+        if supplied is not None:
+            return supplied
+        fetch_head = Path(admission.worktree_identity["git_dir"]) / "FETCH_HEAD"
+        try:
+            raw = fetch_head.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"FETCH_HEAD is unavailable: {exc}") from exc
+        if len(raw) > MERGE_SCOPE_BINDING_CAP_BYTES or not raw.endswith(b"\n"):
+            raise ValueError("FETCH_HEAD is malformed")
+        rows = raw.splitlines()
+        if len(rows) != 1:
+            raise ValueError("FETCH_HEAD does not identify one fixed target")
+        raw_oid = rows[0].split(b"\t", 1)[0]
+        try:
+            oid = raw_oid.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError("FETCH_HEAD object ID is not ASCII") from exc
+        if COMMIT_RE.fullmatch(oid) is None:
+            raise ValueError("FETCH_HEAD object ID is invalid")
+        return oid
+
+    def _recover_merge_bootstrap_scope_binding(
+        self,
+        state: Mapping[str, Any],
+        admission: MergeAdmission,
+        *,
+        fence: PublishedLockRecord | None = None,
+    ) -> dict[str, Any] | None:
+        """Resume a crashed run-bound sidecar without resolving a tip again.
+
+        ``None`` is the exact both-names-absent pre-publication result.  When
+        common-lock recovery already cleared the dead fence, its complete
+        identity is recovered from the immutable sidecar's
+        ``retained_inflight`` member.
+        """
+
+        _require_merge_integration_control("scope-sidecar-recovery")
+        fetch_intent_digest = _merge_event_digest(
+            self.store, str(state["chain_id"]), "fetch_intent"
+        )
+        if fetch_intent_digest is None:
+            raise FrozenError(
+                "merge bootstrap fetch intent digest is unavailable",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        intent = state.get("integration", {}).get("intent")
+        scope_request = (
+            intent.get("scope_request") if isinstance(intent, Mapping) else None
+        )
+        expected_request = _merge_scope_request(admission)
+        if (
+            (scope_request is not None and not isinstance(scope_request, Mapping))
+            or (
+                dict(scope_request)
+                if isinstance(scope_request, Mapping)
+                else None
+            )
+            != expected_request
+        ):
+            raise FrozenError(
+                "merge bootstrap scope request diverges from admission",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        selected_fence = fence or _discover_merge_scope_fence_from_sidecar(
+            self.store,
+            state,
+            fetch_intent_digest=fetch_intent_digest,
+        )
+        if selected_fence is None:
+            return None
+        return _resume_merge_scope_binding(
+            self.store,
+            state,
+            fetch_intent_digest=fetch_intent_digest,
+            scope_request=scope_request,
+            fence=selected_fence,
+        )
+
+    def _run_bootstrap_generation_composite(
+        self,
+        state: dict[str, Any],
+        admission: MergeAdmission,
+        lock: CommonRebaseLock,
+        *,
+        operation_nonce: str,
+        attempt: int,
+        remote_tip: str | None,
+        generation_number: int,
+        verb: str,
+    ) -> tuple[dict[str, Any], MergeBootstrapClassification]:
+        """Run Revision-12's child and retain a post-lock classification input."""
+
+        _require_merge_integration_control("composite-bootstrap-streaming")
+        _require_merge_integration_control("post-fetch-scope-proof")
+        fetch_intent_digest = _merge_event_digest(
+            self.store, str(state["chain_id"]), "fetch_intent"
+        )
+        if fetch_intent_digest is None:
+            raise FrozenError(
+                "merge bootstrap fetch intent digest is unavailable",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        operation, fetch_argv = self._bootstrap_fetch_argv(admission, remote_tip)
+        scope_request = _merge_scope_request(admission)
+        holder: dict[str, Any] = {}
+
+        def intent_current() -> bool:
+            return (
+                _merge_event_digest(
+                    self.store, str(state["chain_id"]), "fetch_intent"
+                )
+                == fetch_intent_digest
+            )
+
+        def failed_result(
+            binding: Mapping[str, Any] | None,
+        ) -> None:
+            nonlocal state
+            integration = copy.deepcopy(state["integration"])
+            integration.update(
+                {
+                    # A run-bound composite failure takes the established
+                    # run-task-binding-invalid ordinary-abort edge; only the
+                    # unbound pre-sidecar failure remains classifying with
+                    # the durable fetch-failed condition.
+                    "condition": (
+                        "none"
+                        if admission.run_task is not None
+                        else "fetch-failed"
+                    ),
+                    "primary_condition": "none",
+                    "intent": {
+                        "operation": "fetch-result",
+                        "operation_nonce": operation_nonce,
+                        "attempt": attempt,
+                        "result": "failed",
+                        "resolved_tip": None,
+                    },
+                }
+            )
+            state = self.store.transition(
+                state,
+                "fetch_result",
+                {
+                    "delta": {"integration": integration},
+                    "scope_fetch_binding": (
+                        copy.deepcopy(dict(binding))
+                        if isinstance(binding, Mapping)
+                        else None
+                    ),
+                    "scope_proof": None,
+                },
+                generation_digest=(
+                    str(state["candidate"]["generation_digest"])
+                    if isinstance(state.get("candidate"), Mapping)
+                    else None
+                ),
+                at=iso_z(),
+            )
+
+        def materialize_success(
+            binding: Mapping[str, Any],
+            metadata: Mapping[str, Any],
+            fixed_tip: str,
+        ) -> tuple[dict[str, Any], MergeScopeResult | None, object]:
+            """Materialize the complete candidate while the child fence survives."""
+
+            nonlocal state
+            scope: MergeScopeResult | None = None
+            if admission.run_task is not None:
+                scope_record = metadata.get("scope")
+                changed = metadata.get("scope_changed_paths")
+                if (
+                    not isinstance(scope_record, Mapping)
+                    or not _valid_sorted_unique_strings(changed)
+                ):
+                    raise FrozenError(
+                        "composite bootstrap scope evidence is malformed",
+                        chain_id=str(state["chain_id"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                _batch, _builders, journal = _coordination_modules()
+                snapshot = admission.run_task
+                out_of_scope = tuple(
+                    path
+                    for path in changed
+                    if not any(
+                        journal.pathspec_contained(path, pattern)
+                        for pattern in snapshot.task_files
+                    )
+                    or not any(
+                        journal.pathspec_contained(path, pattern)
+                        for pattern in snapshot.admitted_scope
+                    )
+                )
+                scope = MergeScopeResult(
+                    argv=tuple(
+                        _merge_scope_argv(
+                            admission.worktree,
+                            fixed_tip,
+                            admission.candidate_head,
+                        )
+                    ),
+                    command_digest=str(binding["command_digest"]),
+                    environment_digest=str(binding["environment_digest"]),
+                    output_digest=str(scope_record["output_digest"]),
+                    changed_paths=tuple(changed),
+                    out_of_scope_paths=out_of_scope,
+                    result="exceeded" if out_of_scope else "contained",
+                )
+            candidate = _retain_or_advance_merge_candidate(
+                admission,
+                fixed_tip,
+                prior_candidate=state.get("candidate"),
+                generation=generation_number,
+                diff_output_digest=str(binding["full_patch_output_digest"]),
+            )
+            proof = (
+                _merge_scope_proof(
+                    admission, candidate, scope, binding
+                )
+                if scope is not None
+                else None
+            )
+            integration = copy.deepcopy(state["integration"])
+            integration.update(
+                {
+                    "condition": "none",
+                    "primary_condition": "none",
+                    "intent": {
+                        "operation": "fetch-result",
+                        "operation_nonce": operation_nonce,
+                        "attempt": attempt,
+                        "result": "success",
+                        "resolved_tip": fixed_tip,
+                    },
+                }
+            )
+            review = state.get("review")
+            iteration = (
+                review.get("iteration") if isinstance(review, Mapping) else None
+            )
+            retained_review = (
+                {"iteration": iteration} if type(iteration) is int else {}
+            )
+            desired = {
+                "candidate": copy.deepcopy(candidate),
+                "tier": None,
+                "state": "classifying",
+                "policy_source": {
+                    "commit": admission.policy.sha,
+                    "digest": admission.policy.digest,
+                },
+                "steps": {},
+                "review": retained_review,
+                "approval": {},
+                "authorization": {},
+                "integration": integration,
+            }
+            state = self.store.transition(
+                state,
+                "fetch_result",
+                {
+                    "delta": {
+                        name: value
+                        for name, value in desired.items()
+                        if state.get(name) != value or name == "state"
+                    },
+                    "scope_fetch_binding": copy.deepcopy(dict(binding)),
+                    "scope_proof": copy.deepcopy(proof),
+                },
+                generation_digest=str(candidate["generation_digest"]),
+                at=iso_z(),
+            )
+            return candidate, scope, proof
+
+        def persist(result: FencedProcessResult) -> None:
+            metadata = result.metadata
+            complete = bool(
+                result.authorized
+                and result.returncode == 0
+                and not result.launch_failed
+                and not result.timed_out
+                and not result.output_limit
+                and not result.group_survived
+                and isinstance(metadata, Mapping)
+                and isinstance(metadata.get("full_patch"), Mapping)
+                and isinstance(metadata.get("resolved_tip"), str)
+            )
+            binding: dict[str, Any] | None = None
+            candidate: dict[str, Any] | None = None
+            scope: MergeScopeResult | None = None
+            proof: object = None
+            error: str | None = None
+            fixed_tip = (
+                str(metadata["resolved_tip"])
+                if complete and isinstance(metadata, Mapping)
+                else None
+            )
+            if complete and fixed_tip is not None:
+                try:
+                    fence, fence_error, _evidence = _read_fence_for_recovery(
+                        lock._common, lock.common_dir
+                    )
+                    if (
+                        fence_error is not None
+                        or fence is None
+                        or fence.digest != result.fence_digest
+                        or fence.inode != result.fence_inode
+                        or fence.record.get("intent_digest") != fetch_intent_digest
+                        or fence.record.get("operation") != operation
+                    ):
+                        raise OSError(
+                            "retained bootstrap fence is unavailable or mismatched"
+                        )
+                    binding = _publish_merge_scope_binding(
+                        self.store,
+                        state,
+                        fetch_intent_digest=fetch_intent_digest,
+                        scope_request=scope_request,
+                        remote_tip=fixed_tip,
+                        fence=fence,
+                        result=result,
+                    )
+                    # Classification is deliberately excluded from this
+                    # callback, but the successful result itself belongs to
+                    # the fenced composite: after the /2 sidecar is durable,
+                    # materialize its complete candidate before the original
+                    # fence is cleared.
+                    candidate, scope, proof = materialize_success(
+                        binding, metadata, fixed_tip
+                    )
+                except (OSError, TypeError, ValueError, Refusal) as exc:
+                    error = str(exc)
+            if not complete or error is not None:
+                failed_result(binding)
+            holder.update(
+                {
+                    "complete": bool(
+                        complete
+                        and error is None
+                        and binding is not None
+                        and candidate is not None
+                    ),
+                    "fixed_tip": fixed_tip,
+                    "binding": copy.deepcopy(binding),
+                    "candidate": copy.deepcopy(candidate),
+                    "scope": copy.deepcopy(scope),
+                    "proof": copy.deepcopy(proof),
+                    "error": error,
+                    "metadata": copy.deepcopy(metadata),
+                }
+            )
+
+        environment = _merge_scope_environment()
+        try:
+            _require_git_no_lazy_fetch_qualification(
+                self._git_no_lazy_fetch_qualification,
+                admission.worktree,
+                environment,
+            )
+        except OSError as exc:
+            failed_result(None)
+            holder.update(
+                {
+                    "complete": False,
+                    "fixed_tip": None,
+                    "binding": None,
+                    "error": str(exc),
+                    "metadata": None,
+                }
+            )
+            scope_failure = admission.run_task is not None
+            reason = (
+                V2ReasonCode.RUN_TASK_BINDING_INVALID
+                if scope_failure
+                else V2ReasonCode.FETCH_FAILED
+            )
+            refusal = _merge_refusal(
+                reason,
+                (
+                    f"forge: {verb} refused — run/task scope derivation is invalid"
+                    if scope_failure
+                    else f"forge: {verb} refused — fixed target fetch failed"
+                ),
+                expected="the pre-lock Git qualification to remain exact",
+                observed=str(exc),
+                chain=state,
+            )
+            if scope_failure:
+                state = self._release_to_aborted(
+                    state, reason="run/task scope derivation is invalid"
+                )
+                refusal.chain = state
+            raise refusal from exc
+        composite_result = run_fenced_command(
+            lock,
+            operation=operation,
+            intent_digest=fetch_intent_digest,
+            intent_validator=intent_current,
+            argv=_merge_bootstrap_child_argv(
+                admission,
+                fetch_argv=fetch_argv,
+                remote_tip=remote_tip,
+            ),
+            cwd=admission.worktree,
+            persist_result=persist,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=False,
+            result_transform=lambda raw: _decode_merge_bootstrap_result(
+                raw,
+                run_bound=admission.run_task is not None,
+                fetch_argv=fetch_argv,
+                worktree=admission.worktree,
+                candidate_head=admission.candidate_head,
+                environment_digest=_git_environment_digest(environment),
+            ),
+        )
+        if not holder.get("complete"):
+            scope_failure = admission.run_task is not None
+            reason = (
+                V2ReasonCode.RUN_TASK_BINDING_INVALID
+                if scope_failure
+                else V2ReasonCode.FETCH_FAILED
+            )
+            refusal = _merge_refusal(
+                reason,
+                (
+                    f"forge: {verb} refused — run/task scope derivation is invalid"
+                    if scope_failure
+                    else f"forge: {verb} refused — fixed target fetch failed"
+                ),
+                expected="one complete composite bootstrap child",
+                observed=str(holder.get("error") or composite_result.evidence()),
+                chain=state,
+            )
+            if scope_failure:
+                state = self._release_to_aborted(
+                    state, reason="run/task scope derivation is invalid"
+                )
+                refusal.chain = state
+            raise refusal
+
+        binding = holder.get("binding")
+        candidate = holder.get("candidate")
+        scope = holder.get("scope")
+        proof = holder.get("proof")
+        if (
+            not isinstance(binding, Mapping)
+            or not isinstance(candidate, Mapping)
+            or (scope is not None and not isinstance(scope, MergeScopeResult))
+        ):
+            raise FrozenError(
+                "composite bootstrap sidecar was not durably retained",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        exceeded = bool(scope is not None and scope.result == "exceeded")
+        if exceeded:
+            fetch_digest = _merge_event_digest(
+                self.store, str(state["chain_id"]), "fetch_result"
+            )
+            if not isinstance(proof, Mapping) or fetch_digest is None:
+                raise FrozenError(
+                    "run-scope refusal lacks its authenticated result proof",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            state = self._release_scope_exceeded(
+                state,
+                scope_proof_digest=str(proof["digest"]),
+                fetch_result_event_digest=fetch_digest,
+                verb=verb,
+            )
+            raise _merge_refusal(
+                V2ReasonCode.RUN_SCOPE_EXCEEDED,
+                f"forge: {verb} refused — changed paths exceed bound task scope",
+                expected="every changed path within task files and admitted run scope",
+                observed=str(scope.out_of_scope_paths if scope is not None else ()),
+                chain=state,
+            )
+        return state, MergeBootstrapClassification(
+            candidate=copy.deepcopy(dict(candidate)),
+            scope=copy.deepcopy(scope),
+            full_patch_output_digest=str(binding["full_patch_output_digest"]),
+            verb=verb,
+        )
+
+    def _run_bootstrap_generation(
+        self,
+        state: dict[str, Any],
+        admission: MergeAdmission,
+        lock: CommonRebaseLock,
+        *,
+        operation_nonce: str,
+        attempt: int,
+        remote_tip: str | None,
+        generation_number: int,
+        verb: str = "merge start",
+    ) -> tuple[dict[str, Any], MergeBootstrapClassification]:
+        """Run the fenced bootstrap and retain its classification inputs."""
+
+        return self._run_bootstrap_generation_composite(
+            state,
+            admission,
+            lock,
+            operation_nonce=operation_nonce,
+            attempt=attempt,
+            remote_tip=remote_tip,
+            generation_number=generation_number,
+            verb=verb,
+        )
+
+    def _complete_bootstrap_classification(
+        self,
+        state: dict[str, Any],
+        admission: MergeAdmission,
+        pending: MergeBootstrapClassification,
+    ) -> tuple[dict[str, Any], MergeCandidateGeneration]:
+        """Classify a durable candidate while holding only its chain lease."""
+
+        if (
+            not _merge_bootstrap_classification_pending(state)
+            or state.get("candidate") != pending.candidate
+            or state.get("candidate", {}).get("diff_sha256")
+            != pending.full_patch_output_digest
+        ):
+            raise FrozenError(
+                "merge bootstrap classification input diverges from its generation",
+                chain_id=str(state.get("chain_id", "")) or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if pending.scope is not None and pending.scope.result == "exceeded":
+            if (
+                pending.scope_proof_digest is None
+                or pending.fetch_result_event_digest is None
+            ):
+                raise FrozenError(
+                    "run-scope refusal lacks its authenticated result proof",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            terminal = self._release_scope_exceeded(
+                state,
+                scope_proof_digest=pending.scope_proof_digest,
+                fetch_result_event_digest=pending.fetch_result_event_digest,
+                verb="merge recover",
+            )
+            raise _merge_refusal(
+                V2ReasonCode.RUN_SCOPE_EXCEEDED,
+                "forge: merge recover refused — changed paths exceed bound task scope",
+                expected="every changed path within task files and admitted run scope",
+                observed=str(pending.scope.out_of_scope_paths),
+                chain=terminal,
+            )
+        binding = state.get("run_binding")
+        with self.store._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ), acquire_chain_lease(
+            self.store.root,
+            chain_id=str(state["chain_id"]),
+            session=self.store._session(None),
+        ) as lease:
+            current = self.store.load_locked(str(state["chain_id"]), lease=lease)
+            if current != state or not _merge_bootstrap_classification_pending(current):
+                raise FrozenError(
+                    "merge bootstrap classification snapshot changed",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            generation = bind_merge_candidate_generation(
+                self.ctx,
+                admission,
+                str(pending.candidate["remote_tip"]),
+                generation=int(pending.candidate["generation"]),
+                scope_result=pending.scope,
+                fixed_tip_bound=True,
+                observation=None,
+                diff_output_digest=pending.full_patch_output_digest,
+            )
+            if generation.candidate != pending.candidate:
+                raise FrozenError(
+                    "merge bootstrap classification changed the immutable candidate",
+                    chain_id=str(state["chain_id"]),
+                    expected=str(pending.candidate.get("generation_digest")),
+                    observed=str(generation.candidate.get("generation_digest")),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            candidate_repo = Repository(admission.worktree)
+            observed_head = candidate_repo.head()
+            if observed_head != pending.candidate["candidate_head"]:
+                raise _merge_refusal(
+                    V2ReasonCode.CANDIDATE_STALE,
+                    f"forge: {pending.verb} refused — candidate HEAD changed during classification",
+                    expected=str(pending.candidate["candidate_head"]),
+                    observed=observed_head,
+                    chain=current,
+                )
+            _merge_worktree_status(
+                candidate_repo,
+                Path(admission.worktree_identity["git_dir"]),
+                verb=pending.verb,
+            )
+            integration = copy.deepcopy(current["integration"])
+            integration["intent"] = None
+            current = self.store.transition_locked(
+                current,
+                "generation_refreshed",
+                {
+                    "delta": {
+                        "state": "verifying",
+                        "tier": copy.deepcopy(generation.tier),
+                        "integration": integration,
+                    }
+                },
+                generation_digest=str(pending.candidate["generation_digest"]),
+                lease=lease,
+                at=iso_z(),
+            )
+        return current, generation
+
 
     def start_chain(
         self,
@@ -15686,33 +25547,22 @@ class MergeEngine:
         admission = prepare_merge_admission(
             self.ctx, worktree, declared_tier, task=task
         )
+        self._prepare_bootstrap_git_no_lazy_fetch_qualification(
+            admission,
+            verb="merge start",
+        )
         chain_id = self._allocate_chain_id()
         journal_binding = (
             admission.run_task.binding if admission.run_task is not None else None
         )
         with self.store._journal_outer(journal_binding):
-            with self.store.admission_lock(admission.worktree), acquire_common_lock(
+            with self.store.admission_lock(
+                admission.worktree
+            ), self._recording_common_lock(
                 Path(admission.worktree_identity["common_dir"]),
-                owner_kind="merge",
                 chain_id=chain_id,
                 operation="start",
-                no_transaction_record=True,
-            ):
-                admission = prepare_merge_admission(
-                    self.ctx, worktree, declared_tier, task=task
-                )
-                refreshed_binding = (
-                    admission.run_task.binding
-                    if admission.run_task is not None
-                    else None
-                )
-                if refreshed_binding != journal_binding:
-                    raise _merge_refusal(
-                        V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                        "forge: merge start refused — run/task binding changed during admission",
-                        expected=str(journal_binding),
-                        observed=str(refreshed_binding),
-                    )
+            ) as common_lock:
                 (
                     worktree_digest,
                     claim_name,
@@ -15781,6 +25631,23 @@ class MergeEngine:
                     generation_digest=None,
                     at=iso_z(),
                 )
+                observed_admission = prepare_merge_admission(
+                    self.ctx, worktree, declared_tier, task=task
+                )
+                if observed_admission != admission:
+                    raise _merge_refusal(
+                        V2ReasonCode.WORKTREE_INVALID,
+                        "forge: merge start refused — admission changed under the common lock",
+                        expected=str(admission),
+                        observed=str(observed_admission),
+                        chain=state,
+                    )
+                admission = observed_admission
+                _require_git_no_lazy_fetch_qualification(
+                    self._git_no_lazy_fetch_qualification,
+                    admission.worktree,
+                    _merge_scope_environment(),
+                )
                 operation_nonce = secrets.token_hex(16)
                 state = self.store.transition(
                     state,
@@ -15794,75 +25661,97 @@ class MergeEngine:
                         "policy_digest": admission.policy.digest,
                         "operation_nonce": operation_nonce,
                         "attempt": 1,
+                        "scope_request": _merge_scope_request(admission),
                     },
                     generation_digest=None,
                     at=iso_z(),
                 )
-                try:
-                    fixed_tip = remote_tip or _resolve_recorded_merge_tip(
-                        admission, verb="merge start"
-                    )
-                except Refusal as exc:
-                    raise self._record_bootstrap_failure(
-                        state, operation_nonce, exc
-                    ) from exc
-                try:
-                    generation = bind_merge_candidate_generation(
-                        self.ctx, admission, fixed_tip, generation=1
-                    )
-                except Refusal as exc:
-                    raise self._record_bootstrap_failure(
-                        state, operation_nonce, exc
-                    ) from exc
-                if generation.scope is not None and generation.scope.result == "exceeded":
-                    terminal = self._release_to_aborted(
-                        state,
-                        reason="changed paths exceed bound task scope",
-                    )
-                    raise _merge_refusal(
-                        V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                        "forge: merge start refused — changed paths exceed bound task scope",
-                        expected="every changed path within task files and admitted run scope",
-                        observed=str(generation.scope.out_of_scope_paths),
-                        chain=terminal,
-                    )
-                integration = copy.deepcopy(state["integration"])
-                integration.update(
-                    {
-                        "condition": "none",
-                        "primary_condition": "none",
-                        "intent": {
-                            "operation": "fetch-result",
-                            "operation_nonce": operation_nonce,
-                            "attempt": 1,
-                            "result": "success",
-                            "resolved_tip": fixed_tip,
-                        },
-                    }
-                )
-                state = self.store.transition(
+                state, pending = self._run_bootstrap_generation(
                     state,
-                    "fetch_result",
-                    {
-                        "delta": {
-                            "candidate": copy.deepcopy(generation.candidate),
-                            "tier": copy.deepcopy(generation.tier),
-                            "state": "verifying",
-                            "integration": integration,
-                        }
-                    },
-                    generation_digest=str(
-                        generation.candidate["generation_digest"]
-                    ),
-                    at=iso_z(),
+                    admission,
+                    common_lock,
+                    operation_nonce=operation_nonce,
+                    attempt=1,
+                    remote_tip=remote_tip,
+                    generation_number=1,
                 )
+        state, generation = self._complete_bootstrap_classification(
+            state, admission, pending
+        )
         return _success(
             state,
             f"merge chain {chain_id} started for {admission.worktree}",
             f"forge merge verify --chain-id {chain_id}",
         )
 
-    def _admission_for_refresh(self, state: Mapping[str, Any]) -> MergeAdmission:
+    def _admission_from_candidate_observation(
+        self,
+        state: Mapping[str, Any],
+        observation: Mapping[str, Any],
+        *,
+        verb: str,
+        require_current_generation: bool,
+    ) -> MergeAdmission:
+        repository, policy, _paths, _diff, _classification = (
+            _parse_merge_candidate_observation(
+                state,
+                observation,
+                verb=verb,
+                require_current_generation=require_current_generation,
+            )
+        )
+        binding = state.get("run_binding")
+        run_task = None
+        if isinstance(binding, Mapping):
+            run_task = _prove_merge_run_task_binding(
+                Path(str(state["repository"])),
+                self.store.common_root,
+                str(binding["run_id"]),
+                str(binding["task_id"]),
+                policy.digest,
+            )
+            if run_task.binding != dict(binding):
+                raise _merge_refusal(
+                    V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                    f"forge: {verb} refused — run/task binding changed during observation",
+                    expected=str(dict(binding)),
+                    observed=str(run_task.binding),
+                    chain=state,
+                )
+        return MergeAdmission(
+            repository=Path(str(state["repository"])),
+            worktree=repository.root,
+            worktree_identity={
+                name: str(state["worktree"][name])
+                for name in ("path", "git_dir", "common_dir")
+            },
+            branch=str(state["branch"]),
+            target=copy.deepcopy(dict(state["target"])),
+            candidate_head=str(observation["expected_head"]),
+            policy=policy,
+            declared_tier=(
+                str(observation["declared_tier"])
+                if observation.get("declared_tier") is not None
+                else None
+            ),
+            run_task=run_task,
+            status_output_digest=sha256_bytes(b""),
+        )
+
+    def _admission_for_refresh(
+        self,
+        state: Mapping[str, Any],
+        *,
+        observation: Mapping[str, Any] | None = None,
+        verb: str = "merge refresh",
+    ) -> MergeAdmission:
+        if observation is not None:
+            return self._admission_from_candidate_observation(
+                state,
+                observation,
+                verb=verb,
+                require_current_generation=True,
+            )
         binding = state.get("run_binding")
         options = dataclasses.replace(
             self.ctx.options,
@@ -15959,29 +25848,59 @@ class MergeEngine:
         state = self._preflight_lifecycle(self._load(), "merge refresh")
         self._halt(state)
         self._refresh_iteration(state)
+        prelock_admission = self._admission_for_refresh(
+            state, verb="merge refresh"
+        )
+        self._prepare_bootstrap_git_no_lazy_fetch_qualification(
+            prelock_admission,
+            verb="merge refresh",
+        )
         binding = state.get("run_binding")
         with self.store._journal_outer(
             binding if isinstance(binding, Mapping) else None
-        ), acquire_common_lock(
+        ), self._recording_common_lock(
             Path(str(state["worktree"]["common_dir"])),
-            owner_kind="merge",
             chain_id=str(state["chain_id"]),
             operation="refresh",
-            no_transaction_record=True,
-        ):
+        ) as common_lock:
             state = self._preflight_lifecycle(self._load(), "merge refresh")
             iteration = self._refresh_iteration(state)
-            admission = self._admission_for_refresh(state)
             prior_candidate = state.get("candidate")
-            bootstrap_nonce: str | None = None
-            bootstrap_attempt = 1
+            prior_integration = state.get("integration")
+            prior_operation = (
+                prior_integration.get("intent")
+                if isinstance(prior_integration, Mapping)
+                else None
+            )
+            admission_head = (
+                str(prior_candidate["candidate_head"])
+                if isinstance(prior_candidate, Mapping)
+                else str(prior_operation.get("pre_fetch_head", ""))
+                if isinstance(prior_operation, Mapping)
+                else ""
+            )
+            admission_tip = (
+                str(prior_candidate["remote_tip"])
+                if isinstance(prior_candidate, Mapping)
+                else admission_head
+            )
+            admission = self._admission_for_refresh(
+                state, verb="merge refresh"
+            )
+            _require_git_no_lazy_fetch_qualification(
+                self._git_no_lazy_fetch_qualification,
+                admission.worktree,
+                _merge_scope_environment(),
+            )
+            prior_intent = state.get("integration", {}).get("intent")
+            attempt = 1
+            if isinstance(prior_intent, Mapping) and type(
+                prior_intent.get("attempt")
+            ) is int:
+                attempt = int(prior_intent["attempt"]) + 1
+            operation_nonce = secrets.token_hex(16)
+            scope_request = _merge_scope_request(admission)
             if prior_candidate is None:
-                prior_intent = state.get("integration", {}).get("intent")
-                if isinstance(prior_intent, Mapping) and type(
-                    prior_intent.get("attempt")
-                ) is int:
-                    bootstrap_attempt = int(prior_intent["attempt"]) + 1
-                bootstrap_nonce = secrets.token_hex(16)
                 state = self.store.transition(
                     state,
                     "fetch_intent",
@@ -15992,102 +25911,57 @@ class MergeEngine:
                         "target": copy.deepcopy(admission.target),
                         "pre_fetch_head": admission.candidate_head,
                         "policy_digest": admission.policy.digest,
-                        "operation_nonce": bootstrap_nonce,
-                        "attempt": bootstrap_attempt,
+                        "operation_nonce": operation_nonce,
+                        "attempt": attempt,
+                        "scope_request": scope_request,
                     },
                     generation_digest=None,
                     at=iso_z(),
                 )
-            try:
-                fixed_tip = remote_tip or _resolve_recorded_merge_tip(
-                    admission, verb="merge refresh"
+            else:
+                integration = copy.deepcopy(state["integration"])
+                _reset_merge_nonmovement_counter(integration)
+                integration.update(
+                    {
+                        "condition": "none",
+                        "primary_condition": "none",
+                        "epoch": None,
+                        "intent": {
+                            "operation": "fetch",
+                            "operation_nonce": operation_nonce,
+                            "attempt": attempt,
+                            "target": copy.deepcopy(admission.target),
+                            "pre_fetch_head": admission.candidate_head,
+                            "scope_request": scope_request,
+                        },
+                    }
                 )
-            except Refusal as exc:
-                if bootstrap_nonce is not None:
-                    raise self._record_bootstrap_failure(
-                        state,
-                        bootstrap_nonce,
-                        exc,
-                        attempt=bootstrap_attempt,
-                    ) from exc
-                raise
+                state = self.store.transition(
+                    state,
+                    "fetch_intent",
+                    {"delta": {"state": "classifying", "integration": integration}},
+                    generation_digest=str(prior_candidate["generation_digest"]),
+                    at=iso_z(),
+                )
             next_number = (
                 int(prior_candidate["generation"]) + 1
                 if isinstance(prior_candidate, Mapping)
                 else 1
             )
-            generation = bind_merge_candidate_generation(
-                self.ctx, admission, fixed_tip, generation=next_number
-            )
-            candidate = copy.deepcopy(generation.candidate)
-            if isinstance(prior_candidate, Mapping):
-                identity_fields = (
-                    "remote",
-                    "destination_ref",
-                    "remote_tip",
-                    "candidate_head",
-                    "diff_sha256",
-                    "policy_commit",
-                    "policy_digest",
-                    "worktree_identity",
-                )
-                if all(
-                    prior_candidate.get(name) == candidate.get(name)
-                    for name in identity_fields
-                ):
-                    candidate = copy.deepcopy(dict(prior_candidate))
-            retained_review = {} if iteration == 0 else {"iteration": iteration}
-            next_integration = copy.deepcopy(state["integration"])
-            next_integration.update(
-                {
-                    "condition": "none",
-                    "primary_condition": "none",
-                    "epoch": None,
-                    "intent": {
-                        "operation": (
-                            "fetch-result"
-                            if prior_candidate is None
-                            else "refresh-result"
-                        ),
-                        "operation_nonce": (
-                            bootstrap_nonce or secrets.token_hex(16)
-                        ),
-                        "attempt": bootstrap_attempt,
-                        "result": "success",
-                        "resolved_tip": fixed_tip,
-                    },
-                }
-            )
-            if prior_candidate is None:
-                event_name = "fetch_result"
-            else:
-                event_name = "generation_refreshed"
-            desired = {
-                "state": "verifying",
-                "policy_source": {
-                    "commit": admission.policy.sha,
-                    "digest": admission.policy.digest,
-                },
-                "candidate": candidate,
-                "tier": copy.deepcopy(generation.tier),
-                "steps": {},
-                "review": retained_review,
-                "approval": {},
-                "authorization": {},
-                "integration": next_integration,
-            }
-            delta = {
-                name: value
-                for name, value in desired.items()
-                if state.get(name) != value
-            }
-            state = self.store.transition(
+            state, pending = self._run_bootstrap_generation(
                 state,
-                event_name,
-                {"delta": delta},
-                generation_digest=str(candidate["generation_digest"]),
-                at=iso_z(),
+                admission,
+                common_lock,
+                operation_nonce=operation_nonce,
+                attempt=attempt,
+                remote_tip=remote_tip,
+                generation_number=next_number,
+                verb="merge refresh",
             )
+        state, generation = self._complete_bootstrap_classification(
+            state, admission, pending
+        )
+        candidate = copy.deepcopy(generation.candidate)
         return _success(
             state,
             f"merge chain {state['chain_id']} refreshed to generation {candidate['generation']}",
@@ -16235,20 +26109,25 @@ class MergeEngine:
         state: dict[str, Any],
         *,
         reason: str | None,
+        terminal_preconditions: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         claim = state["worktree"]["claim"]
         release_mode = (
             "acquired" if claim["status"] == "owned" else "never-published"
         )
-        preconditions = {
-            "schema": "forge-merge-abort-preconditions/1",
-            "chain_id": state["chain_id"],
-            "source_state": state["state"],
-            "candidate": copy.deepcopy(state.get("candidate")),
-            "integration": copy.deepcopy(state["integration"]),
-            "claim": copy.deepcopy(claim),
-            "reason": reason,
-        }
+        preconditions = (
+            copy.deepcopy(dict(terminal_preconditions))
+            if terminal_preconditions is not None
+            else {
+                "schema": "forge-merge-abort-preconditions/1",
+                "chain_id": state["chain_id"],
+                "source_state": state["state"],
+                "candidate": copy.deepcopy(state.get("candidate")),
+                "integration": copy.deepcopy(state["integration"]),
+                "claim": copy.deepcopy(claim),
+                "reason": reason,
+            }
+        )
         generation = state.get("candidate")
         generation_digest = (
             str(generation["generation_digest"])
@@ -16353,6 +26232,154 @@ class MergeEngine:
                 # is best effort and must never revoke the durable release.
                 pass
         return terminal
+
+    def _release_to_aborted_locked(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease,
+        *,
+        reason: str | None,
+        terminal_preconditions: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Perform the ordinary acquired release while recovery owns its lease."""
+
+        claim = state["worktree"]["claim"]
+        if claim.get("status") != "owned":
+            raise FrozenError(
+                "bootstrap recovery does not own its recorded worktree claim",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        preconditions = (
+            copy.deepcopy(dict(terminal_preconditions))
+            if terminal_preconditions is not None
+            else {
+                "schema": "forge-merge-abort-preconditions/1",
+                "chain_id": state["chain_id"],
+                "source_state": state["state"],
+                "candidate": copy.deepcopy(state.get("candidate")),
+                "integration": copy.deepcopy(state["integration"]),
+                "claim": copy.deepcopy(claim),
+                "reason": reason,
+            }
+        )
+        state = self._epoch_transition(
+            state,
+            lease,
+            "ownership_release_intent",
+            {
+                "target_terminal": "aborted",
+                "terminal_disposition": "ordinary",
+                "source_state": state["state"],
+                "terminal_preconditions_digest": sha256_bytes(
+                    canonical_bytes(preconditions)
+                ),
+                "release_mode": "acquired",
+            },
+        )
+        release_intent_digest = self._tail_event_digest(
+            state, "ownership_release_intent"
+        )
+        observed_claim = _remove_merge_claim(self.store, state, unlink=False)
+        observation = {
+            "claim_path": state["worktree"]["claim"]["path"],
+            "exists": True,
+            "inode": observed_claim.inode,
+            "digest": observed_claim.digest,
+        }
+        state = self._epoch_transition(
+            state,
+            lease,
+            "ownership_released",
+            {
+                "release_intent_digest": release_intent_digest,
+                "release_mode": "acquired",
+                "terminal_disposition": "ordinary",
+                "claim_inode": state["worktree"]["claim"]["inode"],
+                "claim_digest": state["worktree"]["claim"]["digest"],
+                "claim_observation_digest": sha256_bytes(
+                    canonical_bytes(observation)
+                ),
+            },
+        )
+        terminal = self._epoch_transition(
+            state, lease, "aborted", {"delta": {"state": "aborted"}}
+        )
+        try:
+            _remove_merge_claim(self.store, terminal)
+        except (FrozenError, OSError):
+            pass
+        return terminal
+
+    def _release_scope_exceeded(
+        self,
+        state: dict[str, Any],
+        *,
+        scope_proof_digest: str,
+        fetch_result_event_digest: str,
+        verb: str = "merge start",
+    ) -> dict[str, Any]:
+        _require_merge_integration_control("scope-release-clean-status")
+        candidate = state.get("candidate")
+        if (
+            not isinstance(candidate, Mapping)
+            or SHA256_RE.fullmatch(scope_proof_digest) is None
+            or SHA256_RE.fullmatch(fetch_result_event_digest) is None
+        ):
+            raise FrozenError(
+                "run-scope abort evidence is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        repository = Repository(Path(str(state["worktree"]["path"])))
+        current_head = repository.head()
+        status = _merge_worktree_status(
+            repository,
+            Path(str(state["worktree"]["git_dir"])),
+            verb=verb,
+        )
+        if status != b"":
+            raise FrozenError(
+                "run-scope abort worktree status is not exact clean",
+                chain_id=str(state["chain_id"]),
+                observed=(
+                    f"bytes={len(status)};sha256={sha256_bytes(status)}"
+                ),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if current_head != candidate["candidate_head"]:
+            raise FrozenError(
+                "run-scope abort candidate changed before release",
+                chain_id=str(state["chain_id"]),
+                observed=current_head,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        preconditions = {
+            "schema": "forge-run-scope-abort-preconditions/1",
+            "target_terminal": "aborted",
+            "terminal_disposition": "ordinary",
+            "release_mode": "acquired",
+            "source_state": "classifying",
+            "scope_proof_digest": scope_proof_digest,
+            "fetch_result_event_digest": fetch_result_event_digest,
+            "generation_digest": candidate["generation_digest"],
+            "worktree_identity": {
+                name: state["worktree"][name]
+                for name in ("path", "git_dir", "common_dir")
+            },
+            "branch": state["branch"],
+            "candidate_head": candidate["candidate_head"],
+            "current_head": current_head,
+            "status_output_digest": sha256_bytes(b""),
+            "push_intent_event_digests": [],
+            "git_mutation_intent_event_digests": [],
+            "unresolved_fence_digests": [],
+        }
+        return self._release_to_aborted(
+            state,
+            reason="changed paths exceed bound task scope",
+            terminal_preconditions=preconditions,
+        )
 
     def abort(self, reason: str | None = None) -> Outcome:
         _require_merge_lifecycle_control("admission-priority")
@@ -16462,12 +26489,10 @@ class MergeEngine:
         binding = state.get("run_binding")
         with self.store._journal_outer(
             binding if isinstance(binding, Mapping) else None
-        ), acquire_common_lock(
+        ), self._recording_common_lock(
             Path(str(state["worktree"]["common_dir"])),
-            owner_kind="merge",
             chain_id=str(state["chain_id"]),
             operation="abort",
-            no_transaction_record=True,
         ):
             current = self._load()
             current_containment, _current_vector = _merge_containment(current)
@@ -17416,6 +27441,5427 @@ class MergeEngine:
             current,
             f"merge finding {finding} disposition recorded",
             f"forge status --chain-id {state['chain_id']}",
+        )
+
+    def _epoch_transition(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease,
+        event_name: str,
+        payload: Mapping[str, Any],
+        *,
+        generation_digest: str | None = None,
+        at: str | None = None,
+    ) -> dict[str, Any]:
+        generation = state.get("candidate")
+        selected = (
+            generation_digest
+            if generation_digest is not None
+            else str(generation["generation_digest"])
+            if isinstance(generation, Mapping)
+            else None
+        )
+        return self.store.transition_locked(
+            state,
+            event_name,
+            payload,
+            generation_digest=selected,
+            lease=lease,
+            at=at or iso_z(),
+        )
+
+    def _tail_event_digest(
+        self, state: Mapping[str, Any], event_name: str
+    ) -> str:
+        digest = _merge_event_digest(
+            self.store, str(state["chain_id"]), event_name
+        )
+        if digest is None:
+            raise FrozenError(
+                f"merge {event_name} event digest is unavailable",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return digest
+
+    @staticmethod
+    def _sealed_plan(
+        state: Mapping[str, Any], policy: Policy, suite: Sequence[Mapping[str, str]]
+    ) -> dict[str, Any]:
+        _require_merge_integration_control("sealed-gate-plan")
+        candidate = state["candidate"]
+        canonical_suite = [copy.deepcopy(dict(member)) for member in suite]
+        return {
+            "status": "sealed",
+            "generation_digest": candidate["generation_digest"],
+            "policy_digest": policy.digest,
+            "suite": canonical_suite,
+            "suite_digest": sha256_bytes(canonical_bytes(canonical_suite)),
+            "cursor": 0,
+            "seal_event_digest": None,
+        }
+
+    def _begin_epoch(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease,
+        *,
+        retry: bool = False,
+        observed_policy: Policy | None = None,
+    ) -> dict[str, Any]:
+        candidate = state.get("candidate")
+        if not isinstance(candidate, Mapping):
+            raise FrozenError(
+                "merge epoch lacks a candidate generation",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        integration = copy.deepcopy(state["integration"])
+        if retry:
+            if observed_policy is None:
+                raise FrozenError(
+                    "merge retry epoch lacks its durable candidate observation",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            policy = observed_policy
+            plan = self._sealed_plan(state, policy, _merge_epoch_suite(state, policy))
+        else:
+            plan = {
+                "status": "unsealed",
+                "generation_digest": None,
+                "policy_digest": None,
+                "suite": None,
+                "suite_digest": None,
+                "cursor": None,
+                "seal_event_digest": None,
+            }
+        integration.update(
+            {
+                "condition": "none",
+                "primary_condition": "none",
+                "epoch": {
+                    "operation_nonce": secrets.token_hex(16),
+                    "generation_digest": candidate["generation_digest"],
+                    "intent_digest": None,
+                    "started_at": iso_z(),
+                    "gate_plan": plan,
+                },
+                "observed": None,
+            }
+        )
+        return self._epoch_transition(
+            state,
+            lease,
+            "epoch_intent",
+            {
+                "delta": {
+                    "state": "reverifying" if retry else "rebasing",
+                    "integration": integration,
+                }
+            },
+        )
+
+    @staticmethod
+    def _epoch_fetch_argv(state: Mapping[str, Any]) -> list[str]:
+        return [
+            "git",
+            "--no-pager",
+            "-C",
+            str(state["worktree"]["path"]),
+            "fetch",
+            "--no-tags",
+            "--quiet",
+            "origin",
+            str(state["target"]["destination_ref"]),
+        ]
+
+    def _epoch_replay_context(
+        self, state: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Return context only from a replay matching the locked projection."""
+
+        chain_id = str(state["chain_id"])
+        with self.store.event_lock(chain_id):
+            replay = self.store._read_replay_locked(chain_id)
+        if replay.state != state:
+            raise FrozenError(
+                "merge epoch observation projection diverges from event replay",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        context = copy.deepcopy(replay.context)
+        context["_authenticated_tail_event"] = (
+            copy.deepcopy(replay.events[-1]) if replay.events else None
+        )
+        return context
+
+    @staticmethod
+    def _resolved_epoch_fetch_tip(state: Mapping[str, Any]) -> str:
+        """Resolve the single fixed-target FETCH_HEAD without launching a child."""
+
+        fetch_head = Path(str(state["worktree"]["git_dir"])) / "FETCH_HEAD"
+        try:
+            raw = fetch_head.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"FETCH_HEAD is unavailable: {exc}") from exc
+        if len(raw) > MERGE_SCOPE_BINDING_CAP_BYTES or not raw.endswith(b"\n"):
+            raise ValueError("FETCH_HEAD is malformed")
+        rows = raw.splitlines()
+        if len(rows) != 1:
+            raise ValueError("FETCH_HEAD does not identify one fixed target")
+        raw_oid = rows[0].split(b"\t", 1)[0]
+        try:
+            oid = raw_oid.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError("FETCH_HEAD object ID is not ASCII") from exc
+        if COMMIT_RE.fullmatch(oid) is None:
+            raise ValueError("FETCH_HEAD object ID is invalid")
+        return oid
+
+    def _run_carried_successor_ancestry(
+        self,
+        state: dict[str, Any],
+        fetched_tip: str,
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        *,
+        resume_intent: bool = False,
+    ) -> tuple[dict[str, Any], bool | None]:
+        """Fence or consume the carried-tip ancestry decision before sealing."""
+
+        _require_merge_integration_control("successor-ancestry-observation")
+        integration = state.get("integration")
+        epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+        plan = epoch.get("gate_plan") if isinstance(epoch, Mapping) else None
+        candidate = state.get("candidate")
+        authorization = state.get("authorization")
+        source_intent = (
+            integration.get("intent") if isinstance(integration, Mapping) else None
+        )
+        replay_context = self._epoch_replay_context(state)
+        fetch_observation = replay_context.get("epoch_fetch_observation")
+        candidate_observation = replay_context.get("candidate_observation")
+        raw_evidence = (
+            fetch_observation.get("evidence")
+            if isinstance(fetch_observation, Mapping)
+            else None
+        )
+        observation_evidence = (
+            candidate_observation.get("evidence")
+            if isinstance(candidate_observation, Mapping)
+            else None
+        )
+        if (
+            state.get("state") != "rebasing"
+            or not isinstance(epoch, Mapping)
+            or not isinstance(plan, Mapping)
+            or plan.get("status") != "unsealed"
+            or not isinstance(candidate, Mapping)
+            or not isinstance(authorization, Mapping)
+            or candidate.get("remote_tip") != fetched_tip
+            or authorization.get("candidate_head") != candidate.get("candidate_head")
+            or authorization.get("review_verdict") != "PASS"
+            or authorization.get("generation_digest")
+            == candidate.get("generation_digest")
+            or not isinstance(fetch_observation, Mapping)
+            or not isinstance(raw_evidence, Mapping)
+            or not _epoch_fetch_observation_record_valid(state, raw_evidence)
+            or not _epoch_fetch_observation_passed(raw_evidence)
+            or fetch_observation.get("digest")
+            != _merge_epoch_fetch_observation_digest(
+                self.store, str(state["chain_id"]), raw_evidence
+            )
+            or not isinstance(candidate_observation, Mapping)
+            or not _merge_candidate_observation_evidence_valid(
+                state, observation_evidence
+            )
+            or candidate_observation.get("source_intent") != raw_evidence
+            or candidate_observation.get("evidence_digest")
+            != observation_evidence.get("evidence_digest")
+            or observation_evidence.get("remote_tip") != fetched_tip
+            or observation_evidence.get("expected_head")
+            != candidate.get("candidate_head")
+            or observation_evidence.get("classify") is not True
+        ):
+            raise FrozenError(
+                "carried successor ancestry observation lacks its exact fetch binding",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if resume_intent:
+            if (
+                not _epoch_ancestry_record_valid(state, source_intent)
+                or not isinstance(source_intent, Mapping)
+                or source_intent.get("phase") not in {"intent", "result"}
+                or source_intent.get("fetch_observation_event_digest")
+                != fetch_observation.get("digest")
+                or source_intent.get("candidate_observation_digest")
+                != candidate_observation.get("evidence_digest")
+            ):
+                raise FrozenError(
+                    "interrupted carried successor ancestry intent is malformed",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            if source_intent.get("phase") == "result":
+                replayed = replay_context.get("epoch_ancestry_observation")
+                tail = replay_context.get("_authenticated_tail_event")
+                recovery_bridge = replay_context.get(
+                    "recovery_proof_bridge"
+                )
+                replayed_at_tail = bool(
+                    isinstance(replayed, Mapping)
+                    and isinstance(tail, Mapping)
+                    and replayed.get("digest") == tail.get("digest")
+                )
+                replayed_before_recovery_proof = bool(
+                    isinstance(replayed, Mapping)
+                    and isinstance(tail, Mapping)
+                    and isinstance(recovery_bridge, Mapping)
+                    and tail.get("digest")
+                    == recovery_bridge.get("event_digest")
+                    and recovery_bridge.get("previous_digest")
+                    == replayed.get("digest")
+                    and (
+                        recovery_bridge.get("operation") == "containment"
+                        and recovery_bridge.get("intent_digest")
+                        == source_intent.get("intent_event_digest")
+                        and recovery_bridge.get("classification")
+                        == "containment-result-persisted"
+                        or recovery_bridge.get("operation") is None
+                        and recovery_bridge.get("intent_digest") is None
+                        and recovery_bridge.get("classification")
+                        == "owner-death-only"
+                    )
+                )
+                if (
+                    not isinstance(replayed, Mapping)
+                    or not (
+                        replayed_at_tail or replayed_before_recovery_proof
+                    )
+                    or replayed.get("evidence") != source_intent
+                ):
+                    raise FrozenError(
+                        "interrupted carried successor ancestry result is unauthenticated",
+                        chain_id=str(state["chain_id"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                contained = source_intent.get("child_result", {}).get(
+                    "contained"
+                )
+                return state, contained if type(contained) is bool else None
+            ancestry_intent = copy.deepcopy(dict(source_intent))
+            argv = list(ancestry_intent["argv"])
+        else:
+            if (
+                not isinstance(source_intent, Mapping)
+                or source_intent != raw_evidence
+                or self._tail_event_digest(state, "condition_recorded")
+                != candidate_observation.get("restore_event_digest")
+            ):
+                raise FrozenError(
+                    "carried successor ancestry observation lacks its exact raw fetch result",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            argv = _remote_containment_argv(
+                state, fetched_tip, str(candidate["candidate_head"])
+            )
+            ancestry_intent = {
+                "schema": "forge-epoch-ancestry-intent/1",
+                "chain_id": state["chain_id"],
+                "epoch_intent_digest": epoch["intent_digest"],
+                "operation_nonce": epoch["operation_nonce"],
+                "generation_digest": candidate["generation_digest"],
+                "fetch_observation_event_digest": fetch_observation["digest"],
+                "candidate_observation_digest": candidate_observation[
+                    "evidence_digest"
+                ],
+                "fetched_tip": fetched_tip,
+                "candidate_head": candidate["candidate_head"],
+                "argv": argv,
+                "phase": "intent",
+                "recorded_at": iso_z(),
+            }
+        if not _epoch_ancestry_record_valid(state, ancestry_intent):
+            raise FrozenError(
+                "carried successor ancestry intent is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if not resume_intent:
+            next_integration = copy.deepcopy(state["integration"])
+            next_integration["intent"] = ancestry_intent
+            state = self._epoch_transition(
+                state,
+                lease,
+                "condition_recorded",
+                {"delta": {"integration": next_integration}},
+            )
+        ancestry_intent_digest = self._tail_event_digest(state, "condition_recorded")
+
+        def intent_current() -> bool:
+            try:
+                fresh = self.store.load_locked(str(state["chain_id"]), lease=lease)
+            except (FrozenError, OSError):
+                return False
+            return bool(
+                fresh.get("state") == "rebasing"
+                and fresh.get("integration", {}).get("intent") == ancestry_intent
+                and self._tail_event_digest(fresh, "condition_recorded")
+                == ancestry_intent_digest
+            )
+
+        def persist(result: FencedProcessResult) -> None:
+            nonlocal state
+            ordinary = bool(
+                result.authorized
+                and type(result.returncode) is int
+                and result.returncode in {0, 1}
+                and not result.launch_failed
+                and not result.timed_out
+                and not result.output_limit
+                and not result.group_survived
+            )
+            contained = result.returncode == 0 if ordinary else None
+            result_intent = {
+                **ancestry_intent,
+                "phase": "result",
+                "intent_event_digest": ancestry_intent_digest,
+                "child_result": {
+                    "authorized": result.authorized,
+                    "exit": result.returncode,
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                    "launch_failed": result.launch_failed,
+                    "timed_out": result.timed_out,
+                    "output_limit_exceeded": result.output_limit,
+                    "group_survived": result.group_survived,
+                    "contained": contained,
+                },
+                "recorded_at": iso_z(),
+            }
+            result_integration = copy.deepcopy(state["integration"])
+            result_integration["intent"] = result_intent
+            state = self._epoch_transition(
+                state,
+                lease,
+                "condition_recorded",
+                {"delta": {"integration": result_integration}},
+            )
+
+        environment = _merge_scope_environment()
+        environment.pop("FORGE_SESSION_PID", None)
+        result = run_fenced_command(
+            lock,
+            operation="containment",
+            intent_digest=ancestry_intent_digest,
+            intent_validator=intent_current,
+            argv=argv,
+            cwd=Path(str(state["worktree"]["path"])),
+            persist_result=persist,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=self.ctx.options.verbose,
+        )
+        durable = state.get("integration", {}).get("intent")
+        if (
+            not _epoch_ancestry_record_valid(state, durable)
+            or not isinstance(durable, Mapping)
+            or durable.get("phase") != "result"
+            or durable.get("child_result", {}).get("inflight_digest")
+            != result.fence_digest
+            or durable.get("child_result", {}).get("output_digest")
+            != result.output_digest
+        ):
+            raise FrozenError(
+                "carried successor ancestry result was not durably retained",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        contained = durable["child_result"].get("contained")
+        return state, contained if type(contained) is bool else None
+
+    def _run_epoch_fetch(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        budget: _MergeEpochBudget,
+        *,
+        resume_intent: bool = False,
+    ) -> tuple[dict[str, Any], str, bool]:
+        """Run one fenced fetch, then classify only its durable raw result."""
+
+        budget.consume("fetches")
+        integration = copy.deepcopy(state["integration"])
+        epoch = integration["epoch"]
+        if resume_intent:
+            intent = integration.get("intent")
+            if (
+                not isinstance(intent, Mapping)
+                or intent.get("operation") != "fetch"
+                or intent.get("operation_nonce") != epoch.get("operation_nonce")
+                or intent.get("target") != state.get("target")
+            ):
+                raise FrozenError(
+                    "interrupted merge fetch intent is malformed",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+        else:
+            integration["intent"] = {
+                "operation": "fetch",
+                "operation_nonce": epoch["operation_nonce"],
+                "attempt": 1,
+                "target": copy.deepcopy(state["target"]),
+            }
+            state = self._epoch_transition(
+                state,
+                lease,
+                "fetch_intent",
+                {"delta": {"integration": integration}},
+            )
+        intent_digest = self._tail_event_digest(state, "fetch_intent")
+        fetch_intent = copy.deepcopy(state["integration"]["intent"])
+        fetch_argv = self._epoch_fetch_argv(state)
+
+        def intent_current() -> bool:
+            try:
+                fresh = self.store.load_locked(str(state["chain_id"]), lease=lease)
+            except (FrozenError, OSError, Refusal):
+                return False
+            return bool(
+                fresh.get("state") == "rebasing"
+                and fresh.get("integration", {}).get("intent") == fetch_intent
+                and self._tail_event_digest(fresh, "fetch_intent")
+                == intent_digest
+            )
+
+        def persist(result: FencedProcessResult) -> None:
+            nonlocal state
+            observation = {
+                "schema": _EPOCH_FETCH_OBSERVATION_SCHEMA,
+                "chain_id": state["chain_id"],
+                "epoch_intent_digest": epoch["intent_digest"],
+                "operation_nonce": epoch["operation_nonce"],
+                "generation_digest": state["candidate"]["generation_digest"],
+                "fetch_intent_event_digest": intent_digest,
+                "target": copy.deepcopy(state["target"]),
+                "argv": copy.deepcopy(fetch_argv),
+                "child_result": {
+                    "authorized": result.authorized,
+                    "exit": result.returncode,
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                    "launch_failed": result.launch_failed,
+                    "timed_out": result.timed_out,
+                    "output_limit_exceeded": result.output_limit,
+                    "group_survived": result.group_survived,
+                },
+                "recorded_at": iso_z(),
+            }
+            next_integration = copy.deepcopy(state["integration"])
+            next_integration["intent"] = observation
+            state = self._epoch_transition(
+                state,
+                lease,
+                "condition_recorded",
+                {"delta": {"integration": next_integration}},
+            )
+
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        environment.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"})
+        result = run_fenced_command(
+            lock,
+            operation="fetch",
+            intent_digest=intent_digest,
+            intent_validator=intent_current,
+            argv=fetch_argv,
+            cwd=Path(str(state["worktree"]["path"])),
+            persist_result=persist,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=self.ctx.options.verbose,
+        )
+        durable = state.get("integration", {}).get("intent")
+        if (
+            not _epoch_fetch_observation_record_valid(state, durable)
+            or not isinstance(durable, Mapping)
+            or durable.get("fetch_intent_event_digest") != intent_digest
+            or durable.get("child_result", {}).get("inflight_digest")
+            != result.fence_digest
+            or durable.get("child_result", {}).get("output_digest")
+            != result.output_digest
+        ):
+            raise FrozenError(
+                "merge epoch fetch result was not durably retained",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return self._complete_epoch_fetch_locked(state, lock, lease)
+
+    def _complete_epoch_fetch_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+    ) -> tuple[dict[str, Any], str, bool]:
+        """Resume raw fetch/candidate/ancestry phases without another fetch."""
+
+        _require_merge_integration_control("successor-ancestry-observation")
+        replay_context = self._epoch_replay_context(state)
+        raw = replay_context.get("epoch_fetch_observation")
+        raw_evidence = raw.get("evidence") if isinstance(raw, Mapping) else None
+        if (
+            not isinstance(raw, Mapping)
+            or not isinstance(raw_evidence, Mapping)
+            or not _epoch_fetch_observation_record_valid(state, raw_evidence)
+            or raw.get("digest")
+            != _merge_epoch_fetch_observation_digest(
+                self.store, str(state["chain_id"]), raw_evidence
+            )
+        ):
+            raise FrozenError(
+                "merge epoch raw fetch result is unavailable or mismatched",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        epoch = state["integration"]["epoch"]
+        if not _epoch_fetch_observation_passed(raw_evidence):
+            failed_integration = copy.deepcopy(state["integration"])
+            _reset_merge_nonmovement_counter(failed_integration)
+            failed_integration.update(
+                {
+                    "condition": "fetch-failed",
+                    "primary_condition": "none",
+                    "epoch": None,
+                    "intent": {
+                        "operation": "fetch-result",
+                        "operation_nonce": epoch["operation_nonce"],
+                        "attempt": 1,
+                        "result": "failed",
+                        "resolved_tip": None,
+                    },
+                }
+            )
+            state = self._epoch_transition(
+                state,
+                lease,
+                "fetch_result",
+                {
+                    "delta": {
+                        "state": "authorized",
+                        "integration": failed_integration,
+                    }
+                },
+            )
+            raise _merge_refusal(
+                V2ReasonCode.FETCH_FAILED,
+                "forge: merge finalize refused — fixed target fetch failed",
+                observed="fenced fetch did not PASS",
+                remediation=f"forge merge finalize --chain-id {state['chain_id']}",
+                chain=state,
+            )
+
+        current_intent = state.get("integration", {}).get("intent")
+        if (
+            isinstance(current_intent, Mapping)
+            and current_intent.get("schema")
+            == "forge-epoch-ancestry-intent/1"
+        ):
+            fetched_tip = str(current_intent.get("fetched_tip", ""))
+        elif (
+            isinstance(current_intent, Mapping)
+            and current_intent.get("schema")
+            == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+        ):
+            if current_intent.get("source_intent") != raw_evidence:
+                raise FrozenError(
+                    "merge candidate observation is bound to another fetch",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            fetched_tip = str(current_intent.get("remote_tip", ""))
+        else:
+            candidate_context = replay_context.get("candidate_observation")
+            candidate_evidence = (
+                candidate_context.get("evidence")
+                if isinstance(candidate_context, Mapping)
+                and candidate_context.get("source_intent") == raw_evidence
+                else None
+            )
+            fetched_tip = (
+                str(candidate_evidence.get("remote_tip", ""))
+                if isinstance(candidate_evidence, Mapping)
+                else self._resolved_epoch_fetch_tip(state)
+            )
+        if COMMIT_RE.fullmatch(fetched_tip) is None:
+            raise FrozenError(
+                "merge epoch fetched tip is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+
+        candidate = state["candidate"]
+        unchanged = fetched_tip == candidate["remote_tip"]
+        policy: Policy | None = None
+        contained: bool | None = True
+        carried = False
+        if unchanged:
+            candidate_context = replay_context.get("candidate_observation")
+            observation = (
+                candidate_context.get("evidence")
+                if isinstance(candidate_context, Mapping)
+                and candidate_context.get("source_intent") == raw_evidence
+                and candidate_context.get("evidence_digest")
+                == candidate_context.get("evidence", {}).get("evidence_digest")
+                else None
+            )
+            if observation is None:
+                state, observation = self._run_candidate_observation_locked(
+                    state,
+                    lock,
+                    lease,
+                    verb="merge finalize",
+                    remote_tip=fetched_tip,
+                    expected_head=str(candidate["candidate_head"]),
+                    classify=True,
+                )
+                replay_context = self._epoch_replay_context(state)
+                candidate_context = replay_context.get("candidate_observation")
+            if (
+                not isinstance(candidate_context, Mapping)
+                or not _merge_candidate_observation_evidence_valid(
+                    state, observation
+                )
+                or candidate_context.get("source_intent") != raw_evidence
+                or candidate_context.get("evidence_digest")
+                != observation.get("evidence_digest")
+            ):
+                raise FrozenError(
+                    "merge candidate observation is not fetch-bound",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            _repository, policy, _paths = _observe_current_merge_candidate(
+                self.ctx,
+                state,
+                verb="merge finalize",
+                observation=observation,
+            )
+            authorization = state.get("authorization")
+            carried = bool(
+                isinstance(authorization, Mapping)
+                and authorization.get("candidate_head")
+                == candidate["candidate_head"]
+                and authorization.get("review_verdict") == "PASS"
+                and authorization.get("generation_digest")
+                != candidate["generation_digest"]
+            )
+            if carried:
+                ancestry_intent = state.get("integration", {}).get("intent")
+                state, contained = self._run_carried_successor_ancestry(
+                    state,
+                    fetched_tip,
+                    lock,
+                    lease,
+                    resume_intent=bool(
+                        isinstance(ancestry_intent, Mapping)
+                        and ancestry_intent.get("schema")
+                        == "forge-epoch-ancestry-intent/1"
+                    ),
+                )
+
+        next_integration = copy.deepcopy(state["integration"])
+        next_integration["intent"] = {
+            "operation": "fetch-result",
+            "operation_nonce": epoch["operation_nonce"],
+            "attempt": 1,
+            "result": "success",
+            "resolved_tip": fetched_tip,
+        }
+        safe_unchanged = bool(unchanged and (not carried or contained is True))
+        next_state = str(state["state"])
+        if safe_unchanged:
+            assert policy is not None
+            suite = (
+                _merge_epoch_suite(state, policy)
+                if int(candidate["generation"]) > 1
+                else []
+            )
+            next_integration["epoch"]["gate_plan"] = self._sealed_plan(
+                state, policy, suite
+            )
+            if suite:
+                next_state = "reverifying"
+        fetch_delta: dict[str, Any] = {"integration": next_integration}
+        if next_state != state["state"]:
+            fetch_delta["state"] = next_state
+        state = self._epoch_transition(
+            state,
+            lease,
+            "fetch_result",
+            {"delta": fetch_delta},
+        )
+        if carried and contained is None:
+            state = self._record_foreign_git_locked(state, lease)
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge finalize refused — carried successor ancestry is unavailable",
+                observed="foreign-git-state",
+                remediation=f"forge status --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        return state, fetched_tip, safe_unchanged
+
+    def _run_epoch_rebase(
+        self,
+        state: dict[str, Any],
+        fetched_tip: str,
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        budget: _MergeEpochBudget,
+    ) -> dict[str, Any]:
+        budget.consume("rebases")
+        pre_head = str(state["candidate"]["candidate_head"])
+        integration = copy.deepcopy(state["integration"])
+        epoch = integration["epoch"]
+        reflog_action = (
+            f"forge-merge-rebase:{state['chain_id']}:"
+            f"{state['candidate']['generation_digest']}:"
+            f"{epoch['operation_nonce']}"
+        )
+        integration.update(
+            {
+                "pre_rebase": {
+                    "head": pre_head,
+                    "fetched_tip": fetched_tip,
+                    "generation_digest": state["candidate"]["generation_digest"],
+                    "recorded_at": iso_z(),
+                },
+                "conflict": None,
+                "intent": {
+                    "operation": "rebase",
+                    "operation_nonce": epoch["operation_nonce"],
+                    "pre_operation_head": pre_head,
+                    "fetched_tip": fetched_tip,
+                    "branch": state["branch"],
+                    "generation_digest": state["candidate"]["generation_digest"],
+                    "reflog_action": reflog_action,
+                    "started_at": iso_z(),
+                },
+            }
+        )
+        state = self._epoch_transition(
+            state, lease, "rebase_intent", {"delta": {"integration": integration}}
+        )
+        intent_digest = self._tail_event_digest(state, "rebase_intent")
+
+        def intent_current() -> bool:
+            return self._tail_event_digest(state, "rebase_intent") == intent_digest
+
+        def persist(result: FencedProcessResult) -> None:
+            nonlocal state
+            succeeded = bool(
+                result.returncode == 0
+                and not result.launch_failed
+                and not result.timed_out
+                and not result.output_limit
+                and not result.group_survived
+            )
+            result_integration = copy.deepcopy(state["integration"])
+            result_integration["intent"] = {
+                "operation": "rebase-result",
+                "operation_nonce": epoch["operation_nonce"],
+                "result": "success" if succeeded else "failed",
+                "pre_operation_head": pre_head,
+                "fetched_tip": fetched_tip,
+                "branch": state["branch"],
+                "generation_digest": state["candidate"]["generation_digest"],
+                "reflog_action": reflog_action,
+                "exit": result.returncode,
+                "inflight_digest": result.fence_digest,
+                "output_digest": result.output_digest,
+                "launch_failed": result.launch_failed,
+                "timed_out": result.timed_out,
+                "output_limit_exceeded": result.output_limit,
+                "group_survived": result.group_survived,
+                "recorded_at": iso_z(),
+            }
+            state = self._epoch_transition(
+                state,
+                lease,
+                "rebase_result",
+                {"delta": {"integration": result_integration}},
+            )
+
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        environment.update(
+            {
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_LAZY_FETCH": "1",
+                "GIT_REFLOG_ACTION": reflog_action,
+            }
+        )
+        run_fenced_command(
+            lock,
+            operation="rebase",
+            intent_digest=intent_digest,
+            intent_validator=intent_current,
+            argv=[
+                "git",
+                "--no-pager",
+                "-C",
+                str(state["worktree"]["path"]),
+                "rebase",
+                fetched_tip,
+            ],
+            cwd=Path(str(state["worktree"]["path"])),
+            persist_result=persist,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=self.ctx.options.verbose,
+        )
+        state = self._recover_rebase_observation_locked(state, lock, lease)
+        if state["state"] == "rebase_conflict":
+            raise _merge_refusal(
+                V2ReasonCode.REBASE_CONFLICT,
+                "forge: merge finalize refused — integration has a recoverable rebase conflict",
+                remediation=(
+                    f"forge merge recover --continue --paths <path>... --chain-id {state['chain_id']}"
+                ),
+                chain=state,
+            )
+        if (
+            state["state"] == "revising"
+            and state.get("integration", {}).get("condition") == "rebase-failed"
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.REBASE_FAILED,
+                "forge: merge finalize refused — integration rebase failed",
+                remediation=f"forge merge refresh --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if state.get("integration", {}).get("condition") == "foreign-git-state":
+            if _merge_rebase_result_failed(state):
+                raise _merge_refusal(
+                    V2ReasonCode.REBASE_FAILED,
+                    "forge: merge finalize refused — integration rebase failed",
+                    observed="foreign-git-state",
+                    remediation=f"forge status --chain-id {state['chain_id']}",
+                    chain=state,
+                )
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge finalize refused — rebase result is not attributable to the recorded intent",
+                observed="foreign-git-state",
+                remediation=f"forge status --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if state["state"] != "reverifying":
+            raise FrozenError(
+                "merge rebase produced no authenticated successor generation",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return state
+
+    def _run_epoch_suite(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        budget: _MergeEpochBudget,
+    ) -> dict[str, Any]:
+        plan = state.get("integration", {}).get("epoch", {}).get("gate_plan")
+        if not isinstance(plan, Mapping) or plan.get("status") != "sealed":
+            raise FrozenError(
+                "merge epoch gate plan is not sealed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if int(plan["cursor"]) >= len(plan["suite"]):
+            return state
+        budget.consume("suites")
+        state, candidate_observation = self._run_candidate_observation_locked(
+            state,
+            lock,
+            lease,
+            verb="merge finalize",
+            remote_tip=str(state["candidate"]["remote_tip"]),
+            expected_head=str(state["candidate"]["candidate_head"]),
+            classify=False,
+        )
+        repository, policy, changed_paths = _observe_current_merge_candidate(
+            self.ctx,
+            state,
+            verb="merge finalize",
+            observation=candidate_observation,
+        )
+        expected = _merge_epoch_suite(state, policy)
+        if expected != plan["suite"] or sha256_bytes(
+            canonical_bytes(expected)
+        ) != plan["suite_digest"]:
+            raise FrozenError(
+                "merge epoch gate plan diverges from committed policy",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        while True:
+            plan = state["integration"]["epoch"]["gate_plan"]
+            cursor = int(plan["cursor"])
+            if cursor >= len(plan["suite"]):
+                return state
+            member = plan["suite"][cursor]
+            gate_id = str(member["id"])
+            authorizing_digest = (
+                str(plan["seal_event_digest"])
+                if cursor == 0
+                else self._tail_event_digest(state, "gate_recorded")
+            )
+            intent_digest = merge_gate_intent_digest(
+                chain_id=str(state["chain_id"]),
+                epoch_intent_digest=str(state["integration"]["epoch"]["intent_digest"]),
+                seal_event_digest=str(plan["seal_event_digest"]),
+                generation_digest=str(plan["generation_digest"]),
+                policy_digest=str(plan["policy_digest"]),
+                suite_digest=str(plan["suite_digest"]),
+                cursor=cursor,
+                kind=str(member["kind"]),
+                gate_id=gate_id,
+                authorizing_event_digest=authorizing_digest,
+            )
+            if member["kind"] == "scoped-mutation":
+                argv = [
+                    sys.executable,
+                    str(self.ctx.helper("run-scoped-mutation.py")),
+                    "--base",
+                    str(state["candidate"]["remote_tip"]),
+                    "--head",
+                    str(state["candidate"]["candidate_head"]),
+                ]
+                bound = _merge_run_directory(state)
+                if bound is not None:
+                    _repository, run_dir = bound
+                    argv.extend(
+                        [
+                            "--journal",
+                            str(run_dir / "journal.jsonl"),
+                            "--task",
+                            str(state["run_binding"]["task_id"]),
+                        ]
+                    )
+                details: dict[str, Any] = {"kind": "scoped-mutation"}
+            else:
+                argv, remaining, details = self._resolve_gate(
+                    state, policy, changed_paths, gate_id
+                )
+                if gate_id.startswith("stack:"):
+                    commands = [argv, *(
+                        ["bash", "-c", cell, "forge", *changed_paths]
+                        for cell in remaining
+                    )]
+                    cell_index = 1 + sum(
+                        1
+                        for prior_member in plan["suite"][:cursor]
+                        if prior_member == member
+                    )
+                    if cell_index > len(commands):
+                        raise FrozenError(
+                            "stack cursor exceeds its committed command cells",
+                            chain_id=str(state["chain_id"]),
+                            observed=gate_id,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    argv = commands[cell_index - 1]
+                    details.update(
+                        {
+                            "batch_id": sha256_bytes(
+                                canonical_bytes(
+                                    {
+                                        "epoch": state["integration"]["epoch"][
+                                            "intent_digest"
+                                        ],
+                                        "suite": plan["suite_digest"],
+                                        "gate": gate_id,
+                                    }
+                                )
+                            )[:16],
+                            "cell_count": len(commands),
+                            "cell_index": cell_index,
+                        }
+                    )
+            holder: dict[str, Any] = {}
+
+            def intent_current() -> bool:
+                try:
+                    fresh = self.store.load_locked(str(state["chain_id"]), lease=lease)
+                    current_plan = fresh["integration"]["epoch"]["gate_plan"]
+                    return bool(
+                        current_plan == state["integration"]["epoch"]["gate_plan"]
+                        and int(current_plan["cursor"]) == cursor
+                    )
+                except (KeyError, FrozenError, OSError, TypeError):
+                    return False
+
+            def persist(result: FencedProcessResult) -> None:
+                nonlocal state
+                passed = bool(
+                    result.returncode == 0
+                    and not result.launch_failed
+                    and not result.timed_out
+                    and not result.output_limit
+                    and not result.group_survived
+                )
+                transcript = _write_merge_artifact(
+                    self.ctx,
+                    state,
+                    (
+                        "evidence/epoch-"
+                        f"{state['integration']['epoch']['operation_nonce']}-"
+                        f"{cursor:02d}-{re.sub(r'[^A-Za-z0-9_.-]+', '-', gate_id)}.log"
+                    ),
+                    result.output,
+                )
+                fact = {
+                    "result": (
+                        "passed"
+                        if passed
+                        else "inconclusive"
+                        if member["kind"] == "scoped-mutation"
+                        else "failed"
+                    ),
+                    "generation_digest": state["candidate"]["generation_digest"],
+                    "criterion": (
+                        "mutation: scoped"
+                        if member["kind"] == "scoped-mutation"
+                        else f"gate-1: {gate_id}"
+                        if gate_id == "gate-1"
+                        else f"gate-2: {gate_id}"
+                    ),
+                    "command_argv": list(argv),
+                    "exit_code": result.returncode,
+                    "duration_seconds": round(result.duration_seconds, 6),
+                    "stdout_stderr_digest": result.output_digest,
+                    "timed_out": result.timed_out,
+                    "output_limit": result.output_limit,
+                    "launch_failed": result.launch_failed,
+                    "transcript": transcript,
+                    "gate_plan_position": {
+                        "seal_event_digest": plan["seal_event_digest"],
+                        "suite_digest": plan["suite_digest"],
+                        "cursor": cursor,
+                        "kind": member["kind"],
+                        "id": gate_id,
+                    },
+                    "gate_intent_digest": intent_digest,
+                    "inflight_digest": result.fence_digest,
+                    **copy.deepcopy(details),
+                }
+                steps = copy.deepcopy(state["steps"])
+                runs = copy.deepcopy(steps.get(gate_id, []))
+                if not isinstance(runs, list):
+                    runs = []
+                runs.append(fact)
+                steps[gate_id] = runs
+                integration = copy.deepcopy(state["integration"])
+                integration["epoch"]["gate_plan"]["cursor"] = cursor + 1
+                delta: dict[str, Any] = {
+                    "steps": steps,
+                    "integration": integration,
+                }
+                if not passed and member["kind"] == "gate":
+                    _reset_merge_nonmovement_counter(integration)
+                    delta["state"] = "reverification_failed"
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "gate_recorded",
+                    {"delta": delta},
+                )
+                holder["passed"] = passed or member["kind"] == "scoped-mutation"
+
+            environment = os.environ.copy()
+            environment.pop("FORGE_SESSION_PID", None)
+            run_fenced_command(
+                lock,
+                operation="gate",
+                intent_digest=intent_digest,
+                intent_validator=intent_current,
+                argv=argv,
+                cwd=repository.root,
+                persist_result=persist,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+            try:
+                state, candidate_observation = (
+                    self._run_candidate_observation_locked(
+                        state,
+                        lock,
+                        lease,
+                        verb="merge finalize",
+                        remote_tip=str(state["candidate"]["remote_tip"]),
+                        expected_head=str(state["candidate"]["candidate_head"]),
+                        classify=False,
+                    )
+                )
+                _observe_current_merge_candidate(
+                    self.ctx,
+                    state,
+                    verb="merge finalize",
+                    observation=candidate_observation,
+                )
+            except Refusal as exc:
+                if exc.reason_code == V2ReasonCode.CANDIDATE_STALE:
+                    observed_outputs = _merge_candidate_observation_outputs(
+                        state, candidate_observation
+                    )
+                    observed_head = ""
+                    if observed_outputs is not None:
+                        try:
+                            observed_head = (
+                                observed_outputs["identity"]
+                                .decode("utf-8")
+                                .splitlines()[-1]
+                            )
+                        except (IndexError, UnicodeDecodeError):
+                            observed_head = ""
+                    state, refreshed_observation = (
+                        self._run_candidate_observation_locked(
+                            state,
+                            lock,
+                            lease,
+                            verb="merge finalize",
+                            remote_tip=str(state["candidate"]["remote_tip"]),
+                            expected_head=observed_head,
+                            classify=True,
+                        )
+                    )
+                    admission = self._admission_from_candidate_observation(
+                        state,
+                        refreshed_observation,
+                        verb="merge finalize",
+                        require_current_generation=False,
+                    )
+                    generation = bind_merge_candidate_generation(
+                        self.ctx,
+                        admission,
+                        str(state["candidate"]["remote_tip"]),
+                        generation=int(state["candidate"]["generation"]) + 1,
+                        observation=refreshed_observation,
+                    )
+                    integration = copy.deepcopy(state["integration"])
+                    _reset_merge_nonmovement_counter(integration)
+                    integration.update(
+                        {
+                            "condition": "none",
+                            "primary_condition": "none",
+                            "epoch": None,
+                        }
+                    )
+                    review = state.get("review")
+                    iteration = (
+                        review.get("iteration")
+                        if isinstance(review, Mapping)
+                        else None
+                    )
+                    retained_review = (
+                        {"iteration": iteration}
+                        if type(iteration) is int
+                        else {}
+                    )
+                    state = self._epoch_transition(
+                        state,
+                        lease,
+                        "generation_refreshed",
+                        {
+                            "delta": {
+                                "state": "verifying",
+                                "policy_source": {
+                                    "commit": admission.policy.sha,
+                                    "digest": admission.policy.digest,
+                                },
+                                "candidate": copy.deepcopy(
+                                    generation.candidate
+                                ),
+                                "tier": copy.deepcopy(generation.tier),
+                                "integration": integration,
+                                "steps": {},
+                                "review": retained_review,
+                                "approval": {},
+                                "authorization": {},
+                            }
+                        },
+                        generation_digest=str(
+                            generation.candidate["generation_digest"]
+                        ),
+                    )
+                    exc.chain = state
+                    exc.remediation = (
+                        f"forge merge refresh --chain-id {state['chain_id']}"
+                    )
+                    exc.next_required_step = exc.remediation
+                raise
+            if not holder.get("passed"):
+                raise _merge_refusal(
+                    V2ReasonCode.MERGE_GATE_FAILED,
+                    f"forge: merge gate failed — {gate_id}",
+                    remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                    chain=state,
+                    evidence_refs=[
+                        str(state["steps"][gate_id][-1]["transcript"])
+                    ],
+                )
+
+    @staticmethod
+    def _parse_remote_observation(
+        result: FencedProcessResult, destination_ref: str
+    ) -> tuple[bool | None, str | None]:
+        complete = bool(
+            result.returncode == 0
+            and not result.launch_failed
+            and not result.timed_out
+            and not result.output_limit
+            and not result.group_survived
+        )
+        if not complete:
+            return None, None
+        if not result.output:
+            return False, None
+        try:
+            decoded = result.output.decode("ascii")
+        except UnicodeDecodeError:
+            return None, None
+        rows = decoded.splitlines()
+        if len(rows) != 1:
+            return None, None
+        fields = rows[0].split("\t")
+        if (
+            len(fields) != 2
+            or fields[1] != destination_ref
+            or COMMIT_RE.fullmatch(fields[0]) is None
+        ):
+            return None, None
+        return True, fields[0]
+
+    @staticmethod
+    def _parse_fetched_remote_observation(
+        result: FencedProcessResult,
+        destination_ref: str,
+        git_dir: Path,
+    ) -> tuple[bool | None, str | None]:
+        """Classify the single fixed-ref observation fetch without a stale ref."""
+
+        complete = bool(
+            result.authorized
+            and not result.launch_failed
+            and not result.timed_out
+            and not result.output_limit
+            and not result.group_survived
+            and result.returncode is not None
+        )
+        if not complete:
+            return None, None
+        if result.returncode != 0:
+            expected = f"couldn't find remote ref {destination_ref}".encode("utf-8")
+            return (False, None) if expected in result.output else (None, None)
+        fetch_head = git_dir / "FETCH_HEAD"
+        try:
+            raw = fetch_head.read_bytes()
+        except OSError:
+            return None, None
+        if len(raw) > MERGE_SCOPE_BINDING_CAP_BYTES or not raw.endswith(b"\n"):
+            return None, None
+        rows = raw.splitlines()
+        if len(rows) != 1:
+            return None, None
+        raw_oid = rows[0].split(b"\t", 1)[0]
+        try:
+            oid = raw_oid.decode("ascii")
+        except UnicodeDecodeError:
+            return None, None
+        if COMMIT_RE.fullmatch(oid) is None:
+            return None, None
+        return True, oid
+
+    @staticmethod
+    def _head_contained(repository: Repository, head: str, tip: str) -> bool:
+        return (
+            repository.git(
+                ["merge-base", "--is-ancestor", head, tip], check=False
+            ).returncode
+            == 0
+        )
+
+    def _run_remote_observation(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        budget: _MergeEpochBudget,
+        *,
+        phase: str,
+        budget_member: str | None = None,
+    ) -> dict[str, Any]:
+        selected_budget = budget_member or (
+            "pre_observations" if phase == "final-prepush" else "post_observations"
+        )
+        if budget_member is not None and not (
+            phase == "post-push" and budget_member == "pre_observations"
+        ):
+            raise ValueError("merge recovery observation budget is invalid")
+        budget.consume(selected_budget)
+        push_intent_digest = (
+            self._tail_event_digest(state, "push_intent")
+            if phase == "post-push"
+            else None
+        )
+        intent = _remote_observation_intent(
+            state,
+            phase=phase,
+            push_intent_digest=push_intent_digest,
+        )
+        intent_digest = sha256_bytes(canonical_bytes(intent))
+        integration = copy.deepcopy(state["integration"])
+        integration["intent"] = intent
+        state = self._epoch_transition(
+            state,
+            lease,
+            "condition_recorded",
+            {"delta": {"integration": integration}},
+        )
+
+        def intent_current() -> bool:
+            try:
+                fresh = self.store.load_locked(str(state["chain_id"]), lease=lease)
+            except (FrozenError, OSError):
+                return False
+            return fresh.get("integration", {}).get("intent") == intent
+
+        heads = _remote_observation_heads(state)
+        fetch_argv = _remote_observation_fetch_argv(state)
+
+        def persist(result: FencedProcessResult) -> None:
+            nonlocal state
+            exists, oid = self._parse_fetched_remote_observation(
+                result,
+                str(state["target"]["destination_ref"]),
+                Path(str(state["worktree"]["git_dir"])),
+            )
+            progress = {
+                **intent,
+                "schema": "forge-remote-observation-progress/1",
+                "stage": "fetch-result",
+                "fetch_result": {
+                    "argv": list(result.argv),
+                    "authorized": result.authorized,
+                    "exit": result.returncode,
+                    "exists": exists,
+                    "oid": oid,
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                    "launch_failed": result.launch_failed,
+                    "timed_out": result.timed_out,
+                    "output_limit_exceeded": result.output_limit,
+                    "group_survived": result.group_survived,
+                },
+                "heads": list(heads),
+                "cursor": 0,
+                "head": None,
+                "argv": None,
+                "completed": [],
+                "recorded_at": iso_z(),
+            }
+            next_integration = copy.deepcopy(state["integration"])
+            next_integration["intent"] = progress
+            state = self._epoch_transition(
+                state,
+                lease,
+                "condition_recorded",
+                {"delta": {"integration": next_integration}},
+            )
+
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        environment.update(
+            {
+                "LC_ALL": "C",
+                "LANG": "C",
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_LAZY_FETCH": "1",
+            }
+        )
+        fetch_result = run_fenced_command(
+            lock,
+            operation="remote-observation",
+            intent_digest=intent_digest,
+            intent_validator=intent_current,
+            argv=fetch_argv,
+            cwd=Path(str(state["worktree"]["path"])),
+            persist_result=persist,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=self.ctx.options.verbose,
+        )
+        progress = state.get("integration", {}).get("intent")
+        if (
+            not _remote_observation_progress_valid(state, progress)
+            or not isinstance(progress, Mapping)
+            or progress.get("stage") != "fetch-result"
+            or progress.get("fetch_result", {}).get("inflight_digest")
+            != fetch_result.fence_digest
+            or progress.get("fetch_result", {}).get("output_digest")
+            != fetch_result.output_digest
+        ):
+            raise FrozenError(
+                "remote observation fetch result was not durably retained",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        progress = copy.deepcopy(dict(progress))
+        fetch_evidence = progress["fetch_result"]
+        exists = fetch_evidence["exists"]
+        oid = fetch_evidence["oid"]
+        environment = dict(environment)
+        for cursor, head in enumerate(heads):
+            if exists is not True or oid is None or _merge_inactive(state):
+                break
+            if any(
+                item.get("contained") is None
+                for item in progress.get("completed", [])
+            ):
+                break
+            containment_argv = _remote_containment_argv(state, head, str(oid))
+            containment_intent = {
+                **progress,
+                "stage": "containment-intent",
+                "cursor": cursor,
+                "head": head,
+                "argv": containment_argv,
+                "recorded_at": iso_z(),
+            }
+            next_integration = copy.deepcopy(state["integration"])
+            next_integration["intent"] = containment_intent
+            state = self._epoch_transition(
+                state,
+                lease,
+                "condition_recorded",
+                {"delta": {"integration": next_integration}},
+            )
+            containment_digest = sha256_bytes(canonical_bytes(containment_intent))
+
+            def containment_current() -> bool:
+                try:
+                    fresh = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                except (FrozenError, OSError):
+                    return False
+                return fresh.get("integration", {}).get("intent") == containment_intent
+
+            def persist_containment(result: FencedProcessResult) -> None:
+                nonlocal state, progress
+                ordinary = bool(
+                    result.authorized
+                    and result.returncode in {0, 1}
+                    and not result.launch_failed
+                    and not result.timed_out
+                    and not result.output_limit
+                    and not result.group_survived
+                )
+                evidence = {
+                    "head": head,
+                    "tip": str(oid),
+                    "argv": list(result.argv),
+                    "authorized": result.authorized,
+                    "exit": result.returncode,
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                    "launch_failed": result.launch_failed,
+                    "timed_out": result.timed_out,
+                    "output_limit_exceeded": result.output_limit,
+                    "group_survived": result.group_survived,
+                    "contained": (
+                        result.returncode == 0 if ordinary else None
+                    ),
+                }
+                completed = copy.deepcopy(containment_intent["completed"])
+                completed.append(evidence)
+                result_progress = {
+                    **containment_intent,
+                    "stage": "containment-result",
+                    "completed": completed,
+                    "recorded_at": iso_z(),
+                }
+                result_integration = copy.deepcopy(state["integration"])
+                result_integration["intent"] = result_progress
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "condition_recorded",
+                    {"delta": {"integration": result_integration}},
+                )
+                progress = result_progress
+
+            containment_result = run_fenced_command(
+                lock,
+                operation="containment",
+                intent_digest=containment_digest,
+                intent_validator=containment_current,
+                argv=containment_argv,
+                cwd=Path(str(state["worktree"]["path"])),
+                persist_result=persist_containment,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+            durable = state.get("integration", {}).get("intent")
+            if (
+                not _remote_observation_progress_valid(state, durable)
+                or not isinstance(durable, Mapping)
+                or durable.get("stage") != "containment-result"
+                or durable.get("completed", [{}])[-1].get("inflight_digest")
+                != containment_result.fence_digest
+                or durable.get("completed", [{}])[-1].get("output_digest")
+                != containment_result.output_digest
+            ):
+                raise FrozenError(
+                    "remote containment result was not durably retained",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            progress = copy.deepcopy(dict(durable))
+
+        completed = progress.get("completed", [])
+        complete_containment = bool(
+            exists is True
+            and len(completed) == len(heads)
+            and all(type(item.get("contained")) is bool for item in completed)
+        )
+        if complete_containment:
+            vector_values = [bool(item["contained"]) for item in completed]
+        elif exists is False:
+            vector_values = [False for _head in heads]
+        else:
+            exists = None
+            oid = None
+            vector_values = [None for _head in heads]
+
+        restored_integration = copy.deepcopy(state["integration"])
+        restored_integration["intent"] = intent
+        state = self._epoch_transition(
+            state,
+            lease,
+            "condition_recorded",
+            {"delta": {"integration": restored_integration}},
+        )
+
+        push = state["integration"].get("push")
+        attempts = (
+            list(push.get("attempted_heads", []))
+            if isinstance(push, Mapping)
+            else []
+        )
+        attempted_vector = [
+            {"head": head, "contained": contained}
+            for head, contained in zip(attempts, vector_values[-len(attempts) :])
+        ]
+        contains_intended: bool | None = vector_values[-1] if vector_values else None
+        observed = {
+            "exists": exists,
+            "oid": oid,
+            "contains_intended_head": contains_intended,
+            "attempted_head_containment": attempted_vector,
+            "observed_at": iso_z(),
+            "inflight_digest": fetch_result.fence_digest,
+            "output_digest": fetch_result.output_digest,
+        }
+        next_integration = copy.deepcopy(state["integration"])
+        next_integration["observed"] = observed
+        prior_count = int(next_integration["remote_movement_count"])
+        next_state = str(state["state"])
+        carried_generation: MergeCandidateGeneration | None = None
+        if phase == "final-prepush":
+            if exists is True and oid == state["candidate"]["remote_tip"]:
+                next_integration.update(
+                    {"condition": "none", "primary_condition": "none"}
+                )
+            elif exists in {True, False}:
+                count = prior_count + 1
+                next_integration.update(
+                    {
+                        "condition": "remote-churn" if count == 8 else "remote-moved",
+                        "primary_condition": "none",
+                        "remote_movement_count": count,
+                    }
+                )
+                next_state = "awaiting_approval" if count == 8 else "authorized"
+                if exists is True and oid is not None:
+                    try:
+                        state, candidate_observation = (
+                            self._run_candidate_observation_locked(
+                                state,
+                                lock,
+                                lease,
+                                verb="merge finalize",
+                                remote_tip=oid,
+                                expected_head=str(
+                                    state["candidate"]["candidate_head"]
+                                ),
+                                classify=True,
+                            )
+                        )
+                        admission = self._admission_from_candidate_observation(
+                            state,
+                            candidate_observation,
+                            verb="merge finalize",
+                            require_current_generation=False,
+                        )
+                        proposed = bind_merge_candidate_generation(
+                            self.ctx,
+                            admission,
+                            oid,
+                            generation=int(state["candidate"]["generation"]) + 1,
+                            observation=candidate_observation,
+                        )
+                        prior_candidate = state["candidate"]
+                        if (
+                            all(
+                                prior_candidate.get(name)
+                                == proposed.candidate.get(name)
+                                for name in _MERGE_REMOTE_ONLY_IDENTITY_FIELDS
+                            )
+                            and proposed.tier == state.get("tier")
+                            and not (
+                                proposed.scope is not None
+                                and proposed.scope.result == "exceeded"
+                            )
+                        ):
+                            carried_generation = proposed
+                            next_integration["epoch"] = None
+                    except (KeyError, OSError, Refusal, ValueError):
+                        carried_generation = None
+            else:
+                _reset_merge_nonmovement_counter(next_integration)
+                next_integration.update(
+                    {"condition": "fetch-failed", "primary_condition": "none"}
+                )
+                next_state = "authorized"
+        else:
+            assert isinstance(push, Mapping)
+            next_push = copy.deepcopy(dict(push))
+            landed = None
+            for member in reversed(attempted_vector):
+                if member["contained"] is True:
+                    landed = member["head"]
+                    break
+            next_push["landed_head"] = landed
+            next_integration["push"] = next_push
+            classification = (
+                next_push.get("result", {}).get("classification")
+                if isinstance(next_push.get("result"), Mapping)
+                else None
+            )
+            current_contained = bool(
+                attempts
+                and attempts[-1] == state["candidate"]["candidate_head"]
+                and contains_intended is True
+            )
+            if current_contained:
+                _reset_merge_nonmovement_counter(next_integration)
+                next_state = "pushed"
+                next_integration.update(
+                    {"condition": "none", "primary_condition": "none"}
+                )
+            elif landed is not None:
+                _reset_merge_nonmovement_counter(next_integration)
+                if not _merge_inactive(state):
+                    next_state = "authorized"
+                next_integration.update(
+                    {"condition": "remote-moved", "primary_condition": "none"}
+                )
+            elif exists is None:
+                _reset_merge_nonmovement_counter(next_integration)
+                next_integration.update(
+                    {
+                        "condition": "push-outcome-unknown",
+                        "primary_condition": "none",
+                    }
+                )
+            elif exists is True and oid == next_push["expected_old_tip"]:
+                _reset_merge_nonmovement_counter(next_integration)
+                next_integration.update(
+                    {
+                        "condition": (
+                            "push-failed"
+                            if classification == "known-failure"
+                            else "none"
+                        ),
+                        "primary_condition": "none",
+                    }
+                )
+            else:
+                independent = classification in {"success", "non-fast-forward"}
+                if independent:
+                    count = prior_count + 1
+                else:
+                    _reset_merge_nonmovement_counter(next_integration)
+                    count = 0
+                next_state = "awaiting_approval" if count == 8 else "authorized"
+                next_integration.update(
+                    {
+                        "condition": (
+                            "remote-churn"
+                            if count == 8
+                            else "non-fast-forward"
+                            if classification == "non-fast-forward"
+                            else "remote-moved"
+                        ),
+                        "primary_condition": "none",
+                        "remote_movement_count": count,
+                    }
+                )
+        observation_delta: dict[str, Any] = {"integration": next_integration}
+        if next_state != state["state"]:
+            observation_delta["state"] = next_state
+        if carried_generation is not None:
+            observation_delta["candidate"] = copy.deepcopy(
+                carried_generation.candidate
+            )
+            observation_delta["steps"] = copy.deepcopy(state.get("steps"))
+        transition_payload: dict[str, Any] = {"delta": observation_delta}
+        if carried_generation is not None:
+            transition_payload.update(
+                {
+                    "prior_generation_digest": state["candidate"][
+                        "generation_digest"
+                    ],
+                    "successor_generation_digest": carried_generation.candidate[
+                        "generation_digest"
+                    ],
+                    "equality_proof": _merge_remote_only_equality_proof(
+                        state["candidate"]
+                    ),
+                }
+            )
+        state = self._epoch_transition(
+            state,
+            lease,
+            (
+                "generation_carried_forward"
+                if carried_generation is not None
+                else "push_observed"
+            ),
+            transition_payload,
+            generation_digest=(
+                str(carried_generation.candidate["generation_digest"])
+                if carried_generation is not None
+                else None
+            ),
+        )
+        return state
+
+    @staticmethod
+    def _push_classification(
+        result: FencedProcessResult, destination_ref: str
+    ) -> str:
+        if (
+            result.launch_failed
+            or result.timed_out
+            or result.output_limit
+            or result.group_survived
+            or result.returncode is None
+        ):
+            return "outcome-unknown"
+        if result.returncode == 0:
+            return "success"
+        try:
+            decoded = result.output.decode("utf-8")
+        except UnicodeDecodeError:
+            return "known-failure"
+        target_rows: list[tuple[str, str]] = []
+        for row in decoded.splitlines():
+            fields = row.split("\t")
+            if len(fields) != 3 or ":" not in fields[1]:
+                continue
+            _source, destination = fields[1].rsplit(":", 1)
+            if destination == destination_ref:
+                target_rows.append((fields[0], fields[2]))
+        if len(target_rows) == 1 and target_rows[0] in {
+            ("!", "[rejected] (non-fast-forward)"),
+            ("!", "[rejected] (fetch first)"),
+        }:
+            return "non-fast-forward"
+        return "known-failure"
+
+    def _final_history_mutation_mode(
+        self, state: Mapping[str, Any], lock: CommonRebaseLock
+    ) -> tuple[str | None, str]:
+        """Read DM-015 from the exact final intended commit under the lock."""
+
+        _require_merge_integration_control("final-intended-head-mode")
+        candidate = state.get("candidate")
+        if not isinstance(candidate, Mapping):
+            raise FrozenError(
+                "merge final intended HEAD is unavailable",
+                chain_id=str(state.get("chain_id") or "") or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        worktree = Path(str(state["worktree"]["path"]))
+        candidate_head = str(candidate["candidate_head"])
+        argv = [
+            "git",
+            "cat-file",
+            "blob",
+            f"{candidate_head}:.forge-manifest",
+        ]
+        environment = _merge_scope_environment()
+        try:
+            lock.assert_held()
+            _require_git_no_lazy_fetch_qualification(
+                self._git_no_lazy_fetch_qualification,
+                worktree,
+                environment,
+            )
+            result = run_bounded(
+                argv,
+                cwd=worktree,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+            lock.assert_held()
+        except (OSError, TimeoutError) as exc:
+            raise self._final_mode_unavailable(state, str(exc)) from exc
+        if result.timed_out or result.output_limit:
+            raise _merge_refusal(
+                V2ReasonCode.REBASE_LOCK_UNAVAILABLE,
+                "forge: merge finalize refused — final intended HEAD mode is unavailable",
+                expected="a complete bounded read of the candidate .forge-manifest blob",
+                observed=(
+                    f"exit={result.returncode}, timeout={result.timed_out}, "
+                    f"output_limit={result.output_limit}"
+                ),
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        if result.returncode != 0:
+            return None, result.output_digest
+        try:
+            mode = _parse_history_mutation_mode(result.output)
+        except ValueError:
+            return None, result.output_digest
+        return mode, result.output_digest
+
+    def _park_invalid_final_history_mode(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease,
+        *,
+        manifest_digest: str,
+    ) -> dict[str, Any]:
+        integration = copy.deepcopy(state["integration"])
+        _reset_merge_nonmovement_counter(integration)
+        integration.update(
+            {
+                "condition": "none",
+                "primary_condition": "none",
+                "epoch": None,
+                "intent": {
+                    "schema": "forge-history-mutation-mode-result/1",
+                    "operation": "history-mutation-mode",
+                    "candidate_head": state["candidate"]["candidate_head"],
+                    "manifest_digest": manifest_digest,
+                    "result": "invalid",
+                    "recorded_at": iso_z(),
+                },
+            }
+        )
+        review = state.get("review")
+        iteration = review.get("iteration") if isinstance(review, Mapping) else None
+        projection = {
+            "state": "revising",
+            "review": {"iteration": iteration} if type(iteration) is int else {},
+            "approval": {},
+            "authorization": {},
+            "integration": integration,
+        }
+        return self._epoch_transition(
+            state,
+            lease,
+            "reverification_result",
+            {
+                "delta": {
+                    name: value
+                    for name, value in projection.items()
+                    if state.get(name) != value
+                }
+            },
+        )
+
+    def _run_epoch_push(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        budget: _MergeEpochBudget,
+        *,
+        retry: bool = False,
+    ) -> dict[str, Any]:
+        plan = state["integration"]["epoch"]["gate_plan"]
+        if plan.get("status") != "sealed" or plan.get("cursor") != len(
+            plan.get("suite", [])
+        ):
+            raise FrozenError(
+                "merge push intent precedes completion of its sealed gate plan",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if retry:
+            _require_merge_integration_control("push-retry")
+            prior_result = state.get("integration", {}).get("push", {}).get(
+                "result"
+            )
+            if (
+                state.get("state") != "pushing"
+                or _merge_inactive(state)
+                or not (
+                    prior_result is None or isinstance(prior_result, Mapping)
+                )
+                or not _merge_old_tip_all_false(state)
+                or not self._current_merge_authority(state)
+            ):
+                raise FrozenError(
+                    "merge duplicate push lacks an active authorized old-tip observation",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+        state, candidate_observation = self._run_candidate_observation_locked(
+            state,
+            lock,
+            lease,
+            verb="merge finalize",
+            remote_tip=str(state["candidate"]["remote_tip"]),
+            expected_head=str(state["candidate"]["candidate_head"]),
+            classify=False,
+        )
+        _observe_current_merge_candidate(
+            self.ctx,
+            state,
+            verb="merge finalize",
+            observation=candidate_observation,
+        )
+        mode, manifest_digest = self._final_history_mutation_mode(state, lock)
+        if mode is None:
+            state = self._park_invalid_final_history_mode(
+                state,
+                lease,
+                manifest_digest=manifest_digest,
+            )
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: history mutation mode invalid — repair committed .forge-manifest through Forge CLI",
+                remediation=(
+                    "repair committed .forge-manifest through Forge CLI, then "
+                    f"forge merge refresh --chain-id {state['chain_id']}"
+                ),
+                chain=state,
+            )
+        budget.consume("pushes")
+        candidate = state["candidate"]
+        integration = copy.deepcopy(state["integration"])
+        epoch = integration["epoch"]
+        prior_push = integration.get("push")
+        attempted = (
+            list(prior_push.get("attempted_heads", []))
+            if isinstance(prior_push, Mapping)
+            else []
+        )
+        attempted.append(str(candidate["candidate_head"]))
+        intended_at = iso_z()
+        _reset_merge_nonmovement_counter(integration)
+        integration.update(
+            {
+                "condition": "none",
+                "primary_condition": "none",
+                "intent": {
+                    "operation": "push",
+                    "operation_nonce": epoch["operation_nonce"],
+                    "attempt": len(attempted),
+                },
+                "observed": None,
+                "push": {
+                    "expected_old_tip": candidate["remote_tip"],
+                    "intended_head": candidate["candidate_head"],
+                    "destination_ref": candidate["destination_ref"],
+                    "intended_at": intended_at,
+                    "result": None,
+                    "attempted_heads": attempted,
+                    "landed_head": (
+                        prior_push.get("landed_head")
+                        if isinstance(prior_push, Mapping)
+                        else None
+                    ),
+                },
+            }
+        )
+        push_delta: dict[str, Any] = {"integration": integration}
+        if state["state"] != "pushing":
+            push_delta["state"] = "pushing"
+        state = self._epoch_transition(
+            state,
+            lease,
+            "push_intent",
+            {"delta": push_delta},
+            at=intended_at,
+        )
+        intent_digest = self._tail_event_digest(state, "push_intent")
+
+        def intent_current() -> bool:
+            return self._tail_event_digest(state, "push_intent") == intent_digest
+
+        def persist(result: FencedProcessResult) -> None:
+            nonlocal state
+            next_integration = copy.deepcopy(state["integration"])
+            next_push = copy.deepcopy(next_integration["push"])
+            next_push["result"] = {
+                "classification": self._push_classification(
+                    result, str(next_push["destination_ref"])
+                ),
+                "exit": result.returncode,
+                "inflight_digest": result.fence_digest,
+                "output_digest": result.output_digest,
+                "launch_failed": result.launch_failed,
+                "timed_out": result.timed_out,
+                "output_limit_exceeded": result.output_limit,
+                "recorded_at": iso_z(),
+            }
+            next_integration["push"] = next_push
+            state = self._epoch_transition(
+                state,
+                lease,
+                "condition_recorded",
+                {"delta": {"integration": next_integration}},
+            )
+
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        environment.update(
+            {
+                "LC_ALL": "C",
+                "LANG": "C",
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_LAZY_FETCH": "1",
+            }
+        )
+        run_fenced_command(
+            lock,
+            operation="push",
+            intent_digest=intent_digest,
+            intent_validator=intent_current,
+            argv=[
+                "git",
+                "--no-pager",
+                "-C",
+                str(state["worktree"]["path"]),
+                "push",
+                "--porcelain",
+                "origin",
+                (
+                    f"{candidate['candidate_head']}:"
+                    f"{candidate['destination_ref']}"
+                ),
+            ],
+            cwd=Path(str(state["worktree"]["path"])),
+            persist_result=persist,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=self.ctx.options.verbose,
+        )
+        state = self._run_remote_observation(
+            state,
+            lock,
+            lease,
+            budget,
+            phase="post-push",
+        )
+        if state["state"] == "pushing":
+            condition = state["integration"]["condition"]
+            classification = state["integration"].get("push", {}).get(
+                "result", {}
+            ).get("classification")
+            if _merge_old_tip_all_false(state):
+                if classification != "known-failure":
+                    return state
+                condition = "push-failed"
+            reason = (
+                V2ReasonCode.PUSH_OUTCOME_UNKNOWN
+                if condition == "push-outcome-unknown"
+                else V2ReasonCode.PUSH_FAILED
+            )
+            raise _merge_refusal(
+                reason,
+                (
+                    "forge: merge push outcome cannot be observed authoritatively"
+                    if reason == V2ReasonCode.PUSH_OUTCOME_UNKNOWN
+                    else "forge: merge push failed"
+                ),
+                remediation=f"forge merge recover --chain-id {state['chain_id']}",
+                chain=state,
+            )
+        return state
+
+    def _park_integrated_review(
+        self, state: dict[str, Any], lease: ChainLease
+    ) -> dict[str, Any]:
+        integration = copy.deepcopy(state["integration"])
+        _reset_merge_nonmovement_counter(integration)
+        integration["epoch"] = None
+        integration["condition"] = "none"
+        integration["primary_condition"] = "none"
+        prior_review = state.get("review")
+        iteration = (
+            prior_review.get("iteration")
+            if isinstance(prior_review, Mapping)
+            else None
+        )
+        retained_review = {"iteration": iteration} if type(iteration) is int else {}
+        projection = {
+            "state": "reviewing",
+            "integration": integration,
+            "review": retained_review,
+            "approval": {},
+            "authorization": {},
+        }
+        return self._epoch_transition(
+            state,
+            lease,
+            "reverification_result",
+            {
+                "delta": {
+                    name: value
+                    for name, value in projection.items()
+                    if state.get(name) != value
+                }
+            },
+        )
+
+    def _release_to_closed_locked(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease,
+        *,
+        cleanup_results: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Commit the FR-237 close cutoff while the ordered locks are held."""
+
+        _require_merge_integration_control("nonforce-cleanup")
+        claim = state["worktree"]["claim"]
+        if claim.get("status") != "owned":
+            raise FrozenError(
+                "pushed merge ownership is not acquired at cleanup cutoff",
+                chain_id=str(state["chain_id"]),
+                observed=str(claim.get("status")),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        push = state.get("integration", {}).get("push")
+        observed = state.get("integration", {}).get("observed")
+        if not isinstance(push, Mapping) or not isinstance(observed, Mapping):
+            raise FrozenError(
+                "cleanup cutoff lacks authenticated push containment",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        preconditions = {
+            "schema": "forge-merge-close-preconditions/1",
+            "chain_id": state["chain_id"],
+            "source_state": state["state"],
+            "landed_head": push["landed_head"],
+            "containment_observation": copy.deepcopy(dict(observed)),
+            "cleanup_results": [copy.deepcopy(dict(item)) for item in cleanup_results],
+        }
+        state = self._epoch_transition(
+            state,
+            lease,
+            "ownership_release_intent",
+            {
+                "target_terminal": "closed",
+                "terminal_disposition": "ordinary",
+                "source_state": state["state"],
+                "terminal_preconditions_digest": sha256_bytes(
+                    canonical_bytes(preconditions)
+                ),
+                "release_mode": "acquired",
+            },
+        )
+        release_intent_digest = self._tail_event_digest(
+            state, "ownership_release_intent"
+        )
+        observed_claim = _remove_merge_claim(self.store, state, unlink=False)
+        observation = {
+            "claim_path": state["worktree"]["claim"]["path"],
+            "exists": True,
+            "inode": observed_claim.inode,
+            "digest": observed_claim.digest,
+        }
+        state = self._epoch_transition(
+            state,
+            lease,
+            "ownership_released",
+            {
+                "release_intent_digest": release_intent_digest,
+                "release_mode": "acquired",
+                "terminal_disposition": "ordinary",
+                "claim_inode": state["worktree"]["claim"]["inode"],
+                "claim_digest": state["worktree"]["claim"]["digest"],
+                "claim_observation_digest": sha256_bytes(
+                    canonical_bytes(observation)
+                ),
+            },
+        )
+        terminal = self._epoch_transition(
+            state,
+            lease,
+            "closed",
+            {"delta": {"state": "closed"}},
+        )
+        try:
+            _remove_merge_claim(self.store, terminal)
+        except (FrozenError, OSError):
+            # The event-authoritative terminal release remains valid when its
+            # materialized tombstone cannot be collected in this invocation.
+            pass
+        return terminal
+
+    def _cleanup_result_locked(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease,
+        *,
+        passed: bool,
+    ) -> dict[str, Any]:
+        delta: dict[str, Any] = {
+            "cleanup": {"condition": "none" if passed else "cleanup-failed"}
+        }
+        if not passed and state["state"] != "cleanup_pending":
+            delta["state"] = "cleanup_pending"
+        return self._epoch_transition(
+            state, lease, "cleanup_result", {"delta": delta}
+        )
+
+    def _run_cleanup_child(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        *,
+        operation: str,
+        argv: Sequence[str],
+        intent_digest: str,
+    ) -> tuple[dict[str, Any], FencedProcessResult]:
+        holder: dict[str, Any] = {}
+
+        def intent_current() -> bool:
+            try:
+                fresh = self.store.load_locked(str(state["chain_id"]), lease=lease)
+            except (FrozenError, OSError):
+                return False
+            return bool(
+                fresh.get("cleanup") == state.get("cleanup")
+                and self._tail_event_digest(fresh, "cleanup_intent")
+                == intent_digest
+            )
+
+        def persist(result: FencedProcessResult) -> None:
+            holder["result"] = result
+
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        environment.update({"GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"})
+        run_fenced_command(
+            lock,
+            operation=operation,
+            intent_digest=intent_digest,
+            intent_validator=intent_current,
+            argv=argv,
+            cwd=self.ctx.repo.root,
+            persist_result=persist,
+            env=environment,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            cap=OUTPUT_CAP_BYTES,
+            verbose=self.ctx.options.verbose,
+        )
+        result = holder.get("result")
+        if not isinstance(result, FencedProcessResult):
+            raise FrozenError(
+                "cleanup child produced no durable result",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return state, result
+
+    @staticmethod
+    def _current_merge_authority(state: Mapping[str, Any]) -> bool:
+        candidate = state.get("candidate")
+        authorization = state.get("authorization")
+        review = state.get("review")
+        verdict = review.get("verdict") if isinstance(review, Mapping) else None
+        if not isinstance(candidate, Mapping) or not isinstance(
+            authorization, Mapping
+        ):
+            return False
+        if not (
+            authorization.get("candidate_head") == candidate.get("candidate_head")
+            and SHA256_RE.fullmatch(
+                str(authorization.get("generation_digest", ""))
+            )
+            is not None
+            and isinstance(verdict, Mapping)
+            and verdict.get("verdict") == "PASS"
+        ):
+            return False
+        tier = state.get("tier")
+        if isinstance(tier, Mapping) and tier.get("control") is True:
+            approval = state.get("approval")
+            return bool(
+                isinstance(approval, Mapping)
+                and approval.get("purpose") == "gate-4"
+                and approval.get("candidate") == candidate.get("candidate_head")
+                and approval.get("generation_digest")
+                == authorization.get("generation_digest")
+            )
+        return True
+
+    def _complete_pending_release_locked(
+        self, state: dict[str, Any], lease: ChainLease
+    ) -> dict[str, Any]:
+        """Resume only the event-selected ownership terminal transaction."""
+
+        claim = state.get("worktree", {}).get("claim")
+        if not isinstance(claim, Mapping) or claim.get("status") not in {
+            "releasing",
+            "released",
+        }:
+            return state
+        with self.store.event_lock(str(state["chain_id"])):
+            replay = self.store._read_replay_locked(str(state["chain_id"]))
+        intent = next(
+            (
+                event
+                for event in reversed(replay.events)
+                if event.get("event") == "ownership_release_intent"
+            ),
+            None,
+        )
+        if not isinstance(intent, Mapping) or not isinstance(
+            intent.get("payload"), Mapping
+        ):
+            raise FrozenError(
+                "pending ownership release lacks its authenticated intent",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        release = intent["payload"]
+        target = str(release.get("target_terminal"))
+        mode = str(release.get("release_mode"))
+        disposition = str(release.get("terminal_disposition"))
+        if target not in {"closed", "aborted"} or mode not in {
+            "acquired",
+            "never-published",
+        }:
+            raise FrozenError(
+                "pending ownership release carries an invalid terminal selection",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if claim.get("status") == "releasing":
+            if mode == "acquired":
+                observed_claim = _remove_merge_claim(
+                    self.store, state, unlink=False
+                )
+                observation = {
+                    "claim_path": claim["path"],
+                    "exists": True,
+                    "inode": observed_claim.inode,
+                    "digest": observed_claim.digest,
+                }
+            else:
+                if not _merge_unpublished_claim_absent(state, self.store):
+                    raise FrozenError(
+                        "never-published release observed an ownership pathname",
+                        chain_id=str(state["chain_id"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                observation = {
+                    "claim_path": claim["path"],
+                    "exists": False,
+                    "inode": None,
+                    "digest": None,
+                }
+            state = self._epoch_transition(
+                state,
+                lease,
+                "ownership_released",
+                {
+                    "release_intent_digest": intent["digest"],
+                    "release_mode": mode,
+                    "terminal_disposition": disposition,
+                    "claim_inode": claim.get("inode"),
+                    "claim_digest": claim.get("digest"),
+                    "claim_observation_digest": sha256_bytes(
+                        canonical_bytes(observation)
+                    ),
+                },
+            )
+        if state["worktree"]["claim"]["status"] != "released":
+            raise FrozenError(
+                "ownership release result did not materialize released truth",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        terminal_payload: dict[str, Any] = {"delta": {"state": target}}
+        if disposition == "historical-landed-superseded":
+            push = state.get("integration", {}).get("push")
+            observed = state.get("integration", {}).get("observed")
+            if not isinstance(push, Mapping) or not isinstance(observed, Mapping):
+                raise FrozenError(
+                    "historical release lost its containment evidence",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            terminal_payload = {
+                "terminal_disposition": disposition,
+                "landed_head": push.get("landed_head"),
+                "superseded_head": push.get("intended_head"),
+                "observation_digest": observed.get("output_digest"),
+            }
+        state = self._epoch_transition(
+            state, lease, target, terminal_payload
+        )
+        if mode == "acquired":
+            try:
+                _remove_merge_claim(self.store, state)
+            except (FrozenError, OSError):
+                pass
+        return state
+
+    def _record_foreign_git_locked(
+        self, state: dict[str, Any], lease: ChainLease
+    ) -> dict[str, Any]:
+        integration = state.get("integration")
+        if not isinstance(integration, Mapping):
+            raise FrozenError(
+                "merge integration projection is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if integration.get("condition") == "foreign-git-state":
+            return state
+        updated = copy.deepcopy(dict(integration))
+        updated.update(
+            {"condition": "foreign-git-state", "primary_condition": "none"}
+        )
+        _reset_merge_nonmovement_counter(updated)
+        return self._epoch_transition(
+            state,
+            lease,
+            "condition_recorded",
+            {"delta": {"integration": updated}},
+        )
+
+    def _restore_integrated_rebase_observation_intent_locked(
+        self, state: dict[str, Any], lease: ChainLease
+    ) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
+        """Restore the raw rebase fact after a crash in a read-only proof leg."""
+
+        integration = state.get("integration")
+        current_intent = (
+            integration.get("intent") if isinstance(integration, Mapping) else None
+        )
+        phase = (
+            current_intent.get("phase")
+            if isinstance(current_intent, Mapping)
+            else None
+        )
+        prefix = "forge-integrated-observation:"
+        if not isinstance(phase, str) or not phase.startswith(prefix):
+            return state, current_intent if isinstance(current_intent, Mapping) else None
+        source_intent = current_intent.get("source_intent")
+        parts = phase.split(":")
+        if (
+            len(parts) != 3
+            or parts[0] != "forge-integrated-observation"
+            or parts[1] not in {"branch", "head", "status", "ancestry"}
+            or parts[2] not in {"intent", "result"}
+            or current_intent.get("observation_step") != parts[1]
+            or not isinstance(source_intent, Mapping)
+        ):
+            return state, None
+        source_state = copy.deepcopy(state)
+        source_state["integration"]["intent"] = copy.deepcopy(dict(source_intent))
+        binding = _merge_rebase_integrated_observation_binding(
+            source_state, source_intent
+        )
+        pre_rebase = source_state["integration"].get("pre_rebase")
+        epoch = source_state["integration"].get("epoch")
+        if (
+            binding is None
+            or not isinstance(pre_rebase, Mapping)
+            or not isinstance(epoch, Mapping)
+            or current_intent.get("operation") != "rebase"
+            or current_intent.get("operation_nonce") != epoch.get("operation_nonce")
+            or current_intent.get("pre_operation_head") != pre_rebase.get("head")
+            or current_intent.get("fetched_tip") != pre_rebase.get("fetched_tip")
+            or current_intent.get("branch") != source_state.get("branch")
+            or current_intent.get("generation_digest")
+            != pre_rebase.get("generation_digest")
+            or current_intent.get("reflog_action")
+            != _merge_rebase_action(source_state)
+            or current_intent.get("observation_binding") != binding
+        ):
+            return state, None
+        restored = copy.deepcopy(state["integration"])
+        restored["intent"] = copy.deepcopy(dict(source_intent))
+        state = self._epoch_transition(
+            state,
+            lease,
+            "rebase_intent",
+            {"delta": {"integration": restored}},
+        )
+        return state, source_intent
+
+    def _run_integrated_rebase_observation_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Collect the integrated-result tuple through durable fenced reads."""
+
+        _require_merge_integration_control("observation-first-recovery")
+        state, source_intent = (
+            self._restore_integrated_rebase_observation_intent_locked(state, lease)
+        )
+        integration = state.get("integration")
+        pre_rebase = (
+            integration.get("pre_rebase")
+            if isinstance(integration, Mapping)
+            else None
+        )
+        epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+        action = _merge_rebase_action(state)
+        if (
+            not isinstance(source_intent, Mapping)
+            or not isinstance(pre_rebase, Mapping)
+            or not isinstance(epoch, Mapping)
+            or action is None
+        ):
+            return state, None
+        observation_binding = _merge_rebase_integrated_observation_binding(
+            state, source_intent
+        )
+        if observation_binding is None:
+            return state, None
+        identity = {
+            "operation_nonce": epoch.get("operation_nonce"),
+            "pre_operation_head": pre_rebase.get("head"),
+            "fetched_tip": pre_rebase.get("fetched_tip"),
+            "branch": state.get("branch"),
+            "generation_digest": pre_rebase.get("generation_digest"),
+            "reflog_action": action,
+        }
+        worktree = Path(str(state["worktree"]["path"]))
+        environment = _merge_scope_environment()
+        environment.pop("FORGE_SESSION_PID", None)
+        step_results: dict[str, dict[str, Any]] = {}
+        output_digests: dict[str, str] = {}
+
+        def restore_source() -> None:
+            nonlocal state
+            state, _restored = (
+                self._restore_integrated_rebase_observation_intent_locked(
+                    state, lease
+                )
+            )
+
+        def run_step(
+            name: str,
+            argv: Sequence[str],
+            *,
+            allowed_exits: frozenset[int] = frozenset({0}),
+        ) -> bytes | None:
+            nonlocal state
+            observation_intent = {
+                "operation": "rebase",
+                **identity,
+                "phase": f"forge-integrated-observation:{name}:intent",
+                "observation_binding": observation_binding,
+                "observation_step": name,
+                "prior_output_digests": copy.deepcopy(output_digests),
+                "source_intent": copy.deepcopy(dict(source_intent)),
+                "started_at": iso_z(),
+            }
+            updated = copy.deepcopy(state["integration"])
+            updated["intent"] = copy.deepcopy(observation_intent)
+            state = self._epoch_transition(
+                state,
+                lease,
+                "rebase_intent",
+                {"delta": {"integration": updated}},
+            )
+            intent_digest = self._tail_event_digest(state, "rebase_intent")
+
+            def intent_current() -> bool:
+                try:
+                    fresh = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                    return bool(
+                        fresh.get("state") == state.get("state")
+                        and fresh.get("integration", {}).get("condition") == "none"
+                        and fresh.get("integration", {}).get("intent")
+                        == observation_intent
+                        and self._tail_event_digest(fresh, "rebase_intent")
+                        == intent_digest
+                    )
+                except (FrozenError, KeyError, OSError, Refusal, ValueError):
+                    return False
+
+            def persist_observation(result: FencedProcessResult) -> None:
+                nonlocal state
+                result_intent = {
+                    **copy.deepcopy(observation_intent),
+                    "phase": f"forge-integrated-observation:{name}:result",
+                    "child_result": {
+                        "authorized": result.authorized,
+                        "exit": result.returncode,
+                        "inflight_digest": result.fence_digest,
+                        "output_digest": result.output_digest,
+                        "launch_failed": result.launch_failed,
+                        "timed_out": result.timed_out,
+                        "output_limit_exceeded": result.output_limit,
+                        "group_survived": result.group_survived,
+                    },
+                    "recorded_at": iso_z(),
+                }
+                result_integration = copy.deepcopy(state["integration"])
+                result_integration["intent"] = result_intent
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "rebase_intent",
+                    {"delta": {"integration": result_integration}},
+                )
+
+            result = run_fenced_command(
+                lock,
+                operation="containment",
+                intent_digest=intent_digest,
+                intent_validator=intent_current,
+                argv=argv,
+                cwd=worktree,
+                persist_result=persist_observation,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+            durable = state.get("integration", {}).get("intent", {}).get(
+                "child_result"
+            )
+            if (
+                not isinstance(durable, Mapping)
+                or durable.get("authorized") is not True
+                or durable.get("exit") not in allowed_exits
+                or durable.get("launch_failed") is not False
+                or durable.get("timed_out") is not False
+                or durable.get("output_limit_exceeded") is not False
+                or durable.get("group_survived") is not False
+                or durable.get("inflight_digest") != result.fence_digest
+                or durable.get("output_digest") != result.output_digest
+                or result.returncode != durable.get("exit")
+            ):
+                restore_source()
+                return None
+            step_results[name] = {
+                "intent_digest": intent_digest,
+                "inflight_digest": result.fence_digest,
+                "output_digest": result.output_digest,
+                "exit": result.returncode,
+            }
+            output_digests[name] = result.output_digest
+            return result.output
+
+        branch_output = run_step(
+            "branch", ["git", "--no-pager", "symbolic-ref", "-q", "HEAD"]
+        )
+        if branch_output is None:
+            return state, None
+        head_output = run_step(
+            "head", ["git", "--no-pager", "rev-parse", "--verify", "HEAD"]
+        )
+        if head_output is None:
+            return state, None
+        try:
+            observed_head = head_output.decode("ascii").removesuffix("\n")
+        except UnicodeDecodeError:
+            observed_head = ""
+        if (
+            COMMIT_RE.fullmatch(observed_head) is None
+            or head_output != f"{observed_head}\n".encode("ascii")
+        ):
+            restore_source()
+            return state, None
+        status_output = run_step(
+            "status",
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ],
+        )
+        if status_output is None:
+            return state, None
+        ancestry_output = run_step(
+            "ancestry",
+            [
+                "git",
+                "--no-pager",
+                "merge-base",
+                "--is-ancestor",
+                str(pre_rebase["fetched_tip"]),
+                observed_head,
+            ],
+            allowed_exits=frozenset({0, 1}),
+        )
+        if ancestry_output is None:
+            return state, None
+        try:
+            branch = branch_output.removesuffix(b"\n").decode("utf-8")
+        except UnicodeDecodeError:
+            branch = ""
+        observation: dict[str, Any] = {
+            "schema": "forge-merge-integrated-observation/1",
+            "observation_binding": observation_binding,
+            "operation_nonce": identity["operation_nonce"],
+            "generation_digest": identity["generation_digest"],
+            "pre_operation_head": identity["pre_operation_head"],
+            "fetched_tip": identity["fetched_tip"],
+            "branch": branch,
+            "observed_head": observed_head,
+            "status_digest": sha256_bytes(status_output),
+            "status_empty": status_output == b"",
+            "fetched_tip_ancestor": bool(
+                step_results["ancestry"]["exit"] == 0 and ancestry_output == b""
+            ),
+            "steps": copy.deepcopy(step_results),
+        }
+        observation["evidence_digest"] = sha256_bytes(canonical_bytes(observation))
+        restore_source()
+        return state, observation
+
+    def _materialize_rebase_success_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        *,
+        fetched_tip: str,
+        inflight_digest: str,
+        output_digest: str,
+        observation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        expected_head = str(observation.get("observed_head", ""))
+        state, candidate_observation = self._run_candidate_observation_locked(
+            state,
+            lock,
+            lease,
+            verb="merge recover",
+            remote_tip=fetched_tip,
+            expected_head=expected_head,
+            classify=True,
+        )
+        admission = self._admission_from_candidate_observation(
+            state,
+            candidate_observation,
+            verb="merge recover",
+            require_current_generation=False,
+        )
+        generation = bind_merge_candidate_generation(
+            self.ctx,
+            admission,
+            fetched_tip,
+            generation=int(state["candidate"]["generation"]) + 1,
+            observation=candidate_observation,
+        )
+        if (
+            admission.candidate_head != expected_head
+            or generation.candidate.get("candidate_head") != expected_head
+            or not _merge_rebase_integrated_predicate(state, observation)
+        ):
+            raise ValueError("rebase observation changed before materialization")
+        suite = _merge_epoch_suite(
+            {
+                **state,
+                "candidate": generation.candidate,
+                "tier": generation.tier,
+            },
+            admission.policy,
+        )
+        integration = copy.deepcopy(state["integration"])
+        epoch = integration.get("epoch")
+        pre_rebase = integration.get("pre_rebase")
+        if not isinstance(epoch, Mapping) or not isinstance(pre_rebase, Mapping):
+            raise FrozenError(
+                "rebase result lacks its durable epoch and pre-rebase identity",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        integration.update(
+            {
+                "condition": "none",
+                "primary_condition": "none",
+                "conflict": None,
+                "intent": {
+                    "operation": "rebase-result",
+                    "operation_nonce": epoch["operation_nonce"],
+                    "result": "success",
+                    "pre_operation_head": pre_rebase["head"],
+                    "rebased_head": generation.candidate["candidate_head"],
+                    "fetched_tip": fetched_tip,
+                    "inflight_digest": inflight_digest,
+                    "output_digest": output_digest,
+                    "recorded_at": iso_z(),
+                },
+            }
+        )
+        integration["epoch"]["generation_digest"] = generation.candidate[
+            "generation_digest"
+        ]
+        integration["epoch"]["gate_plan"] = self._sealed_plan(
+            {**state, "candidate": generation.candidate},
+            admission.policy,
+            suite,
+        )
+        prior_review = state.get("review")
+        iteration = (
+            prior_review.get("iteration")
+            if isinstance(prior_review, Mapping)
+            else None
+        )
+        retained_review = {"iteration": iteration} if type(iteration) is int else {}
+        rebase_projection = {
+            "state": "reverifying",
+            "policy_source": {
+                "commit": admission.policy.sha,
+                "digest": admission.policy.digest,
+            },
+            "candidate": copy.deepcopy(generation.candidate),
+            "tier": copy.deepcopy(generation.tier),
+            "steps": {},
+            "review": retained_review,
+            "approval": {},
+            "authorization": {},
+            "integration": integration,
+        }
+        rebase_delta = {
+            name: value
+            for name, value in rebase_projection.items()
+            if state.get(name) != value
+        }
+        return self._epoch_transition(
+            state,
+            lease,
+            "rebase_result",
+            {"delta": rebase_delta},
+            generation_digest=str(generation.candidate["generation_digest"]),
+        )
+
+    def _recover_rebase_observation_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+    ) -> dict[str, Any]:
+        """Classify a crashed rebase from bounded, fenced Git observations."""
+
+        state, restored_intent = (
+            self._restore_integrated_rebase_observation_intent_locked(state, lease)
+        )
+        if restored_intent is None:
+            return self._record_foreign_git_locked(state, lease)
+        git_dir = Path(str(state["worktree"]["git_dir"]))
+        integration = state.get("integration")
+        pre_rebase = (
+            integration.get("pre_rebase")
+            if isinstance(integration, Mapping)
+            else None
+        )
+        epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+        result_class = _merge_rebase_result_classification(state)
+        if (
+            not isinstance(pre_rebase, Mapping)
+            or not isinstance(epoch, Mapping)
+            or result_class == "foreign"
+        ):
+            return self._record_foreign_git_locked(state, lease)
+        metadata: list[str] = []
+        for name in (
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "BISECT_LOG",
+            "rebase-apply",
+            "rebase-merge",
+            "sequencer",
+        ):
+            try:
+                os.lstat(git_dir / name)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return self._record_foreign_git_locked(state, lease)
+            metadata.append(name)
+        rebase_live = any(name in metadata for name in ("rebase-merge", "rebase-apply"))
+        if rebase_live:
+            intent = integration.get("intent")
+            exact_nonzero = bool(
+                isinstance(intent, Mapping)
+                and result_class == "failed"
+                and type(intent.get("exit")) is int
+                and intent.get("exit") != 0
+                and intent.get("launch_failed") is False
+                and intent.get("timed_out") is False
+                and intent.get("output_limit_exceeded") is False
+                and intent.get("group_survived") is False
+            )
+            if result_class != "absent" and not exact_nonzero:
+                return self._record_foreign_git_locked(state, lease)
+            state, observation = self._run_conflict_observation_locked(
+                state, lock, lease, kind="conflict"
+            )
+            if observation is None:
+                return self._record_foreign_git_locked(state, lease)
+            integration = state["integration"]
+            intent = integration.get("intent")
+            result_class = _merge_rebase_result_classification(state)
+            exact_nonzero = bool(
+                isinstance(intent, Mapping)
+                and result_class == "failed"
+                and type(intent.get("exit")) is int
+                and intent.get("exit") != 0
+                and intent.get("launch_failed") is False
+                and intent.get("timed_out") is False
+                and intent.get("output_limit_exceeded") is False
+                and intent.get("group_survived") is False
+            )
+            evidence_digest = sha256_bytes(canonical_bytes(observation))
+            inflight_digest = (
+                str(intent["inflight_digest"])
+                if isinstance(intent, Mapping) and exact_nonzero
+                else evidence_digest
+            )
+            output_digest = (
+                str(intent["output_digest"])
+                if isinstance(intent, Mapping) and exact_nonzero
+                else evidence_digest
+            )
+            updated = copy.deepcopy(dict(integration))
+            updated["conflict"] = _merge_conflict_record(
+                state,
+                observation,
+                inflight_digest=inflight_digest,
+                output_digest=output_digest,
+            )
+            _reset_merge_nonmovement_counter(updated)
+            return self._epoch_transition(
+                state,
+                lease,
+                "rebase_conflict",
+                {"delta": {"state": "rebase_conflict", "integration": updated}},
+            )
+        if metadata:
+            return self._record_foreign_git_locked(state, lease)
+        state, observation = self._run_integrated_rebase_observation_locked(
+            state, lock, lease
+        )
+        if observation is None:
+            return self._record_foreign_git_locked(state, lease)
+        integration = state.get("integration")
+        pre_rebase = (
+            integration.get("pre_rebase")
+            if isinstance(integration, Mapping)
+            else None
+        )
+        result_class = _merge_rebase_result_classification(state)
+        current_head = str(observation.get("observed_head", ""))
+        evidence_digest = str(observation.get("evidence_digest", ""))
+        if (
+            not isinstance(integration, Mapping)
+            or not isinstance(pre_rebase, Mapping)
+            or SHA256_RE.fullmatch(evidence_digest) is None
+            or observation.get("status_empty") is not True
+            or observation.get("branch") != state.get("branch")
+        ):
+            return self._record_foreign_git_locked(state, lease)
+        if result_class in {"absent", "success"}:
+            try:
+                integrated = _merge_rebase_integrated_predicate(state, observation)
+            except (OSError, ValueError):
+                integrated = False
+            if integrated:
+                intent = integration.get("intent")
+                inflight_digest = (
+                    str(intent["inflight_digest"])
+                    if isinstance(intent, Mapping) and result_class == "success"
+                    else evidence_digest
+                )
+                output_digest = (
+                    str(intent["output_digest"])
+                    if isinstance(intent, Mapping) and result_class == "success"
+                    else evidence_digest
+                )
+                try:
+                    return self._materialize_rebase_success_locked(
+                        state,
+                        lock,
+                        lease,
+                        fetched_tip=str(pre_rebase["fetched_tip"]),
+                        inflight_digest=inflight_digest,
+                        output_digest=output_digest,
+                        observation=observation,
+                    )
+                except (KeyError, OSError, Refusal, ValueError):
+                    return self._record_foreign_git_locked(state, lease)
+        if current_head == pre_rebase.get("head"):
+            try:
+                state, candidate_observation = (
+                    self._run_candidate_observation_locked(
+                        state,
+                        lock,
+                        lease,
+                        verb="merge recover",
+                        remote_tip=str(state["candidate"]["remote_tip"]),
+                        expected_head=str(state["candidate"]["candidate_head"]),
+                        classify=False,
+                    )
+                )
+                _observe_current_merge_candidate(
+                    self.ctx,
+                    state,
+                    verb="merge recover",
+                    observation=candidate_observation,
+                )
+            except (KeyError, OSError, Refusal, ValueError):
+                return self._record_foreign_git_locked(state, lease)
+            updated = copy.deepcopy(dict(integration))
+            if result_class == "failed":
+                updated.update(
+                    {
+                        "condition": "rebase-failed",
+                        "primary_condition": "none",
+                        "epoch": None,
+                        "conflict": None,
+                    }
+                )
+                next_state = "revising"
+            else:
+                updated.update(
+                    {
+                        "condition": "none",
+                        "primary_condition": "none",
+                        "epoch": None,
+                        "intent": None,
+                        "conflict": None,
+                    }
+                )
+                next_state = "authorized"
+            _reset_merge_nonmovement_counter(updated)
+            return self._epoch_transition(
+                state,
+                lease,
+                "rebase_result",
+                {"delta": {"state": next_state, "integration": updated}},
+            )
+        return self._record_foreign_git_locked(state, lease)
+
+    def _finish_recovered_epoch_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        budget: _MergeEpochBudget,
+    ) -> tuple[dict[str, Any], str]:
+        state = self._run_epoch_suite(state, lock, lease, budget)
+        if not self._current_merge_authority(state):
+            return self._park_integrated_review(state, lease), "review"
+        state = self._run_remote_observation(
+            state, lock, lease, budget, phase="final-prepush"
+        )
+        if state["state"] in {"authorized", "awaiting_approval"}:
+            return state, "parked"
+        state = self._run_epoch_push(state, lock, lease, budget)
+        return state, "pushed" if state["state"] == "pushed" else "observed"
+
+    def _run_conflict_observation_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        *,
+        kind: str,
+        paths: Sequence[str] = (),
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Run one conflict snapshot as three bounded, durable fenced reads."""
+
+        _require_merge_integration_control("conflict-continue-contract")
+        if kind not in {"conflict", "post-add"}:
+            raise ValueError("invalid conflict observation kind")
+        try:
+            selected_paths = (
+                _normalize_merge_conflict_paths(paths)
+                if kind == "post-add" or paths
+                else ()
+            )
+        except (TypeError, ValueError):
+            return state, None
+        integration = state.get("integration")
+        epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+        pre_rebase = (
+            integration.get("pre_rebase")
+            if isinstance(integration, Mapping)
+            else None
+        )
+        current_intent = (
+            integration.get("intent") if isinstance(integration, Mapping) else None
+        )
+        phase = current_intent.get("phase") if isinstance(current_intent, Mapping) else None
+        source_intent = (
+            current_intent.get("source_intent")
+            if isinstance(current_intent, Mapping)
+            and isinstance(phase, str)
+            and phase.startswith("forge-conflict-observation:")
+            else current_intent
+        )
+        action = _merge_rebase_action(state)
+        if (
+            not isinstance(epoch, Mapping)
+            or not isinstance(pre_rebase, Mapping)
+            or not isinstance(source_intent, Mapping)
+            or action is None
+        ):
+            return state, None
+        identity = {
+            "operation_nonce": epoch.get("operation_nonce"),
+            "pre_operation_head": pre_rebase.get("head"),
+            "fetched_tip": pre_rebase.get("fetched_tip"),
+            "branch": state.get("branch"),
+            "generation_digest": pre_rebase.get("generation_digest"),
+            "reflog_action": action,
+        }
+        source_state = copy.deepcopy(state)
+        source_state["integration"]["intent"] = copy.deepcopy(dict(source_intent))
+        if not _merge_owned_rebase_metadata(source_state):
+            return state, None
+        commands: tuple[tuple[str, list[str]], ...] = (
+            ("unmerged", ["git", "diff", "--name-only", "--diff-filter=U", "-z", "--"]),
+            ("index", ["git", "ls-files", "--stage", "-z", "--"]),
+            (
+                "status",
+                ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            ),
+        )
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        environment.update(
+            {
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_LAZY_FETCH": "1",
+                "GIT_REFLOG_ACTION": action,
+            }
+        )
+        observation_nonce = secrets.token_hex(16)
+        observation_binding = sha256_bytes(
+            canonical_bytes(
+                {
+                    "kind": kind,
+                    "observation_nonce": observation_nonce,
+                    "paths": list(selected_paths),
+                    "source_intent": source_intent,
+                }
+            )
+        )
+
+        def restore_source_intent() -> None:
+            nonlocal state
+            if state.get("integration", {}).get("intent") == source_intent:
+                return
+            restored = copy.deepcopy(state["integration"])
+            restored["intent"] = copy.deepcopy(dict(source_intent))
+            state = self._epoch_transition(
+                state,
+                lease,
+                "rebase_intent",
+                {"delta": {"integration": restored}},
+            )
+
+        outputs: dict[str, bytes] = {}
+        output_digests: dict[str, str] = {}
+        worktree = Path(str(state["worktree"]["path"]))
+        for name, argv in commands:
+            if not _merge_owned_rebase_metadata(
+                {
+                    **state,
+                    "integration": {
+                        **state["integration"],
+                        "intent": {
+                            "operation": "continue",
+                            **identity,
+                        },
+                    },
+                }
+            ):
+                restore_source_intent()
+                return state, None
+            observation_intent = {
+                "operation": "continue",
+                **identity,
+                "phase": f"forge-conflict-observation:{kind}:{name}:intent",
+                "observation_nonce": observation_nonce,
+                "observation_binding": observation_binding,
+                "observation_kind": kind,
+                "observation_step": name,
+                "authorized_paths": list(selected_paths),
+                "prior_output_digests": copy.deepcopy(output_digests),
+                "source_intent": copy.deepcopy(dict(source_intent)),
+                "started_at": iso_z(),
+            }
+            updated = copy.deepcopy(state["integration"])
+            updated["intent"] = copy.deepcopy(observation_intent)
+            state = self._epoch_transition(
+                state,
+                lease,
+                "rebase_intent",
+                {"delta": {"integration": updated}},
+            )
+            intent_digest = self._tail_event_digest(state, "rebase_intent")
+
+            def intent_current(
+                expected: Mapping[str, Any] = observation_intent,
+                expected_digest: str = intent_digest,
+            ) -> bool:
+                try:
+                    fresh = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                    return bool(
+                        fresh.get("state") == state.get("state")
+                        and fresh.get("integration", {}).get("condition") == "none"
+                        and fresh.get("integration", {}).get("intent") == expected
+                        and self._tail_event_digest(fresh, "rebase_intent")
+                        == expected_digest
+                    )
+                except (FrozenError, KeyError, OSError, Refusal, ValueError):
+                    return False
+
+            def persist_observation(result: FencedProcessResult) -> None:
+                nonlocal state
+                result_intent = {
+                    **copy.deepcopy(observation_intent),
+                    "phase": f"forge-conflict-observation:{kind}:{name}:result",
+                    "child_result": {
+                        "authorized": result.authorized,
+                        "exit": result.returncode,
+                        "inflight_digest": result.fence_digest,
+                        "output_digest": result.output_digest,
+                        "launch_failed": result.launch_failed,
+                        "timed_out": result.timed_out,
+                        "output_limit_exceeded": result.output_limit,
+                        "group_survived": result.group_survived,
+                    },
+                    "recorded_at": iso_z(),
+                }
+                result_integration = copy.deepcopy(state["integration"])
+                result_integration["intent"] = result_intent
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "rebase_intent",
+                    {"delta": {"integration": result_integration}},
+                )
+
+            result = run_fenced_command(
+                lock,
+                operation="continue",
+                intent_digest=intent_digest,
+                intent_validator=intent_current,
+                argv=argv,
+                cwd=worktree,
+                persist_result=persist_observation,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+            durable_result = state.get("integration", {}).get("intent", {}).get(
+                "child_result"
+            )
+            if (
+                not isinstance(durable_result, Mapping)
+                or durable_result.get("authorized") is not True
+                or durable_result.get("exit") != 0
+                or durable_result.get("launch_failed") is not False
+                or durable_result.get("timed_out") is not False
+                or durable_result.get("output_limit_exceeded") is not False
+                or durable_result.get("group_survived") is not False
+                or durable_result.get("inflight_digest") != result.fence_digest
+                or durable_result.get("output_digest") != result.output_digest
+            ):
+                restore_source_intent()
+                return state, None
+            outputs[name] = result.output
+            output_digests[name] = result.output_digest
+        if not _merge_owned_rebase_metadata(state):
+            restore_source_intent()
+            return state, None
+        observation = (
+            _observe_merge_conflict(
+                outputs["unmerged"], outputs["index"], outputs["status"]
+            )
+            if kind == "conflict"
+            else _observe_merge_post_add(
+                selected_paths,
+                outputs["unmerged"],
+                outputs["index"],
+                outputs["status"],
+            )
+        )
+        restore_source_intent()
+        return state, observation
+
+    def _recover_conflict_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+        *,
+        continue_rebase: bool,
+        abort_rebase: bool,
+        paths: Sequence[str] | None,
+    ) -> dict[str, Any]:
+        integration = copy.deepcopy(state["integration"])
+        epoch = integration.get("epoch")
+        pre_rebase = integration.get("pre_rebase")
+        durable_intent = integration.get("intent")
+        durable_phase = (
+            durable_intent.get("phase")
+            if isinstance(durable_intent, Mapping)
+            else None
+        )
+        conflict_observation_pending = bool(
+            isinstance(durable_intent, Mapping)
+            and isinstance(durable_phase, str)
+            and durable_phase.startswith("forge-conflict-observation:")
+            and isinstance(durable_intent.get("source_intent"), Mapping)
+        )
+        integrated_observation_pending = bool(
+            isinstance(durable_intent, Mapping)
+            and isinstance(durable_phase, str)
+            and durable_phase.startswith("forge-integrated-observation:")
+            and isinstance(durable_intent.get("source_intent"), Mapping)
+        )
+        observation_pending = bool(
+            conflict_observation_pending or integrated_observation_pending
+        )
+        prior_intent = (
+            durable_intent.get("source_intent")
+            if observation_pending and isinstance(durable_intent, Mapping)
+            else durable_intent
+        )
+        prior_conflict = integration.get("conflict")
+        continuation_marker = (
+            prior_conflict.get("continuation_result")
+            if isinstance(prior_conflict, Mapping)
+            else None
+        )
+        abort_marker = (
+            prior_conflict.get("abort_result")
+            if isinstance(prior_conflict, Mapping)
+            else None
+        )
+        abort_result_pending = bool(
+            isinstance(prior_intent, Mapping)
+            and prior_intent.get("operation") == "rebase-result"
+            and isinstance(abort_marker, Mapping)
+            and abort_marker.get("operation_nonce")
+            == prior_intent.get("operation_nonce")
+            and abort_marker.get("inflight_digest")
+            == prior_intent.get("inflight_digest")
+            and abort_marker.get("output_digest")
+            == prior_intent.get("output_digest")
+        )
+        continuation_phase = (
+            "continue-result"
+            if isinstance(prior_intent, Mapping)
+            and prior_intent.get("operation") == "rebase-result"
+            and isinstance(continuation_marker, Mapping)
+            and not abort_result_pending
+            and not abort_rebase
+            else str(prior_intent.get("phase"))
+            if isinstance(prior_intent, Mapping)
+            and prior_intent.get("operation") == "continue"
+            and prior_intent.get("phase") in {"stage-result", "rebase"}
+            and not abort_rebase
+            else None
+        )
+        resume_continue = bool(
+            continuation_phase is not None
+            or conflict_observation_pending
+            or integrated_observation_pending
+            and isinstance(continuation_marker, Mapping)
+            and not abort_result_pending
+        )
+        resume_abort = abort_result_pending
+        if (
+            not continue_rebase
+            and not abort_rebase
+            and not resume_continue
+            and not resume_abort
+        ):
+            return state
+        if not isinstance(epoch, Mapping) or not isinstance(pre_rebase, Mapping):
+            return self._record_foreign_git_locked(state, lease)
+        worktree = Path(str(state["worktree"]["path"]))
+        reflog_action = _merge_rebase_action(state)
+        if reflog_action is None:
+            return self._record_foreign_git_locked(state, lease)
+        identity = {
+            "operation_nonce": epoch["operation_nonce"],
+            "pre_operation_head": pre_rebase["head"],
+            "fetched_tip": pre_rebase["fetched_tip"],
+            "branch": state["branch"],
+            "generation_digest": pre_rebase["generation_digest"],
+            "reflog_action": reflog_action,
+        }
+        environment = os.environ.copy()
+        environment.pop("FORGE_SESSION_PID", None)
+        environment.update(
+            {
+                "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_NO_LAZY_FETCH": "1",
+                "GIT_REFLOG_ACTION": reflog_action,
+            }
+        )
+
+        if continue_rebase or resume_continue:
+            source_paths: Sequence[str] = (
+                paths or ()
+                if continue_rebase
+                else durable_intent.get("authorized_paths", ())
+                if conflict_observation_pending
+                and isinstance(durable_intent, Mapping)
+                else prior_conflict.get("authorized_paths", ())
+                if continuation_phase == "continue-result"
+                and isinstance(prior_conflict, Mapping)
+                else prior_intent.get("authorized_paths", ())
+                if isinstance(prior_intent, Mapping)
+                else ()
+            )
+            try:
+                selected_paths = _normalize_merge_conflict_paths(source_paths)
+            except (TypeError, ValueError):
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge recover refused — conflict paths are invalid",
+                    chain=state,
+                )
+            conflict = integration.get("conflict")
+            conflict_digest = (
+                sha256_bytes(canonical_bytes(dict(conflict)))
+                if isinstance(conflict, Mapping)
+                else None
+            )
+
+            def mark_foreign() -> None:
+                nonlocal state
+                state = self._record_foreign_git_locked(state, lease)
+
+            def refuse_changed_conflict() -> None:
+                raise _merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: merge recover refused — conflict ownership or baselines changed",
+                    expected="the recorded conflict set and non-conflict byte baselines",
+                    observed="foreign or changed Git conflict state",
+                    remediation=(
+                        f"forge merge recover --abort-rebase --chain-id {state['chain_id']}"
+                    ),
+                    chain=state,
+                )
+
+            def phase_intent_valid(
+                candidate: object, *, operation: str, phase: str
+            ) -> bool:
+                return bool(
+                    isinstance(candidate, Mapping)
+                    and candidate.get("operation") == operation
+                    and candidate.get("phase") == phase
+                    and candidate.get("authorized_paths") == list(selected_paths)
+                    and candidate.get("conflict_digest") == conflict_digest
+                    and isinstance(conflict, Mapping)
+                    and candidate.get("index_baseline_digest")
+                    == conflict.get("index_baseline_digest")
+                    and candidate.get("status_baseline_digest")
+                    == conflict.get("status_baseline_digest")
+                    and all(candidate.get(name) == value for name, value in identity.items())
+                )
+
+            def exact_stage_success(candidate: Mapping[str, Any]) -> bool:
+                result = candidate.get("stage_result")
+                return bool(
+                    isinstance(result, Mapping)
+                    and result.get("authorized") is True
+                    and type(result.get("exit")) is int
+                    and result.get("exit") == 0
+                    and result.get("launch_failed") is False
+                    and result.get("timed_out") is False
+                    and result.get("output_limit_exceeded") is False
+                    and result.get("group_survived") is False
+                    and SHA256_RE.fullmatch(str(result.get("inflight_digest", "")))
+                    is not None
+                    and SHA256_RE.fullmatch(str(result.get("output_digest", "")))
+                    is not None
+                )
+
+            def classify_continue_result() -> str:
+                nonlocal state
+                result_intent = state.get("integration", {}).get("intent")
+                current_conflict = state.get("integration", {}).get("conflict")
+                marker = (
+                    current_conflict.get("continuation_result")
+                    if isinstance(current_conflict, Mapping)
+                    else None
+                )
+                result_class = _merge_rebase_result_classification(state)
+                if (
+                    not isinstance(result_intent, Mapping)
+                    or not isinstance(marker, Mapping)
+                    or marker.get("operation_nonce")
+                    != identity["operation_nonce"]
+                    or marker.get("inflight_digest")
+                    != result_intent.get("inflight_digest")
+                    or marker.get("output_digest")
+                    != result_intent.get("output_digest")
+                ):
+                    mark_foreign()
+                    return "foreign"
+                if result_class == "foreign":
+                    mark_foreign()
+                    return (
+                        "failed-foreign"
+                        if result_intent.get("group_survived") is True
+                        else "foreign"
+                    )
+                normal = bool(
+                    type(result_intent.get("exit")) is int
+                    and result_intent.get("launch_failed") is False
+                    and result_intent.get("timed_out") is False
+                    and result_intent.get("output_limit_exceeded") is False
+                    and result_intent.get("group_survived") is False
+                    and SHA256_RE.fullmatch(
+                        str(result_intent.get("inflight_digest", ""))
+                    )
+                    is not None
+                    and SHA256_RE.fullmatch(
+                        str(result_intent.get("output_digest", ""))
+                    )
+                    is not None
+                )
+                ordinary_nonzero = bool(
+                    normal and int(result_intent.get("exit", 0)) > 0
+                )
+                if ordinary_nonzero:
+                    state, next_conflict = self._run_conflict_observation_locked(
+                        state,
+                        lock,
+                        lease,
+                        kind="conflict",
+                        paths=selected_paths,
+                    )
+                    if next_conflict is not None:
+                        updated = copy.deepcopy(state["integration"])
+                        updated["conflict"] = _merge_conflict_record(
+                            state,
+                            next_conflict,
+                            inflight_digest=str(result_intent["inflight_digest"]),
+                            output_digest=str(result_intent["output_digest"]),
+                        )
+                        updated["intent"] = {
+                            "operation": "continue",
+                            **identity,
+                            "phase": "conflict",
+                            "recorded_at": iso_z(),
+                        }
+                        _reset_merge_nonmovement_counter(updated)
+                        state = self._epoch_transition(
+                            state,
+                            lease,
+                            "rebase_conflict",
+                            {
+                                "delta": {
+                                    "state": "rebase_conflict",
+                                    "integration": updated,
+                                }
+                            },
+                        )
+                        return "conflict"
+                if normal and result_intent.get("exit") == 0:
+                    state, integrated_observation = (
+                        self._run_integrated_rebase_observation_locked(
+                            state, lock, lease
+                        )
+                    )
+                    if (
+                        isinstance(integrated_observation, Mapping)
+                        and _merge_rebase_integrated_predicate(
+                            state, integrated_observation
+                        )
+                    ):
+                        observed_head = str(
+                            integrated_observation.get("observed_head", "")
+                        )
+                        try:
+                            state = self._materialize_rebase_success_locked(
+                                state,
+                                lock,
+                                lease,
+                                fetched_tip=str(pre_rebase["fetched_tip"]),
+                                inflight_digest=str(
+                                    result_intent["inflight_digest"]
+                                ),
+                                output_digest=str(result_intent["output_digest"]),
+                                observation=integrated_observation,
+                            )
+                        except (KeyError, OSError, Refusal, ValueError):
+                            pass
+                        else:
+                            return "continued"
+                    updated = copy.deepcopy(state["integration"])
+                    updated.update(
+                        {
+                            "condition": "foreign-git-state",
+                            "primary_condition": "none",
+                        }
+                    )
+                    _reset_merge_nonmovement_counter(updated)
+                    state = self._epoch_transition(
+                        state,
+                        lease,
+                        "rebase_result",
+                        {"delta": {"integration": updated}},
+                    )
+                    return "foreign"
+                if not normal:
+                    mark_foreign()
+                    return "failed-foreign"
+                state, restoration_observation = (
+                    self._run_integrated_rebase_observation_locked(
+                        state, lock, lease
+                    )
+                )
+                restored = bool(
+                    isinstance(restoration_observation, Mapping)
+                    and restoration_observation.get("status_empty") is True
+                    and restoration_observation.get("observed_head")
+                    == pre_rebase.get("head")
+                    and restoration_observation.get("branch") == state.get("branch")
+                    and _merge_rebase_operation_metadata_absent(state)
+                )
+                if not restored:
+                    mark_foreign()
+                    return "failed-foreign"
+                updated = copy.deepcopy(state["integration"])
+                updated.update(
+                    {
+                        "condition": "rebase-failed",
+                        "primary_condition": "none",
+                        "epoch": None,
+                        "conflict": None,
+                    }
+                )
+                _reset_merge_nonmovement_counter(updated)
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "rebase_result",
+                    {
+                        "delta": {
+                            "state": "revising",
+                            "integration": updated,
+                        }
+                    },
+                )
+                return "failed"
+
+            if resume_continue:
+                if not isinstance(prior_intent, Mapping):
+                    mark_foreign()
+                    refuse_changed_conflict()
+                try:
+                    durable_paths = _normalize_merge_conflict_paths(
+                        conflict.get("authorized_paths", ())
+                        if continuation_phase == "continue-result"
+                        and isinstance(conflict, Mapping)
+                        else durable_intent.get("authorized_paths", ())
+                        if observation_pending
+                        and isinstance(durable_intent, Mapping)
+                        else prior_intent.get("authorized_paths", ())
+                    )
+                except (TypeError, ValueError):
+                    durable_paths = ()
+                if selected_paths != durable_paths:
+                    raise _merge_refusal(
+                        V2ReasonCode.STATE_PRECONDITION,
+                        "forge: merge recover refused — requested paths differ from the durable continuation intent",
+                        chain=state,
+                    )
+
+            if continuation_phase == "continue-result":
+                disposition = classify_continue_result()
+                if disposition in {"failed", "failed-foreign"}:
+                    raise _merge_refusal(
+                        V2ReasonCode.REBASE_FAILED,
+                        "forge: merge recover refused — rebase continuation failed",
+                        remediation=f"forge merge refresh --chain-id {state['chain_id']}",
+                        chain=state,
+                    )
+                if disposition == "foreign":
+                    refuse_changed_conflict()
+                return state
+
+            if continuation_phase is None:
+                try:
+                    stored_paths = _normalize_merge_conflict_paths(
+                        conflict.get("authorized_paths", ())
+                        if isinstance(conflict, Mapping)
+                        else ()
+                    )
+                except (TypeError, ValueError):
+                    stored_paths = ()
+                if selected_paths != stored_paths:
+                    raise _merge_refusal(
+                        V2ReasonCode.STATE_PRECONDITION,
+                        "forge: merge recover refused — requested paths differ from the recorded conflict set",
+                        expected=str(list(stored_paths)),
+                        observed=str(list(selected_paths)),
+                        chain=state,
+                    )
+                state, observation = self._run_conflict_observation_locked(
+                    state,
+                    lock,
+                    lease,
+                    kind="conflict",
+                    paths=selected_paths,
+                )
+                if observation is None:
+                    mark_foreign()
+                    refuse_changed_conflict()
+                fresh_paths = tuple(observation["authorized_paths"])
+                if selected_paths != fresh_paths:
+                    raise _merge_refusal(
+                        V2ReasonCode.STATE_PRECONDITION,
+                        "forge: merge recover refused — requested paths differ from the exact unmerged set",
+                        expected=str(list(fresh_paths)),
+                        observed=str(list(selected_paths)),
+                        chain=state,
+                    )
+                if not _merge_conflict_record_matches(state, observation):
+                    mark_foreign()
+                    refuse_changed_conflict()
+                stage_intent = {
+                    "operation": "continue",
+                    **identity,
+                    "phase": "stage",
+                    "authorized_paths": list(selected_paths),
+                    "conflict_digest": conflict_digest,
+                    "index_baseline_digest": observation["index_baseline_digest"],
+                    "status_baseline_digest": observation["status_baseline_digest"],
+                    "started_at": iso_z(),
+                }
+                staged = copy.deepcopy(state["integration"])
+                staged["intent"] = copy.deepcopy(stage_intent)
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "rebase_intent",
+                    {"delta": {"integration": staged}},
+                )
+                stage_intent_digest = self._tail_event_digest(state, "rebase_intent")
+
+                def stage_intent_current() -> bool:
+                    try:
+                        fresh = self.store.load_locked(
+                            str(state["chain_id"]), lease=lease
+                        )
+                        return bool(
+                            fresh.get("state") == "rebase_conflict"
+                            and fresh.get("integration", {}).get("condition") == "none"
+                            and fresh.get("integration", {}).get("intent") == stage_intent
+                            and self._tail_event_digest(fresh, "rebase_intent")
+                            == stage_intent_digest
+                        )
+                    except (FrozenError, KeyError, OSError, Refusal, ValueError):
+                        return False
+
+                def persist_stage(result: FencedProcessResult) -> None:
+                    nonlocal state
+                    stage_result = {
+                        **copy.deepcopy(stage_intent),
+                        "phase": "stage-result",
+                        "stage_result": {
+                            "authorized": result.authorized,
+                            "exit": result.returncode,
+                            "inflight_digest": result.fence_digest,
+                            "output_digest": result.output_digest,
+                            "launch_failed": result.launch_failed,
+                            "timed_out": result.timed_out,
+                            "output_limit_exceeded": result.output_limit,
+                            "group_survived": result.group_survived,
+                        },
+                        "recorded_at": iso_z(),
+                    }
+                    updated = copy.deepcopy(state["integration"])
+                    updated["intent"] = stage_result
+                    state = self._epoch_transition(
+                        state,
+                        lease,
+                        "rebase_intent",
+                        {"delta": {"integration": updated}},
+                    )
+
+                run_fenced_command(
+                    lock,
+                    operation="continue",
+                    intent_digest=stage_intent_digest,
+                    intent_validator=stage_intent_current,
+                    argv=["git", "--literal-pathspecs", "add", "--", *selected_paths],
+                    cwd=worktree,
+                    persist_result=persist_stage,
+                    env=environment,
+                    timeout=COMMAND_TIMEOUT_SECONDS,
+                    cap=OUTPUT_CAP_BYTES,
+                    verbose=self.ctx.options.verbose,
+                )
+                continuation_phase = "stage-result"
+
+            if continuation_phase == "stage-result":
+                stage_result = state.get("integration", {}).get("intent")
+                if (
+                    not phase_intent_valid(
+                        stage_result, operation="continue", phase="stage-result"
+                    )
+                    or not isinstance(stage_result, Mapping)
+                    or not exact_stage_success(stage_result)
+                ):
+                    mark_foreign()
+                    raise _merge_refusal(
+                        V2ReasonCode.REBASE_FAILED,
+                        "forge: merge recover refused — literal conflict staging failed",
+                        remediation=(
+                            f"forge merge recover --abort-rebase --chain-id {state['chain_id']}"
+                        ),
+                        chain=state,
+                    )
+                state, post_add = self._run_conflict_observation_locked(
+                    state,
+                    lock,
+                    lease,
+                    kind="post-add",
+                    paths=selected_paths,
+                )
+                if (
+                    post_add is None
+                    or post_add["nonconflict_index_digest"]
+                    != stage_result.get("index_baseline_digest")
+                    or post_add["nonconflict_status_digest"]
+                    != stage_result.get("status_baseline_digest")
+                ):
+                    mark_foreign()
+                    refuse_changed_conflict()
+                rebase_intent = {
+                    **copy.deepcopy(dict(stage_result)),
+                    "phase": "rebase",
+                    "post_add_index_digest": post_add["index_digest"],
+                    "post_add_status_digest": post_add["status_digest"],
+                    "post_add_nonconflict_index_digest": post_add[
+                        "nonconflict_index_digest"
+                    ],
+                    "post_add_nonconflict_status_digest": post_add[
+                        "nonconflict_status_digest"
+                    ],
+                    "recorded_at": iso_z(),
+                }
+                updated = copy.deepcopy(state["integration"])
+                updated["intent"] = rebase_intent
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "rebase_intent",
+                    {"delta": {"integration": updated}},
+                )
+                continuation_phase = "rebase"
+
+            rebase_intent = state.get("integration", {}).get("intent")
+            state, post_add = self._run_conflict_observation_locked(
+                state,
+                lock,
+                lease,
+                kind="post-add",
+                paths=selected_paths,
+            )
+            if (
+                continuation_phase != "rebase"
+                or not phase_intent_valid(
+                    rebase_intent, operation="continue", phase="rebase"
+                )
+                or not isinstance(rebase_intent, Mapping)
+                or not exact_stage_success(rebase_intent)
+                or post_add is None
+                or post_add["index_digest"]
+                != rebase_intent.get("post_add_index_digest")
+                or post_add["status_digest"]
+                != rebase_intent.get("post_add_status_digest")
+                or post_add["nonconflict_index_digest"]
+                != rebase_intent.get("index_baseline_digest")
+                or post_add["nonconflict_status_digest"]
+                != rebase_intent.get("status_baseline_digest")
+                or post_add["nonconflict_index_digest"]
+                != rebase_intent.get("post_add_nonconflict_index_digest")
+                or post_add["nonconflict_status_digest"]
+                != rebase_intent.get("post_add_nonconflict_status_digest")
+            ):
+                mark_foreign()
+                refuse_changed_conflict()
+            rebase_intent_digest = self._tail_event_digest(state, "rebase_intent")
+
+            def rebase_intent_current() -> bool:
+                try:
+                    fresh = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                    return bool(
+                        fresh.get("state") == "rebase_conflict"
+                        and fresh.get("integration", {}).get("condition") == "none"
+                        and fresh.get("integration", {}).get("intent")
+                        == rebase_intent
+                        and self._tail_event_digest(fresh, "rebase_intent")
+                        == rebase_intent_digest
+                    )
+                except (FrozenError, KeyError, OSError, Refusal, ValueError):
+                    return False
+
+            def persist_continue(result: FencedProcessResult) -> None:
+                nonlocal state
+                succeeded = bool(
+                    result.returncode == 0
+                    and not result.launch_failed
+                    and not result.timed_out
+                    and not result.output_limit
+                    and not result.group_survived
+                )
+                result_intent = {
+                    "operation": "rebase-result",
+                    **identity,
+                    "result": "success" if succeeded else "failed",
+                    "exit": result.returncode,
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                    "launch_failed": result.launch_failed,
+                    "timed_out": result.timed_out,
+                    "output_limit_exceeded": result.output_limit,
+                    "group_survived": result.group_survived,
+                    "recorded_at": iso_z(),
+                }
+                updated = copy.deepcopy(state["integration"])
+                updated["intent"] = result_intent
+                updated_conflict = copy.deepcopy(updated.get("conflict"))
+                if not isinstance(updated_conflict, dict):
+                    raise FrozenError(
+                        "merge continuation result lost its conflict identity",
+                        chain_id=str(state["chain_id"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                updated_conflict["continuation_result"] = {
+                    "operation_nonce": identity["operation_nonce"],
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                }
+                updated["conflict"] = updated_conflict
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "rebase_intent",
+                    {"delta": {"integration": updated}},
+                )
+
+            continue_environment = environment.copy()
+            continue_environment["GIT_EDITOR"] = "true"
+            run_fenced_command(
+                lock,
+                operation="continue",
+                intent_digest=rebase_intent_digest,
+                intent_validator=rebase_intent_current,
+                argv=["git", "rebase", "--continue"],
+                cwd=worktree,
+                persist_result=persist_continue,
+                env=continue_environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+            disposition = classify_continue_result()
+            if disposition in {"failed", "failed-foreign"}:
+                raise _merge_refusal(
+                    V2ReasonCode.REBASE_FAILED,
+                    "forge: merge recover refused — rebase continuation failed",
+                    remediation=f"forge merge refresh --chain-id {state['chain_id']}",
+                    chain=state,
+                )
+            if disposition == "foreign":
+                refuse_changed_conflict()
+            return state
+
+        if not resume_abort:
+            abort_intent = {
+                "operation": "abort",
+                **identity,
+                "started_at": iso_z(),
+            }
+            integration["intent"] = copy.deepcopy(abort_intent)
+            state = self._epoch_transition(
+                state,
+                lease,
+                "rebase_intent",
+                {"delta": {"integration": integration}},
+            )
+            intent_digest = self._tail_event_digest(state, "rebase_intent")
+
+            def abort_intent_current() -> bool:
+                try:
+                    fresh = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                    return bool(
+                        fresh.get("state") == "rebase_conflict"
+                        and fresh.get("integration", {}).get("condition") == "none"
+                        and fresh.get("integration", {}).get("intent")
+                        == abort_intent
+                        and self._tail_event_digest(fresh, "rebase_intent")
+                        == intent_digest
+                    )
+                except (FrozenError, KeyError, OSError, Refusal, ValueError):
+                    return False
+
+            def persist_abort(result: FencedProcessResult) -> None:
+                nonlocal state
+                succeeded = bool(
+                    result.returncode == 0
+                    and not result.launch_failed
+                    and not result.timed_out
+                    and not result.output_limit
+                    and not result.group_survived
+                )
+                result_intent = {
+                    "operation": "rebase-result",
+                    **identity,
+                    "result": "success" if succeeded else "failed",
+                    "exit": result.returncode,
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                    "launch_failed": result.launch_failed,
+                    "timed_out": result.timed_out,
+                    "output_limit_exceeded": result.output_limit,
+                    "group_survived": result.group_survived,
+                    "recorded_at": iso_z(),
+                }
+                updated = copy.deepcopy(state["integration"])
+                updated["intent"] = result_intent
+                updated_conflict = copy.deepcopy(updated.get("conflict"))
+                if not isinstance(updated_conflict, dict):
+                    raise FrozenError(
+                        "merge abort result lost its conflict identity",
+                        chain_id=str(state["chain_id"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                updated_conflict["abort_result"] = {
+                    "operation_nonce": identity["operation_nonce"],
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                }
+                updated["conflict"] = updated_conflict
+                state = self._epoch_transition(
+                    state,
+                    lease,
+                    "rebase_intent",
+                    {"delta": {"integration": updated}},
+                )
+
+            run_fenced_command(
+                lock,
+                operation="abort",
+                intent_digest=intent_digest,
+                intent_validator=abort_intent_current,
+                argv=[
+                    "git",
+                    "--no-pager",
+                    "-C",
+                    str(worktree),
+                    "rebase",
+                    "--abort",
+                ],
+                cwd=worktree,
+                persist_result=persist_abort,
+                env=environment,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                cap=OUTPUT_CAP_BYTES,
+                verbose=self.ctx.options.verbose,
+            )
+
+        raw_abort_result = state.get("integration", {}).get("intent")
+        current_conflict = state.get("integration", {}).get("conflict")
+        current_abort_marker = (
+            current_conflict.get("abort_result")
+            if isinstance(current_conflict, Mapping)
+            else None
+        )
+        result_class = _merge_rebase_result_classification(state)
+        if (
+            not isinstance(raw_abort_result, Mapping)
+            or not isinstance(current_abort_marker, Mapping)
+            or current_abort_marker.get("operation_nonce")
+            != identity["operation_nonce"]
+            or current_abort_marker.get("inflight_digest")
+            != raw_abort_result.get("inflight_digest")
+            or current_abort_marker.get("output_digest")
+            != raw_abort_result.get("output_digest")
+            or result_class not in {"success", "failed"}
+        ):
+            return self._record_foreign_git_locked(state, lease)
+
+        state, restoration_observation = (
+            self._run_integrated_rebase_observation_locked(state, lock, lease)
+        )
+        restored = bool(
+            isinstance(restoration_observation, Mapping)
+            and restoration_observation.get("status_empty") is True
+            and restoration_observation.get("observed_head")
+            == pre_rebase.get("head")
+            and restoration_observation.get("branch") == state.get("branch")
+            and _merge_rebase_operation_metadata_absent(state)
+        )
+        if not restored:
+            return self._record_foreign_git_locked(state, lease)
+        updated = copy.deepcopy(state["integration"])
+        _reset_merge_nonmovement_counter(updated)
+        updated.update(
+            {
+                "condition": "rebase-failed",
+                "primary_condition": "none",
+                "epoch": None,
+                "conflict": None,
+            }
+        )
+        state = self._epoch_transition(
+            state,
+            lease,
+            "rebase_result",
+            {
+                "delta": {
+                    "state": "revising",
+                    "integration": updated,
+                }
+            },
+        )
+        return state
+
+    def _bootstrap_pending_classification_inputs_locked(
+        self,
+        state: Mapping[str, Any],
+        admission: MergeAdmission,
+    ) -> MergeBootstrapClassification:
+        """Recover the authenticated inputs carried by a successful result."""
+
+        if not _merge_bootstrap_classification_pending(state):
+            raise FrozenError(
+                "merge bootstrap classification snapshot is not pending",
+                chain_id=str(state.get("chain_id", "")) or None,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        candidate = state["candidate"]
+        with self.store.event_lock(str(state["chain_id"])):
+            replay = self.store._read_replay_locked(str(state["chain_id"]))
+        selected: Mapping[str, Any] | None = None
+        for event in reversed(replay.events):
+            payload = event.get("payload")
+            delta = payload.get("delta") if isinstance(payload, Mapping) else None
+            integration = (
+                delta.get("integration") if isinstance(delta, Mapping) else None
+            )
+            if (
+                event.get("event") == "fetch_result"
+                and event.get("generation_digest")
+                == candidate.get("generation_digest")
+                and isinstance(payload, Mapping)
+                and integration == state.get("integration")
+            ):
+                selected = event
+                break
+        if selected is None:
+            raise FrozenError(
+                "merge bootstrap classification result evidence is unavailable",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        payload = selected["payload"]
+        try:
+            binding = _validate_merge_scope_fetch_binding(
+                payload.get("scope_fetch_binding")
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FrozenError(
+                "merge bootstrap classification sidecar is malformed",
+                chain_id=str(state["chain_id"]),
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        if (
+            binding.get("chain_id") != state.get("chain_id")
+            or binding.get("candidate_head") != candidate.get("candidate_head")
+            or binding.get("remote_tip") != candidate.get("remote_tip")
+            or binding.get("full_patch_output_digest")
+            != candidate.get("diff_sha256")
+        ):
+            raise FrozenError(
+                "merge bootstrap classification sidecar changed its candidate",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        proof = payload.get("scope_proof")
+        scope: MergeScopeResult | None = None
+        if admission.run_task is not None:
+            scope_request = _merge_scope_request(admission)
+            if not _validate_merge_scope_proof(
+                proof,
+                state=state,
+                binding=binding,
+                scope_request=scope_request,
+            ):
+                raise FrozenError(
+                    "merge bootstrap classification scope proof is malformed",
+                    chain_id=str(state["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            assert isinstance(proof, Mapping)
+            scope = MergeScopeResult(
+                argv=tuple(
+                    _merge_scope_argv(
+                        admission.worktree,
+                        str(candidate["remote_tip"]),
+                        str(candidate["candidate_head"]),
+                    )
+                ),
+                command_digest=str(proof["command_digest"]),
+                environment_digest=str(proof["environment_digest"]),
+                output_digest=str(proof["output_digest"]),
+                changed_paths=tuple(proof["changed_paths"]),
+                out_of_scope_paths=tuple(proof["out_of_scope_paths"]),
+                result=str(proof["result"]),
+            )
+        elif proof is not None:
+            raise FrozenError(
+                "unbound merge bootstrap carried a scope proof",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return MergeBootstrapClassification(
+            candidate=copy.deepcopy(dict(candidate)),
+            scope=scope,
+            full_patch_output_digest=str(binding["full_patch_output_digest"]),
+            scope_proof_digest=(
+                str(proof["digest"]) if isinstance(proof, Mapping) else None
+            ),
+            fetch_result_event_digest=str(selected["digest"]),
+            verb="merge recover",
+        )
+
+    def _recover_classifying_bootstrap_v12_locked(
+        self,
+        state: dict[str, Any],
+        lease: ChainLease,
+    ) -> tuple[
+        dict[str, Any],
+        str,
+        MergeAdmission | None,
+        MergeBootstrapClassification | None,
+    ]:
+        """Classify the Revision-12 pre-sidecar and surviving-sidecar windows."""
+
+        _require_merge_integration_control("composite-bootstrap-streaming")
+        intent = state.get("integration", {}).get("intent")
+        if _merge_bootstrap_classification_pending(state):
+            admission = self._admission_for_refresh(
+                state, verb="merge recover"
+            )
+            pending = self._bootstrap_pending_classification_inputs_locked(
+                state, admission
+            )
+            return state, "classification-pending", admission, pending
+        if (
+            state.get("state") == "classifying"
+            and state.get("integration", {}).get("condition") == "fetch-failed"
+            and state.get("candidate") is None
+            and state.get("tier") is None
+            and not isinstance(state.get("run_binding"), Mapping)
+            and isinstance(intent, Mapping)
+            and set(intent)
+            == {
+                "operation",
+                "operation_nonce",
+                "attempt",
+                "result",
+                "resolved_tip",
+            }
+            and intent.get("operation") == "fetch-result"
+            and _valid_nonce(intent.get("operation_nonce"))
+            and _valid_positive_int(intent.get("attempt"))
+            and intent.get("result") == "failed"
+            and intent.get("resolved_tip") is None
+        ):
+            raise _merge_refusal(
+                V2ReasonCode.FETCH_FAILED,
+                "forge: merge recover refused — fixed target fetch failed",
+                expected="merge refresh to begin one fresh bootstrap epoch",
+                observed="the prior composite bootstrap did not PASS",
+                remediation=(
+                    f"forge merge refresh --chain-id {state['chain_id']}"
+                ),
+                chain=state,
+            )
+        if (
+            not isinstance(intent, Mapping)
+            or intent.get("operation") != "fetch"
+            or not _valid_nonce(intent.get("operation_nonce"))
+            or not _valid_positive_int(intent.get("attempt"))
+            or COMMIT_RE.fullmatch(str(intent.get("pre_fetch_head", ""))) is None
+        ):
+            raise FrozenError(
+                "interrupted merge bootstrap intent is malformed",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        operation_nonce = str(intent["operation_nonce"])
+        attempt = int(intent["attempt"])
+        run_bound = isinstance(state.get("run_binding"), Mapping)
+        admission = self._admission_for_refresh(
+            state, verb="merge recover"
+        )
+        binding = self._recover_merge_bootstrap_scope_binding(
+            state, admission, fence=None
+        )
+
+        def record_failure(
+            sidecar: Mapping[str, Any] | None,
+        ) -> dict[str, Any]:
+            integration = copy.deepcopy(state["integration"])
+            integration.update(
+                {
+                    "condition": "none" if run_bound else "fetch-failed",
+                    "primary_condition": "none",
+                    "intent": {
+                        "operation": "fetch-result",
+                        "operation_nonce": operation_nonce,
+                        "attempt": attempt,
+                        "result": "failed",
+                        "resolved_tip": None,
+                    },
+                }
+            )
+            return self._epoch_transition(
+                state,
+                lease,
+                "fetch_result",
+                {
+                    "delta": {"integration": integration},
+                    "scope_fetch_binding": (
+                        copy.deepcopy(dict(sidecar))
+                        if isinstance(sidecar, Mapping)
+                        else None
+                    ),
+                    "scope_proof": None,
+                },
+                generation_digest=(
+                    str(state["candidate"]["generation_digest"])
+                    if isinstance(state.get("candidate"), Mapping)
+                    else None
+                ),
+            )
+
+        if binding is None:
+            failed = record_failure(None)
+            if not run_bound:
+                return failed, "fetch-failed", None, None
+            terminal = self._release_to_aborted_locked(
+                failed,
+                lease,
+                reason="run/task scope derivation is invalid",
+            )
+            raise _merge_refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: merge recover refused — run/task scope derivation is invalid",
+                expected="a surviving authenticated composite-bootstrap sidecar",
+                observed="scope-fetch sidecar absent",
+                chain=terminal,
+            )
+        if run_bound:
+            failed = record_failure(binding)
+            terminal = self._release_to_aborted_locked(
+                failed,
+                lease,
+                reason="run/task scope derivation is invalid",
+            )
+            raise _merge_refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: merge recover refused — run/task scope derivation is invalid",
+                expected="ordinary abort after the surviving run-bound sidecar",
+                observed=str(binding.get("digest")),
+                chain=terminal,
+            )
+
+        fixed_tip = str(binding["remote_tip"])
+        generation_number = (
+            int(state["candidate"]["generation"]) + 1
+            if isinstance(state.get("candidate"), Mapping)
+            else 1
+        )
+        try:
+            candidate = _retain_or_advance_merge_candidate(
+                admission,
+                fixed_tip,
+                prior_candidate=state.get("candidate"),
+                generation=generation_number,
+                diff_output_digest=str(binding["full_patch_output_digest"]),
+            )
+        except (TypeError, ValueError) as exc:
+            raise FrozenError(
+                "surviving composite-bootstrap sidecar cannot materialize its generation",
+                chain_id=str(state["chain_id"]),
+                observed=str(exc),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            ) from exc
+        integration = copy.deepcopy(state["integration"])
+        integration.update(
+            {
+                "condition": "none",
+                "primary_condition": "none",
+                "intent": {
+                    "operation": "fetch-result",
+                    "operation_nonce": operation_nonce,
+                    "attempt": attempt,
+                    "result": "success",
+                    "resolved_tip": fixed_tip,
+                },
+            }
+        )
+        desired = {
+            "candidate": copy.deepcopy(candidate),
+            "tier": None,
+            "state": "classifying",
+            "policy_source": {
+                "commit": admission.policy.sha,
+                "digest": admission.policy.digest,
+            },
+            "steps": {},
+            "review": (
+                {"iteration": state["review"]["iteration"]}
+                if isinstance(state.get("review"), Mapping)
+                and type(state["review"].get("iteration")) is int
+                else {}
+            ),
+            "approval": {},
+            "authorization": {},
+            "integration": integration,
+        }
+        current = self._epoch_transition(
+            state,
+            lease,
+            "fetch_result",
+            {
+                "delta": {
+                    name: value
+                    for name, value in desired.items()
+                    if state.get(name) != value or name == "state"
+                },
+                "scope_fetch_binding": copy.deepcopy(dict(binding)),
+                "scope_proof": None,
+            },
+            generation_digest=str(candidate["generation_digest"]),
+        )
+        pending = self._bootstrap_pending_classification_inputs_locked(
+            current, admission
+        )
+        return current, "classification-pending", admission, pending
+
+    def _recover_classifying_bootstrap_locked(
+        self,
+        state: dict[str, Any],
+        lock: CommonRebaseLock,
+        lease: ChainLease,
+    ) -> tuple[
+        dict[str, Any],
+        str,
+        MergeAdmission | None,
+        MergeBootstrapClassification | None,
+    ]:
+        """Finish one interrupted bootstrap from its durable raw child result."""
+
+        del lock
+        return self._recover_classifying_bootstrap_v12_locked(state, lease)
+
+
+    def recover(
+        self,
+        *,
+        continue_rebase: bool = False,
+        paths: Sequence[str] | None = None,
+        abort_rebase: bool = False,
+    ) -> Outcome:
+        """Observation-first reconciliation for one dormant merge chain."""
+
+        self._git_no_lazy_fetch_qualification = None
+        for control in _REQUIRED_MERGE_INTEGRATION_CONTROLS:
+            _require_merge_integration_control(control)
+        explicit_conflict_mode = bool(continue_rebase or abort_rebase)
+        state = (
+            self._read_only_recovery_flag_state()
+            if explicit_conflict_mode
+            else self._load()
+        )
+        if continue_rebase and abort_rebase:
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge recover refused — recovery modes are mutually exclusive",
+                chain=state,
+            )
+        if bool(paths) != bool(continue_rebase):
+            raise _merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: merge recover refused — --continue requires --paths and --paths requires --continue",
+                chain=state,
+            )
+        _require_loud_merge_recovery_mode(
+            state,
+            continue_rebase=continue_rebase,
+            abort_rebase=abort_rebase,
+        )
+        if explicit_conflict_mode:
+            state = self._load()
+            _require_loud_merge_recovery_mode(
+                state,
+                continue_rebase=continue_rebase,
+                abort_rebase=abort_rebase,
+            )
+        self._halt(state)
+        if self._recover_can_reach_final_mode(
+            state,
+            continue_rebase=continue_rebase,
+            abort_rebase=abort_rebase,
+        ):
+            self._prepare_git_no_lazy_fetch_qualification(state)
+        binding = state.get("run_binding")
+        action = "observed"
+        pending_admission: MergeAdmission | None = None
+        pending_classification: MergeBootstrapClassification | None = None
+        budget = _MergeEpochBudget()
+        with self.store._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ):
+            with self._recording_common_lock(
+                Path(str(state["worktree"]["common_dir"])),
+                chain_id=str(state["chain_id"]),
+                operation="recover",
+            ) as common_lock:
+                with acquire_chain_lease(
+                    self.store.root,
+                    chain_id=str(state["chain_id"]),
+                    session=self.store._session(None),
+                    exclusion=common_lock,
+                ) as lease:
+                    current = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                    _require_loud_merge_recovery_mode(
+                        current,
+                        continue_rebase=continue_rebase,
+                        abort_rebase=abort_rebase,
+                    )
+                    interrupted_candidate_observation = bool(
+                        isinstance(
+                            current.get("integration", {}).get("intent"),
+                            Mapping,
+                        )
+                        and current["integration"]["intent"].get("schema")
+                        == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+                    )
+                    current, _source_intent, observation_restored = (
+                        self._restore_candidate_observation_intent_locked(
+                            current, lease
+                        )
+                    )
+                    if not observation_restored:
+                        current = self._record_foreign_git_locked(
+                            current, lease
+                        )
+                    bootstrap_intent = current.get("integration", {}).get(
+                        "intent"
+                    )
+                    if (
+                        isinstance(bootstrap_intent, Mapping)
+                        and bootstrap_intent.get("schema")
+                        == _BOOTSTRAP_FETCH_OBSERVATION_SCHEMA
+                        and not _bootstrap_fetch_observation_record_valid(
+                            current, bootstrap_intent
+                        )
+                    ):
+                        current = self._record_foreign_git_locked(
+                            current, lease
+                        )
+                    claim_status = current.get("worktree", {}).get(
+                        "claim", {}
+                    ).get("status")
+                    if claim_status in {"releasing", "released"} and current[
+                        "state"
+                    ] not in {"closed", "aborted"}:
+                        current = self._complete_pending_release_locked(
+                            current, lease
+                        )
+                        action = "terminal"
+                    elif current.get("integration", {}).get("condition") == (
+                        "lock-release-failed"
+                    ):
+                        integration = copy.deepcopy(current["integration"])
+                        integration.update(
+                            {
+                                "condition": integration["primary_condition"],
+                                "primary_condition": "none",
+                            }
+                        )
+                        current = self._epoch_transition(
+                            current,
+                            lease,
+                            "lock_release_result",
+                            {"delta": {"integration": integration}},
+                        )
+                        action = "lock-release"
+                    elif current["state"] == "classifying":
+                        if continue_rebase or abort_rebase:
+                            self._wrong_state(
+                                current,
+                                "bare recovery for an interrupted bootstrap",
+                                "merge recover",
+                            )
+                        (
+                            current,
+                            action,
+                            pending_admission,
+                            pending_classification,
+                        ) = self._recover_classifying_bootstrap_locked(
+                            current, common_lock, lease
+                        )
+                    elif current["state"] == "pushing":
+                        retry_candidate = bool(
+                            not _merge_inactive(current)
+                            and _merge_old_tip_all_false(current)
+                            and isinstance(
+                                current.get("integration", {}).get("push"),
+                                Mapping,
+                            )
+                            and (
+                                current.get("integration", {})
+                                .get("push", {})
+                                .get("result")
+                                is None
+                                or isinstance(
+                                    current.get("integration", {})
+                                    .get("push", {})
+                                    .get("result"),
+                                    Mapping,
+                                )
+                            )
+                        )
+                        prior_observation_digest = (
+                            self._tail_event_digest(current, "push_observed")
+                            if retry_candidate
+                            else None
+                        )
+                        current = self._run_remote_observation(
+                            current,
+                            common_lock,
+                            lease,
+                            budget,
+                            phase="post-push",
+                            budget_member=(
+                                "pre_observations" if retry_candidate else None
+                            ),
+                        )
+                        fresh_observation_digest = (
+                            self._tail_event_digest(current, "push_observed")
+                            if retry_candidate
+                            else None
+                        )
+                        if (
+                            retry_candidate
+                            and fresh_observation_digest
+                            != prior_observation_digest
+                            and current["state"] == "pushing"
+                            and not _merge_inactive(current)
+                            and _merge_old_tip_all_false(current)
+                        ):
+                            current = self._run_epoch_push(
+                                current,
+                                common_lock,
+                                lease,
+                                budget,
+                                retry=True,
+                            )
+                        action = (
+                            "pushed"
+                            if current["state"] == "pushed"
+                            else "observed"
+                        )
+                    elif current["state"] == "reverification_failed":
+                        current, candidate_observation = (
+                            self._run_candidate_observation_locked(
+                                current,
+                                common_lock,
+                                lease,
+                                verb="merge recover",
+                                remote_tip=str(
+                                    current["candidate"]["remote_tip"]
+                                ),
+                                expected_head=str(
+                                    current["candidate"]["candidate_head"]
+                                ),
+                                classify=False,
+                            )
+                        )
+                        _repository, observed_policy, _paths = (
+                            _observe_current_merge_candidate(
+                                self.ctx,
+                                current,
+                                verb="merge recover",
+                                observation=candidate_observation,
+                            )
+                        )
+                        current = self._begin_epoch(
+                            current,
+                            lease,
+                            retry=True,
+                            observed_policy=observed_policy,
+                        )
+                        current, action = self._finish_recovered_epoch_locked(
+                            current, common_lock, lease, budget
+                        )
+                    elif current["state"] == "reverifying":
+                        current, action = self._finish_recovered_epoch_locked(
+                            current, common_lock, lease, budget
+                        )
+                    elif current["state"] == "rebase_conflict":
+                        current = self._recover_conflict_locked(
+                            current,
+                            common_lock,
+                            lease,
+                            continue_rebase=continue_rebase,
+                            abort_rebase=abort_rebase,
+                            paths=paths,
+                        )
+                        if current["state"] == "reverifying":
+                            current, action = self._finish_recovered_epoch_locked(
+                                current, common_lock, lease, budget
+                            )
+                        else:
+                            action = "conflict"
+                    elif current["state"] == "rebasing":
+                        intent = current.get("integration", {}).get("intent")
+                        plan = current.get("integration", {}).get("epoch", {}).get(
+                            "gate_plan"
+                        )
+                        fetch_observation_phase = bool(
+                            isinstance(intent, Mapping)
+                            and (
+                                intent.get("schema")
+                                == _EPOCH_FETCH_OBSERVATION_SCHEMA
+                                or intent.get("schema")
+                                == "forge-epoch-ancestry-intent/1"
+                                or (
+                                    intent.get("schema")
+                                    == _MERGE_CANDIDATE_OBSERVATION_SCHEMA
+                                    and isinstance(
+                                        intent.get("source_intent"), Mapping
+                                    )
+                                    and intent.get("source_intent", {}).get(
+                                        "schema"
+                                    )
+                                    == _EPOCH_FETCH_OBSERVATION_SCHEMA
+                                )
+                            )
+                        )
+                        if fetch_observation_phase:
+                            current, fetched_tip, unchanged = (
+                                self._complete_epoch_fetch_locked(
+                                    current, common_lock, lease
+                                )
+                            )
+                            if not unchanged:
+                                current = self._run_epoch_rebase(
+                                    current,
+                                    fetched_tip,
+                                    common_lock,
+                                    lease,
+                                    budget,
+                                )
+                            current, action = self._finish_recovered_epoch_locked(
+                                current, common_lock, lease, budget
+                            )
+                        elif isinstance(plan, Mapping) and plan.get("status") == "sealed":
+                            current, action = self._finish_recovered_epoch_locked(
+                                current, common_lock, lease, budget
+                            )
+                        elif isinstance(intent, Mapping) and (
+                            intent.get("operation") in {"rebase", "rebase-result"}
+                            or intent.get("operation") == "continue"
+                            and isinstance(intent.get("phase"), str)
+                            and str(intent["phase"]).startswith(
+                                "forge-conflict-observation:"
+                            )
+                        ):
+                            current = self._recover_rebase_observation_locked(
+                                current, common_lock, lease
+                            )
+                            if current["state"] == "reverifying":
+                                current, action = self._finish_recovered_epoch_locked(
+                                    current, common_lock, lease, budget
+                                )
+                        elif isinstance(intent, Mapping) and intent.get(
+                            "operation"
+                        ) == "fetch-result" and intent.get("result") == "success":
+                            current = self._run_epoch_rebase(
+                                current,
+                                str(intent["resolved_tip"]),
+                                common_lock,
+                                lease,
+                                budget,
+                            )
+                            current, action = self._finish_recovered_epoch_locked(
+                                current, common_lock, lease, budget
+                            )
+                        else:
+                            current, fetched_tip, unchanged = self._run_epoch_fetch(
+                                current,
+                                common_lock,
+                                lease,
+                                budget,
+                                resume_intent=bool(
+                                    isinstance(intent, Mapping)
+                                    and intent.get("operation") == "fetch"
+                                ),
+                            )
+                            if not unchanged:
+                                current = self._run_epoch_rebase(
+                                    current,
+                                    fetched_tip,
+                                    common_lock,
+                                    lease,
+                                    budget,
+                                )
+                            current, action = self._finish_recovered_epoch_locked(
+                                current, common_lock, lease, budget
+                            )
+                    elif current["state"] == "authorized" and current.get(
+                        "integration", {}
+                    ).get("condition") in {
+                        "fetch-failed",
+                        "remote-moved",
+                        "non-fast-forward",
+                    }:
+                        current = self._begin_epoch(current, lease)
+                        current, fetched_tip, unchanged = self._run_epoch_fetch(
+                            current, common_lock, lease, budget
+                        )
+                        if not unchanged:
+                            current = self._run_epoch_rebase(
+                                current,
+                                fetched_tip,
+                                common_lock,
+                                lease,
+                                budget,
+                            )
+                        current, action = self._finish_recovered_epoch_locked(
+                            current, common_lock, lease, budget
+                        )
+                    elif current.get("integration", {}).get("condition") == (
+                        "foreign-git-state"
+                    ):
+                        current = self._record_foreign_git_locked(current, lease)
+                        action = "foreign"
+                    elif interrupted_candidate_observation:
+                        action = "observed"
+                    else:
+                        self._wrong_state(
+                            current,
+                            "a recoverable merge condition or interrupted epoch",
+                            "merge recover",
+                        )
+        if pending_classification is not None:
+            if pending_admission is None:
+                raise FrozenError(
+                    "merge bootstrap recovery lost its classification admission",
+                    chain_id=str(current["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            current, _generation = self._complete_bootstrap_classification(
+                current,
+                pending_admission,
+                pending_classification,
+            )
+            action = "classified"
+        if current["state"] == "pushing":
+            condition = current["integration"]["condition"]
+            reason = (
+                V2ReasonCode.PUSH_FAILED
+                if condition == "push-failed"
+                else V2ReasonCode.PUSH_OUTCOME_UNKNOWN
+                if condition == "push-outcome-unknown"
+                else V2ReasonCode.NON_FAST_FORWARD
+                if condition == "non-fast-forward"
+                else None
+            )
+            if reason is not None:
+                raise _merge_refusal(
+                    reason,
+                    f"forge: merge recover observed {condition}",
+                    remediation=f"forge merge recover --chain-id {current['chain_id']}",
+                    chain=current,
+                )
+        next_steps = {
+            "pushed": f"forge merge cleanup --chain-id {current['chain_id']}",
+            "pushing": f"forge merge recover --chain-id {current['chain_id']}",
+            "reviewing": f"forge review request --chain-id {current['chain_id']}",
+            "authorized": f"forge merge finalize --chain-id {current['chain_id']}",
+            "revising": f"forge merge refresh --chain-id {current['chain_id']}",
+            "rebase_conflict": (
+                f"forge merge recover --continue --paths <path>... --chain-id {current['chain_id']}"
+            ),
+            "closed": "none — merge chain closed",
+            "aborted": "none — merge chain aborted",
+        }
+        return _success(
+            current,
+            f"merge recovery {action} for chain {current['chain_id']}",
+            next_steps.get(
+                str(current["state"]),
+                f"forge status --chain-id {current['chain_id']}",
+            ),
+        )
+
+    def cleanup_chain(self) -> Outcome:
+        """Remove only the contained worktree and unmoved branch, without force."""
+
+        for control in _REQUIRED_MERGE_INTEGRATION_CONTROLS:
+            _require_merge_integration_control(control)
+        state = self._load()
+        if state["state"] not in {"pushed", "cleanup_pending"}:
+            self._wrong_state(state, "pushed or cleanup_pending", "merge cleanup")
+        self._halt(state)
+        binding = state.get("run_binding")
+        results: list[dict[str, Any]] = []
+        with self.store._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ):
+            with self._recording_common_lock(
+                Path(str(state["worktree"]["common_dir"])),
+                chain_id=str(state["chain_id"]),
+                operation="cleanup",
+            ) as common_lock:
+                with acquire_chain_lease(
+                    self.store.root,
+                    chain_id=str(state["chain_id"]),
+                    session=self.store._session(None),
+                    exclusion=common_lock,
+                ) as lease:
+                    current = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                    if current["state"] not in {"pushed", "cleanup_pending"}:
+                        self._wrong_state(
+                            current, "pushed or cleanup_pending", "merge cleanup"
+                        )
+                    containment, _vector = _merge_containment(current)
+                    if containment != "current":
+                        raise FrozenError(
+                            "cleanup lost current-generation containment truth",
+                            chain_id=str(current["chain_id"]),
+                            observed=containment,
+                            schema=REVISION9_OUTPUT_SCHEMA,
+                        )
+                    cleanup = {
+                        "condition": str(current["cleanup"]["condition"]),
+                        "intent": {
+                            "operation_nonce": secrets.token_hex(16),
+                            "generation_digest": current["candidate"][
+                                "generation_digest"
+                            ],
+                            "started_at": iso_z(),
+                        },
+                    }
+                    current = self._epoch_transition(
+                        current,
+                        lease,
+                        "cleanup_intent",
+                        {"delta": {"cleanup": cleanup}},
+                    )
+                    intent_digest = self._tail_event_digest(
+                        current, "cleanup_intent"
+                    )
+
+                    observation: dict[str, Any] = {}
+
+                    def observation_current() -> bool:
+                        try:
+                            fresh = self.store.load_locked(
+                                str(current["chain_id"]), lease=lease
+                            )
+                        except (FrozenError, OSError):
+                            return False
+                        return bool(
+                            fresh.get("cleanup") == current.get("cleanup")
+                            and self._tail_event_digest(fresh, "cleanup_intent")
+                            == intent_digest
+                        )
+
+                    def persist_observation(result: FencedProcessResult) -> None:
+                        exists, oid = self._parse_fetched_remote_observation(
+                            result,
+                            str(current["target"]["destination_ref"]),
+                            Path(str(current["worktree"]["common_dir"])),
+                        )
+                        landed = str(current["integration"]["push"]["landed_head"])
+                        contained = bool(
+                            exists is True
+                            and oid is not None
+                            and self._head_contained(self.ctx.repo, landed, oid)
+                        )
+                        observation.update(
+                            {
+                                "exists": exists,
+                                "oid": oid,
+                                "landed_head": landed,
+                                "contained": contained,
+                                "inflight_digest": result.fence_digest,
+                                "output_digest": result.output_digest,
+                            }
+                        )
+
+                    environment = os.environ.copy()
+                    environment.pop("FORGE_SESSION_PID", None)
+                    environment.update(
+                        {
+                            "LC_ALL": "C",
+                            "LANG": "C",
+                            "GIT_OPTIONAL_LOCKS": "0",
+                            "GIT_NO_LAZY_FETCH": "1",
+                        }
+                    )
+                    run_fenced_command(
+                        common_lock,
+                        operation="remote-observation",
+                        intent_digest=intent_digest,
+                        intent_validator=observation_current,
+                        argv=[
+                            "git",
+                            "--no-pager",
+                            "-C",
+                            str(self.ctx.repo.root),
+                            "fetch",
+                            "--no-tags",
+                            "--quiet",
+                            "origin",
+                            str(current["target"]["destination_ref"]),
+                        ],
+                        cwd=self.ctx.repo.root,
+                        persist_result=persist_observation,
+                        env=environment,
+                        timeout=COMMAND_TIMEOUT_SECONDS,
+                        cap=OUTPUT_CAP_BYTES,
+                        verbose=self.ctx.options.verbose,
+                    )
+                    results.append({"operation": "remote-observation", **observation})
+                    if not observation.get("contained"):
+                        current = self._cleanup_result_locked(
+                            current, lease, passed=False
+                        )
+                        raise _merge_refusal(
+                            V2ReasonCode.CLEANUP_FAILED,
+                            "forge: merge cleanup failed — landed HEAD containment is not current",
+                            observed=canonical_bytes(observation).decode("utf-8"),
+                            remediation=(
+                                f"forge merge cleanup --chain-id {current['chain_id']}"
+                            ),
+                            chain=current,
+                        )
+
+                    branch = str(current["branch"])
+                    branch_tip_result = self.ctx.repo.git(
+                        ["rev-parse", "--verify", branch], check=False
+                    )
+                    if branch_tip_result.returncode == 0:
+                        branch_tip = branch_tip_result.stdout.decode(
+                            "ascii", "strict"
+                        ).strip()
+                        if branch_tip != current["candidate"]["candidate_head"]:
+                            current = self._cleanup_result_locked(
+                                current, lease, passed=False
+                            )
+                            raise _merge_refusal(
+                                V2ReasonCode.CLEANUP_FAILED,
+                                "forge: merge cleanup failed — recorded branch moved",
+                                expected=str(current["candidate"]["candidate_head"]),
+                                observed=branch_tip,
+                                remediation=(
+                                    f"forge merge cleanup --chain-id {current['chain_id']}"
+                                ),
+                                chain=current,
+                            )
+                    worktree = Path(str(current["worktree"]["path"]))
+                    commands: list[tuple[str, list[str]]] = []
+                    if worktree.exists():
+                        commands.append(
+                            (
+                                "worktree-remove",
+                                [
+                                    "git",
+                                    "--no-pager",
+                                    "-C",
+                                    str(self.ctx.repo.root),
+                                    "worktree",
+                                    "remove",
+                                    str(worktree),
+                                ],
+                            )
+                        )
+                    if branch_tip_result.returncode == 0:
+                        commands.append(
+                            (
+                                "branch-delete",
+                                [
+                                    "git",
+                                    "--no-pager",
+                                    "-C",
+                                    str(self.ctx.repo.root),
+                                    "update-ref",
+                                    "-d",
+                                    branch,
+                                    str(current["candidate"]["candidate_head"]),
+                                ],
+                            )
+                        )
+                    for operation, argv in commands:
+                        _unused, result = self._run_cleanup_child(
+                            current,
+                            common_lock,
+                            lease,
+                            operation=operation,
+                            argv=argv,
+                            intent_digest=intent_digest,
+                        )
+                        passed = bool(
+                            result.returncode == 0
+                            and not result.launch_failed
+                            and not result.timed_out
+                            and not result.output_limit
+                            and not result.group_survived
+                        )
+                        results.append(
+                            {
+                                "operation": operation,
+                                "passed": passed,
+                                **result.evidence(),
+                            }
+                        )
+                        if not passed:
+                            current = self._cleanup_result_locked(
+                                current, lease, passed=False
+                            )
+                            raise _merge_refusal(
+                                V2ReasonCode.CLEANUP_FAILED,
+                                f"forge: merge cleanup failed — {operation} did not PASS",
+                                remediation=(
+                                    f"forge merge cleanup --chain-id {current['chain_id']}"
+                                ),
+                                chain=current,
+                            )
+                    current = self._cleanup_result_locked(
+                        current, lease, passed=True
+                    )
+                    current = self._release_to_closed_locked(
+                        current, lease, cleanup_results=results
+                    )
+        return _success(
+            current,
+            f"merge chain {current['chain_id']} cleanup is durably closed",
+            "none — merge chain closed",
+        )
+
+    def finalize(self) -> Outcome:
+        """Execute one FR-235 bounded epoch under the ordered lock stack."""
+
+        self._git_no_lazy_fetch_qualification = None
+        for control in _REQUIRED_MERGE_INTEGRATION_CONTROLS:
+            _require_merge_integration_control(control)
+        state = self._preflight_lifecycle(self._load(), "merge finalize")
+        self._halt(state)
+        if state["state"] != "authorized":
+            self._wrong_state(state, "authorized", "merge finalize")
+        self._prepare_git_no_lazy_fetch_qualification(state)
+        binding = state.get("run_binding")
+        budget = _MergeEpochBudget()
+        with self.store._journal_outer(
+            binding if isinstance(binding, Mapping) else None
+        ):
+            with self._recording_common_lock(
+                Path(str(state["worktree"]["common_dir"])),
+                chain_id=str(state["chain_id"]),
+                operation="finalize",
+            ) as common_lock:
+                with acquire_chain_lease(
+                    self.store.root,
+                    chain_id=str(state["chain_id"]),
+                    session=self.store._session(None),
+                    exclusion=common_lock,
+                ) as lease:
+                    current = self.store.load_locked(
+                        str(state["chain_id"]), lease=lease
+                    )
+                    if current["state"] != "authorized":
+                        self._wrong_state(current, "authorized", "merge finalize")
+                    current, candidate_observation = (
+                        self._run_candidate_observation_locked(
+                            current,
+                            common_lock,
+                            lease,
+                            verb="merge finalize",
+                            remote_tip=str(current["candidate"]["remote_tip"]),
+                            expected_head=str(
+                                current["candidate"]["candidate_head"]
+                            ),
+                            classify=False,
+                        )
+                    )
+                    _observe_current_merge_candidate(
+                        self.ctx,
+                        current,
+                        verb="merge finalize",
+                        observation=candidate_observation,
+                    )
+                    starting_generation = str(
+                        current["candidate"]["generation_digest"]
+                    )
+                    current = self._begin_epoch(current, lease)
+                    current, fetched_tip, unchanged = self._run_epoch_fetch(
+                        current, common_lock, lease, budget
+                    )
+                    if not unchanged:
+                        current = self._run_epoch_rebase(
+                            current,
+                            fetched_tip,
+                            common_lock,
+                            lease,
+                            budget,
+                        )
+                    current = self._run_epoch_suite(
+                        current, common_lock, lease, budget
+                    )
+                    if (
+                        str(current["candidate"]["generation_digest"])
+                        != starting_generation
+                    ):
+                        current = self._park_integrated_review(current, lease)
+                        return _success(
+                            current,
+                            "integrated generation passed its mechanical suite and is parked for fresh review",
+                            f"forge review request --chain-id {current['chain_id']}",
+                        )
+                    current = self._run_remote_observation(
+                        current,
+                        common_lock,
+                        lease,
+                        budget,
+                        phase="final-prepush",
+                    )
+                    if current["state"] == "authorized":
+                        return _success(
+                            current,
+                            "merge epoch parked after authoritative remote movement",
+                            f"forge merge finalize --chain-id {current['chain_id']}",
+                        )
+                    if current["state"] == "awaiting_approval":
+                        raise _merge_refusal(
+                            V2ReasonCode.REMOTE_CHURN,
+                            "forge: merge finalize refused — remote churn exhausted the bounded retry counter",
+                            remediation=(
+                                "forge merge approve --candidate "
+                                f"{current['candidate']['candidate_head']} --chain-id {current['chain_id']}"
+                            ),
+                            chain=current,
+                        )
+                    if current["state"] not in {"rebasing", "reverifying"}:
+                        self._wrong_state(
+                            current,
+                            "an unchanged post-observation epoch",
+                            "merge finalize",
+                        )
+                    current = self._run_epoch_push(
+                        current, common_lock, lease, budget
+                    )
+        if current["state"] == "pushing":
+            return _success(
+                current,
+                "merge push attempt was authoritatively observed as not landed",
+                f"forge merge recover --chain-id {current['chain_id']}",
+            )
+        return _success(
+            current,
+            f"merge candidate {current['candidate']['candidate_head']} is durably pushed",
+            f"forge merge cleanup --chain-id {current['chain_id']}",
         )
 
 

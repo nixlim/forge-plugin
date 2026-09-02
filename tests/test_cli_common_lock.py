@@ -1430,18 +1430,20 @@ class FencedProcessTests(unittest.TestCase):
                 self.assertTrue(selector.closed)
                 self.assertEqual(closed, [output_descriptor, error_descriptor])
 
-    def test_merge_fence_death_proof_refuses_unlink_without_recorder(self) -> None:
+    def test_merge_fence_death_proof_requires_reservation_classification(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             common = Path(temporary)
+            boundaries: list[str] = []
             lock = CLI.acquire_common_lock(
                 common,
                 owner_kind="merge",
                 chain_id=CHAIN_ID,
                 operation="recover",
-                use_flock=False,
+                use_flock=True,
                 timeout=2,
                 group_probe=lambda _pgid: "dead",
-                recovery_recorder=lambda _proof: None,
+                no_transaction_record=True,
+                boundary=boundaries.append,
             )
             fence = CLI._publish_fence(
                 lock,
@@ -1463,35 +1465,70 @@ class FencedProcessTests(unittest.TestCase):
                 ),
             )
             fence_path = common / CLI.COMMON_LOCK_INFLIGHT_NAME
+            fence_bytes = fence_path.read_bytes()
+            reservation_path = common / CLI.COMMON_LOCK_RECOVERY_NAME
+            classified: list[dict[str, object]] = []
+
+            def classify(
+                reservation: CLI.RecoveryReservation,
+                observed_fence: CLI.PublishedLockRecord | None,
+            ) -> None:
+                self.assertTrue(reservation_path.is_file())
+                reservation.assert_current("fixture lifecycle classification")
+                self.assertTrue(reservation.matches_chain(CHAIN_ID))
+                self.assertEqual(fence_path.read_bytes(), fence_bytes)
+                self.assertEqual(fence_path.stat().st_ino, fence.inode)
+                self.assertIsNotNone(observed_fence)
+                assert observed_fence is not None
+                self.assertEqual(observed_fence.inode, fence.inode)
+                self.assertEqual(observed_fence.digest, fence.digest)
+                record = reservation.record
+                self.assertEqual(
+                    record["recovery_kind"], "flock-held-dead-fence"
+                )
+                self.assertEqual(record["inflight_inode"], fence.inode)
+                self.assertEqual(record["inflight_digest"], fence.digest)
+                self.assertIsNotNone(record["group_dead_at"])
+                classified.append(record)
+
             try:
-                lock._recovery_recorder = None
-                with self.assertRaisesRegex(OSError, "recorder"):
+                with self.assertRaisesRegex(
+                    OSError,
+                    "reservation-held lifecycle classification is required",
+                ):
                     lock.recover_owned_fence(fence)
                 self.assertTrue(fence_path.exists())
                 self.assertEqual(fence_path.stat().st_ino, fence.inode)
+                self.assertFalse(reservation_path.exists())
+                self.assertIn("recovery-reservation-published", boundaries)
+                self.assertNotIn(
+                    "recovery-fence-lifecycle-classified", boundaries
+                )
+                self.assertNotIn("recovery-fence-cleared", boundaries)
 
-                proofs: list[dict[str, object]] = []
-                lock._recovery_recorder = proofs.append
-                lock.recover_owned_fence(fence)
-                self.assertEqual(len(proofs), 1)
-                self.assertEqual(
-                    proofs[0]["schema"], "forge-rebase-fence-death/1"
+                boundaries.clear()
+                lock.recover_owned_fence(
+                    fence, lifecycle_classifier=classify
                 )
-                self.assertEqual(proofs[0]["operation"], "gate")
-                self.assertEqual(
-                    proofs[0]["intent_digest"],
-                    fence.record["intent_digest"],
-                )
-                self.assertEqual(proofs[0]["fence_digest"], fence.digest)
+                self.assertEqual(len(classified), 1)
                 self.assertFalse(fence_path.exists())
+                self.assertFalse(reservation_path.exists())
+                self.assertLess(
+                    boundaries.index("recovery-reservation-published"),
+                    boundaries.index("recovery-fence-lifecycle-classified"),
+                )
+                self.assertLess(
+                    boundaries.index("recovery-fence-lifecycle-classified"),
+                    boundaries.index("recovery-fence-cleared"),
+                )
             finally:
                 if fence_path.exists():
                     lock.recover_owned_fence(
-                        fence, persist_proof=lambda _proof: None
+                        fence, lifecycle_classifier=classify
                     )
                 lock.release()
 
-    def test_phase5_cannot_recover_transaction_owner_without_recorder(self) -> None:
+    def test_phase5_refuses_surviving_fence_without_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             common = Path(temporary)
             marker = common / "marker"
@@ -1504,21 +1541,68 @@ class FencedProcessTests(unittest.TestCase):
             )
             intent_path = common / CLI.COMMON_LOCK_INTENT_NAME
             fence_path = common / CLI.COMMON_LOCK_INFLIGHT_NAME
+            intent_bytes = intent_path.read_bytes()
+            fence_bytes = fence_path.read_bytes()
             intent_inode = intent_path.stat().st_ino
             fence_inode = fence_path.stat().st_ino
+            clock = FakeClock()
+            pid_probe = mock.Mock(
+                side_effect=AssertionError(
+                    "ordinary acquisition must not probe the owner PID"
+                )
+            )
+            group_probe = mock.Mock(
+                side_effect=AssertionError(
+                    "ordinary acquisition must not probe the fence PGID"
+                )
+            )
 
-            with self.assertRaisesRegex(OSError, "recorder"):
+            with mock.patch.object(
+                CLI,
+                "_inspect_common_lock_fd",
+                side_effect=AssertionError(
+                    "ordinary acquisition must not inspect a fenced owner"
+                ),
+            ), mock.patch.object(
+                CLI,
+                "_read_fence_for_recovery",
+                side_effect=AssertionError(
+                    "ordinary acquisition must not read the fence"
+                ),
+            ), self.assertRaisesRegex(
+                CLI.CommonLockUnavailable,
+                "^forge: common rebase lock unavailable$",
+            ) as raised:
                 CLI.acquire_common_lock(
                     common,
                     owner_kind="phase5",
                     chain_id=None,
                     operation="phase5-scan",
                     use_flock=False,
-                    timeout=2,
-                    pid_probe=lambda _pid: "dead",
-                    group_probe=lambda _pgid: "dead",
+                    timeout=300,
+                    clock=clock,
+                    sleeper=clock.sleep,
+                    pid_probe=pid_probe,
+                    group_probe=group_probe,
                 )
 
+            self.assertEqual(
+                raised.exception.reason_code.value,
+                "rebase-lock-unavailable",
+            )
+            self.assertEqual(
+                json.loads(raised.exception.observed),
+                {
+                    "common_dir": str(common),
+                    "detail": "surviving in-flight fence requires explicit recovery",
+                },
+            )
+            self.assertEqual(clock.value, 300.0)
+            self.assertAlmostEqual(sum(clock.sleeps), 300.0)
+            pid_probe.assert_not_called()
+            group_probe.assert_not_called()
+            self.assertEqual(intent_path.read_bytes(), intent_bytes)
+            self.assertEqual(fence_path.read_bytes(), fence_bytes)
             self.assertEqual(intent_path.stat().st_ino, intent_inode)
             self.assertEqual(fence_path.stat().st_ino, fence_inode)
             self.assertFalse((common / CLI.COMMON_LOCK_RECOVERY_NAME).exists())
@@ -1546,7 +1630,67 @@ class FencedProcessTests(unittest.TestCase):
                 fence_bytes = fence_path.read_bytes()
                 fence_record = json.loads(fence_bytes)
                 fence_digest = hashlib.sha256(fence_bytes).hexdigest()
-                proofs: list[dict[str, object]] = []
+                fence_inode = fence_path.stat().st_ino
+                intent_path = common / CLI.COMMON_LOCK_INTENT_NAME
+                intent_bytes = intent_path.read_bytes()
+                intent_inode = intent_path.stat().st_ino
+                intent_digest = hashlib.sha256(intent_bytes).hexdigest()
+                reservation_path = common / CLI.COMMON_LOCK_RECOVERY_NAME
+
+                with self.assertRaises(CLI.CommonLockUnavailable) as refused:
+                    CLI.acquire_common_lock(
+                        common,
+                        owner_kind="merge",
+                        chain_id=CHAIN_ID,
+                        operation="recover",
+                        use_flock=False,
+                        timeout=2,
+                        pid_probe=lambda _pid: "dead",
+                        group_probe=lambda _pgid: "dead",
+                        no_transaction_record=True,
+                    )
+                self.assertIn(
+                    "reservation-held lifecycle classification is required",
+                    json.loads(refused.exception.observed)["detail"],
+                )
+                self.assertEqual(intent_path.read_bytes(), intent_bytes)
+                self.assertEqual(intent_path.stat().st_ino, intent_inode)
+                self.assertEqual(fence_path.read_bytes(), fence_bytes)
+                self.assertEqual(fence_path.stat().st_ino, fence_inode)
+                self.assertFalse(reservation_path.exists())
+
+                classified: list[dict[str, object]] = []
+
+                def classify(
+                    reservation: CLI.RecoveryReservation,
+                    observed_fence: CLI.PublishedLockRecord | None,
+                ) -> None:
+                    self.assertTrue(reservation_path.is_file())
+                    reservation.assert_current(
+                        "fixture lifecycle classification"
+                    )
+                    self.assertTrue(reservation.matches_chain(CHAIN_ID))
+                    self.assertEqual(fence_path.read_bytes(), fence_bytes)
+                    self.assertEqual(fence_path.stat().st_ino, fence_inode)
+                    self.assertIsNotNone(observed_fence)
+                    assert observed_fence is not None
+                    self.assertEqual(observed_fence.inode, fence_inode)
+                    self.assertEqual(observed_fence.digest, fence_digest)
+                    self.assertEqual(observed_fence.record, fence_record)
+                    record = reservation.record
+                    self.assertEqual(
+                        record["recovery_kind"], "fallback-owner-and-fence"
+                    )
+                    self.assertEqual(record["stale_owner_inode"], intent_inode)
+                    self.assertEqual(record["stale_owner_digest"], intent_digest)
+                    self.assertEqual(record["inflight_inode"], fence_inode)
+                    self.assertEqual(record["inflight_digest"], fence_digest)
+                    self.assertEqual(
+                        record["group_dead_at"], record["owner_dead_at"]
+                    )
+                    classified.append(record)
+
+                boundaries: list[str] = []
                 recovered = CLI.acquire_common_lock(
                     common,
                     owner_kind="merge",
@@ -1556,24 +1700,28 @@ class FencedProcessTests(unittest.TestCase):
                     timeout=2,
                     pid_probe=lambda _pid: "dead",
                     group_probe=lambda _pgid: "dead",
-                    recovery_recorder=proofs.append,
+                    no_transaction_record=True,
+                    recovery_classifier=classify,
+                    boundary=boundaries.append,
                 )
-                self.assertEqual(len(proofs), 2)
-                self.assertEqual(proofs[0]["recovery_kind"], "fallback-owner-and-fence")
-                self.assertEqual(
-                    proofs[1],
-                    {
-                        "schema": "forge-rebase-fence-death/1",
-                        "operation": fence_record["operation"],
-                        "intent_digest": fence_record["intent_digest"],
-                        "fence_digest": fence_digest,
-                        "host": fence_record["host"],
-                        "pgid": fence_record["pgid"],
-                        "group_dead_at": proofs[0]["group_dead_at"],
-                    },
-                )
-                self.assertFalse(fence_path.exists())
-                recovered.release()
+                try:
+                    self.assertEqual(len(classified), 1)
+                    self.assertFalse(fence_path.exists())
+                    self.assertFalse(reservation_path.exists())
+                    self.assertLess(
+                        boundaries.index("recovery-reservation-published"),
+                        boundaries.index(
+                            "recovery-fence-lifecycle-classified"
+                        ),
+                    )
+                    self.assertLess(
+                        boundaries.index(
+                            "recovery-fence-lifecycle-classified"
+                        ),
+                        boundaries.index("recovery-fence-cleared"),
+                    )
+                finally:
+                    recovered.release()
 
     def test_timeout_and_output_cap_both_use_term_quarter_second_then_kill(self) -> None:
         commands = (
@@ -1672,6 +1820,14 @@ class FencedProcessTests(unittest.TestCase):
             ).read_bytes()
             fence_record = json.loads(fence_bytes)
             fence_digest = hashlib.sha256(fence_bytes).hexdigest()
+            fence_inode = (
+                common / CLI.COMMON_LOCK_INFLIGHT_NAME
+            ).stat().st_ino
+            intent_path = common / CLI.COMMON_LOCK_INTENT_NAME
+            intent_bytes = intent_path.read_bytes()
+            intent_inode = intent_path.stat().st_ino
+            intent_digest = hashlib.sha256(intent_bytes).hexdigest()
+            reservation_path = common / CLI.COMMON_LOCK_RECOVERY_NAME
             contenders = (
                 ("merge", "c-2026-08-29T120001Z-bbbb", "recover"),
                 ("push", None, "push"),
@@ -1695,7 +1851,71 @@ class FencedProcessTests(unittest.TestCase):
                         no_transaction_record=True,
                     )
                 self.assertEqual(clock.value, 300.0)
-            recovery_proofs: list[dict[str, object]] = []
+
+            with self.assertRaises(CLI.CommonLockUnavailable) as refused:
+                CLI.acquire_common_lock(
+                    common,
+                    owner_kind="merge",
+                    chain_id=CHAIN_ID,
+                    operation="recover",
+                    use_flock=False,
+                    timeout=2,
+                    pid_probe=lambda _pid: "dead",
+                    group_probe=lambda _pgid: "dead",
+                    no_transaction_record=True,
+                )
+            self.assertIn(
+                "reservation-held lifecycle classification is required",
+                json.loads(refused.exception.observed)["detail"],
+            )
+            self.assertEqual(intent_path.read_bytes(), intent_bytes)
+            self.assertEqual(intent_path.stat().st_ino, intent_inode)
+            self.assertEqual(
+                (common / CLI.COMMON_LOCK_INFLIGHT_NAME).read_bytes(),
+                fence_bytes,
+            )
+            self.assertEqual(
+                (common / CLI.COMMON_LOCK_INFLIGHT_NAME).stat().st_ino,
+                fence_inode,
+            )
+            self.assertFalse(reservation_path.exists())
+
+            classified: list[dict[str, object]] = []
+
+            def classify(
+                reservation: CLI.RecoveryReservation,
+                observed_fence: CLI.PublishedLockRecord | None,
+            ) -> None:
+                self.assertTrue(reservation_path.is_file())
+                reservation.assert_current("fixture lifecycle classification")
+                self.assertTrue(reservation.matches_chain(CHAIN_ID))
+                self.assertEqual(
+                    (common / CLI.COMMON_LOCK_INFLIGHT_NAME).read_bytes(),
+                    fence_bytes,
+                )
+                self.assertEqual(
+                    (common / CLI.COMMON_LOCK_INFLIGHT_NAME).stat().st_ino,
+                    fence_inode,
+                )
+                self.assertIsNotNone(observed_fence)
+                assert observed_fence is not None
+                self.assertEqual(observed_fence.inode, fence_inode)
+                self.assertEqual(observed_fence.digest, fence_digest)
+                self.assertEqual(observed_fence.record, fence_record)
+                record = reservation.record
+                self.assertEqual(
+                    record["recovery_kind"], "fallback-owner-and-fence"
+                )
+                self.assertEqual(record["stale_owner_inode"], intent_inode)
+                self.assertEqual(record["stale_owner_digest"], intent_digest)
+                self.assertEqual(record["inflight_inode"], fence_inode)
+                self.assertEqual(record["inflight_digest"], fence_digest)
+                self.assertEqual(
+                    record["group_dead_at"], record["owner_dead_at"]
+                )
+                classified.append(record)
+
+            boundaries: list[str] = []
             recovered = CLI.acquire_common_lock(
                 common,
                 owner_kind="merge",
@@ -1705,22 +1925,26 @@ class FencedProcessTests(unittest.TestCase):
                 timeout=2,
                 pid_probe=lambda _pid: "dead",
                 group_probe=lambda _pgid: "dead",
-                recovery_recorder=recovery_proofs.append,
+                no_transaction_record=True,
+                recovery_classifier=classify,
+                boundary=boundaries.append,
             )
-            self.assertEqual(len(recovery_proofs), 2)
-            self.assertEqual(
-                recovery_proofs[1],
-                {
-                    "schema": "forge-rebase-fence-death/1",
-                    "operation": fence_record["operation"],
-                    "intent_digest": fence_record["intent_digest"],
-                    "fence_digest": fence_digest,
-                    "host": fence_record["host"],
-                    "pgid": fence_record["pgid"],
-                    "group_dead_at": recovery_proofs[0]["group_dead_at"],
-                },
-            )
-            recovered.release()
+            try:
+                self.assertEqual(len(classified), 1)
+                self.assertFalse(
+                    (common / CLI.COMMON_LOCK_INFLIGHT_NAME).exists()
+                )
+                self.assertFalse(reservation_path.exists())
+                self.assertLess(
+                    boundaries.index("recovery-reservation-published"),
+                    boundaries.index("recovery-fence-lifecycle-classified"),
+                )
+                self.assertLess(
+                    boundaries.index("recovery-fence-lifecycle-classified"),
+                    boundaries.index("recovery-fence-cleared"),
+                )
+            finally:
+                recovered.release()
 
 
 class WrapperAndDormancyTests(unittest.TestCase):
