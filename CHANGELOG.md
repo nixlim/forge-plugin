@@ -20,6 +20,9 @@ Release dates are the UTC dates of the release commits.
 - Phase-3 slice 7 manifest rebind (second): the manifest and fixtures
   re-bound to the guard subject that also carries the quoted-`case`
   segmentation fix and memoized resolution from review-final iteration 2.
+- Phase-3 slice 7 manifest rebind (third): the manifest and fixtures
+  re-bound to the guard subject that also carries the raw-split union and
+  linear case-word scans from review-final iteration 3.
 - Phase-3 slice 6 completes the merge inventory with real common-lock
   contention, fresh 300-second fence budgets, remote churn and destination-ref
   races, historical-attempt and safe-release recovery, serialized review
