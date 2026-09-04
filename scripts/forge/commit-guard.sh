@@ -86,7 +86,7 @@ ENV_OPTIONAL_SIGNAL_OPTIONS = {
     "--default-signal",
     "--ignore-signal",
 }
-FORGE_CLI_SINGLE_COMMANDS = frozenset({"status", "verify", "classify"})
+FORGE_CLI_SINGLE_COMMANDS = frozenset({"status", "verify", "classify", "push"})
 FORGE_CLI_PAIRED_COMMANDS = frozenset(
     {
         ("commit", "start"),
@@ -102,8 +102,17 @@ FORGE_CLI_PAIRED_COMMANDS = frozenset(
         ("review", "collect"),
         ("review", "attach"),
         ("review", "disposition"),
+        ("merge", "start"),
+        ("merge", "refresh"),
+        ("merge", "verify"),
+        ("merge", "gate"),
+        ("merge", "finalize"),
+        ("merge", "recover"),
+        ("merge", "cleanup"),
+        ("merge", "abort"),
     }
 )
+FORGE_CLI_GLOBAL_VALUE_OPTIONS = frozenset({"--chain-id", "--repo", "--run-id"})
 FORGE_CLI_DENIALS = {
     "deny-approve": (
         "forge: operator verb denied — present the candidate and ask the operator "
@@ -114,6 +123,219 @@ FORGE_CLI_DENIALS = {
         "to run this via ! (commit skip)"
     ),
 }
+V2_CORPUS_FAILURE_DENIAL = (
+    "forge: history mutation mode invalid — repair committed .forge-manifest "
+    "through Forge CLI"
+)
+V2_CORPUS_SHA256 = (
+    "310bfda5efdbfe3c99a1d189c8ff336782f90a79af741c4098ada4ae579bde27"
+)
+V2_DENIAL_FALLBACKS = {
+    "deny-merge-approve": (
+        "forge: operator verb denied — present the candidate and ask the operator "
+        "to run this via ! (merge approve)"
+    ),
+    "deny-invalid-mode": V2_CORPUS_FAILURE_DENIAL,
+    "deny-raw-commit": (
+        "forge: raw git commit denied — use Forge CLI commit finalize"
+    ),
+    "deny-raw-push": (
+        "forge: raw git push denied — use Forge CLI merge finalize or Forge CLI push"
+    ),
+}
+V2_CASE_EXPECTATIONS = {
+    "activation-enabled-raw-commit-worktree-legacy": "deny-raw-commit",
+    "activation-enabled-raw-push-worktree-missing": "deny-raw-push",
+    "activation-invalid-raw-commit": "deny-invalid-mode",
+    "activation-invalid-raw-push": "deny-invalid-mode",
+    "activation-legacy-raw-push-worktree-invalid": "allow",
+    "activation-missing-raw-push-worktree-enabled": "allow",
+    "activation-non-forge-raw-commit": "allow",
+    "activation-upstream-raw-push": "allow",
+    "allow-enabled-commit-finalize": "allow",
+    "allow-enabled-merge-finalize": "allow",
+    "allow-enabled-push": "allow",
+    "allow-quoted-raw-text": "allow",
+    "compound-merge-finalize-then-raw-commit": "deny-raw-commit",
+    "compound-push-then-raw-push": "deny-raw-push",
+    "deny-merge-approve-global-after-last": "deny-merge-approve",
+    "deny-merge-approve-global-before-first": "deny-merge-approve",
+    "deny-merge-approve-global-between-middle": "deny-merge-approve",
+    "no-match-merge-approved": "no-match",
+}
+V2_ACTIVATION_CONTEXTS = frozenset(
+    {
+        "non-forge",
+        "upstream",
+        "plugin-mode-missing",
+        "legacy-v1",
+        "forge-verbs-v1",
+        "invalid",
+    }
+)
+V2_EXPECTATIONS = frozenset(
+    {
+        "allow",
+        "no-match",
+        "deny-merge-approve",
+        "deny-invalid-mode",
+        "deny-raw-commit",
+        "deny-raw-push",
+    }
+)
+V2_DENIAL_EXPECTATIONS = frozenset(
+    {
+        "deny-merge-approve",
+        "deny-invalid-mode",
+        "deny-raw-commit",
+        "deny-raw-push",
+    }
+)
+# Fail-closed parser bounds. The shell parser recurses once per nested
+# substitution, case body, and Forge CLI segment, so hostile nesting must be
+# denied before it can exhaust the interpreter stack or the hook deadline; a
+# breached bound or an internal parser failure is a denial, never a traceback
+# with a non-blocking exit. Exit 2 blocks on its own; both channels carry the
+# literal so the model sees the same reason either way.
+MAX_NESTING_DEPTH = 64
+PARSE_TIME_BUDGET_SECONDS = 10.0
+GUARD_FAILSAFE_DENIALS = {
+    "nesting": (
+        "forge: commit guard input bound exceeded — command nesting reached the "
+        f"{MAX_NESTING_DEPTH}-level bound and was not classified; split the command"
+    ),
+    "time": (
+        "forge: commit guard time budget exceeded — command was not classified "
+        f"within {PARSE_TIME_BUDGET_SECONDS:g}s; split the command"
+    ),
+    "internal": (
+        "forge: commit guard internal failure — command was not classified "
+        "({failure}); split the command"
+    ),
+}
+GUARD_FAILSAFE_REASON_CODES = {
+    "nesting": "guard-input-bound",
+    "time": "guard-time-budget",
+    "internal": "guard-internal-failure",
+}
+
+
+# Post-parse resolution runs Git and check-halt per action; arguments never
+# change the repository context, so memoize by the context-determining fields.
+# Disabling this in memory makes distinct-argument floods linear in subprocess
+# cost again, which the time budget then denies.
+CONTEXT_MEMO_ENABLED = True
+# The structured parse may swallow a case compound into one segment. Bash does
+# not treat `case` as reserved after `#`, in heredoc bodies, or inside `${}`,
+# `[[ ]]`, `(( ))`, so a swallow admitted there can hide the segments that a
+# plain separator split exposes. Every command is therefore also split raw
+# (swallow disabled) and the union of actions and denials is enforced; the raw
+# split never invents actions for a genuine compound because its first token
+# is `case`. Disabling this in memory re-opens the swallow class.
+RAW_SEGMENT_PASS_ENABLED = True
+_case_swallow_active = True
+CASE_WORD = re.compile(r"(?<![A-Za-z0-9_])case(?![A-Za-z0-9_])")
+COMMAND_POSITION_TAIL = re.compile(
+    r"\s*(?:(?:if|then|elif|else|while|until|do)\s+)*(?:(?:[({]|!|time|-p)\s*)*"
+)
+IN_WORD = re.compile(r"(?<![A-Za-z0-9_])in(?![A-Za-z0-9_])")
+ESAC_WORD = re.compile(r"(?<![A-Za-z0-9_])esac(?![A-Za-z0-9_])")
+
+
+def _raw_segment_pass(function):
+    """Run ``function`` with case-compound swallowing disabled."""
+    global _case_swallow_active
+    previous = _case_swallow_active
+    _case_swallow_active = False
+    try:
+        return function()
+    finally:
+        _case_swallow_active = previous
+_context_memo: dict[tuple[object, ...], "RepoContext | None"] = {}
+_mode_memo: dict[tuple[object, ...], str] = {}
+_sentinel_memo: dict[tuple[object, ...], str | None] = {}
+
+
+def _reset_resolution_memos() -> None:
+    _context_memo.clear()
+    _mode_memo.clear()
+    _sentinel_memo.clear()
+
+
+def _context_key(action: "GitAction") -> tuple[object, ...]:
+    return (
+        str(action.shell_cwd),
+        action.structural_globals,
+        action.assignments,
+    )
+
+
+def _context_identity(context: "RepoContext") -> tuple[object, ...]:
+    return (
+        str(context.worktree_root),
+        str(context.git_dir),
+        str(context.index_file),
+        str(context.common_dir),
+        str(context.main_root),
+        context.bare,
+    )
+
+
+def resolve_repo_context(action: "GitAction") -> "RepoContext | None":
+    if not CONTEXT_MEMO_ENABLED:
+        return repo_context(action)
+    key = _context_key(action)
+    if key not in _context_memo:
+        _context_memo[key] = repo_context(action)
+    return _context_memo[key]
+
+
+def resolve_history_mutation_mode(context: "RepoContext") -> str:
+    if not CONTEXT_MEMO_ENABLED:
+        return committed_history_mutation_mode(context)
+    key = _context_identity(context)
+    if key not in _mode_memo:
+        _mode_memo[key] = committed_history_mutation_mode(context)
+    return _mode_memo[key]
+
+
+def resolve_halt_sentinel(context: "RepoContext", check_halt: Path) -> str | None:
+    if not CONTEXT_MEMO_ENABLED:
+        return halt_sentinel(context, check_halt)
+    key = _context_identity(context)
+    if key not in _sentinel_memo:
+        _sentinel_memo[key] = halt_sentinel(context, check_halt)
+    return _sentinel_memo[key]
+
+
+class GuardInputBoundExceeded(Exception):
+    """A command exceeded one of the fail-closed parser bounds."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
+_nesting_depth = 0
+
+
+def _enter_nesting() -> None:
+    """Count one nested parse level and deny past MAX_NESTING_DEPTH."""
+    global _nesting_depth
+    if _nesting_depth >= MAX_NESTING_DEPTH:
+        raise GuardInputBoundExceeded("nesting")
+    _nesting_depth += 1
+
+
+def _exit_nesting() -> None:
+    global _nesting_depth
+    _nesting_depth -= 1
+
+
+def _failsafe_failure_name(exc: BaseException) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "", type(exc).__name__) or "unknown"
+
+
 GIT_SUBCOMMANDS = frozenset(
     {"add", "commit", "push", "reset", "restore", "rm", "stash"}
 )
@@ -197,13 +419,228 @@ class RepoContext:
     bare: bool
 
 
+def _matching_backtick(command: str, index: int) -> int | None:
+    """Return the closing offset for one executable backtick substitution."""
+    cursor = index + 1
+    escaped = False
+    while cursor < len(command):
+        char = command[cursor]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "`":
+            return cursor
+        cursor += 1
+    return None
+
+
+def _shell_word_end(command: str, index: int) -> int:
+    cursor = index
+    while cursor < len(command) and (
+        command[cursor].isalnum() or command[cursor] == "_"
+    ):
+        cursor += 1
+    return cursor
+
+
+def _reserved_word_start(command: str, index: int) -> bool:
+    return index == 0 or command[index - 1].isspace() or command[index - 1] in ";|&(){}"
+
+
+def _reserved_word_opens_command(word: str) -> bool:
+    """Return whether a shell control word is followed by a command position."""
+    return word in {"if", "then", "elif", "else", "while", "until", "do", "time"}
+
+
+def _matching_executable_parenthesis(command: str, index: int) -> int | None:
+    """Return the closing offset for `$(`, `<(`, or `>(` at ``index``."""
+    _enter_nesting()
+    try:
+        return _matching_executable_parenthesis_body(command, index)
+    finally:
+        _exit_nesting()
+
+
+def _matching_executable_parenthesis_body(command: str, index: int) -> int | None:
+    cursor = index + 2
+    depth = 1
+    quote: str | None = None
+    escaped = False
+    case_states: list[str] = []
+    case_subject_seen: list[bool] = []
+    case_pattern_seen: list[bool] = []
+    command_position = True
+    while cursor < len(command):
+        char = command[cursor]
+        if escaped:
+            escaped = False
+            cursor += 1
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            cursor += 1
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = None
+            cursor += 1
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = None
+                cursor += 1
+                continue
+            if command.startswith("$(", cursor):
+                closing = _matching_executable_parenthesis(command, cursor)
+                cursor = closing + 1 if closing is not None else cursor + 2
+                continue
+            if char == "`":
+                closing = _matching_backtick(command, cursor)
+                cursor = closing + 1 if closing is not None else cursor + 1
+                continue
+            cursor += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            cursor += 1
+            continue
+        if command.startswith(("$(", "<(", ">("), cursor):
+            closing = _matching_executable_parenthesis(command, cursor)
+            cursor = closing + 1 if closing is not None else cursor + 2
+            continue
+        if char == "`":
+            closing = _matching_backtick(command, cursor)
+            cursor = closing + 1 if closing is not None else cursor + 1
+            continue
+        if case_states and case_states[-1] == "body":
+            case_separator = next(
+                (
+                    separator
+                    for separator in (";;&", ";;", ";&")
+                    if command.startswith(separator, cursor)
+                ),
+                None,
+            )
+            if case_separator is not None:
+                case_states[-1] = "pattern"
+                case_pattern_seen[-1] = False
+                command_position = False
+                cursor += len(case_separator)
+                continue
+        if (
+            (char.isalpha() or char == "_")
+            and _reserved_word_start(command, cursor)
+        ):
+            word_end = _shell_word_end(command, cursor)
+            word = command[cursor:word_end]
+            if case_states and case_states[-1] == "await-in":
+                if word == "in" and case_subject_seen[-1]:
+                    case_states[-1] = "pattern"
+                    case_pattern_seen[-1] = False
+                    command_position = False
+                else:
+                    case_subject_seen[-1] = True
+            elif (
+                case_states
+                and word == "esac"
+                and case_states[-1] == "pattern"
+                and not case_pattern_seen[-1]
+            ):
+                case_states.pop()
+                case_subject_seen.pop()
+                case_pattern_seen.pop()
+                command_position = False
+            elif command_position and word == "case":
+                if len(case_states) >= MAX_NESTING_DEPTH:
+                    raise GuardInputBoundExceeded("nesting")
+                case_states.append("await-in")
+                case_subject_seen.append(False)
+                case_pattern_seen.append(False)
+                command_position = False
+            elif case_states and case_states[-1] == "pattern":
+                case_pattern_seen[-1] = True
+            elif command_position and not _reserved_word_opens_command(word):
+                command_position = False
+            cursor = word_end
+            continue
+        if (
+            case_states
+            and case_states[-1] == "pattern"
+            and case_pattern_seen[-1]
+            and char == ")"
+        ):
+            case_states[-1] = "body"
+            command_position = True
+            cursor += 1
+            continue
+        if case_states and case_states[-1] == "pattern" and not char.isspace():
+            case_pattern_seen[-1] = True
+        separator = next(
+            (
+                item
+                for item in ("&&", "||", ";", "|", "&", "\n")
+                if command.startswith(item, cursor)
+            ),
+            None,
+        )
+        if separator is not None:
+            if not case_states or case_states[-1] != "pattern":
+                command_position = True
+            cursor += len(separator)
+            continue
+        if char == "(":
+            depth += 1
+            command_position = True
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return cursor
+        cursor += 1
+    return None
+
+
+def _executable_parenthesis_at(
+    command: str, index: int, quote: str | None
+) -> bool:
+    """Return whether an executable parenthesized substitution starts here."""
+    if command.startswith("$(", index):
+        return quote != "'"
+    return quote is None and command.startswith(("<(", ">("), index)
+
+
+def _opaque_executable_end(
+    command: str, index: int, quote: str | None
+) -> int | None:
+    """Return the end of an executable span which outer splitting must skip."""
+    if _executable_parenthesis_at(command, index, quote):
+        return _matching_executable_parenthesis(command, index)
+    if command[index] == "`" and quote != "'":
+        return _matching_backtick(command, index)
+    return None
+
+
+def _case_swallow_admissible(syntax: str, command: str, index: int) -> bool:
+    """Admit a case-compound swallow only at command position in the masked view.
+
+    Quoted text is already masked to `x` in the view, so no separate quote
+    check is needed. Deliberately a named seam: tests disable it in memory to
+    show that the raw-pass union, not this admission, carries the guarantee
+    that a swallow never hides a segment.
+    """
+    return _case_swallow_active and _case_starts_command(
+        syntax[:index], command, index
+    )
+
+
 def split_segments(command: str) -> list[tuple[str, str | None]]:
-    """Split on requested shell operators without splitting quoted text."""
+    """Split on shell operators outside quotes and executable substitutions."""
     segments: list[tuple[str, str | None]] = []
     current: list[str] = []
     quote: str | None = None
     escaped = False
     index = 0
+    syntax: str | None = None
 
     while index < len(command):
         char = command[index]
@@ -217,14 +654,37 @@ def split_segments(command: str) -> list[tuple[str, str | None]]:
             escaped = True
             index += 1
             continue
-        if quote is not None:
+        if quote == "'":
             current.append(char)
-            if char == quote:
+            if char == "'":
                 quote = None
             index += 1
             continue
-        if char in ("'", '"'):
+        if quote == '"' and char == '"':
+            current.append(char)
+            quote = None
+            index += 1
+            continue
+        if quote is None and char in ("'", '"'):
             quote = char
+            current.append(char)
+            index += 1
+            continue
+        closing = _opaque_executable_end(command, index, quote)
+        if closing is not None:
+            current.extend(command[index : closing + 1])
+            index = closing + 1
+            continue
+        if command.startswith("case", index):
+            if syntax is None:
+                syntax = _shell_syntax_view(command)
+            if _case_swallow_admissible(syntax, command, index):
+                case_end = _matching_case_end(command, index, syntax)
+                if case_end is not None:
+                    current.extend(command[index:case_end])
+                    index = case_end
+                    continue
+        if quote == '"':
             current.append(char)
             index += 1
             continue
@@ -247,12 +707,553 @@ def split_segments(command: str) -> list[tuple[str, str | None]]:
     return segments
 
 
+def executable_subcommands(command: str) -> list[str]:
+    """Return executable substitution bodies, excluding quoted or escaped data."""
+    nested: list[str] = []
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            index += 1
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"' and char == '"':
+            quote = None
+            index += 1
+            continue
+        if quote is None and char in ("'", '"'):
+            quote = char
+            index += 1
+            continue
+        if _executable_parenthesis_at(command, index, quote):
+            closing = _matching_executable_parenthesis(command, index)
+            if closing is not None:
+                nested.append(command[index + 2 : closing])
+                index = closing + 1
+            else:
+                index += 2
+            continue
+        if char == "`" and quote != "'":
+            closing = _matching_backtick(command, index)
+            if closing is None:
+                index += 1
+            else:
+                nested.append(_legacy_backtick_body(command[index + 1 : closing]))
+                index = closing + 1
+            continue
+        index += 1
+    return nested
+
+
+def _legacy_backtick_body(body: str) -> str:
+    """Expose escaped nested backticks before recursively parsing their body."""
+    normalized: list[str] = []
+    index = 0
+    while index < len(body):
+        if body[index] == "\\" and index + 1 < len(body) and body[index + 1] == "`":
+            normalized.append("`")
+            index += 2
+            continue
+        normalized.append(body[index])
+        index += 1
+    return "".join(normalized)
+
+
+def _shell_syntax_view(command: str) -> str:
+    """Mask quoted, escaped, and substitution text while preserving offsets."""
+    view = list(command)
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and quote != "'":
+            view[index] = "x"
+            if index + 1 < len(command):
+                view[index + 1] = "x"
+            index += 2
+            continue
+        if quote == "'":
+            view[index] = "x"
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            view[index] = "x"
+            if char == '"':
+                quote = None
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            view[index] = "x"
+            index += 1
+            continue
+        if _executable_parenthesis_at(command, index, quote):
+            closing = _matching_executable_parenthesis(command, index)
+            if closing is not None:
+                view[index : closing + 1] = "x" * (closing + 1 - index)
+                index = closing + 1
+                continue
+        if char == "`":
+            closing = _matching_backtick(command, index)
+            if closing is not None:
+                view[index : closing + 1] = "x" * (closing + 1 - index)
+                index = closing + 1
+                continue
+        index += 1
+    return "".join(view)
+
+
+def _case_starts_command(prefix: str, command: str, index: int) -> bool:
+    if not _reserved_word_start(command, index):
+        return False
+    word_end = index + 4
+    if word_end < len(command) and (
+        command[word_end].isalnum() or command[word_end] == "_"
+    ):
+        return False
+    # Only the tail after the last separator can put `case` at command
+    # position; an earlier separator's tail would contain that separator.
+    tail_start = max(prefix.rfind(separator) for separator in ";|&\n") + 1
+    return COMMAND_POSITION_TAIL.fullmatch(prefix, tail_start) is not None
+
+
+def _matching_case_end(
+    command: str, index: int, syntax: str | None = None
+) -> int | None:
+    """Return the exclusive end of a balanced unquoted case compound."""
+    if syntax is None:
+        syntax = _shell_syntax_view(command)
+    case_states: list[str] = []
+    subject_seen: list[bool] = []
+    pattern_seen: list[bool] = []
+    command_position = True
+    cursor = index
+    while cursor < len(syntax):
+        if case_states and case_states[-1] == "body":
+            case_separator = next(
+                (
+                    separator
+                    for separator in (";;&", ";;", ";&")
+                    if syntax.startswith(separator, cursor)
+                ),
+                None,
+            )
+            if case_separator is not None:
+                case_states[-1] = "pattern"
+                pattern_seen[-1] = False
+                command_position = False
+                cursor += len(case_separator)
+                continue
+        char = syntax[cursor]
+        if (
+            (char.isalpha() or char == "_")
+            and _reserved_word_start(syntax, cursor)
+        ):
+            word_end = _shell_word_end(syntax, cursor)
+            word = syntax[cursor:word_end]
+            if case_states and case_states[-1] == "await-in":
+                if word == "in" and subject_seen[-1]:
+                    case_states[-1] = "pattern"
+                    pattern_seen[-1] = False
+                    command_position = False
+                else:
+                    subject_seen[-1] = True
+            elif (
+                case_states
+                and word == "esac"
+                and case_states[-1] == "pattern"
+                and not pattern_seen[-1]
+            ):
+                case_states.pop()
+                subject_seen.pop()
+                pattern_seen.pop()
+                if not case_states:
+                    return word_end
+                command_position = False
+            elif command_position and word == "case":
+                if len(case_states) >= MAX_NESTING_DEPTH:
+                    raise GuardInputBoundExceeded("nesting")
+                case_states.append("await-in")
+                subject_seen.append(False)
+                pattern_seen.append(False)
+                command_position = False
+            elif case_states and case_states[-1] == "pattern":
+                pattern_seen[-1] = True
+            elif command_position and not _reserved_word_opens_command(word):
+                command_position = False
+            cursor = word_end
+            continue
+        if (
+            case_states
+            and case_states[-1] == "pattern"
+            and pattern_seen[-1]
+            and char == ")"
+        ):
+            case_states[-1] = "body"
+            command_position = True
+            cursor += 1
+            continue
+        if case_states and case_states[-1] == "pattern" and not char.isspace():
+            pattern_seen[-1] = True
+        separator = next(
+            (
+                item
+                for item in ("&&", "||", ";", "|", "&", "\n")
+                if syntax.startswith(item, cursor)
+            ),
+            None,
+        )
+        if separator is not None:
+            if not case_states or case_states[-1] != "pattern":
+                command_position = True
+            cursor += len(separator)
+            continue
+        if char == "(" and (not case_states or case_states[-1] != "pattern"):
+            command_position = True
+        cursor += 1
+    return None
+
+
+def _nested_case_end(command: str, syntax: str, index: int) -> int | None:
+    """Return a nested case end when one begins at this arm-body offset."""
+    if not syntax.startswith("case", index):
+        return None
+    end = index + 4
+    if (index and (syntax[index - 1].isalnum() or syntax[index - 1] == "_")) or (
+        end < len(syntax) and (syntax[end].isalnum() or syntax[end] == "_")
+    ):
+        return None
+    return _matching_case_end(command, index, syntax)
+
+
+def _case_arm_end(
+    command: str,
+    syntax: str,
+    body_start: int,
+    outer_esac: int,
+) -> tuple[int, int]:
+    """Find an outer arm terminator while skipping complete nested cases."""
+    cursor = body_start
+    while cursor < outer_esac:
+        nested_end = _nested_case_end(command, syntax, cursor)
+        if nested_end is not None and nested_end <= outer_esac:
+            cursor = nested_end
+            continue
+        delimiter = next(
+            (
+                item
+                for item in (";;&", ";;", ";&")
+                if syntax.startswith(item, cursor)
+            ),
+            None,
+        )
+        if delimiter is not None:
+            return cursor, len(delimiter)
+        cursor += 1
+    return outer_esac, 0
+
+
+def _executable_case_body_spans(command: str) -> list[tuple[int, int]]:
+    """Return absolute (start, end) spans of unquoted case-arm bodies."""
+    spans: list[tuple[int, int]] = []
+    syntax = _shell_syntax_view(command)
+    cursor = 0
+    while cursor < len(command):
+        match = CASE_WORD.search(syntax, cursor)
+        if match is None:
+            break
+        case_start = match.start()
+        if not _case_starts_command(syntax[:case_start], syntax, case_start):
+            cursor = case_start + 4
+            continue
+        case_end = _matching_case_end(command, case_start, syntax)
+        if case_end is None:
+            break
+        case_syntax = syntax[case_start:case_end]
+        case_command = command[case_start:case_end]
+        in_match = IN_WORD.search(case_syntax, 4)
+        esac_match = list(ESAC_WORD.finditer(case_syntax))
+        if in_match is None or not esac_match:
+            cursor = case_end
+            continue
+        arm_cursor = in_match.end()
+        outer_esac = esac_match[-1].start()
+        while arm_cursor < outer_esac:
+            pattern_end = case_syntax.find(")", arm_cursor, outer_esac)
+            if pattern_end < 0:
+                break
+            body_start = pattern_end + 1
+            body_end, delimiter_length = _case_arm_end(
+                case_command,
+                case_syntax,
+                body_start,
+                outer_esac,
+            )
+            spans.append((case_start + body_start, case_start + body_end))
+            if body_end == outer_esac:
+                break
+            arm_cursor = body_end + delimiter_length
+        cursor = case_end
+    return spans
+
+
+def _case_bodies_from_spans(command: str, spans: list[tuple[int, int]]) -> list[str]:
+    bodies: list[str] = []
+    for start, end in spans:
+        body = command[start:end].strip()
+        if body:
+            bodies.append(body)
+    return bodies
+
+
+def executable_case_bodies(
+    command: str, spans: list[tuple[int, int]] | None = None
+) -> list[str]:
+    """Return case-arm command bodies for recursive action classification."""
+    if spans is None:
+        spans = _executable_case_body_spans(command)
+    return _case_bodies_from_spans(command, spans)
+
+
+def _without_case_bodies(command: str, spans: list[tuple[int, int]]) -> str:
+    """Blank case-arm bodies so their substitutions are visited once, via the body."""
+    if not spans:
+        return command
+    view = list(command)
+    for start, end in spans:
+        view[start:end] = " " * (end - start)
+    return "".join(view)
+
+
+def _nested_executables(segment: str) -> list[str]:
+    """Substitutions outside case-arm bodies, then the bodies themselves."""
+    spans = _executable_case_body_spans(segment)
+    return [
+        *executable_subcommands(_without_case_bodies(segment, spans)),
+        *executable_case_bodies(segment, spans),
+    ]
+
+
+def _mask_case_compounds(command: str, syntax: str) -> str:
+    """Hide complete case syntax from group-delimiter classification."""
+    masked = list(syntax)
+    cursor = 0
+    while cursor < len(syntax):
+        match = CASE_WORD.search(syntax, cursor)
+        if match is None:
+            break
+        case_start = match.start()
+        if not _case_starts_command(syntax[:case_start], syntax, case_start):
+            cursor = case_start + 4
+            continue
+        case_end = _matching_case_end(command, case_start, syntax)
+        if case_end is None:
+            break
+        masked[case_start:case_end] = "x" * (case_end - case_start)
+        cursor = case_end
+    return "".join(masked)
+
+
+def _standalone_brace(syntax: str, index: int) -> bool:
+    return (
+        (index == 0 or syntax[index - 1].isspace())
+        and (index + 1 == len(syntax) or syntax[index + 1].isspace())
+    )
+
+
+def _mask_word_parentheses(syntax: str) -> str:
+    """Mask balanced word-level parentheses which are not command groups."""
+    masked = list(syntax)
+    index = 0
+    while index < len(syntax):
+        if syntax[index] != "(":
+            index += 1
+            continue
+        prefix = syntax[:index].rstrip()
+        previous = syntax[index - 1] if index else ""
+        is_array = previous == "="
+        is_extglob = previous in "?*+@!" and bool(previous)
+        is_function = (
+            index + 1 < len(syntax)
+            and syntax[index + 1] == ")"
+            and re.search(r"(?:^|\s)[A-Za-z_][A-Za-z0-9_]*$", prefix) is not None
+        )
+        if not (is_array or is_extglob or is_function):
+            index += 1
+            continue
+        depth = 1
+        cursor = index + 1
+        while cursor < len(syntax) and depth:
+            if syntax[cursor] == "(":
+                depth += 1
+            elif syntax[cursor] == ")":
+                depth -= 1
+            cursor += 1
+        if depth:
+            index += 1
+            continue
+        masked[index:cursor] = "x" * (cursor - index)
+        index = cursor
+    return "".join(masked)
+
+
+def _shell_prefix_end(syntax: str, start: int, positions: set[int]) -> int:
+    """Skip shell negation/time prefixes which precede a command-position group."""
+    index = start
+    while index < len(syntax) and syntax[index].isspace():
+        index += 1
+    while index < len(syntax):
+        if syntax[index] == "!" and (
+            index + 1 == len(syntax) or syntax[index + 1].isspace()
+        ):
+            positions.add(index)
+            index += 1
+        elif syntax.startswith("time", index) and (
+            index + 4 == len(syntax) or syntax[index + 4].isspace()
+        ):
+            positions.update(range(index, index + 4))
+            index += 4
+            while index < len(syntax) and syntax[index].isspace():
+                index += 1
+            if syntax.startswith("-p", index) and (
+                index + 2 == len(syntax) or syntax[index + 2].isspace()
+            ):
+                positions.update(range(index, index + 2))
+                index += 2
+        else:
+            break
+        while index < len(syntax) and syntax[index].isspace():
+            index += 1
+    return index
+
+
+def shell_group_structure(segment: str) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """Remove structural group tokens and return their ordered scope events."""
+    syntax = _shell_syntax_view(segment)
+    syntax = _mask_case_compounds(segment, syntax)
+    syntax = _mask_word_parentheses(syntax)
+    openers: list[str] = []
+    positions: set[int] = set()
+    index = _shell_prefix_end(syntax, 0, positions)
+    while index < len(syntax):
+        char = syntax[index]
+        if char == "(" or (char == "{" and _standalone_brace(syntax, index)):
+            openers.append(char)
+            positions.add(index)
+            index += 1
+            while index < len(syntax) and syntax[index].isspace():
+                index += 1
+            index = _shell_prefix_end(syntax, index, positions)
+            continue
+        break
+
+    closers: list[str] = []
+    for cursor in range(index, len(syntax)):
+        char = syntax[cursor]
+        if char == ")" or (char == "}" and _standalone_brace(syntax, cursor)):
+            closers.append(char)
+            positions.add(cursor)
+
+    normalized = list(segment)
+    for position in positions:
+        normalized[position] = " "
+    return "".join(normalized), tuple(openers), tuple(closers)
+
+
+def _unique_cwds(cwds: tuple[Path, ...] | list[Path]) -> tuple[Path, ...]:
+    return tuple(dict.fromkeys(cwds))
+
+
+def cwd_after_group_exit(
+    opener: str,
+    inherited: tuple[Path, ...],
+    current: tuple[Path, ...],
+    isolated: bool,
+) -> tuple[Path, ...]:
+    """Apply group persistence without leaking pipeline/background cwd."""
+    return inherited if opener == "(" or isolated else current
+
+
+# Deliberately a named seam: tests disable it in memory to prove the async
+# list cwd inheritance is load-bearing.
+def cwd_after_async_list(
+    inherited: tuple[Path, ...], current: tuple[Path, ...]
+) -> tuple[Path, ...]:
+    """Restore the parent cwd after a complete asynchronous AND/OR list."""
+    del current
+    return inherited
+
+
+def without_shell_grouping(tokens: list[str]) -> list[str]:
+    """Remove only command-position subshell/brace delimiters from one segment."""
+    result = list(tokens)
+    while result and result[0] in {"(", "{"}:
+        result.pop(0)
+    if result and result[0].startswith("("):
+        result[0] = result[0].lstrip("(")
+        if not result[0]:
+            result.pop(0)
+    while result and result[-1] in {")",
+        "}",
+    }:
+        result.pop()
+    if result and result[-1].endswith(")"):
+        result[-1] = result[-1].rstrip(")")
+        if not result[-1]:
+            result.pop()
+    return result
+
+
+def _without_forge_global_options(tokens: list[str]) -> list[str]:
+    """Remove the three singleton CLI globals without reordering verb tokens."""
+    result: list[str] = []
+    index = 0
+    while index < len(tokens):
+        word = tokens[index]
+        if word in FORGE_CLI_GLOBAL_VALUE_OPTIONS:
+            if index + 1 >= len(tokens) or tokens[index + 1] == "":
+                return list(tokens)
+            index += 2
+            continue
+        matching_option = next(
+            (
+                option
+                for option in FORGE_CLI_GLOBAL_VALUE_OPTIONS
+                if word.startswith(f"{option}=")
+            ),
+            None,
+        )
+        if matching_option is not None:
+            if word == f"{matching_option}=":
+                return list(tokens)
+            index += 1
+            continue
+        result.append(word)
+        index += 1
+    return result
+
+
 def _classify_forge_cli_segment(segment: str) -> str:
+    normalized_segment, _openers, _closers = shell_group_structure(segment)
     try:
-        tokens = shlex.split(segment, comments=False, posix=True)
+        tokens = shlex.split(normalized_segment, comments=False, posix=True)
     except ValueError:
         return "no-match"
 
+    tokens = without_shell_grouping(tokens)
     index = 0
     if tokens[:1] == ["env"]:
         index = 1
@@ -277,9 +1278,24 @@ def _classify_forge_cli_segment(segment: str) -> str:
         return "deny-approve"
     if pair == ("commit", "skip"):
         return "deny-skip"
+    normalized_subcommands = _without_forge_global_options(subcommands)
+    normalized_pair = tuple(normalized_subcommands[:2])
+    if normalized_pair == ("commit", "approve"):
+        return "deny-approve"
+    if normalized_pair == ("commit", "skip"):
+        return "deny-skip"
+    if normalized_pair == ("merge", "approve"):
+        return "deny-merge-approve"
     if (
         subcommands[0] in FORGE_CLI_SINGLE_COMMANDS
         or pair in FORGE_CLI_PAIRED_COMMANDS
+        or (
+            normalized_subcommands
+            and (
+                normalized_subcommands[0] in FORGE_CLI_SINGLE_COMMANDS
+                or normalized_pair in FORGE_CLI_PAIRED_COMMANDS
+            )
+        )
     ):
         return "allow"
     return "no-match"
@@ -289,6 +1305,24 @@ def classify_forge_cli_invocation(command: str) -> str:
     """Classify FR-221 Forge CLI invocations in a model Bash command."""
     if not isinstance(command, str) or not command or "\x00" in command:
         return "no-match"
+    structured = _classify_forge_cli_invocation_bounded(command)
+    if structured.startswith("deny-") or not RAW_SEGMENT_PASS_ENABLED:
+        return structured
+    raw = _raw_segment_pass(lambda: _classify_forge_cli_invocation_bounded(command))
+    if raw.startswith("deny-"):
+        return raw
+    return "allow" if "allow" in (structured, raw) else structured
+
+
+def _classify_forge_cli_invocation_bounded(command: str) -> str:
+    _enter_nesting()
+    try:
+        return _classify_forge_cli_invocation_nested(command)
+    finally:
+        _exit_nesting()
+
+
+def _classify_forge_cli_invocation_nested(command: str) -> str:
     classification = "no-match"
     for segment, _separator in split_segments(command):
         segment_class = _classify_forge_cli_segment(segment)
@@ -296,7 +1330,138 @@ def classify_forge_cli_invocation(command: str) -> str:
             return segment_class
         if segment_class == "allow":
             classification = "allow"
+        for nested in _nested_executables(segment):
+            nested_class = _classify_forge_cli_invocation_bounded(nested)
+            if nested_class.startswith("deny-"):
+                return nested_class
+            if nested_class == "allow":
+                classification = "allow"
     return classification
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member: {key}")
+        result[key] = value
+    return result
+
+
+def load_v2_denials(corpus_path: Path) -> dict[str, str]:
+    """Load the additive DM-016 denial literals from the shipped corpus."""
+    raw = corpus_path.read_bytes()
+    if len(raw) > 1024 * 1024:
+        raise ValueError("v2 hook corpus exceeds size limit")
+    if hashlib.sha256(raw).hexdigest() != V2_CORPUS_SHA256:
+        raise ValueError("v2 hook corpus bytes are not the manifested generation")
+    payload = json.loads(
+        raw.decode("utf-8"), object_pairs_hook=_unique_json_object
+    )
+    if not isinstance(payload, dict) or tuple(payload) != (
+        "schema",
+        "v1",
+        "case_count",
+        "cases",
+    ):
+        raise ValueError("v2 hook corpus root is invalid")
+    if payload.get("schema") != "fr223-hook-argv/2":
+        raise ValueError("v2 hook corpus schema is invalid")
+    v1 = payload.get("v1")
+    if not isinstance(v1, dict) or tuple(v1) != (
+        "path",
+        "schema",
+        "sha256",
+        "case_count",
+    ) or type(v1.get("case_count")) is not int or v1 != {
+        "path": "system/fr223/hook-argv-cases-v1.json",
+        "schema": "fr223-hook-argv/1",
+        "sha256": (
+            "1850257d7899a4c7199e9bcbe12ffd39"
+            "b0905bb44e49d16348c10e438ea05db7"
+        ),
+        "case_count": 112,
+    }:
+        raise ValueError("v2 hook corpus v1 reference is invalid")
+    cases = payload.get("cases")
+    if (
+        type(payload.get("case_count")) is not int
+        or payload.get("case_count") != 18
+        or not isinstance(cases, list)
+        or len(cases) != 18
+    ):
+        raise ValueError("v2 hook corpus count is invalid")
+
+    observed_expectations: dict[str, str] = {}
+    denial_reasons: dict[str, set[str]] = {
+        expectation: set() for expectation in V2_DENIAL_EXPECTATIONS
+    }
+    identifiers: list[str] = []
+    for case in cases:
+        if not isinstance(case, dict) or tuple(case) != (
+            "id",
+            "command",
+            "activation",
+            "expect",
+            "reason",
+        ):
+            raise ValueError("v2 hook corpus case is invalid")
+        identifier = case.get("id")
+        command = case.get("command")
+        activation = case.get("activation")
+        expectation = case.get("expect")
+        reason = case.get("reason")
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or not isinstance(command, str)
+            or not command
+            or not isinstance(reason, str)
+            or not reason
+            or "\x00" in command
+            or "\x00" in reason
+            or "\r" in reason
+            or "\n" in reason
+        ):
+            raise ValueError("v2 hook corpus case strings are invalid")
+        try:
+            identifier.encode("utf-8")
+            command.encode("utf-8")
+            reason.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("v2 hook corpus strings are not UTF-8 encodable") from exc
+        if expectation not in V2_EXPECTATIONS:
+            raise ValueError("v2 hook corpus expectation is invalid")
+        if not isinstance(activation, dict) or tuple(activation) != (
+            "head_manifest",
+            "worktree_manifest",
+        ):
+            raise ValueError("v2 hook corpus activation is invalid")
+        if activation.get("head_manifest") not in V2_ACTIVATION_CONTEXTS:
+            raise ValueError("v2 hook corpus HEAD activation is invalid")
+        if (
+            activation.get("worktree_manifest") is not None
+            and activation.get("worktree_manifest") not in V2_ACTIVATION_CONTEXTS
+        ):
+            raise ValueError("v2 hook corpus worktree activation is invalid")
+        identifiers.append(identifier)
+        observed_expectations[identifier] = expectation
+        if expectation in denial_reasons:
+            denial_reasons[expectation].add(reason)
+
+    if identifiers != sorted(identifiers) or len(set(identifiers)) != 18:
+        raise ValueError("v2 hook corpus identifiers are invalid")
+    if observed_expectations != V2_CASE_EXPECTATIONS:
+        raise ValueError("v2 hook corpus expectation partition is invalid")
+    if any(len(reasons) != 1 for reasons in denial_reasons.values()):
+        raise ValueError("v2 hook corpus denial literals are ambiguous")
+    resolved = {
+        expectation: next(iter(reasons))
+        for expectation, reasons in denial_reasons.items()
+    }
+    if resolved != V2_DENIAL_FALLBACKS:
+        raise ValueError("v2 hook corpus denial literals are invalid")
+    return resolved
 
 
 def is_git_token(token: str) -> bool:
@@ -556,7 +1721,7 @@ def parse_action(tokens: list[str], cwd: Path) -> GitAction | None:
 
 def updated_cwd(tokens: list[str], cwd: Path, separator: str | None) -> Path:
     """Track a literal, successful shell cd for following non-pipe segments."""
-    if separator == "|" or not tokens or tokens[0] != "cd":
+    if separator in {"|", "&"} or not tokens or tokens[0] != "cd":
         return cwd
     operands = tokens[1:]
     if operands and operands[0] == "--":
@@ -573,23 +1738,153 @@ def updated_cwd(tokens: list[str], cwd: Path, separator: str | None) -> Path:
     return candidate if candidate.is_dir() else cwd
 
 
-def find_actions(command: str) -> list[GitAction]:
+def updated_cwd_states(
+    tokens: list[str],
+    cwds: tuple[Path, ...],
+    separator: str | None,
+    *,
+    may_skip: bool,
+    isolated: bool,
+) -> tuple[Path, ...]:
+    """Advance every plausible cwd while retaining a conditional skip path."""
+    advanced = (
+        cwds
+        if isolated
+        else tuple(updated_cwd(tokens, cwd, separator) for cwd in cwds)
+    )
+    return _unique_cwds((*cwds, *advanced) if may_skip else advanced)
+
+
+def segment_advances_executable_seen(tokens: list[str]) -> bool:
+    """Treat every preceding shell command, including cd, as executable.
+
+    Deliberately a named seam: tests disable it in memory to prove the
+    preceded-by-command qualification is load-bearing.
+    """
+    return bool(tokens)
+
+
+def _find_actions_recursive(
+    command: str,
+    cwd: Path,
+    *,
+    executable_seen: bool,
+) -> list[GitAction]:
+    _enter_nesting()
+    try:
+        return _find_actions_recursive_body(
+            command, cwd, executable_seen=executable_seen
+        )
+    finally:
+        _exit_nesting()
+
+
+def _find_actions_recursive_body(
+    command: str,
+    cwd: Path,
+    *,
+    executable_seen: bool,
+) -> list[GitAction]:
     actions: list[GitAction] = []
-    cwd = Path.cwd().resolve()
-    executable_seen = False
+    cwds = (cwd,)
+    group_stack: list[
+        tuple[str, tuple[Path, ...], bool, bool, tuple[Path, ...]]
+    ] = []
+    and_or_entry_cwds = cwds
+    previous_separator: str | None = None
     for segment, separator in split_segments(command):
+        normalized_segment, openers, closers = shell_group_structure(segment)
+        may_skip = previous_separator in {"&&", "||"}
+        for index, opener in enumerate(openers):
+            group_stack.append(
+                (
+                    opener,
+                    cwds,
+                    may_skip if index == 0 else False,
+                    previous_separator == "|" if index == 0 else False,
+                    and_or_entry_cwds,
+                )
+            )
+            and_or_entry_cwds = cwds
+        for shell_cwd in cwds:
+            for nested in _nested_executables(segment):
+                for action in _find_actions_recursive(
+                    nested,
+                    shell_cwd,
+                    executable_seen=True,
+                ):
+                    if action not in actions:
+                        actions.append(action)
         try:
-            tokens = shlex.split(segment, comments=False, posix=True)
+            tokens = shlex.split(normalized_segment, comments=False, posix=True)
         except ValueError:
+            previous_separator = separator
             continue
         command_tokens = without_redirections(tokens)
-        for candidate_tokens in (tokens, command_tokens):
-            action = parse_action(candidate_tokens, cwd)
-            if action is not None and action not in actions:
-                actions.append(dataclasses.replace(action, preceded_by_command=executable_seen))
-        if command_tokens and command_tokens[0] != "cd":
+        candidates = [tokens, command_tokens]
+        for candidate_tokens in candidates:
+            for shell_cwd in cwds:
+                action = parse_action(candidate_tokens, shell_cwd)
+                if action is not None:
+                    qualified_action = dataclasses.replace(
+                        action, preceded_by_command=executable_seen
+                    )
+                    if qualified_action not in actions:
+                        actions.append(qualified_action)
+        if segment_advances_executable_seen(command_tokens):
             executable_seen = True
-        cwd = updated_cwd(command_tokens, cwd, separator)
+        isolated_segment = separator in {"|", "&"} or (
+            previous_separator == "|" and not openers
+        )
+        cwds = updated_cwd_states(
+            command_tokens,
+            cwds,
+            separator,
+            may_skip=may_skip,
+            isolated=isolated_segment,
+        )
+        for closer in closers:
+            expected = "(" if closer == ")" else "{"
+            if not group_stack or group_stack[-1][0] != expected:
+                continue
+            (
+                opener,
+                inherited_cwds,
+                group_may_skip,
+                piped_from_left,
+                outer_and_or_entry_cwds,
+            ) = group_stack.pop()
+            cwds = cwd_after_group_exit(
+                opener,
+                inherited_cwds,
+                cwds,
+                separator in {"|", "&"} or piped_from_left,
+            )
+            if group_may_skip:
+                cwds = _unique_cwds((*inherited_cwds, *cwds))
+            and_or_entry_cwds = outer_and_or_entry_cwds
+        if separator == "&":
+            cwds = cwd_after_async_list(and_or_entry_cwds, cwds)
+        if separator in {";", "\n", "&"}:
+            and_or_entry_cwds = cwds
+        previous_separator = separator
+    return actions
+
+
+def find_actions(command: str) -> list[GitAction]:
+    try:
+        cwd = Path.cwd().resolve()
+    except (OSError, RuntimeError):
+        cwd = Path.cwd()
+    actions = _find_actions_recursive(command, cwd, executable_seen=False)
+    if not RAW_SEGMENT_PASS_ENABLED:
+        return actions
+    raw_actions = _raw_segment_pass(
+        lambda: _find_actions_recursive(command, cwd, executable_seen=False)
+    )
+    for action in raw_actions:
+        if action not in actions:
+            actions.append(action)
     return actions
 
 
@@ -1434,6 +2729,64 @@ def manifest_requires_marker(context: RepoContext) -> bool:
     return not is_upstream
 
 
+def committed_history_mutation_mode(context: RepoContext) -> str:
+    """Classify DM-015 using only the invoking repository's committed HEAD."""
+    try:
+        result = run_context_git(context, "show", "HEAD:.forge-manifest")
+    except OSError:
+        return "non-forge"
+    if result.returncode != 0:
+        return "non-forge"
+    raw = result.stdout
+    if HEAD_PLUGIN_REF_LINE.search(raw) is None:
+        if (
+            UPSTREAM_COMMIT_LINE.search(raw) is not None
+            or UPSTREAM_REGION_LINE.search(raw) is not None
+        ):
+            return "upstream"
+        return "non-forge"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return "invalid"
+    if not text.endswith("\n") or "\r" in text or "\x00" in text:
+        return "invalid"
+    lines = text[:-1].split("\n")
+    history_rows: list[tuple[int, str]] = []
+    suspicious_history_row = False
+    for index, line in enumerate(lines):
+        field = line.split(":", 1)[0].strip(" \t")
+        if field == "history_mutation_mode":
+            history_rows.append((index, line))
+        elif line.lstrip(" \t").startswith("history_mutation_mode"):
+            suspicious_history_row = True
+    if suspicious_history_row:
+        return "invalid"
+    if not history_rows:
+        return "plugin-mode-missing"
+    if len(history_rows) != 1:
+        return "invalid"
+    row_index, row = history_rows[0]
+    if row not in {
+        "history_mutation_mode: legacy-v1",
+        "history_mutation_mode: forge-verbs-v1",
+    }:
+        return "invalid"
+    init_rows = [
+        index
+        for index, line in enumerate(lines)
+        if line in {"init_completed: true", "init_completed: false"}
+    ]
+    if len(init_rows) != 1 or row_index != init_rows[0] + 1:
+        return "invalid"
+    if any(
+        line.startswith("region: ") and index < row_index
+        for index, line in enumerate(lines)
+    ):
+        return "invalid"
+    return row.split(": ", 1)[1]
+
+
 def policy_region(policy: bytes, name: str) -> bytes | None:
     """Extract one complete committed policy region, including its delimiters."""
     begin = f"<!-- FORGE:REGION {name} BEGIN -->".encode()
@@ -1788,6 +3141,89 @@ def foreign_live_chain(context: RepoContext) -> dict[str, object] | None:
     return None
 
 
+ResolvedCommand = tuple[
+    list[GitAction],
+    str,
+    list[tuple[GitAction, "RepoContext | None"]],
+    dict[tuple[object, ...], str],
+    dict[tuple[object, ...], str | None],
+]
+
+
+def _resolve_command(command: str, check_halt: Path) -> ResolvedCommand:
+    """Parse, then resolve every action's context, mode, and halt probe once."""
+    actions = find_actions(command)
+    cli_class = classify_forge_cli_invocation(command)
+    contexts = [(action, resolve_repo_context(action)) for action in actions]
+    modes: dict[tuple[object, ...], str] = {}
+    sentinels: dict[tuple[object, ...], str | None] = {}
+    for action, context in contexts:
+        if context is None or action.subcommand not in {"commit", "push"}:
+            continue
+        identity = _context_identity(context)
+        if identity not in sentinels:
+            sentinels[identity] = resolve_halt_sentinel(context, check_halt)
+        if identity not in modes:
+            modes[identity] = resolve_history_mutation_mode(context)
+    return actions, cli_class, contexts, modes, sentinels
+
+
+def _classify_command_bounded(
+    command: str, check_halt: Path | None = None
+) -> ResolvedCommand | tuple[list[GitAction], str]:
+    """Run parsing and per-action resolution under the fail-closed bounds.
+
+    Without ``check_halt`` only the parse phase runs (the in-process test
+    surface); with it, context, mode, and halt resolution are covered by the
+    same budget so a flood of distinct actions cannot outrun the hook deadline.
+    """
+    global _nesting_depth
+    _nesting_depth = 0
+    _reset_resolution_memos()
+    budget = PARSE_TIME_BUDGET_SECONDS
+    armed = False
+    previous_handler: object = None
+
+    def expired(_signum: int, _frame: object) -> None:
+        raise GuardInputBoundExceeded("time")
+
+    if budget and budget > 0 and hasattr(signal, "setitimer"):
+        previous_handler = signal.signal(signal.SIGALRM, expired)
+        signal.setitimer(signal.ITIMER_REAL, float(budget))
+        armed = True
+    try:
+        if check_halt is None:
+            return find_actions(command), classify_forge_cli_invocation(command)
+        return _resolve_command(command, check_halt)
+    finally:
+        if armed:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+
+
+def _failsafe_deny(command: str, kind: str, emitter: Path, failure: str) -> int:
+    """Deny an unclassifiable command on both channels with exit 2."""
+    reason = GUARD_FAILSAFE_DENIALS[kind]
+    if kind == "internal":
+        reason = reason.format(failure=failure or "unknown")
+    emit_deny(reason)
+    reason_code = GUARD_FAILSAFE_REASON_CODES[kind]
+    context = invoking_repo_context()
+    if context is not None:
+        audit_block(context, "guard", reason_code, command)
+        emit_decision_event(
+            emitter,
+            context,
+            event="guard_deny",
+            candidate=staged_candidate(context),
+            policy_sha=head_policy_sha(context),
+            reason=reason_code,
+        )
+    sys.stderr.write(f"{reason}\n")
+    sys.stderr.flush()
+    return 2
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -1802,11 +3238,43 @@ def main() -> int:
     if not isinstance(command, str):
         return 0
 
-    actions = find_actions(command)
-    contexts = [(action, repo_context(action)) for action in actions]
     check_halt = Path(sys.argv[1])
     classifier = Path(sys.argv[2])
     emitter = Path(sys.argv[3])
+    v2_corpus = Path(sys.argv[4])
+    try:
+        _actions, cli_class, contexts, modes, sentinels = _classify_command_bounded(
+            command, check_halt
+        )
+    except GuardInputBoundExceeded as exc:
+        return _failsafe_deny(command, exc.kind, emitter, "")
+    except Exception as exc:  # fail closed on any parser or resolution failure
+        return _failsafe_deny(command, "internal", emitter, _failsafe_failure_name(exc))
+    v2_denials: dict[str, str] | None = None
+    v2_corpus_failed = False
+
+    def v2_denial(expectation: str) -> str:
+        nonlocal v2_corpus_failed, v2_denials
+        if v2_denials is None:
+            try:
+                v2_denials = load_v2_denials(v2_corpus)
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+                v2_denials = {}
+                v2_corpus_failed = True
+        reason = v2_denials.get(expectation)
+        if reason is None:
+            v2_corpus_failed = True
+            return V2_DENIAL_FALLBACKS[expectation]
+        return reason
+
+    def v2_status(reason: str) -> int:
+        if not v2_corpus_failed:
+            return 0
+        # Exit 2 is itself a blocking hook outcome. Retain the applicable exact
+        # FR-239 literal on both output channels even when corpus bytes are bad.
+        sys.stderr.write(f"{reason}\n")
+        sys.stderr.flush()
+        return 2
 
     # Halt is the first authority check across every relevant segment.
     for action, context in contexts:
@@ -1814,7 +3282,7 @@ def main() -> int:
             continue
         if context is None:
             continue
-        sentinel = halt_sentinel(context, check_halt)
+        sentinel = sentinels.get(_context_identity(context))
         if sentinel is None:
             continue
         reason = f"forge: operator halt engaged ({sentinel})"
@@ -1835,10 +3303,28 @@ def main() -> int:
         run_halt_check(context, check_halt, probe_only=False)
         return 0
 
-    cli_class = classify_forge_cli_invocation(command)
+    operator_context: RepoContext | None = None
+    if cli_class.startswith("deny-"):
+        operator_context = invoking_repo_context()
+        if operator_context is not None:
+            sentinel = halt_sentinel(operator_context, check_halt)
+            if sentinel is not None:
+                reason = f"forge: operator halt engaged ({sentinel})"
+                audit_block(operator_context, "forge-cli", "operator-halt", command)
+                emit_deny(reason)
+                emit_decision_event(
+                    emitter,
+                    operator_context,
+                    event="guard_deny",
+                    candidate=staged_candidate(operator_context),
+                    policy_sha=head_policy_sha(operator_context),
+                    reason="operator-halt",
+                )
+                run_halt_check(operator_context, check_halt, probe_only=False)
+                return 0
     if cli_class in FORGE_CLI_DENIALS:
         emit_deny(FORGE_CLI_DENIALS[cli_class])
-        context = invoking_repo_context()
+        context = operator_context
         if context is not None:
             reason_code = f"operator-verb-{cli_class[len('deny-'):]}"
             audit_block(context, "forge-cli", reason_code, command)
@@ -1851,6 +3337,60 @@ def main() -> int:
                 reason=reason_code,
             )
         return 0
+    if cli_class == "deny-merge-approve":
+        reason = v2_denial(cli_class)
+        emit_deny(reason)
+        context = operator_context
+        if context is not None:
+            audit_block(context, "forge-cli", "operator-verb-merge-approve", command)
+            emit_decision_event(
+                emitter,
+                context,
+                event="guard_deny",
+                candidate=staged_candidate(context),
+                policy_sha=head_policy_sha(context),
+                reason="operator-verb-merge-approve",
+            )
+        return v2_status(reason)
+
+    activation_contexts = [
+        (action, context, modes[_context_identity(context)])
+        for action, context in contexts
+        if context is not None and action.subcommand in {"commit", "push"}
+    ]
+    for action, context, mode in activation_contexts:
+        if mode != "invalid":
+            continue
+        reason_code = "activation-policy-invalid"
+        audit_block(context, action.executable, reason_code, command)
+        reason = v2_denial("deny-invalid-mode")
+        emit_deny(reason)
+        emit_decision_event(
+            emitter,
+            context,
+            event="guard_deny",
+            candidate=staged_candidate(context),
+            policy_sha=head_policy_sha(context),
+            reason=reason_code,
+        )
+        return v2_status(reason)
+    for action, context, mode in activation_contexts:
+        if mode != "forge-verbs-v1":
+            continue
+        expectation = f"deny-raw-{action.subcommand}"
+        reason_code = f"raw-git-{action.subcommand}-denied"
+        audit_block(context, action.executable, reason_code, command)
+        reason = v2_denial(expectation)
+        emit_deny(reason)
+        emit_decision_event(
+            emitter,
+            context,
+            event="guard_deny",
+            candidate=staged_candidate(context),
+            policy_sha=head_policy_sha(context),
+            reason=reason_code,
+        )
+        return v2_status(reason)
 
     for action, context in contexts:
         if context is None or not is_index_mutating_action(action):
@@ -1925,9 +3465,20 @@ try:
     raise SystemExit(main())
 except BrokenPipeError:
     raise SystemExit(0)
+except Exception as exc:  # fail closed: never a bare traceback with exit 1
+    failsafe_reason = GUARD_FAILSAFE_DENIALS["internal"].format(
+        failure=_failsafe_failure_name(exc)
+    )
+    try:
+        emit_deny(failsafe_reason)
+    except Exception:
+        pass
+    sys.stderr.write(f"{failsafe_reason}\n")
+    raise SystemExit(2)
 PY
 
 exec python3 -c "$python_code" \
     "$script_dir/check-halt.sh" \
     "$script_dir/risk_tier.py" \
-    "$script_dir/emit-decision-event.py"
+    "$script_dir/emit-decision-event.py" \
+    "$script_dir/../../system/fr223/hook-argv-cases-v2.json"

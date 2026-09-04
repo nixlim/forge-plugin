@@ -1,0 +1,210 @@
+{
+  "schema": "fr223-reason-codes/2",
+  "codes": [
+    {
+      "code": "ambiguous-target",
+      "exit_class": 1,
+      "precondition": "a dispensation or disposition target matches more than one record"
+    },
+    {
+      "code": "approval-required",
+      "exit_class": 1,
+      "precondition": "control-class chain not yet operator-approved"
+    },
+    {
+      "code": "candidate-stale",
+      "exit_class": 1,
+      "precondition": "evidence bound to a superseded candidate hash"
+    },
+    {
+      "code": "citation-out-of-root",
+      "exit_class": 1,
+      "precondition": "FR-017 refusal surfaced through the CLI"
+    },
+    {
+      "code": "cleanup-failed",
+      "exit_class": 1,
+      "precondition": "Pushed candidate containment or non-force worktree/branch cleanup cannot complete"
+    },
+    {
+      "code": "dirty-index",
+      "exit_class": 1,
+      "precondition": "pre-existing staged content at `commit start`"
+    },
+    {
+      "code": "dirty-worktree",
+      "exit_class": 1,
+      "precondition": "Merge source or default-branch push checkout fails the exact clean predicate"
+    },
+    {
+      "code": "drift-tree-index",
+      "exit_class": 1,
+      "precondition": "working-tree-vs-index divergence on a staged path"
+    },
+    {
+      "code": "evidence-incomplete",
+      "exit_class": 1,
+      "precondition": "a required tier step is absent or non-PASS without an operator skip"
+    },
+    {
+      "code": "fetch-failed",
+      "exit_class": 1,
+      "precondition": "Required fixed-target fetch/tip resolution failed"
+    },
+    {
+      "code": "frozen-chain",
+      "exit_class": 2,
+      "precondition": "corrupt chain file, irresolvable event/state divergence, or foreign HEAD in `committing`"
+    },
+    {
+      "code": "halt-engaged",
+      "exit_class": 1,
+      "precondition": "operator halt sentinel present"
+    },
+    {
+      "code": "head-moved",
+      "exit_class": 1,
+      "precondition": "out-of-band HEAD movement pending `commit rebase` or `abort`"
+    },
+    {
+      "code": "inactive-chain",
+      "exit_class": 1,
+      "precondition": "chain past `inactive_after`; only `status`/`abort` accepted"
+    },
+    {
+      "code": "iteration-cap",
+      "exit_class": 1,
+      "precondition": "FR-053 cap of 8 reached"
+    },
+    {
+      "code": "live-chain-exists",
+      "exit_class": 1,
+      "precondition": "another live commit chain owns the worktree"
+    },
+    {
+      "code": "live-merge-chain-exists",
+      "exit_class": 1,
+      "precondition": "Another live merge chain owns the selected worktree"
+    },
+    {
+      "code": "lock-release-failed",
+      "exit_class": 1,
+      "precondition": "Rebase lock could not be explicitly released after the primary outcome was recorded"
+    },
+    {
+      "code": "lock-unavailable",
+      "exit_class": 1,
+      "precondition": "commit-lock acquisition failed or timed out"
+    },
+    {
+      "code": "merge-gate-failed",
+      "exit_class": 1,
+      "precondition": "Required initial or integrated merge gate is unavailable or non-PASS"
+    },
+    {
+      "code": "mutating-gate-pending",
+      "exit_class": 1,
+      "precondition": "non-mutating `gate run` while a configured mutating gate is pending"
+    },
+    {
+      "code": "non-fast-forward",
+      "exit_class": 1,
+      "precondition": "Ordinary destination update was rejected as non-fast-forward"
+    },
+    {
+      "code": "ok",
+      "exit_class": 0,
+      "precondition": "success"
+    },
+    {
+      "code": "operator-verb-denied",
+      "exit_class": 1,
+      "precondition": "model-issued `approve`/`skip` reached the CLI through a denied path"
+    },
+    {
+      "code": "path-missing",
+      "exit_class": 1,
+      "precondition": "a named path does not exist at `commit start`/`restage`"
+    },
+    {
+      "code": "policy-changed",
+      "exit_class": 1,
+      "precondition": "committed policy bytes differ at the new HEAD after `commit rebase`"
+    },
+    {
+      "code": "policy-unreadable",
+      "exit_class": 1,
+      "precondition": "committed-HEAD policy unavailable outside the bootstrap path"
+    },
+    {
+      "code": "push-failed",
+      "exit_class": 1,
+      "precondition": "Push returned a known failure other than non-fast-forward"
+    },
+    {
+      "code": "push-outcome-unknown",
+      "exit_class": 1,
+      "precondition": "Remote outcome cannot be authoritatively observed"
+    },
+    {
+      "code": "push-target-invalid",
+      "exit_class": 1,
+      "precondition": "Checkout, remote, branch, or destination ref is not the fixed sanctioned target"
+    },
+    {
+      "code": "rebase-conflict",
+      "exit_class": 1,
+      "precondition": "CLI-owned rebase awaits the specified conflict-recovery verb"
+    },
+    {
+      "code": "rebase-failed",
+      "exit_class": 1,
+      "precondition": "Rebase/continue/abort failed outside the recoverable conflict state"
+    },
+    {
+      "code": "rebase-lock-unavailable",
+      "exit_class": 1,
+      "precondition": "Common rebase lock timed out after 300 seconds or no portable mechanism exists"
+    },
+    {
+      "code": "remote-churn",
+      "exit_class": 1,
+      "precondition": "Eight consecutive integration epochs were defeated by remote movement"
+    },
+    {
+      "code": "review-verdict-invalid",
+      "exit_class": 1,
+      "precondition": "verdict grammar, candidate-hash citation, or package-digest citation failed at `collect`/`attach`"
+    },
+    {
+      "code": "skip-not-permitted",
+      "exit_class": 1,
+      "precondition": "a skip naming control-class review or approval"
+    },
+    {
+      "code": "state-precondition",
+      "exit_class": 1,
+      "precondition": "verb issued in a state whose transition table does not admit it"
+    },
+    {
+      "code": "token-consumed",
+      "exit_class": 1,
+      "precondition": "authorization token already used"
+    },
+    {
+      "code": "ttl-expired",
+      "exit_class": 1,
+      "precondition": "authorization token past its 30-minute TTL"
+    },
+    {
+      "code": "worktree-invalid",
+      "exit_class": 1,
+      "precondition": "Existing path is not a valid registered non-main local-branch worktree"
+    },
+    {
+      "code": "worktree-missing",
+      "exit_class": 1,
+      "precondition": "`merge start --worktree` path does not exist"
+    }
+  ]
+}

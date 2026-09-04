@@ -1,0 +1,192 @@
+{
+  "schema": "fr223-hook-argv/2",
+  "v1": {
+    "path": "system/fr223/hook-argv-cases-v1.json",
+    "schema": "fr223-hook-argv/1",
+    "sha256": "1850257d7899a4c7199e9bcbe12ffd39b0905bb44e49d16348c10e438ea05db7",
+    "case_count": 112
+  },
+  "case_count": 18,
+  "cases": [
+    {
+      "id": "activation-enabled-raw-commit-worktree-legacy",
+      "command": "git commit -m 'activation enabled'",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": "legacy-v1"
+      },
+      "expect": "deny-raw-commit",
+      "reason": "forge: raw git commit denied — use Forge CLI commit finalize"
+    },
+    {
+      "id": "activation-enabled-raw-push-worktree-missing",
+      "command": "git push origin HEAD:main",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": "plugin-mode-missing"
+      },
+      "expect": "deny-raw-push",
+      "reason": "forge: raw git push denied — use Forge CLI merge finalize or Forge CLI push"
+    },
+    {
+      "id": "activation-invalid-raw-commit",
+      "command": "git commit -m 'invalid activation'",
+      "activation": {
+        "head_manifest": "invalid",
+        "worktree_manifest": null
+      },
+      "expect": "deny-invalid-mode",
+      "reason": "forge: history mutation mode invalid — repair committed .forge-manifest through Forge CLI"
+    },
+    {
+      "id": "activation-invalid-raw-push",
+      "command": "git push origin HEAD:main",
+      "activation": {
+        "head_manifest": "invalid",
+        "worktree_manifest": null
+      },
+      "expect": "deny-invalid-mode",
+      "reason": "forge: history mutation mode invalid — repair committed .forge-manifest through Forge CLI"
+    },
+    {
+      "id": "activation-legacy-raw-push-worktree-invalid",
+      "command": "git push origin HEAD:main",
+      "activation": {
+        "head_manifest": "legacy-v1",
+        "worktree_manifest": "invalid"
+      },
+      "expect": "allow",
+      "reason": "committed legacy mode preserves phase-1 raw-push behavior despite working-tree drift"
+    },
+    {
+      "id": "activation-missing-raw-push-worktree-enabled",
+      "command": "git push origin HEAD:main",
+      "activation": {
+        "head_manifest": "plugin-mode-missing",
+        "worktree_manifest": "forge-verbs-v1"
+      },
+      "expect": "allow",
+      "reason": "a missing committed mode is legacy even when the working tree appears activated"
+    },
+    {
+      "id": "activation-non-forge-raw-commit",
+      "command": "git commit -m 'non forge repository'",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "allow",
+      "reason": "a repository without a committed Forge manifest remains inert"
+    },
+    {
+      "id": "activation-upstream-raw-push",
+      "command": "git push origin HEAD:main",
+      "activation": {
+        "head_manifest": "upstream",
+        "worktree_manifest": null
+      },
+      "expect": "allow",
+      "reason": "an upstream-schema committed manifest retains halt-only behavior"
+    },
+    {
+      "id": "allow-enabled-commit-finalize",
+      "command": "env FORGE_MODE=phase3 /usr/bin/python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py\" commit finalize --message phase3",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "allow",
+      "reason": "commit finalize is one of the three sanctioned Forge CLI producer paths"
+    },
+    {
+      "id": "allow-enabled-merge-finalize",
+      "command": "python /opt/forge/scripts/forge/cli.py merge finalize --chain-id c-2026-08-29T120000Z-abcd",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "allow",
+      "reason": "merge finalize is one of the three sanctioned Forge CLI producer paths"
+    },
+    {
+      "id": "allow-enabled-push",
+      "command": "env TRACE=1 python3 ./scripts/forge/cli.py push --repo=.",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "allow",
+      "reason": "Forge CLI push is one of the three sanctioned producer paths"
+    },
+    {
+      "id": "allow-quoted-raw-text",
+      "command": "python3 scripts/forge/cli.py commit finalize --message 'git commit && git push'",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "allow",
+      "reason": "quoted raw-Git text remains argument data to the sanctioned finalize segment"
+    },
+    {
+      "id": "compound-merge-finalize-then-raw-commit",
+      "command": "python3 scripts/forge/cli.py merge finalize --chain-id c-2026-08-29T120000Z-abcd && git commit -m appended",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "deny-raw-commit",
+      "reason": "forge: raw git commit denied — use Forge CLI commit finalize"
+    },
+    {
+      "id": "compound-push-then-raw-push",
+      "command": "env TRACE=1 /usr/bin/python3 /opt/forge/scripts/forge/cli.py push --repo /tmp/repo; git push origin HEAD:main",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "deny-raw-push",
+      "reason": "forge: raw git push denied — use Forge CLI merge finalize or Forge CLI push"
+    },
+    {
+      "id": "deny-merge-approve-global-after-last",
+      "command": "printf ready && python3 scripts/forge/cli.py merge approve --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --chain-id c-2026-08-29T120000Z-abcd",
+      "activation": {
+        "head_manifest": "legacy-v1",
+        "worktree_manifest": null
+      },
+      "expect": "deny-merge-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (merge approve)"
+    },
+    {
+      "id": "deny-merge-approve-global-before-first",
+      "command": "python3 scripts/forge/cli.py --repo /tmp/repo merge approve --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef; printf tail",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-merge-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (merge approve)"
+    },
+    {
+      "id": "deny-merge-approve-global-between-middle",
+      "command": "printf head | /usr/bin/python3 '/opt/forge plugin/scripts/forge/cli.py' merge --run-id=run-20260829-cli-phase3 approve --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef | printf tail",
+      "activation": {
+        "head_manifest": "upstream",
+        "worktree_manifest": null
+      },
+      "expect": "deny-merge-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (merge approve)"
+    },
+    {
+      "id": "no-match-merge-approved",
+      "command": "python3 scripts/forge/cli.py merge approved --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "no-match",
+      "reason": "approved is a lookalike rather than the exact merge approve operator verb"
+    }
+  ]
+}

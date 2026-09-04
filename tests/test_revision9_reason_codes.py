@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = Path("docs/specs/forge-plugin-spec.md")
 V1_CORPUS = ROOT / "system/fr223/reason-codes-v1.json"
+V2_CORPUS = ROOT / "system/fr223/reason-codes-v2.json"
 V3_CORPUS = ROOT / "system/fr223/reason-codes-v3.json"
 V1_SHA256 = "3646227d8437789e0407117dc09e00d6116edccb63e89354c746d4b9059c264b"
 
@@ -149,8 +150,10 @@ class Revision9ReasonCodeCorpusTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.spec = committed_spec()
+        cls.v2 = json.loads(V2_CORPUS.read_text(encoding="utf-8"))
         cls.v3 = json.loads(V3_CORPUS.read_text(encoding="utf-8"))
-        cls.v2_rows = v2_spec_rows(cls.spec)
+        cls.v2_rows = cls.v2["codes"]
+        cls.v2_spec_rows = v2_spec_rows(cls.spec)
         cls.revision9_rows = revision9_spec_rows(cls.spec)
 
     def test_exact_schema_sorted_unique_complete_count(self) -> None:
@@ -172,6 +175,9 @@ class Revision9ReasonCodeCorpusTests(unittest.TestCase):
 
     def test_complete_union_matches_committed_spec_authority(self) -> None:
         self.assertEqual(len(self.v2_rows), 41)
+        self.assertEqual(set(self.v2), {"schema", "codes"})
+        self.assertEqual(self.v2["schema"], "fr223-reason-codes/2")
+        self.assertEqual(self.v2_rows, self.v2_spec_rows)
         self.assertEqual(len(self.revision9_rows), 12)
         expected = sorted(
             self.v2_rows + self.revision9_rows,

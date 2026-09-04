@@ -10,6 +10,22 @@ Release dates are the UTC dates of the release commits.
 
 ### Added
 
+- Phase-3 slice 7: the additive 41-member reason corpus, referenced 130-case
+  hook matcher corpus, corpus-driven merge-approval and activation denials in
+  `commit-guard.sh`, and the v2 byte-pin, hook, and manifest test modules.
+- Commit guard fail-closed bounds: nested substitutions and case compounds
+  reaching the 64-level bound, parsing plus per-action context resolution
+  exceeding the 10-second budget, or any internal guard failure now deny on
+  both channels with exit 2 instead of escaping as a traceback with a
+  non-blocking exit; repository context, activation mode, and halt probes are
+  memoized per distinct context; each bound has an in-memory disable test.
+- Commit guard segmentation: a swallowed `case` compound can no longer hide
+  the segments around it. Every command is also split raw with swallowing
+  disabled and the union of actions and denials is enforced, so `case` words
+  in quotes, comments, heredoc bodies, `${}`, `[[ ]]`, or `(( ))` never merge
+  a raw push, commit, operator verb, or the halt check into an inert segment;
+  case-arm bodies are visited once and case-word scans are linear, so
+  alternating or wide case input stays fast.
 - Phase-3 slice 7 evidence: the two planted-defect BLOCK eval baselines.
 - Phase-3 slice 7 manifest: the generation-1 `fr230-phase3-4-v2` manifest and
   its five phase-3 PASS result fixtures under `tests/fixtures/fr230-results/`,
