@@ -89,7 +89,7 @@ BINDING_CANDIDATE_KINDS = frozenset(
 BINDING_REVIEW_VERDICTS = frozenset({"PASS", "BLOCK"})
 BINDING_REVIEW_ROLES = frozenset({"review-cheap", "review-final"})
 CHAIN_DECISION_OUTCOMES = frozenset(
-    {"chain-approval", "chain-skip", "chain-landing"}
+    {"chain-approval", "chain-skip", "chain-landing", "chain-abort"}
 )
 BINDING_CORRELATION_CONTROLS = frozenset({"journal-only"})
 HEX_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -817,7 +817,7 @@ def _binding_shape_valid(
                 return False
     elif record.get("type") == "decision":
         outcome = record.get("outcome")
-        if outcome in CHAIN_DECISION_OUTCOMES and outcome == "chain-landing" and review is not None:
+        if outcome in {"chain-landing", "chain-abort"} and review is not None:
             return False
     return True
 
@@ -1517,7 +1517,7 @@ def _validate_proposed_record(
                 _invalid_record_field(
                     kind,
                     "outcome",
-                    "must be one of chain-approval, chain-skip, chain-landing",
+                    "must be one of chain-approval, chain-skip, chain-landing, chain-abort",
                 )
         if activated and candidate.get("outcome") in CHAIN_DECISION_OUTCOMES:
             if "binding" not in candidate and not _defer_binding:
@@ -7157,9 +7157,34 @@ def _check_binding_correlation(
             for record in landings
             if (bound := _binding_chain_and_candidate(record)) is not None
         }
+        # Revision 13: a chain-abort decision retires every record bound to
+        # its chain from the landing correlation; such records were drained by
+        # a chain that never landed. A chain carrying both an abort and a
+        # landing decision is contradictory.
+        aborts = [
+            record
+            for record in records
+            if record.get("type") == "decision"
+            and record.get("task") == task
+            and record.get("outcome") == "chain-abort"
+            and _binding_chain_and_candidate(record) is not None
+        ]
+        aborted_chains = {
+            bound[0]
+            for record in aborts
+            if (bound := _binding_chain_and_candidate(record)) is not None
+        }
+        if any(chain in aborted_chains for chain, _candidate in landing_keys):
+            issues.append(
+                f"task {task!r} has inconsistent bound candidate across gate "
+                "and landing records"
+            )
+            return
         for gate in task_gates:
             bound = _binding_chain_and_candidate(gate)
             assert bound is not None
+            if bound[0] in aborted_chains:
+                continue
             if (bound[0], bound[1]) not in landing_keys:
                 issues.append(
                     f"task {task!r} has inconsistent bound candidate across gate "
@@ -7174,6 +7199,8 @@ def _check_binding_correlation(
             ):
                 continue
             bound = _binding_chain_and_candidate(decision)
+            if bound is not None and bound[0] in aborted_chains:
+                continue
             if bound is None or (bound[0], bound[1]) not in landing_keys:
                 issues.append(
                     f"task {task!r} has inconsistent bound candidate across gate "
@@ -7212,6 +7239,20 @@ def _check_binding_correlation(
             if any(line <= landing_line for line in terminal_task_lines):
                 issues.append(
                     f"terminal task {task!r} precedes a bound chain landing decision"
+                )
+                return
+        for abort in aborts:
+            abort_line = int(abort.get("_line", 0))
+            terminal_task_lines = [
+                int(record.get("_line", 0))
+                for record in records
+                if record.get("type") == "task"
+                and record.get("id") == task
+                and record.get("status") in TERMINAL_TASK_STATUSES
+            ]
+            if any(line <= abort_line for line in terminal_task_lines):
+                issues.append(
+                    f"terminal task {task!r} precedes a bound chain abort decision"
                 )
                 return
 

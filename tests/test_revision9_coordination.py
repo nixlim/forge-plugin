@@ -3259,11 +3259,19 @@ print("committed")
     def _append_test_landing(
         self, repo: Path, run_id: str, chain_id: str
     ) -> dict[str, object]:
+        return self._append_test_decision(repo, run_id, chain_id, "chain-landing")
+
+    def _append_test_decision(
+        self, repo: Path, run_id: str, chain_id: str, outcome: str, *, seed: str = ""
+    ) -> dict[str, object]:
         preimage = {
             "schema": journal.BINDING_SCHEMA,
             "source_record": {
                 "chain_id": chain_id,
-                "event_digest": key("terminal-event"),
+                "event_digest": key(
+                    ("terminal-event" if outcome == "chain-landing" else f"terminal-event-{outcome}")
+                    + seed
+                ),
             },
             "candidate": {
                 "kind": "staged-diff-sha256",
@@ -3276,22 +3284,26 @@ print("committed")
             "binding_id": journal._sha256(journal._canonical_json_bytes(preimage)),
         }
         with mock.patch.object(builders, "resolve_binding", return_value=binding):
-            outcome = builders.decision_add(
+            appended = builders.decision_add(
                 repo,
                 run_id,
-                idempotency_key=key(f"{run_id}-{chain_id}-terminal-landing"),
+                idempotency_key=key(f"{run_id}-{chain_id}-terminal-{outcome}{seed}"),
                 task="task-01",
-                resolution="The bound candidate landed",
+                resolution=(
+                    "The bound candidate landed"
+                    if outcome == "chain-landing"
+                    else "The bound chain was aborted"
+                ),
                 finding=None,
-                outcome="chain-landing",
+                outcome=outcome,
                 risk=None,
                 basis=[],
                 binding_chain=chain_id,
                 binding_id=str(binding["binding_id"]),
             )
-        self.assertFalse(outcome.repeated)
-        self.assertEqual(len(outcome.records), 1)
-        recorded_binding = outcome.records[0].get("binding")
+        self.assertFalse(appended.repeated)
+        self.assertEqual(len(appended.records), 1)
+        recorded_binding = appended.records[0].get("binding")
         self.assertEqual(recorded_binding, binding)
         assert isinstance(recorded_binding, dict)
         return recorded_binding
@@ -3346,6 +3358,177 @@ print("committed")
                     task="task-01",
                     status="complete",
                 )
+
+    def _abort_bound_chain_fixture(
+        self, repo: Path, chain_id: str, state_path: Path, *, outbox: object = None
+    ) -> None:
+        """Append an authenticated chain_aborted event to a fixture chain."""
+        events_path = state_path.parent / f"{chain_id}.events.jsonl"
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state = copy.deepcopy(state)
+        state["last_event_at"] = "2026-08-28T12:05:00Z"
+        state["state"] = "aborted"
+        state["commit_result"] = {
+            "aborted_at": state["last_event_at"],
+            "reason": "candidate superseded",
+        }
+        state["journal_outbox"] = outbox
+        unsigned = {
+            "sequence": len(events) + 1,
+            "prev_digest": events[-1]["digest"],
+            "payload": {
+                "at": state["last_event_at"],
+                "details": {"reason": "candidate superseded"},
+                "event": "chain_aborted",
+                "state": copy.deepcopy(state),
+            },
+        }
+        event = {
+            **unsigned,
+            "digest": journal._sha256(journal._canonical_json_bytes(unsigned)),
+        }
+        events.append(event)
+        events_path.write_bytes(
+            b"".join(journal._canonical_json_bytes(item) + b"\n" for item in events)
+        )
+        state_path.write_bytes(journal._canonical_json_bytes(state) + b"\n")
+
+    def test_terminal_builder_accepts_authenticated_abort_disposition(self) -> None:
+        """Bead forge-plugin-437: an explicit abort is a terminal disposition."""
+        with self.api_environment():
+            repo, run_id, run_binding = self._terminal_control_repo("abort-accepted")
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox=None
+            )
+            self._abort_bound_chain_fixture(repo, chain_id, state_path)
+            with mock.patch.object(
+                builders,
+                "TERMINAL_CHAIN_CONTROLS",
+                builders.TERMINAL_CHAIN_CONTROLS - {"abort-disposition"},
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo, run_id, idempotency_key=key("abort-disabled"),
+                    task="task-01", status="complete",
+                )
+            outcome = builders.task_finish(
+                repo, run_id, idempotency_key=key("abort-accepted"),
+                task="task-01", status="complete",
+            )
+            self.assertEqual(outcome.records[0]["status"], "complete")
+
+            # A landing decision citing the aborted chain contradicts its state.
+            repo, run_id, run_binding = self._terminal_control_repo("abort-landing")
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox=None
+            )
+            self._abort_bound_chain_fixture(repo, chain_id, state_path)
+            self._append_test_landing(repo, run_id, chain_id)
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo, run_id, idempotency_key=key("abort-landing"),
+                    task="task-01", status="complete",
+                )
+
+            # An aborted chain whose outbox is still pending is not terminal.
+            repo, run_id, run_binding = self._terminal_control_repo("abort-outbox")
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox={"pending": True}
+            )
+            self._abort_bound_chain_fixture(
+                repo, chain_id, state_path, outbox={"pending": True}
+            )
+            # A consequential chain_aborted appended over an unreceipted outbox
+            # is a replay violation, so replay refuses it before the outbox or
+            # abort-disposition controls are reached.
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo, run_id, idempotency_key=key("abort-outbox"),
+                    task="task-01", status="complete",
+                )
+
+            # A landing decision citing the aborted chain is contradictory even
+            # when the journal also holds the abort decision.
+            repo, run_id, run_binding = self._terminal_control_repo("abort-both")
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox=None
+            )
+            self._abort_bound_chain_fixture(repo, chain_id, state_path)
+            self._append_test_decision(repo, run_id, chain_id, "chain-abort")
+            self._append_test_landing(repo, run_id, chain_id)
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo, run_id, idempotency_key=key("abort-both"),
+                    task="task-01", status="complete",
+                )
+
+            # Two abort decisions for one aborted chain are refused: exactly
+            # one carried decision is the only accepted shape.
+            repo, run_id, run_binding = self._terminal_control_repo("abort-twice")
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox=None
+            )
+            self._abort_bound_chain_fixture(repo, chain_id, state_path)
+            self._append_test_decision(repo, run_id, chain_id, "chain-abort")
+            self._append_test_decision(
+                repo, run_id, chain_id, "chain-abort", seed="second"
+            )
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo, run_id, idempotency_key=key("abort-twice"),
+                    task="task-01", status="complete",
+                )
+
+            # An abort decision citing a chain that is not a terminal abort is
+            # contradictory too.
+            repo, run_id, run_binding = self._terminal_control_repo("abort-live")
+            chain_id, state_path = self._write_bound_chain_state(
+                repo, run_id, run_binding=run_binding, outbox=None
+            )
+            self._append_test_decision(repo, run_id, chain_id, "chain-abort")
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                builders.task_finish(
+                    repo, run_id, idempotency_key=key("abort-live"),
+                    task="task-01", status="complete",
+                )
+
+    def test_terminal_abort_disposition_fails_closed_on_shape(self) -> None:
+        base = {"state": "aborted", "journal_outbox": None}
+        self.assertFalse(builders._terminal_abort_disposition(dict(base)))
+        self.assertFalse(builders._terminal_abort_disposition({**base, "kind": "other"}))
+        self.assertFalse(
+            builders._terminal_abort_disposition({**base, "kind": "commit", "commit_result": {}})
+        )
+        self.assertFalse(
+            builders._terminal_abort_disposition(
+                {**base, "kind": "commit", "commit_result": {"aborted_at": "2026-08-28T12:05:00Z", "commit_sha": "1" * 40}}
+            )
+        )
+        self.assertTrue(
+            builders._terminal_abort_disposition(
+                {**base, "kind": "commit", "commit_result": {"aborted_at": "2026-08-28T12:05:00Z", "reason": ""}}
+            )
+        )
+        self.assertTrue(builders._terminal_abort_disposition({**base, "kind": "merge"}))
+        self.assertFalse(
+            builders._terminal_abort_disposition({**base, "kind": "merge", "journal_outbox": {"pending": True}})
+        )
 
     def test_terminal_builder_accepts_only_explicit_absent_chain_tombstone(self) -> None:
         with self.api_environment():
@@ -4025,11 +4208,12 @@ class Revision9BindingTests(unittest.TestCase):
         *,
         candidate: dict[str, object] | None = None,
         review: dict[str, object] | None = None,
+        chain_id: str = "c-2026-08-28T120000Z-abcd",
     ) -> dict[str, object]:
         preimage: dict[str, object] = {
             "schema": journal.BINDING_SCHEMA,
             "source_record": {
-                "chain_id": "c-2026-08-28T120000Z-abcd",
+                "chain_id": chain_id,
                 "event_digest": key(f"event-{seed}"),
             },
             "candidate": candidate
@@ -5144,6 +5328,63 @@ class Revision9BindingTests(unittest.TestCase):
         issues: list[str] = []
         journal._check_binding_correlation(records, issues)
         return issues
+
+    def test_fr021_abort_decision_retires_its_chain_and_orders_terminal_task(self) -> None:
+        """Revision 13: an abort decision retires its chain's records from landing correlation."""
+        aborted_chain = "c-2026-08-28T110000Z-ab01"
+        aborted_candidate = {"kind": "staged-diff-sha256", "value": key("aborted-candidate")}
+        stale_gate = self.binding("stale-gate", chain_id=aborted_chain, candidate=aborted_candidate)
+        abort = self.binding("abort", chain_id=aborted_chain, candidate=aborted_candidate)
+        baseline = self.correlation_records()
+        # A gate drained by a chain that was later aborted, without an abort decision,
+        # is still counted and breaks correlation (pre-revision-13 abort).
+        orphaned = copy.deepcopy(baseline)
+        orphaned.insert(4, {
+            "type": "verification", "id": "check-00", "task": "task-01",
+            "criterion": "gate-2: changelog", "result": "passed", "binding": stale_gate,
+        })
+        for line, record in enumerate(orphaned, start=1):
+            record["_line"] = line
+        self.assertEqual(
+            self.issue_for(orphaned),
+            ["task 'task-01' has inconsistent bound candidate across gate and landing records"],
+        )
+        # With the chain's abort decision present, the gate is retired.
+        retired = copy.deepcopy(orphaned)
+        retired.insert(5, {
+            "type": "decision", "id": "decision-00", "task": "task-01",
+            "outcome": "chain-abort", "binding": abort,
+        })
+        for line, record in enumerate(retired, start=1):
+            record["_line"] = line
+        self.assertEqual(self.issue_for(retired), [])
+        # The terminal task must follow the abort decision.
+        late_abort = copy.deepcopy(retired)
+        abort_record = late_abort.pop(5)
+        terminal_index = next(
+            index for index, record in enumerate(late_abort)
+            if record.get("type") == "task" and record.get("status") == "complete"
+        )
+        late_abort.insert(terminal_index + 1, abort_record)
+        for line, record in enumerate(late_abort, start=1):
+            record["_line"] = line
+        self.assertEqual(
+            self.issue_for(late_abort),
+            ["terminal task 'task-01' precedes a bound chain abort decision"],
+        )
+        # A landing that cites the aborted chain is contradictory.
+        contradictory = copy.deepcopy(retired)
+        landing_index = next(
+            index for index, record in enumerate(contradictory)
+            if record.get("outcome") == "chain-landing"
+        )
+        contradictory[landing_index]["binding"] = self.binding(
+            "landing-on-aborted", chain_id=aborted_chain, candidate=aborted_candidate
+        )
+        self.assertEqual(
+            self.issue_for(contradictory),
+            ["task 'task-01' has inconsistent bound candidate across gate and landing records"],
+        )
 
     def test_fr021_four_exact_correlation_issues_and_disabled_control(self) -> None:
         baseline = self.correlation_records()

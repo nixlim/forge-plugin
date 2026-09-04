@@ -163,7 +163,7 @@ STATE_TRANSITIONS: dict[str, frozenset[str]] = {
     "awaiting_approval": frozenset({"classifying", "authorized", "aborted"}),
     "authorized": frozenset({"classifying", "committing", "aborted"}),
     "committing": frozenset({"authorized", "closed"}),
-    "closed": frozenset({"aborted"}),
+    "closed": frozenset(),
     "aborted": frozenset(),
 }
 STATE_KEYS = {
@@ -10891,12 +10891,29 @@ def _build_chain_journal_records(
         "operator_skip",
         "commit_produced",
         "commit_close_recovered",
+        "chain_aborted",
     }:
+        if event == "chain_aborted":
+            # Revision 13: an explicit abort of a never-landed chain carries a
+            # journal-visible abort decision bound to the abandoned candidate.
+            # `commit abort` refuses terminal chains before mutation, so the
+            # checks below are defensive: a chain without a staged candidate
+            # has nothing to bind, and a landed commit is never rewritten.
+            candidate_state = state.get("candidate")
+            result = state.get("commit_result")
+            if (
+                not isinstance(candidate_state, Mapping)
+                or not isinstance(candidate_state.get("sha256"), str)
+                or not isinstance(result, Mapping)
+                or result.get("commit_sha") is not None
+            ):
+                return ()
         outcome = {
             "operator_approved": "chain-approval",
             "operator_skip": "chain-skip",
             "commit_produced": "chain-landing",
             "commit_close_recovered": "chain-landing",
+            "chain_aborted": "chain-abort",
         }[event]
         resolution = {
             "operator_approved": "Forge commit chain approval recorded",
@@ -10911,6 +10928,10 @@ def _build_chain_journal_records(
             "commit_close_recovered": (
                 "Forge commit chain landing recovered: "
                 f"{details.get('commit_sha', 'unknown')}"
+            ),
+            "chain_aborted": (
+                "Forge commit chain abort recorded: "
+                f"{details.get('reason') or 'no reason given'}"
             ),
         }[event]
         record = {
@@ -37295,6 +37316,11 @@ class Engine:
         )
         if state["state"] == "committing":
             self._wrong_state(state, "status/recovery while committing", "commit abort")
+        if state["state"] in TERMINAL_STATES:
+            # Revision 13: abort is a transition, never a retry or a landing
+            # rewrite. A terminal chain refuses before any state, event, or
+            # outbox mutation so its landing (or earlier abort) stays intact.
+            self._wrong_state(state, "a nonterminal chain", "commit abort")
         _transition_state(state, "aborted")
         state["commit_result"] = {"aborted_at": iso_z(), "reason": reason or ""}
         self.ctx.store.persist(state, "chain_aborted", {"reason": reason or ""})

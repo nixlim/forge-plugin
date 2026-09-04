@@ -2164,6 +2164,305 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertTrue(self.state_path(chain_id).exists())
         self.assertTrue(self.events_path(chain_id).exists())
 
+    def test_explicit_abort_of_readable_bound_chain_is_a_terminal_disposition(self) -> None:
+        """Bead forge-plugin-437: an operator abort must not dead-end the task.
+
+        A readable run-bound chain aborted explicitly has no landing and cannot
+        be tombstoned; its authenticated terminal state is the disposition the
+        landing predicate accepts, so task-finish and run-close proceed.
+        """
+        run_id = "run-20260904-explicit-abort"
+        # A verified chain has drained gate records into the journal; the
+        # abort must retire them from FR-021 correlation.
+        chain_id = self.start_bound_fast_chain(run_id)
+        exit_code, aborted = self.invoke_cli(
+            "--chain-id",
+            chain_id,
+            "commit",
+            "abort",
+            "--reason",
+            "candidate superseded by a later chain",
+        )
+        self.assertEqual(exit_code, 0, aborted)
+        self.assertEqual(aborted["state"], "aborted")
+        tombstone_path = (
+            self.state_path(chain_id).parent / "tombstones" / f"{chain_id}.json"
+        )
+        self.assertFalse(tombstone_path.exists())
+        state = json.loads(self.state_path(chain_id).read_bytes())
+        self.assertEqual(state["state"], "aborted")
+        self.assertIsNone(state["journal_outbox"])
+        self.assertIn("aborted_at", state["commit_result"])
+        _batch, builders, journal = CLI._coordination_modules()
+        # Revision 13: the abort drained exactly one chain-abort decision bound
+        # to the abandoned candidate, carried by the chain_aborted event and
+        # receipted, and its binding replays exactly.
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        records = [
+            json.loads(line)
+            for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        aborts = [
+            record for record in records
+            if record.get("type") == "decision" and record.get("outcome") == "chain-abort"
+        ]
+        self.assertEqual(len(aborts), 1)
+        abort_binding = aborts[0]["binding"]
+        self.assertEqual(abort_binding["source_record"]["chain_id"], chain_id)
+        self.assertEqual(abort_binding["candidate"]["value"], state["candidate"]["sha256"])
+        self.assertIsNone(abort_binding["review"])
+        self.assertTrue(aborts[0]["resolution"].startswith("Forge commit chain abort recorded: "))
+        events = self.events(chain_id)
+        self.assertEqual(events[-1]["payload"]["event"], "journal_receipted")
+        self.assertEqual(events[-2]["payload"]["event"], "chain_aborted")
+        carried = events[-2]["payload"]["details"]["journal_batch"]["records"]
+        self.assertEqual([record["outcome"] for record in carried], ["chain-abort"])
+        with self.cli_process_context():
+            resolved = builders.resolve_binding(
+                self.repo,
+                chain_id,
+                str(abort_binding["binding_id"]),
+                expected_type="decision",
+                expected_fields={"task": "task-01", "outcome": "chain-abort"},
+                expected_run_id=run_id,
+                expected_task_id="task-01",
+            )
+        self.assertEqual(resolved, abort_binding)
+        # The disposition is load-bearing: without it the abort dead-ends the task.
+        with self.cli_process_context(), mock.patch.object(
+            builders,
+            "TERMINAL_CHAIN_CONTROLS",
+            builders.TERMINAL_CHAIN_CONTROLS - {"abort-disposition"},
+        ), self.assertRaisesRegex(
+            journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+        ):
+            builders.task_finish(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-finish-disabled"),
+                task="task-01",
+                status="complete",
+            )
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-finish"),
+                task="task-01",
+                status="complete",
+            )
+        self.assertFalse(finished.repeated)
+        self.assertEqual(finished.records[0]["status"], "complete")
+        with self.cli_process_context(), mock.patch.object(
+            builders,
+            "TERMINAL_CHAIN_CONTROLS",
+            builders.TERMINAL_CHAIN_CONTROLS - {"abort-disposition"},
+        ), self.assertRaisesRegex(
+            journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+        ):
+            builders.run_close(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-close-disabled"),
+                judgment="blocked",
+                summary="Aborted chain still blocks the run without the disposition",
+                risks=[],
+                follow_ups=[],
+            )
+        with self.cli_process_context():
+            closed = builders.run_close(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-close"),
+                judgment="blocked",
+                summary="The aborted chain is an explicit terminal disposition",
+                risks=[],
+                follow_ups=[],
+            )
+        self.assertFalse(closed.repeated)
+        # The aborted chain's artifacts stay exactly as the abort left them.
+        self.assertEqual(
+            json.loads(self.state_path(chain_id).read_bytes())["state"], "aborted"
+        )
+        # Journal-only FR-021 correlation accepts a passed close: the abort
+        # decision retired the chain's drained gate records. (The close above
+        # is `blocked` only because this fixture's gate records cite
+        # repository-relative evidence the run-relative validator cannot
+        # resolve — bead forge-plugin-7t0; correlation is
+        # proved here over the projected passed close.)
+        records = [
+            json.loads(line)
+            for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        records = [record for record in records if record.get("type") != "run_closed"]
+        records.append({"type": "run_closed", "judgment": "passed"})
+        for line, record in enumerate(records, start=1):
+            record["_line"] = line
+        drained_gates = [
+            record for record in records
+            if record.get("type") == "verification"
+            and record.get("result") == "passed"
+            and str(record.get("criterion", "")).startswith(("gate-1: ", "gate-2: "))
+            and record["binding"]["source_record"]["chain_id"] == chain_id
+        ]
+        self.assertGreater(len(drained_gates), 0)
+        issues: list[str] = []
+        journal._check_binding_correlation(records, issues)
+        self.assertEqual(issues, [])
+        # Without the abort decision the same drained gate records would be an
+        # unretired, un-landed candidate: the decision is load-bearing.
+        without_abort = [
+            record for record in records if record.get("outcome") != "chain-abort"
+        ]
+        issues = []
+        journal._check_binding_correlation(without_abort, issues)
+        self.assertEqual(
+            issues,
+            ["task 'task-01' has inconsistent bound candidate across gate and landing records"],
+        )
+
+    def test_abort_refuses_terminal_chains_before_any_mutation(self) -> None:
+        """Bead forge-plugin-437 iteration 2: an abort is never retried."""
+        _batch, builders, journal = CLI._coordination_modules()
+        # Retry of an abort: refused, no event, outbox null, journal unchanged.
+        run_id = "run-20260904-abort-retry"
+        chain_id = self.start_bound_fast_chain(run_id)
+        exit_code, aborted = self.invoke_cli(
+            "--chain-id", chain_id, "commit", "abort", "--reason", "first"
+        )
+        self.assertEqual(exit_code, 0, aborted)
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        events_before = self.events_path(chain_id).read_bytes()
+        state_before = self.state_path(chain_id).read_bytes()
+        exit_code, retried = self.invoke_cli(
+            "--chain-id", chain_id, "commit", "abort", "--reason", "second"
+        )
+        self.assertEqual(exit_code, 1, retried)
+        self.assertEqual(retried["reason_code"], "state-precondition")
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+        self.assertEqual(self.state_path(chain_id).read_bytes(), state_before)
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+        exit_code, status = self.invoke_cli("--chain-id", chain_id, "status")
+        self.assertEqual(exit_code, 0, status)
+        self.assertEqual(status["state"], "aborted")
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
+                task="task-01", status="complete",
+            )
+        self.assertEqual(finished.records[0]["status"], "complete")
+
+    def test_abort_refuses_landed_chain_and_keeps_its_landing(self) -> None:
+        """Bead forge-plugin-437 iteration 2: a landing is never rewritten."""
+        _batch, builders, journal = CLI._coordination_modules()
+        run_id = "run-20260904-abort-after-close"
+        chain_id = self.start_bound_fast_chain(run_id)
+        exit_code, finalized = self.invoke_cli(
+            "--chain-id", chain_id, "commit", "finalize", "--message", "land it"
+        )
+        self.assertEqual(exit_code, 0, finalized)
+        self.assertEqual(finalized["state"], "closed")
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        events_before = self.events_path(chain_id).read_bytes()
+        landed = self.state(chain_id)
+        commit_sha = landed["commit_result"]["commit_sha"]
+        exit_code, aborted = self.invoke_cli(
+            "--chain-id", chain_id, "commit", "abort", "--reason", "too late"
+        )
+        self.assertEqual(exit_code, 1, aborted)
+        self.assertEqual(aborted["reason_code"], "state-precondition")
+        after = self.state(chain_id)
+        self.assertEqual(after["state"], "closed")
+        self.assertEqual(after["commit_result"]["commit_sha"], commit_sha)
+        self.assertIsNone(after["journal_outbox"])
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+        records = [
+            json.loads(line)
+            for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        self.assertEqual(
+            [record.get("outcome") for record in records if record.get("type") == "decision"
+             and record.get("outcome") in {"chain-landing", "chain-abort"}],
+            ["chain-landing"],
+        )
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
+                task="task-01", status="complete",
+            )
+        self.assertEqual(finished.records[0]["status"], "complete")
+
+    def test_task_finish_inspects_only_the_finishing_tasks_chains(self) -> None:
+        """Bead forge-plugin-437: another task's cited chain is not a refusal."""
+        run_id = "run-20260904-other-task-chain"
+        first_chain = self.start_bound_chain(run_id)
+        exit_code, aborted = self.invoke_cli(
+            "--chain-id", first_chain, "commit", "abort", "--reason", "superseded"
+        )
+        self.assertEqual(exit_code, 0, aborted)
+        _batch, builders, journal = CLI._coordination_modules()
+        with self.cli_process_context():
+            builders.task_start(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-task-02"),
+                task="task-02",
+                goal="A second task with its own live chain",
+                acceptance=["its chain is not the first task's business"],
+                files=["src/other.py"],
+            )
+        # The abort leaves task-01's candidate staged; a new chain needs a clean index.
+        self.git("restore", "--staged", "src/app.py")
+        self.change("src/other.py", "OTHER = 1\n")
+        exit_code, started = self.invoke_cli(
+            "--run-id", run_id, "commit", "start", "--paths", "src/other.py",
+            "--task", "task-02",
+        )
+        self.assertEqual(exit_code, 0, started)
+        second_chain = str(started["chain_id"])
+        exit_code, verified = self.invoke_cli("--chain-id", second_chain, "verify")
+        self.assertEqual(exit_code, 0, verified)
+        # task-01's finish ignores task-02's live, journal-cited chain ...
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-finish-01"),
+                task="task-01",
+                status="complete",
+            )
+        self.assertEqual(finished.records[0]["status"], "complete")
+        # ... while task-02's own nonterminal chain still refuses its finish,
+        # and run-close still sees every chain in the run.
+        with self.cli_process_context(), self.assertRaisesRegex(
+            journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+        ):
+            builders.task_finish(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-finish-02"),
+                task="task-02",
+                status="complete",
+            )
+        with self.cli_process_context(), self.assertRaisesRegex(
+            journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+        ):
+            builders.run_close(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-close-early"),
+                judgment="blocked",
+                summary="task-02's chain is still live",
+                risks=[],
+                follow_ups=[],
+            )
+
     def test_operator_tombstone_admits_absent_chain_and_refuses_healthy_chain(self) -> None:
         absent_id = "c-2026-08-31T120000Z-abcd"
         exit_code, unknown = self.invoke_cli(

@@ -55,8 +55,18 @@ _INGEST_CAPTURE_CITATION_PREFIX = (
     "ingest.captured_package: "
 )
 TERMINAL_CHAIN_CONTROLS = frozenset(
-    {"enumeration", "lock", "binding", "replay", "outbox", "landing", "tombstone"}
+    {
+        "enumeration",
+        "lock",
+        "binding",
+        "replay",
+        "outbox",
+        "landing",
+        "tombstone",
+        "abort-disposition",
+    }
 )
+_ABORTED_AT_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 TERMINAL_CHAIN_INVALID = (
     "forge: journal builder refused — bound chain proof is invalid"
 )
@@ -226,8 +236,9 @@ _COMMIT_STATE_TRANSITIONS = {
         {"authorized", "classifying", "committing", "aborted"}
     ),
     "committing": frozenset({"committing", "authorized", "closed"}),
-    # A receipted landing acknowledgement is the sole terminal self-event.
-    "closed": frozenset({"closed", "aborted"}),
+    # A receipted landing acknowledgement is the sole terminal self-event;
+    # Revision 13 removes closed -> aborted (abort refuses terminal chains).
+    "closed": frozenset({"closed"}),
     "aborted": frozenset({"aborted"}),
 }
 _COMMIT_STATE_KEYS = frozenset(
@@ -4994,6 +5005,30 @@ def _binding_matches_source_fact(
             and isinstance(observed, dict)
             and observed.get("contains_intended_head") is True
         )
+    if outcome == "chain-abort":
+        # Revision 13: an explicit abort of a never-landed chain is carried by
+        # its own chain_aborted event and bound to the candidate it abandoned.
+        if binding.get("review") is not None or prior is None:
+            return False
+        if event_name != "chain_aborted" or prior.get("state") == "aborted":
+            return False
+        if current.get("state") != "aborted":
+            return False
+        if family == "commit":
+            result = current.get("commit_result")
+            old_result = prior.get("commit_result")
+            old_commit = (
+                old_result.get("commit_sha") if isinstance(old_result, dict) else None
+            )
+            return bool(
+                old_commit is None
+                and isinstance(result, dict)
+                and isinstance(result.get("aborted_at"), str)
+                and result.get("commit_sha") is None
+            )
+        # Merge aborts carry no decision yet (their retirement is pending
+        # work); a merge-family chain-abort binding is never authenticated.
+        return False
     return False
 
 
@@ -6197,7 +6232,45 @@ def _binding_is_current(
                 or push.get("landed_head") != current.get("candidate_head")
             ):
                 return False
+    if record_type == "decision" and outcome == "chain-abort":
+        if state.get("state") != "aborted":
+            return False
+        if chain_family == "commit":
+            result = state.get("commit_result")
+            source_result = source_state.get("commit_result")
+            if (
+                not isinstance(result, dict)
+                or not isinstance(source_result, dict)
+                or result.get("aborted_at") != source_result.get("aborted_at")
+                or result.get("commit_sha") is not None
+            ):
+                return False
     return True
+
+
+def _terminal_abort_disposition(state: dict[str, object]) -> bool:
+    """Return whether an authenticated terminal abort stands in for a landing.
+
+    An explicit operator abort of a readable run-bound chain is a valid
+    non-landing disposition: the chain is terminal (``aborted``), its journal
+    outbox is null, and for the commit family its ``commit_result`` records
+    the abort time. Nonterminal chains and aborted chains with a pending
+    outbox never qualify, so the landing predicate still refuses them.
+    """
+    if state.get("state") != "aborted" or state.get("journal_outbox") is not None:
+        return False
+    kind = state.get("kind")
+    if kind == "commit":
+        result = state.get("commit_result")
+        return (
+            isinstance(result, dict)
+            and isinstance(result.get("aborted_at"), str)
+            and _ABORTED_AT_PATTERN.fullmatch(str(result["aborted_at"])) is not None
+            and result.get("commit_sha") is None
+        )
+    # Only the two known chain families qualify; an absent or unknown kind is
+    # never an accepted disposition.
+    return kind == "merge"
 
 
 @contextmanager
@@ -6738,15 +6811,16 @@ def _terminal_chain_guard(
                 if (
                     run_binding.get("run_id") != run_id
                     or run_binding.get("repository") != str(repository)
-                    or (
-                        task_id is not None
-                        and run_binding.get("task_id") != task_id
-                    )
                 ):
                     if chain_id in journal_chain_ids:
                         raise journal.CoordinationRefusal(
                             TERMINAL_CHAIN_INVALID
                         )
+                    continue
+                if task_id is not None and run_binding.get("task_id") != task_id:
+                    # Another task's chain in the same run is that task's
+                    # business (and run-close's); task-finish inspects only
+                    # chains whose binding names the finishing task.
                     continue
                 bound_task = run_binding.get("task_id")
                 if not isinstance(bound_task, str):
@@ -6792,6 +6866,71 @@ def _terminal_chain_guard(
                     and record["binding"]["source_record"].get("chain_id")
                     == chain_id
                 ]
+                aborts = [
+                    record
+                    for record in records
+                    if record.get("type") == "decision"
+                    and record.get("task") == bound_task
+                    and record.get("outcome") == "chain-abort"
+                    and isinstance(record.get("binding"), dict)
+                    and isinstance(record["binding"].get("source_record"), dict)
+                    and record["binding"]["source_record"].get("chain_id")
+                    == chain_id
+                ]
+                if (
+                    "abort-disposition" in TERMINAL_CHAIN_CONTROLS
+                    and _terminal_abort_disposition(state)
+                ):
+                    # An aborted chain never landed: a landing decision citing
+                    # it contradicts the authenticated terminal state. A chain
+                    # aborted under Revision 13 carries exactly one abort
+                    # decision through its outbox; a chain aborted before that
+                    # (or before it ever staged a candidate) carries none and
+                    # is accepted on its authenticated terminal state alone.
+                    if landings or len(aborts) > 1:
+                        raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
+                    if "replay" in TERMINAL_CHAIN_CONTROLS and aborts:
+                        abort = aborts[0]
+                        abort_binding = abort.get("binding")
+                        assert isinstance(abort_binding, dict)
+                        abort_binding_id = abort_binding.get("binding_id")
+                        if not isinstance(abort_binding_id, str):
+                            raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
+                        try:
+                            resolved_abort = _resolve_binding_from_descriptor(
+                                repository,
+                                chains_descriptor,
+                                chain_id,
+                                abort_binding_id,
+                                expected_type="decision",
+                                expected_fields={
+                                    name: abort.get(name)
+                                    for name in (
+                                        "task",
+                                        "resolution",
+                                        "finding",
+                                        "outcome",
+                                        "risk",
+                                        "basis",
+                                    )
+                                },
+                                expected_run_id=run_id,
+                                expected_task_id=bound_task,
+                                allow_pending=True,
+                            )
+                        except journal.CoordinationRefusal as exc:
+                            if str(exc) == JOURNAL_OUTBOX_PENDING:
+                                raise
+                            raise journal.CoordinationRefusal(
+                                TERMINAL_CHAIN_INVALID
+                            ) from exc
+                        if resolved_abort != abort_binding:
+                            raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
+                    continue
+                if aborts:
+                    # An abort decision cites a chain whose authenticated state
+                    # is not a terminal abort: contradictory, never a landing.
+                    raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
                 if "landing" in TERMINAL_CHAIN_CONTROLS and len(landings) != 1:
                     raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
                 if "replay" in TERMINAL_CHAIN_CONTROLS and landings:
@@ -7597,7 +7736,7 @@ def decision_add(
             journal._invalid_record_field(
                 "decision",
                 "outcome",
-                "must be one of chain-approval, chain-skip, chain-landing",
+                "must be one of chain-approval, chain-skip, chain-landing, chain-abort",
             )
 
     def validate_citations(repository: Path, run_dir: Path) -> None:

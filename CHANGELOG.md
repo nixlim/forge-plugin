@@ -10,6 +10,22 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Journal-visible chain abort: `commit abort` on a run-bound chain that
+  holds a staged candidate and never landed now drains one `chain-abort`
+  decision through the outbox, a fourth closed decision outcome. The terminal
+  guard behind `journal task-finish` and `run-close` accepts an authenticated
+  never-landed abort (new `abort-disposition` control with an in-memory
+  disable) with at most one replay-exact abort decision, refuses a landing
+  that cites an aborted chain, and `task-finish` inspects only the finishing
+  task's chains, and `commit abort` refuses `closed` and `aborted` chains
+  before any mutation so a landing is never rewritten and an abort is never
+  retried. FR-021 journal-only correlation retires records bound to a
+  chain with an abort decision and reports `terminal task '<task>' precedes
+  a bound chain abort decision` when the task closes too early. Chains
+  aborted before this release carry no decision and stay outside journal-only
+  correlation until a retrospective path lands (spec revision 13; DM-001,
+  FR-021, FR-210/FR-222 amendments; bead forge-plugin-437). The generation-1 `fr230-phase3-4-v2` manifest
+  and its five result fixtures are re-bound to the changed `cli.py` subject.
 - CI: the drift-check step wrote its summary into the checkout, so the
   worktree-clean check failed on every run; the summary now goes to the
   runner's temp directory and is uploaded from there (GH forge-plugin-76g).
