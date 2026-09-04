@@ -40,7 +40,10 @@ jobs:
           set -o pipefail
           # errexit-safe capture: GitHub's default shell is `bash -e {0}`, so a
           # bare nonzero pipeline would abort the step before any status check.
-          bash scripts/forge/drift-check.sh | tee drift-summary.json && status=0 || status=$?
+          # The summary is written outside the checkout: drift-check's
+          # worktree-clean check runs `git status --untracked-files=all`, so a
+          # tee target inside the worktree would dirty the tree it is auditing.
+          bash scripts/forge/drift-check.sh | tee "$RUNNER_TEMP/drift-summary.json" && status=0 || status=$?
           # exit 2 is a drift-check failure; 0/1 (clean/findings) both pass CI —
           # findings are the drift skill's concern, not a PR gate.
           if [ "$status" -eq 2 ]; then exit 2; fi
@@ -51,5 +54,5 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: drift-summary
-          path: drift-summary.json
+          path: ${{ runner.temp }}/drift-summary.json
           if-no-files-found: ignore

@@ -8,6 +8,12 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Fixed
+
+- CI: the drift-check step wrote its summary into the checkout, so the
+  worktree-clean check failed on every run; the summary now goes to the
+  runner's temp directory and is uploaded from there (GH forge-plugin-76g).
+
 ### Added
 
 - Phase-3 slice 7: the additive 41-member reason corpus, referenced 130-case
