@@ -10,6 +10,15 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Commit guard: a leading shell assignment (`VAR=value python3
+  scripts/forge/cli.py commit approve …`) no longer bypasses the operator-verb
+  denial; the CLI invocation matcher skips assignment words before and after
+  an `env` prefix like the git matcher does. The v1 corpus row that pinned
+  the bypass is superseded, not edited, by the new `fr223-hook-argv/3`
+  generation (twelve additive rows, one supersession member, eval fixture
+  with a live-recorded baseline, v3 manifest), so v1 and v2 bytes stay
+  immutable (spec revision 13, DM-016 and FR-221 amendments; bead
+  forge-plugin-di8).
 - Journal-visible chain abort: `commit abort` on a run-bound chain that
   holds a staged candidate and never landed now drains one `chain-abort`
   decision through the outbox, a fourth closed decision outcome. The terminal

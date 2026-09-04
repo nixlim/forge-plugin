@@ -1246,6 +1246,24 @@ def _without_forge_global_options(tokens: list[str]) -> list[str]:
     return result
 
 
+def _skip_forge_cli_prefix(tokens: list[str]) -> int:
+    """Return the index of the interpreter after assignment and env prefixes.
+
+    Bash applies leading ``VAR=value`` words and ``env`` to the command that
+    follows, so ``FORGE_SESSION_PID=123 python3 scripts/forge/cli.py commit
+    approve`` is the same operator verb as the bare form. Deliberately a named
+    seam: tests disable it in memory to prove the prefix skip is load-bearing.
+    """
+    index = 0
+    while index < len(tokens) and ASSIGNMENT.fullmatch(tokens[index]):
+        index += 1
+    if tokens[index : index + 1] == ["env"]:
+        index += 1
+        while index < len(tokens) and ASSIGNMENT.fullmatch(tokens[index]):
+            index += 1
+    return index
+
+
 def _classify_forge_cli_segment(segment: str) -> str:
     normalized_segment, _openers, _closers = shell_group_structure(segment)
     try:
@@ -1254,11 +1272,7 @@ def _classify_forge_cli_segment(segment: str) -> str:
         return "no-match"
 
     tokens = without_shell_grouping(tokens)
-    index = 0
-    if tokens[:1] == ["env"]:
-        index = 1
-        while index < len(tokens) and ASSIGNMENT.fullmatch(tokens[index]):
-            index += 1
+    index = _skip_forge_cli_prefix(tokens)
     if len(tokens) < index + 3:
         return "no-match"
 

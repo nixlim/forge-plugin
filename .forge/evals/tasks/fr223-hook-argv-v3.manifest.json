@@ -1,0 +1,28 @@
+{
+  "schema": "fr223-hook-argv-manifest/3",
+  "artifacts": [
+    {
+      "path": ".forge/evals/tasks/fr223-hook-argv-matcher-v3.md",
+      "sha256": "6a1264489a82505e17139ba9cac1cbfc3217331b4df740982027ad02ba2d4b31"
+    },
+    {
+      "path": ".forge/evals/tasks/fr223-hook-argv-matcher-v3.result",
+      "sha256": "09a6c264d3c4abdcb411b1659573ef239dad5df6f71760e7f44d8b36d73bf387"
+    },
+    {
+      "path": "system/fr223/hook-argv-cases-v3.json",
+      "sha256": "dfe5b4d01d3e333045beddedf558333ef5302a8ad14fbd967bfc92eef0bd9991"
+    }
+  ],
+  "clauses": [
+    {
+      "artifacts": [
+        ".forge/evals/tasks/fr223-hook-argv-matcher-v3.md",
+        ".forge/evals/tasks/fr223-hook-argv-matcher-v3.result",
+        "system/fr223/hook-argv-cases-v3.json"
+      ],
+      "clause": "hook-argv-supersession-v3",
+      "statement": "The fr223-hook-argv/3 corpus references the immutable v2 generation (and through it v1) by digest, supersedes exactly one v1 expectation (no-match-bare-assignment-without-env -> deny-approve with the exact commit-approve operator-verb literal) without editing any referenced byte, and adds twelve assignment-prefixed operator-verb rows; the v3 matcher eval baseline BLOCK was recorded from a fresh review-cheap execution (gpt-5.6-sol, high, read-only) over the fixture scenario with the oracle section withheld. Fixture-family immutability applies from this baseline; changes require another additive generation."
+    }
+  ]
+}

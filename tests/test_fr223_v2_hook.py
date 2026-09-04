@@ -28,6 +28,7 @@ V1_REASON = ROOT / "system/fr223/reason-codes-v1.json"
 V2_REASON = ROOT / "system/fr223/reason-codes-v2.json"
 V1_HOOK = ROOT / "system/fr223/hook-argv-cases-v1.json"
 V2_HOOK = ROOT / "system/fr223/hook-argv-cases-v2.json"
+V3_HOOK = ROOT / "system/fr223/hook-argv-cases-v3.json"
 V1_REASON_SHA256 = "3646227d8437789e0407117dc09e00d6116edccb63e89354c746d4b9059c264b"
 V1_HOOK_SHA256 = "1850257d7899a4c7199e9bcbe12ffd39b0905bb44e49d16348c10e438ea05db7"
 V1_MANIFEST_SHA256 = "7741b877b1ed45047d680a077c5303b2314cd1f3ef0339821bd7105ac9acd5c9"
@@ -363,12 +364,18 @@ class V2HookExecutionTests(HookHarnessMixin, unittest.TestCase):
             self.assertEqual(result.stdout, "")
 
     def test_all_112_v1_classifier_rows_are_unchanged(self) -> None:
+        """Every v1 row classifies as pinned, after the v3 supersession map."""
         module = load_guard_module(self, "forge_commit_guard_v2_v1_compat")
+        superseded = {
+            entry["id"]: entry["expect"]
+            for entry in read_json(V3_HOOK)["supersedes"]
+        }
+        self.assertEqual(superseded, {"no-match-bare-assignment-without-env": "deny-approve"})
         for case in read_json(V1_HOOK)["cases"]:
             with self.subTest(case=case["id"]):
                 self.assertEqual(
                     module.classify_forge_cli_invocation(case["command"]),
-                    case["expect"],
+                    superseded.get(case["id"], case["expect"]),
                 )
 
     def test_all_18_additive_cases_execute_against_their_activation_context(self) -> None:
@@ -1589,6 +1596,58 @@ class GuardRawSegmentUnionTests(HookHarnessMixin, unittest.TestCase):
         actions = module.find_actions(command)
         self.assertLess(time.monotonic() - started, 5.0)
         self.assertEqual([a.subcommand for a in actions], ["push"])
+
+
+class GuardOperatorVerbPrefixTests(HookHarnessMixin, unittest.TestCase):
+    """Bead forge-plugin-di8: assignment prefixes never hide an operator verb."""
+
+    VERBS = {
+        "python3 scripts/forge/cli.py commit approve --candidate abc --chain-id c-2026-09-01T000000Z-0000": (
+            "deny-approve", LEGACY_OPERATOR_DENIALS["deny-approve"]
+        ),
+        "python3 scripts/forge/cli.py commit skip --step review --chain-id c-2026-09-01T000000Z-0000": (
+            "deny-skip", LEGACY_OPERATOR_DENIALS["deny-skip"]
+        ),
+        "python3 scripts/forge/cli.py merge approve --candidate abc --chain-id c-2026-09-01T000000Z-0000": (
+            "deny-merge-approve", DENIALS["deny-merge-approve"]
+        ),
+    }
+    PREFIXES = (
+        "FORGE_SESSION_PID=$CLAUDE_PID ",
+        "FORGE_SESSION_PID=123 TMPDIR=/dev/shm/x ",
+        'X="a b" ',
+        "A=1 env B=2 ",
+        "env A=1 ",
+    )
+
+    def test_assignment_prefixed_operator_verbs_are_classified_and_the_skip_is_load_bearing(
+        self,
+    ) -> None:
+        module = load_guard_module(self, "forge_commit_guard_prefix")
+        for verb, (expected, _reason) in self.VERBS.items():
+            for prefix in self.PREFIXES:
+                with self.subTest(prefix=prefix, verb=verb.split()[3:5]):
+                    self.assertEqual(
+                        module.classify_forge_cli_invocation(prefix + verb), expected
+                    )
+        exploit = self.PREFIXES[0] + next(iter(self.VERBS))
+        with mock.patch.object(module, "_skip_forge_cli_prefix", lambda _tokens: 0):
+            self.assertEqual(module.classify_forge_cli_invocation(exploit), "no-match")
+            # the bare form is unaffected by the seam
+            self.assertEqual(
+                module.classify_forge_cli_invocation(next(iter(self.VERBS))),
+                "deny-approve",
+            )
+
+    def test_assignment_prefixed_operator_verbs_are_denied_end_to_end(self) -> None:
+        plain = self.repository("non-forge", None)
+        enabled = self.repository("forge-verbs-v1", None)
+        for verb, (_expected, reason) in self.VERBS.items():
+            for repo in (plain, enabled):
+                with self.subTest(verb=verb.split()[3:5], repo=repo.name):
+                    result = self.invoke(repo, self.PREFIXES[0] + verb)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout), denial(reason))
 
 
 if __name__ == "__main__":

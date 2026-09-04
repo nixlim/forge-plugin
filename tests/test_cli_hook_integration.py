@@ -64,6 +64,19 @@ class HookArgvCorpusIntegrationTests(unittest.TestCase):
 
         cases = json.loads(ARGV_CORPUS.read_text(encoding="utf-8"))["cases"]
         self.assertEqual(len(cases), 112)
+        # Revision 13: the v3 generation supersedes one v1 expectation; the v1
+        # bytes and every other row stay as pinned.
+        superseded = {
+            entry["id"]: entry
+            for entry in json.loads(
+                (ARGV_CORPUS.parent / "hook-argv-cases-v3.json").read_text(encoding="utf-8")
+            )["supersedes"]
+        }
+        cases = [
+            {**case, "expect": superseded[case["id"]]["expect"], "reason": superseded[case["id"]]["reason"]}
+            if case["id"] in superseded else case
+            for case in cases
+        ]
         observed_denials: set[str] = set()
         for case in cases:
             with self.subTest(case=case["id"]):

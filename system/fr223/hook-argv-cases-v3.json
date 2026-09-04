@@ -1,0 +1,140 @@
+{
+  "schema": "fr223-hook-argv/3",
+  "v2": {
+    "path": "system/fr223/hook-argv-cases-v2.json",
+    "schema": "fr223-hook-argv/2",
+    "sha256": "310bfda5efdbfe3c99a1d189c8ff336782f90a79af741c4098ada4ae579bde27",
+    "case_count": 18
+  },
+  "supersedes": [
+    {
+      "id": "no-match-bare-assignment-without-env",
+      "generation": "fr223-hook-argv/1",
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    }
+  ],
+  "case_count": 12,
+  "cases": [
+    {
+      "id": "deny-approve-bare-assignment-then-env-assignment",
+      "command": "FORGE_MODE=test env TRACE=1 python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-bare-multiple-assignments",
+      "command": "FORGE_SESSION_PID=384258 TMPDIR=/dev/shm/forge-gate python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-bare-quoted-assignment-space",
+      "command": "FORGE_NOTE=\"two words\" python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-approve-bare-single-assignment",
+      "command": "FORGE_SESSION_PID=384258 python3 scripts/forge/cli.py commit approve --candidate abc123",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit approve)"
+    },
+    {
+      "id": "deny-merge-approve-bare-assignment-then-env-assignment",
+      "command": "FORGE_MODE=test env TRACE=1 python3 scripts/forge/cli.py merge approve --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --chain-id c-2026-08-29T120000Z-abcd",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "deny-merge-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (merge approve)"
+    },
+    {
+      "id": "deny-merge-approve-bare-multiple-assignments",
+      "command": "FORGE_SESSION_PID=384258 TMPDIR=/dev/shm/forge-gate python3 scripts/forge/cli.py merge approve --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --chain-id c-2026-08-29T120000Z-abcd",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "deny-merge-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (merge approve)"
+    },
+    {
+      "id": "deny-merge-approve-bare-quoted-assignment-space",
+      "command": "FORGE_NOTE=\"two words\" python3 scripts/forge/cli.py merge approve --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --chain-id c-2026-08-29T120000Z-abcd",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "deny-merge-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (merge approve)"
+    },
+    {
+      "id": "deny-merge-approve-bare-single-assignment",
+      "command": "FORGE_SESSION_PID=384258 python3 scripts/forge/cli.py merge approve --candidate 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --chain-id c-2026-08-29T120000Z-abcd",
+      "activation": {
+        "head_manifest": "forge-verbs-v1",
+        "worktree_manifest": null
+      },
+      "expect": "deny-merge-approve",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (merge approve)"
+    },
+    {
+      "id": "deny-skip-bare-assignment-then-env-assignment",
+      "command": "FORGE_MODE=test env TRACE=1 python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-bare-multiple-assignments",
+      "command": "FORGE_SESSION_PID=384258 TMPDIR=/dev/shm/forge-gate python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-bare-quoted-assignment-space",
+      "command": "FORGE_NOTE=\"two words\" python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    },
+    {
+      "id": "deny-skip-bare-single-assignment",
+      "command": "FORGE_SESSION_PID=384258 python3 scripts/forge/cli.py commit skip gate-2 --reason operator-directed",
+      "activation": {
+        "head_manifest": "non-forge",
+        "worktree_manifest": null
+      },
+      "expect": "deny-skip",
+      "reason": "forge: operator verb denied — present the candidate and ask the operator to run this via ! (commit skip)"
+    }
+  ]
+}

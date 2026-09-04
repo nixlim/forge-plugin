@@ -1128,6 +1128,20 @@ class Phase1CorpusConsumptionTests(unittest.TestCase):
         )
 
         cases = read_json(ARGV_CORPUS)["cases"]
+        # Revision 13: the fr223-hook-argv/3 generation supersedes one v1
+        # expectation without editing the v1 bytes; apply its map before
+        # asserting, exactly as the v2/v3 hook tests do.
+        superseded = {
+            entry["id"]: entry
+            for entry in read_json(
+                ARGV_CORPUS.parent / "hook-argv-cases-v3.json"
+            )["supersedes"]
+        }
+        cases = [
+            {**case, "expect": superseded[case["id"]]["expect"], "reason": superseded[case["id"]]["reason"]}
+            if case["id"] in superseded else case
+            for case in cases
+        ]
         for case in cases:
             with self.subTest(case=case["id"]):
                 self.assertEqual(classify(case["command"]), case["expect"])
