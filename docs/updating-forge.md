@@ -57,7 +57,10 @@ and move deliberately:
   activated runs validate journal record shapes at append time (malformed
   records refuse at the first write instead of poisoning the run); 0.6.10
   tightens `run-readmit` to superset-or-`--replace` semantics and adds
-  required typed idempotency keys. If you scripted around old behavior, those scripts
+  required typed idempotency keys; after 0.6.10 the worktree-merge skill
+  takes its reintegration lock through `common-lock hold` (no `flock` binary
+  consulted; a dead lock owner is an operator-cleared condition) and gated run
+  close retires restaged-candidate gate sets from FR-021 correlation. If you scripted around old behavior, those scripts
   fail loudly rather than silently — by design.
 - **Local modifications do not survive updates.** Any patch you carry in the
   plugin cache is overwritten by every update; re-apply and re-verify after

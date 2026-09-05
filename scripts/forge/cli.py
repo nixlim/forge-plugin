@@ -10674,6 +10674,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 and args.commit_command == "start"
                 and getattr(args, "archive_run_id", None) is None
             )
+            # bead forge-plugin-11a: a tombstoned chain has no state to inherit
+            # a run from, so the disposition verb names the run explicitly.
+            or (args.command == "commit" and args.commit_command == "abort-disposition")
         )
         if options.run_id is not None and not run_id_admitted:
             options.revision9_face = True
@@ -19479,6 +19482,28 @@ def _command_run_lock_id(engine: "Engine", method_name: str) -> str | None:
     if isinstance(binding, Mapping) and isinstance(binding.get("run_id"), str):
         return str(binding["run_id"])
     if method_name == "start" and engine.ctx.options.run_id is not None:
+        return engine.ctx.options.run_id
+    if (
+        method_name == "abort_disposition"
+        and selected_id is not None
+        and engine.ctx.options.run_id is not None
+        and engine.ctx.store.tombstone(selected_id) is not None
+    ):
+        # bead forge-plugin-11a: a tombstone disposition appends to the named
+        # run's journal, so that journal's lock is the outer lock. A run
+        # without a journal takes no lock: the verb then refuses with its
+        # named journal precondition instead of a lock failure.
+        run_dir = (
+            engine.ctx.store.common_root
+            / ".codex-orchestrator"
+            / "runs"
+            / str(engine.ctx.options.run_id)
+        )
+        try:
+            if not (run_dir / "journal.jsonl").is_file():
+                return None
+        except OSError:
+            return None
         return engine.ctx.options.run_id
     return None
 
@@ -37437,6 +37462,11 @@ class Engine:
                 remediation=f"forge {verb} --chain-id <id>",
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
+        tombstone = self.ctx.store.tombstone(str(self.ctx.options.chain_id))
+        if tombstone is not None:
+            return self._tombstone_abort_disposition(
+                str(self.ctx.options.chain_id), tombstone
+            )
         state = self.select(include_terminal=True)
         self._preflight(
             state,
@@ -37446,6 +37476,18 @@ class Engine:
         )
         chain_id = str(state["chain_id"])
         binding = state.get("run_binding")
+        if self.ctx.options.run_id is not None and (
+            not isinstance(binding, Mapping)
+            or binding.get("run_id") != self.ctx.options.run_id
+        ):
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"{verb} refused — --run-id does not name the chain's bound run",
+                expected=str(binding.get("run_id")) if isinstance(binding, Mapping) else "an unbound chain takes no --run-id",
+                observed=str(self.ctx.options.run_id),
+                remediation=f"forge {verb} --chain-id {chain_id}",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
         records: list[dict[str, Any]] = []
         journal_issues: list[str] = []
         if isinstance(binding, Mapping):
@@ -37475,6 +37517,117 @@ class Engine:
             state,
             f"chain {chain_id} abort disposition recorded",
             "none — chain remains aborted",
+        )
+
+    def _tombstone_abort_disposition(
+        self, chain_id: str, tombstone: Mapping[str, Any]
+    ) -> Outcome:
+        """Carry a chain-abort decision for an operator-tombstoned chain (bead 11a).
+
+        The tombstone is the chain's only remaining authority: its canonical
+        digest sources the binding, the run is named explicitly, and the task
+        and candidate come from the journal's own records bound to the chain.
+        """
+
+        verb = "commit abort-disposition"
+
+        def refuse(expected: str, observed: str) -> Refusal:
+            return Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"{verb} refused — tombstoned chain is not dispositionable",
+                expected=expected,
+                observed=observed,
+                remediation=f"forge {verb} --run-id <run> --chain-id {chain_id}",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+
+        run_id = self.ctx.options.run_id
+        if run_id is None:
+            raise refuse("--run-id naming the run whose journal cites the chain", "no run named")
+        artifacts = tombstone.get("artifacts")
+        if not isinstance(artifacts, Mapping) or any(
+            not isinstance(fact, Mapping) or fact.get("status") != "absent"
+            for fact in artifacts.values()
+        ):
+            raise refuse(
+                "a tombstone whose state and events artifacts are both absent",
+                "tombstone retains captured artifacts",
+            )
+        _batch, builders, journal = _coordination_modules()
+        run_dir = self.ctx.store.common_root / ".codex-orchestrator" / "runs" / str(run_id)
+        records, journal_issues = journal.read_journal(run_dir / "journal.jsonl")
+        if journal_issues or not records:
+            raise refuse("a readable run journal", "run journal unreadable or empty")
+        cited = [
+            record
+            for record in records
+            if isinstance(record.get("binding"), Mapping)
+            and isinstance(record["binding"].get("source_record"), Mapping)
+            and record["binding"]["source_record"].get("chain_id") == chain_id
+        ]
+        if not cited:
+            raise refuse("journal records bound to the tombstoned chain", "no bound record cites the chain")
+        tasks = {record.get("task") for record in cited}
+        # Mirror the terminal guard: every cited record must carry the one
+        # candidate, or the guard would refuse the single-shot decision forever.
+        candidates = {
+            record["binding"]["candidate"].get("value")
+            if isinstance(record["binding"].get("candidate"), Mapping)
+            else None
+            for record in cited
+        }
+        if len(tasks) != 1 or not isinstance(next(iter(tasks)), str):
+            raise refuse("exactly one task among the chain's bound records", f"{len(tasks)} tasks")
+        if len(candidates) != 1 or not isinstance(next(iter(candidates)), str):
+            raise refuse(
+                "exactly one staged-diff candidate among the chain's bound records",
+                f"{len(candidates)} candidates",
+            )
+        if any(
+            record.get("type") == "decision"
+            and record.get("outcome") in {"chain-abort", "chain-landing"}
+            for record in cited
+        ):
+            raise refuse(
+                "no chain-abort or chain-landing decision citing the chain",
+                "a disposition already cites the chain",
+            )
+        task_id = str(next(iter(tasks)))
+        candidate_value = str(next(iter(candidates)))
+        binding = builders.tombstone_abort_binding(dict(tombstone), chain_id, candidate_value)
+        basis = journal.TOMBSTONE_DISPOSITION_BASIS.format(chain_id=chain_id)
+        reason = str(tombstone.get("reason") or "no reason given")
+        try:
+            outcome = builders.decision_add(
+                self.ctx.store.common_root,
+                str(run_id),
+                idempotency_key=str(binding["source_record"]["event_digest"]),
+                resolution=(
+                    "Forge commit chain abort disposition recorded from the operator "
+                    f"tombstone: {reason}"
+                ),
+                task=task_id,
+                finding=None,
+                outcome="chain-abort",
+                risk=None,
+                basis=[basis],
+                binding_chain=chain_id,
+                binding_id=str(binding["binding_id"]),
+                binding_candidate=candidate_value,
+                allow_terminal_task=True,
+            )
+        except journal.CoordinationRefusal as exc:
+            raise _coordination_refusal(exc) from exc
+        if getattr(outcome, "repeated", False):
+            raise refuse("a first disposition of the tombstoned chain", "disposition already recorded")
+        return Outcome(
+            ok=True,
+            reason_code=V2ReasonCode.OK,
+            message=f"chain {chain_id} tombstone abort disposition recorded",
+            next_required_step="none — chain remains tombstoned",
+            chain_id=chain_id,
+            evidence_refs=(basis,),
+            schema=REVISION9_OUTPUT_SCHEMA,
         )
 
     def _wrong_state(self, state: Mapping[str, Any], expected: str, verb: str) -> None:

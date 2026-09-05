@@ -42,8 +42,12 @@ defect, not as coverage.
 - Claude Code ≥ 2.x
 - Python ≥ 3.10 (standard library only — no packages, no build step)
 - OpenAI Codex CLI on `PATH` (`codex --version`), authenticated
-- bash on macOS (BSD userland) or Linux; `flock` optional (a portable fallback
-  lock is used where it is absent)
+- bash on macOS (BSD userland) or Linux. Reintegration locking needs no `flock`
+  binary: the worktree-merge skill holds the portable Git-common-dir arbiter
+  through the Forge CLI (`common-lock hold`), which takes its optional kernel
+  layer through Python's `fcntl`. Only the commit-lock helper pair
+  (`acquire-commit-lock.sh` and `release-commit-lock.sh`, which also guard the
+  decision-event lock) needs `flock` or `lockf`.
 
 ## Install
 
@@ -131,6 +135,11 @@ tier.
 - **Audit** — guard denials and halt detections append to
   `.forge/tmp/halt-audit.log`; full orchestration history lives in the run journal
   under `.codex-orchestrator/runs/<run-id>/`.
+- **Dead merge-lock owner** — a reintegration holder killed outright leaves its
+  arbiter owner record (`agent-rebase.lockdir` and `agent-rebase.lock.intent`
+  in the Git common directory) and later entrants refuse until it is cleared.
+  Only you clear it, after proving the recorded host and PID dead; agents never
+  remove lock artifacts.
 
 ## The durable record
 
@@ -220,6 +229,8 @@ content-addressed by the staged diff, so two chains can hold authorization at on
 and one candidate's marker can never admit another. Journals record an owner and
 refuse an append from a live foreign owner. Runs are admitted by declared file
 scope rather than refused outright, and overlapping scopes are named on refusal.
+Reintegrations serialize through one portable arbiter in the Git common directory,
+so every worktree and every entrant on Linux or macOS contends on the same lock.
 
 Decision-event emission is lossless under concurrency on local POSIX filesystems
 (macOS and Linux). The guarantee does not extend to NFS or SMB, and Windows is out

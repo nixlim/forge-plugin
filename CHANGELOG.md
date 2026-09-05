@@ -32,6 +32,17 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- `commit abort-disposition --run-id <run> --chain-id <chain>` now dispositions
+  an operator-tombstoned run-bound chain (a chain that froze and was sealed
+  under Revision 11 without ever landing): it appends one `chain-abort`
+  decision whose binding is sourced from the canonical tombstone digest and
+  whose basis is the tombstone path, admitted on an already-terminal task and
+  exempt from the terminal-task ordering, so the gate records the frozen chain
+  drained are retired from FR-021 correlation and the run can close `passed`.
+  The terminal guards authenticate that single decision against the tombstone
+  and refuse a landing beside it, a second abort, or a candidate mismatch; every
+  refusal appends nothing (spec revision 13 DM-001/FR-021/FR-210/FR-222 amendment;
+  bead forge-plugin-11a).
 - FR-021 journal-only correlation no longer refuses a `passed` close for a
   task whose chain drained gate sets for candidates it later restaged (any
   BLOCK-then-restage cycle): records bound to a superseded candidate are

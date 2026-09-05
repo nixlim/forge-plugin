@@ -27,7 +27,15 @@ from commitment_paths import (  # noqa: E402
 
 
 BUILDER_VALIDATION_CONTROLS = frozenset(
-    {"derived-fields", "relations", "binding-replay", "scope-change"}
+    {
+        "derived-fields",
+        "relations",
+        "binding-replay",
+        "scope-change",
+        # bead forge-plugin-11a: authenticate a chain-abort binding against an
+        # operator tombstone when the chain has no event stream.
+        "tombstone-binding",
+    }
 )
 _INGEST_PROOF_ORDER = (
     "chain-schema-and-digest-replay",
@@ -63,6 +71,7 @@ TERMINAL_CHAIN_CONTROLS = frozenset(
         "outbox",
         "landing",
         "tombstone",
+        "tombstone-disposition",
         "abort-disposition",
     }
 )
@@ -5327,6 +5336,7 @@ def resolve_binding(
     expected_fields: dict[str, object] | None = None,
     expected_run_id: str | None = None,
     expected_task_id: str | None = None,
+    tombstone_candidate: str | None = None,
     _chains_descriptor: int | None = None,
     _chains_observation: journal.FileObservation | None = None,
 ) -> dict[str, object]:
@@ -5370,6 +5380,7 @@ def resolve_binding(
             expected_fields=expected_fields,
             expected_run_id=expected_run_id,
             expected_task_id=expected_task_id,
+            tombstone_candidate=tombstone_candidate,
         )
         if (
             journal._file_observation(os.fstat(chains_descriptor))
@@ -5388,6 +5399,56 @@ def resolve_binding(
             os.close(owned_descriptor)
 
 
+def _resolve_tombstone_abort_binding(
+    chains_descriptor: int,
+    chain_id: str,
+    binding_id: str,
+    *,
+    expected_type: str | None,
+    expected_fields: dict[str, object] | None,
+    replay_only: bool,
+    tombstone_candidate: str | None,
+) -> dict[str, object] | None:
+    """Authenticate a chain-abort binding against an operator tombstone.
+
+    Returns None when the chain still has an event stream (ordinary replay
+    applies) or no valid tombstone stands in its place. When the events file
+    is absent and a valid tombstone with both artifacts absent exists, the only
+    binding the chain can carry is the tombstone disposition: a ``decision``
+    with ``outcome: chain-abort`` whose binding equals
+    ``tombstone_abort_binding`` for the caller-supplied candidate. Every other
+    request against a tombstoned chain is refused.
+    """
+
+    try:
+        os.stat(
+            f"{chain_id}.events.jsonl", dir_fd=chains_descriptor, follow_symlinks=False
+        )
+        return None
+    except FileNotFoundError:
+        pass
+    record = _read_terminal_tombstone_record(chains_descriptor, chain_id)
+    if record is None:
+        return None
+    if "tombstone-binding" not in BUILDER_VALIDATION_CONTROLS:
+        raise _binding_replay_refusal()
+    _raw, value = record
+    if (
+        replay_only
+        or not _tombstone_artifacts_absent(value)
+        or expected_type != "decision"
+        or not isinstance(expected_fields, dict)
+        or expected_fields.get("outcome") != "chain-abort"
+        or not isinstance(tombstone_candidate, str)
+        or journal.HEX_SHA256_PATTERN.fullmatch(tombstone_candidate) is None
+    ):
+        raise _binding_replay_refusal()
+    binding = tombstone_abort_binding(value, chain_id, tombstone_candidate)
+    if binding["binding_id"] != binding_id:
+        raise _binding_replay_refusal()
+    return binding
+
+
 def _resolve_binding_from_descriptor(
     repository: Path,
     chains_descriptor: int,
@@ -5402,7 +5463,19 @@ def _resolve_binding_from_descriptor(
     allow_pending: bool = False,
     validate_lineage: bool = True,
     ownership_summary: bool = False,
+    tombstone_candidate: str | None = None,
 ) -> dict[str, object]:
+    tombstone = _resolve_tombstone_abort_binding(
+        chains_descriptor,
+        chain_id,
+        binding_id,
+        expected_type=expected_type,
+        expected_fields=expected_fields,
+        replay_only=replay_only,
+        tombstone_candidate=tombstone_candidate,
+    )
+    if tombstone is not None:
+        return tombstone
     # Event authority is read and reduced before the materialized projection.
     # A state file must never select or repair the history that authenticates it.
     raw_event_bytes = _read_regular_bytes_at(
@@ -6550,11 +6623,12 @@ def _captured_ingest_chain_ids(
     return result
 
 
-def _terminal_tombstone_valid(
+def _read_terminal_tombstone_record(
     chains_descriptor: int, chain_id: str
-) -> bool:
+) -> tuple[bytes, dict[str, object]] | None:
+    """Return the exact canonical bytes and value of one valid tombstone, else None."""
     if "tombstone" not in TERMINAL_CHAIN_CONTROLS:
-        return False
+        return None
     tombstones_descriptor: int | None = None
     try:
         before = os.stat(
@@ -6574,7 +6648,7 @@ def _terminal_tombstone_valid(
             or tombstone_before.st_uid != os.geteuid()
             or tombstone_before.st_nlink not in {1, 2}
         ):
-            return False
+            return None
         if tombstone_before.st_nlink == 2:
             alias_pattern = re.compile(
                 rf"^\.{re.escape(chain_id)}\.[1-9][0-9]*\.[0-9a-f]{{16}}\.tmp$"
@@ -6594,7 +6668,7 @@ def _terminal_tombstone_valid(
                 ):
                     aliases.append(candidate)
             if len(aliases) != 1:
-                return False
+                return None
         raw, file_observation = journal._read_bound_regular(
             tombstones_descriptor,
             tombstone_name,
@@ -6613,7 +6687,7 @@ def _terminal_tombstone_valid(
             )
             != observation
         ):
-            return False
+            return None
         rebound = os.stat(
             tombstone_name,
             dir_fd=tombstones_descriptor,
@@ -6624,10 +6698,10 @@ def _terminal_tombstone_valid(
             or rebound.st_uid != tombstone_before.st_uid
             or rebound.st_nlink != tombstone_before.st_nlink
         ):
-            return False
+            return None
         value = json.loads(raw.decode("utf-8"))
     except (FileNotFoundError, OSError, UnicodeError, ValueError, RecursionError):
-        return False
+        return None
     finally:
         if tombstones_descriptor is not None:
             os.close(tombstones_descriptor)
@@ -6653,14 +6727,14 @@ def _terminal_tombstone_valid(
         or not isinstance(value.get("recorded_at"), str)
         or not journal._valid_utc(value["recorded_at"])
     ):
-        return False
+        return None
     operator = value.get("operator")
     artifacts = value.get("artifacts")
     reason = value.get("reason")
     try:
         reason_bytes = reason.encode("utf-8") if isinstance(reason, str) else b""
     except UnicodeError:
-        return False
+        return None
     if (
         not isinstance(operator, dict)
         or set(operator) != {"host", "pid", "uid"}
@@ -6677,16 +6751,16 @@ def _terminal_tombstone_valid(
         or len(reason_bytes) > 4096
         or "\x00" in reason
     ):
-        return False
+        return None
     statuses: set[str] = set()
     for fact in artifacts.values():
         if not isinstance(fact, dict):
-            return False
+            return None
         status = fact.get("status")
         statuses.add(str(status))
         if status == "absent":
             if set(fact) != {"status"}:
-                return False
+                return None
         elif status == "captured":
             if (
                 set(fact) != {"status", "sha256", "bytes"}
@@ -6696,11 +6770,11 @@ def _terminal_tombstone_valid(
                 or type(fact.get("bytes")) is not int
                 or int(fact["bytes"]) < 0
             ):
-                return False
+                return None
         else:
-            return False
+            return None
     if len(statuses) != 1:
-        return False
+        return None
 
     current_facts: dict[str, dict[str, object]] = {}
     for fact_name, artifact_name in (
@@ -6722,8 +6796,8 @@ def _terminal_tombstone_valid(
                 current_facts[fact_name] = {"status": "absent"}
                 continue
             except OSError:
-                return False
-            return False
+                return None
+            return None
         current_facts[fact_name] = {
             "status": "captured",
             "sha256": journal._sha256(artifact_raw),
@@ -6732,11 +6806,130 @@ def _terminal_tombstone_valid(
 
     current_statuses = {fact["status"] for fact in current_facts.values()}
     if len(current_statuses) != 1:
-        return False
+        return None
     if "absent" in current_statuses:
-        return True
-    return current_facts == artifacts
+        return raw, value
+    return (raw, value) if current_facts == artifacts else None
 
+
+
+def _terminal_tombstone_valid(
+    chains_descriptor: int, chain_id: str
+) -> bool:
+    return _read_terminal_tombstone_record(chains_descriptor, chain_id) is not None
+
+
+def _terminal_tombstone_disposition(
+    repository: Path,
+    chains_descriptor: int,
+    chain_id: str,
+    records: Sequence[dict[str, object]],
+) -> bool:
+    """Accept a tombstoned chain, authenticating any disposition the journal cites.
+
+    Returns False when no valid tombstone stands for the chain. A tombstoned
+    chain the journal cites without any chain-abort decision keeps Revision
+    11's unconditional acceptance. When an abort decision cites it (bead
+    forge-plugin-11a) there must be exactly one, no landing decision may stand
+    beside it, and it must resolve against the tombstone with a candidate
+    equal to the candidate of every other journal record bound to the chain.
+    """
+
+    if not _terminal_tombstone_valid(chains_descriptor, chain_id):
+        return False
+    if "tombstone-disposition" not in TERMINAL_CHAIN_CONTROLS:
+        return True
+    cited = [
+        record
+        for record in records
+        if isinstance(record.get("binding"), dict)
+        and isinstance(record["binding"].get("source_record"), dict)
+        and record["binding"]["source_record"].get("chain_id") == chain_id
+    ]
+    landings = [
+        record
+        for record in cited
+        if record.get("type") == "decision"
+        and record.get("outcome") == "chain-landing"
+    ]
+    aborts = [
+        record
+        for record in cited
+        if record.get("type") == "decision" and record.get("outcome") == "chain-abort"
+    ]
+    if not aborts:
+        # Revision 11 acceptance is unchanged for a tombstone the journal
+        # carries no disposition for (captured or absent artifacts alike).
+        return True
+    if landings or len(aborts) > 1:
+        raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
+    abort = aborts[0]
+    binding = abort["binding"]
+    candidate = binding.get("candidate")
+    candidate_value = candidate.get("value") if isinstance(candidate, dict) else None
+    binding_id = binding.get("binding_id")
+    if (
+        not isinstance(candidate_value, str)
+        or not isinstance(binding_id, str)
+        or any(
+            not isinstance(record["binding"].get("candidate"), dict)
+            or record["binding"]["candidate"].get("value") != candidate_value
+            for record in cited
+        )
+    ):
+        raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
+    try:
+        resolved = _resolve_binding_from_descriptor(
+            repository,
+            chains_descriptor,
+            chain_id,
+            binding_id,
+            expected_type="decision",
+            expected_fields={"outcome": "chain-abort"},
+            expected_run_id=None,
+            expected_task_id=None,
+            tombstone_candidate=candidate_value,
+        )
+    except journal.CoordinationRefusal as exc:
+        raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID) from exc
+    if resolved != binding:
+        raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID)
+    return True
+
+
+def _tombstone_artifacts_absent(value: dict[str, object]) -> bool:
+    artifacts = value.get("artifacts")
+    return isinstance(artifacts, dict) and all(
+        isinstance(fact, dict) and fact.get("status") == "absent"
+        for fact in artifacts.values()
+    )
+
+
+def tombstone_abort_binding(
+    tombstone: dict[str, object], chain_id: str, candidate_value: str
+) -> dict[str, object]:
+    """Reconstruct the one chain-abort binding a tombstoned chain can carry.
+
+    Bead forge-plugin-11a: the tombstone record is the immutable source fact of
+    a chain that froze and was sealed by the operator without ever landing. Its
+    canonical digest stands where a chain event digest would, the candidate is
+    the single staged-diff candidate the journal's own records for that chain
+    carry, and the binding id follows the ordinary DM-001 preimage.
+    """
+
+    preimage = {
+        "schema": journal.BINDING_SCHEMA,
+        "source_record": {
+            "chain_id": chain_id,
+            "event_digest": journal._sha256(journal._canonical_json_bytes(tombstone)),
+        },
+        "candidate": {"kind": "staged-diff-sha256", "value": candidate_value},
+        "review": None,
+    }
+    return {
+        **preimage,
+        "binding_id": journal._sha256(journal._canonical_json_bytes(preimage)),
+    }
 
 def _terminal_chain_guard(
     repository: Path,
@@ -6804,7 +6997,9 @@ def _terminal_chain_guard(
                 root_descriptor=chains_descriptor,
                 root_observation=observed_root,
             ):
-                if _terminal_tombstone_valid(chains_descriptor, chain_id):
+                if _terminal_tombstone_disposition(
+                    repository, chains_descriptor, chain_id, records
+                ):
                     continue
                 try:
                     state = _read_json_at(chains_descriptor, f"{chain_id}.json")
@@ -7722,6 +7917,8 @@ def decision_add(
     basis: Sequence[str],
     binding_chain: str | None,
     binding_id: str | None,
+    binding_candidate: str | None = None,
+    allow_terminal_task: bool = False,
 ) -> batch.BatchOutcome:
     inputs = {
         "task": task,
@@ -7733,6 +7930,11 @@ def decision_add(
         "binding_chain": binding_chain,
         "binding_id": binding_id,
     }
+    if binding_candidate is not None or allow_terminal_task:
+        # bead forge-plugin-11a: a tombstone disposition names the candidate
+        # its chain abandoned and may follow the task's terminal record.
+        inputs["binding_candidate"] = binding_candidate
+        inputs["allow_terminal_task"] = allow_terminal_task
 
     def validate() -> None:
         _caller_text("decision", "resolution", resolution)
@@ -7783,7 +7985,13 @@ def decision_add(
 
     def build(state: journal.RunState, repository: Path) -> Sequence[dict[str, object]]:
         if task is not None:
-            _require_active_task(state, task)
+            if allow_terminal_task:
+                if _latest_task(state, task) is None:
+                    raise journal.CoordinationRefusal(
+                        f"forge: journal builder refused — task {task} is unknown"
+                    )
+            else:
+                _require_active_task(state, task)
         record: dict[str, object] = {
             "type": "decision",
             "id": _allocate_id(state.records, "decision"),
@@ -7823,6 +8031,7 @@ def decision_add(
                 },
                 expected_run_id=run_id,
                 expected_task_id=task,
+                tombstone_candidate=binding_candidate,
             )
         return (record,)
 

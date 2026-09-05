@@ -2477,6 +2477,274 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             validation = journal.validate_run(run_dir, gates=True)
         self.assertTrue(validation["ok"], validation)
 
+    def _quarantine_and_tombstone(self, chain_id: str) -> Path:
+        """Reproduce the gse freeze outcome: artifacts moved out, operator tombstone sealed."""
+        quarantine = self.repo / ".forge/tmp/quarantine-test"
+        quarantine.mkdir(parents=True, exist_ok=True)
+        for name in (f"{chain_id}.json", f"{chain_id}.events.jsonl"):
+            (self.repo / ".forge/chains" / name).rename(quarantine / name)
+        exit_code, sealed = self.invoke_cli(
+            "--chain-id", chain_id, "chain", "tombstone",
+            "--reason", "operator direction: chain froze; artifacts quarantined",
+        )
+        self.assertEqual(exit_code, 0, sealed)
+        tombstone = self.repo / ".forge/chains/tombstones" / f"{chain_id}.json"
+        self.assertTrue(tombstone.exists())
+        return tombstone
+
+    def _journal_records(self, run_dir: Path) -> list[dict[str, object]]:
+        return [
+            json.loads(line)
+            for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+
+    def test_tombstone_disposition_retires_a_frozen_chain_after_its_task_closed(self) -> None:
+        """Bead forge-plugin-11a: an operator-tombstoned chain gains its abort decision."""
+        _batch, builders, journal = CLI._coordination_modules()
+        run_id = "run-20260905-tombstone-disp"
+        chain_id = self.start_bound_fast_chain(run_id)
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        bound_before = [
+            record for record in self._journal_records(run_dir)
+            if isinstance(record.get("binding"), dict)
+            and record["binding"]["source_record"]["chain_id"] == chain_id
+        ]
+        self.assertGreaterEqual(len(bound_before), 2)
+        candidate = bound_before[0]["binding"]["candidate"]["value"]
+        self.assertTrue(all(r["binding"]["candidate"]["value"] == candidate for r in bound_before))
+        tombstone_path = self._quarantine_and_tombstone(chain_id)
+        tombstone = json.loads(tombstone_path.read_text(encoding="utf-8"))
+
+        # Revision 11 acceptance: the task closes over the undispositioned tombstone.
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
+                task="task-01", status="complete",
+            )
+        self.assertEqual(finished.records[0]["status"], "complete")
+        # Without the disposition a passed close is refused by journal-only correlation.
+        projected = self._journal_records(run_dir) + [{"type": "run_closed", "judgment": "passed"}]
+        for line, record in enumerate(projected, start=1):
+            record["_line"] = line
+        issues: list[str] = []
+        journal._check_binding_correlation(projected, issues)
+        self.assertEqual(
+            issues, ["task 'task-01' has inconsistent bound candidate across gate and landing records"]
+        )
+
+        # The verb requires the run to be named explicitly.
+        exit_code, no_run = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 1, no_run)
+        self.assertEqual(no_run["reason_code"], "state-precondition")
+        self.assertEqual(
+            no_run["message"],
+            "commit abort-disposition refused — tombstoned chain is not dispositionable",
+        )
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+
+        exit_code, disposed = self.invoke_cli(
+            "--run-id", run_id, "--chain-id", chain_id, "commit", "abort-disposition"
+        )
+        self.assertEqual(exit_code, 0, disposed)
+        self.assertEqual(disposed["message"], f"chain {chain_id} tombstone abort disposition recorded")
+        records = self._journal_records(run_dir)
+        aborts = [r for r in records if r.get("type") == "decision" and r.get("outcome") == "chain-abort"]
+        self.assertEqual(len(aborts), 1)
+        abort = aborts[0]
+        self.assertEqual(abort["task"], "task-01")
+        self.assertEqual(abort["basis"], [f".forge/chains/tombstones/{chain_id}.json"])
+        expected_binding = builders.tombstone_abort_binding(tombstone, chain_id, candidate)
+        self.assertEqual(abort["binding"], expected_binding)
+        self.assertEqual(
+            abort["binding"]["source_record"]["event_digest"],
+            journal._sha256(journal._canonical_json_bytes(tombstone)),
+        )
+        # The decision follows the terminal task record and is still accepted.
+        terminal_line = max(
+            i for i, r in enumerate(records) if r.get("type") == "task" and r.get("status") == "complete"
+        )
+        self.assertGreater(records.index(abort), terminal_line)
+
+        # Single shot: a retry refuses and appends nothing.
+        journal_after = (run_dir / "journal.jsonl").read_bytes()
+        exit_code, retried = self.invoke_cli(
+            "--run-id", run_id, "--chain-id", chain_id, "commit", "abort-disposition"
+        )
+        self.assertEqual(exit_code, 1, retried)
+        self.assertEqual(retried["reason_code"], "state-precondition")
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_after)
+        self.assertNotEqual(journal_after, journal_before)
+
+        # The binding authenticates against the tombstone through the builders.
+        with self.cli_process_context():
+            resolved = builders.resolve_binding(
+                self.repo, chain_id, str(abort["binding"]["binding_id"]),
+                expected_type="decision", expected_fields={"outcome": "chain-abort"},
+                tombstone_candidate=candidate,
+            )
+            self.assertEqual(resolved, abort["binding"])
+            for kwargs in (
+                {"expected_type": "verification", "expected_fields": {"outcome": "chain-abort"}},
+                {"expected_type": "decision", "expected_fields": {"outcome": "chain-landing"}},
+                {"expected_type": "decision", "expected_fields": {"outcome": "chain-abort"},
+                 "tombstone_candidate": key("other-candidate")},
+                {"expected_type": "decision", "expected_fields": {"outcome": "chain-abort"}},
+            ):
+                kwargs.setdefault("tombstone_candidate", None) if "tombstone_candidate" not in kwargs else None
+                with self.subTest(refusal=kwargs):
+                    with self.assertRaises(journal.CoordinationRefusal):
+                        builders.resolve_binding(
+                            self.repo, chain_id, str(abort["binding"]["binding_id"]), **kwargs
+                        )
+            with mock.patch.object(
+                builders, "BUILDER_VALIDATION_CONTROLS",
+                builders.BUILDER_VALIDATION_CONTROLS - {"tombstone-binding"},
+            ):
+                with self.assertRaises(journal.CoordinationRefusal):
+                    builders.resolve_binding(
+                        self.repo, chain_id, str(abort["binding"]["binding_id"]),
+                        expected_type="decision", expected_fields={"outcome": "chain-abort"},
+                        tombstone_candidate=candidate,
+                    )
+
+            # Guards, correlation, and validation accept the dispositioned run.
+            closed = builders.run_close(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-close"),
+                judgment="passed", summary="Frozen chain dispositioned from its tombstone",
+                risks=[], follow_ups=[],
+            )
+            self.assertFalse(closed.repeated)
+            validation = journal.validate_run(run_dir, gates=True)
+        self.assertTrue(validation["ok"], validation)
+
+    def test_tombstone_disposition_refuses_a_nonexistent_run_before_any_lock(self) -> None:
+        """A run without a journal gets the named precondition, not a lock failure."""
+        run_id = "run-20260905-tombstone-norun"
+        chain_id = self.start_bound_fast_chain(run_id)
+        self._quarantine_and_tombstone(chain_id)
+        exit_code, refused = self.invoke_cli(
+            "--run-id", "run-20260905-does-not-exist", "--chain-id", chain_id,
+            "commit", "abort-disposition",
+        )
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "state-precondition")
+        self.assertEqual(
+            refused["message"],
+            "commit abort-disposition refused — tombstoned chain is not dispositionable",
+        )
+        self.assertEqual(refused["expected"], "a readable run journal")
+        self.assertFalse(
+            (self.repo / ".codex-orchestrator/runs/run-20260905-does-not-exist").exists()
+        )
+
+    def test_abort_disposition_run_id_must_name_a_readable_chains_bound_run(self) -> None:
+        """--run-id is admitted for the verb but must match a readable chain's binding."""
+        run_id = "run-20260905-retro-runid"
+        chain_id = self.start_bound_fast_chain(run_id)
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+            exit_code, aborted = self.invoke_cli(
+                "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
+            )
+        self.assertEqual(exit_code, 0, aborted)
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        exit_code, mismatch = self.invoke_cli(
+            "--run-id", "run-20260905-other", "--chain-id", chain_id, "commit", "abort-disposition"
+        )
+        self.assertEqual(exit_code, 1, mismatch)
+        self.assertEqual(mismatch["reason_code"], "state-precondition")
+        self.assertIn("--run-id does not name the chain's bound run", mismatch["message"])
+        self.assertEqual(mismatch["expected"], run_id)
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+        exit_code, disposed = self.invoke_cli(
+            "--run-id", run_id, "--chain-id", chain_id, "commit", "abort-disposition"
+        )
+        self.assertEqual(exit_code, 0, disposed)
+        self.assertEqual(self.events(chain_id)[-2]["payload"]["event"], "abort_disposition_recorded")
+
+    def test_tombstone_disposition_guard_and_correlation_controls_are_load_bearing(self) -> None:
+        """Disable proofs for the terminal guard and the FR-021 ordering exemption."""
+        _batch, builders, journal = CLI._coordination_modules()
+        run_id = "run-20260905-tombstone-guard"
+        chain_id = self.start_bound_fast_chain(run_id)
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        self._quarantine_and_tombstone(chain_id)
+        with self.cli_process_context():
+            builders.task_finish(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
+                task="task-01", status="complete",
+            )
+        exit_code, disposed = self.invoke_cli(
+            "--run-id", run_id, "--chain-id", chain_id, "commit", "abort-disposition"
+        )
+        self.assertEqual(exit_code, 0, disposed)
+        records = self._journal_records(run_dir)
+        abort = next(r for r in records if r.get("outcome") == "chain-abort")
+        projected = [dict(r) for r in records] + [{"type": "run_closed", "judgment": "passed"}]
+        for line, record in enumerate(projected, start=1):
+            record["_line"] = line
+        issues: list[str] = []
+        journal._check_binding_correlation(projected, issues)
+        self.assertEqual(issues, [])
+        with mock.patch.object(
+            journal, "BINDING_CORRELATION_CONTROLS",
+            journal.BINDING_CORRELATION_CONTROLS - {"tombstone-disposition"},
+        ):
+            issues = []
+            journal._check_binding_correlation([dict(r) for r in projected], issues)
+            self.assertEqual(
+                issues, ["terminal task 'task-01' precedes a bound chain abort decision"]
+            )
+        # A basis that is not exactly the tombstone path is an ordinary abort decision.
+        altered = [dict(r) for r in projected]
+        altered_abort = next(r for r in altered if r.get("outcome") == "chain-abort")
+        altered_abort["basis"] = []
+        issues = []
+        journal._check_binding_correlation(altered, issues)
+        self.assertEqual(issues, ["terminal task 'task-01' precedes a bound chain abort decision"])
+
+        chains_root = self.repo / ".forge/chains"
+        descriptor = os.open(chains_root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with self.cli_process_context():
+                self.assertTrue(
+                    builders._terminal_tombstone_disposition(self.repo, descriptor, chain_id, records)
+                )
+                # Two aborts, a landing, or a candidate mismatch refuse.
+                for tampered_records in (
+                    records + [dict(abort)],
+                    records + [{**abort, "outcome": "chain-landing"}],
+                    [
+                        {**r, "binding": {**r["binding"], "candidate": {"kind": "staged-diff-sha256", "value": key("mismatch")}}}
+                        if r.get("type") == "verification" and r.get("binding") else r
+                        for r in records
+                    ],
+                    [
+                        {**r, "binding": {**r["binding"], "binding_id": key("forged")}}
+                        if r.get("outcome") == "chain-abort" else r
+                        for r in records
+                    ],
+                ):
+                    with self.subTest(tampered=tampered_records[-1].get("outcome")):
+                        with self.assertRaises(journal.CoordinationRefusal) as caught:
+                            builders._terminal_tombstone_disposition(
+                                self.repo, descriptor, chain_id, tampered_records
+                            )
+                        self.assertEqual(str(caught.exception), builders.TERMINAL_CHAIN_INVALID)
+                with mock.patch.object(
+                    builders, "TERMINAL_CHAIN_CONTROLS",
+                    builders.TERMINAL_CHAIN_CONTROLS - {"tombstone-disposition"},
+                ):
+                    # Disabled: the guard falls back to Revision 11's unconditional acceptance.
+                    self.assertTrue(
+                        builders._terminal_tombstone_disposition(
+                            self.repo, descriptor, chain_id, records + [dict(abort)]
+                        )
+                    )
+        finally:
+            os.close(descriptor)
+
     def test_abort_disposition_refuses_every_ineligible_chain(self) -> None:
         """Bead forge-plugin-rtj: the verb is only for uncarried run-bound aborts."""
         _batch, builders, journal = CLI._coordination_modules()

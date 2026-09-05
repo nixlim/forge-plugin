@@ -97,9 +97,20 @@ CHAIN_DECISION_OUTCOMES = frozenset(
 # (a BLOCK-then-restage cycle) from the landing correlation and from the
 # precedence rule; ``post-landing-result`` keeps an execution result appended
 # after its task's last landing decision from moving the mutating boundary.
+# ``tombstone-disposition`` (bead forge-plugin-11a): a ``chain-abort`` decision
+# whose ``basis`` cites exactly its chain's operator tombstone is a retrospective
+# disposition of a chain that froze and was tombstoned; it retires the chain like
+# any abort but is exempt from the terminal-task ordering, because the task may
+# have closed long before the tombstone could be dispositioned.
 BINDING_CORRELATION_CONTROLS = frozenset(
-    {"journal-only", "superseded-candidate", "post-landing-result"}
+    {
+        "journal-only",
+        "superseded-candidate",
+        "post-landing-result",
+        "tombstone-disposition",
+    }
 )
+TOMBSTONE_DISPOSITION_BASIS = ".forge/chains/tombstones/{chain_id}.json"
 HEX_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 CHAIN_ID_PATTERN = re.compile(r"c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}")
 DUPLICATE_CHAIN_BINDING = (
@@ -7135,6 +7146,24 @@ def _binding_chain_and_candidate(
     )
 
 
+def _is_tombstone_disposition(record: dict[str, object]) -> bool:
+    """Whether a chain-abort decision is a tombstone disposition (journal-only test)."""
+
+    if (
+        "tombstone-disposition" not in BINDING_CORRELATION_CONTROLS
+        or record.get("type") != "decision"
+        or record.get("outcome") != "chain-abort"
+    ):
+        return False
+    bound = _binding_chain_and_candidate(record)
+    basis = record.get("basis")
+    return (
+        bound is not None
+        and isinstance(basis, list)
+        and basis == [TOMBSTONE_DISPOSITION_BASIS.format(chain_id=bound[0])]
+    )
+
+
 def _last_landing_line_by_task(
     records: list[dict[str, object]],
 ) -> dict[str, int]:
@@ -7447,6 +7476,10 @@ def _check_binding_correlation(
                 )
                 return
         for abort in aborts:
+            if _is_tombstone_disposition(abort):
+                # A tombstone disposition is retrospective by definition: the
+                # frozen chain could not be aborted while its task was open.
+                continue
             abort_line = int(abort.get("_line", 0))
             terminal_task_lines = [
                 int(record.get("_line", 0))

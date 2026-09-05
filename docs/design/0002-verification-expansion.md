@@ -511,7 +511,16 @@ These are verified, not assumed:
   indexes, so staging cannot bleed.
 - **Locks are worktree-transparent.** `commit-lock` and `agent-rebase.lock`
   resolve through `git rev-parse --git-common-dir`, so every worktree contends
-  for the *same* lock. Proven in run-20260808 check-15: a worktree acquire
+  for the *same* lock. (Amended 2026-09-05: reintegration now locks through
+  FR-235's portable arbiter — `agent-rebase.lockdir` and `agent-rebase.lock.intent`
+  with `agent-rebase.lock` as the optional kernel `flock` layer — held via
+  `common-lock hold`. The common-directory resolution and the worktree
+  transparency claim stand. Upstream's worktree-merge `flock` on
+  `agent-rebase.lock` still serializes against a Forge reintegration wherever
+  the wrapper takes its kernel layer, so the "merge serialization survives"
+  note below still holds for that path; only upstream's `mkdir` fallback no
+  longer interoperates, because `agent-rebase.lockdir` is now the arbiter's
+  hard-linked owner directory rather than a disposable mutex.) Proven in run-20260808 check-15: a worktree acquire
   blocked against the main-checkout lock and timed out naming it.
 - **Kill-switch is repo-wide.** `AGENT_HALT` resolves to the main checkout root
   from any worktree.
