@@ -10,6 +10,19 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- FR-021 journal-only correlation no longer refuses a `passed` close for a
+  task whose chain drained gate sets for candidates it later restaged (any
+  BLOCK-then-restage cycle): records bound to a superseded candidate are
+  retired from the landing correlation and the precedence rule exactly as an
+  abort retires a whole chain, the precedence rule scopes to the landed
+  candidate's evidence, and a terminal execution result appended after its
+  task's last landing for an execution recorded before that landing moves
+  neither the run-level nor the per-task mutating boundary. Both rules are
+  named controls (`superseded-candidate`, `post-landing-result`) with disable
+  proofs; a landing followed by a different candidate on its own chain, an
+  execution started after the landing, and records bound to a chain that
+  neither landed, aborted with a decision, nor was superseded keep the
+  refusals (spec revision 13 FR-021 amendment; bead forge-plugin-2mu).
 - Retrospective chain abort disposition: `commit abort-disposition` on a
   run-bound chain that was aborted before revision 13 (its abort carried no
   decision) appends one `abort_disposition_recorded` self-event carrying the

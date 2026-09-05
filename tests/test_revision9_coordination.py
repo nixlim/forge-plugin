@@ -5492,6 +5492,391 @@ class Revision9BindingTests(unittest.TestCase):
             ["task 'task-01' has inconsistent bound candidate across gate and landing records"],
         )
 
+    def _relined(self, records: list[dict[str, object]]) -> list[dict[str, object]]:
+        for line, record in enumerate(records, start=1):
+            record["_line"] = line
+        return records
+
+    def _superseded_set(self, name: str) -> list[dict[str, object]]:
+        """A complete gate set plus approval for an earlier candidate of the landed chain."""
+        candidate = {"kind": "staged-diff-sha256", "value": key(f"{name}-candidate")}
+        return [
+            {
+                "type": "verification", "id": f"check-{name}-1", "task": "task-01",
+                "criterion": "gate-1: project tests", "result": "passed",
+                "binding": self.binding(f"{name}-gate1", candidate=candidate),
+            },
+            {
+                "type": "verification", "id": f"check-{name}-2", "task": "task-01",
+                "criterion": "gate-2: stack checks", "result": "passed",
+                "binding": self.binding(f"{name}-gate2", candidate=candidate),
+            },
+            {
+                "type": "verification", "id": f"check-{name}-3", "task": "task-01",
+                "criterion": journal.GATE_3_CRITERION, "result": "passed",
+                "binding": self.binding(
+                    f"{name}-gate3", candidate=candidate,
+                    review={
+                        "verdict": "PASS", "iteration": 1,
+                        "reviewer_role": "review-final", "package_digest": key(name),
+                    },
+                ),
+            },
+            {
+                "type": "decision", "id": f"decision-{name}", "task": "task-01",
+                "outcome": "chain-approval",
+                "binding": self.binding(f"{name}-approval", candidate=candidate),
+            },
+        ]
+
+    def _with_control_removed(self, control: str):
+        return mock.patch.object(
+            journal, "BINDING_CORRELATION_CONTROLS",
+            journal.BINDING_CORRELATION_CONTROLS - {control},
+        )
+
+    def test_fr021_superseded_candidate_records_are_retired(self) -> None:
+        """Revision 13 (2mu): a restaged chain's earlier candidate sets do not break landing."""
+        baseline = self.correlation_records()
+        inconsistent = "task 'task-01' has inconsistent bound candidate across gate and landing records"
+        # Two earlier candidates drained after the mutating execution, then the landed set.
+        restaged = copy.deepcopy(baseline)
+        restaged[4:4] = self._superseded_set("first") + self._superseded_set("second")
+        self._relined(restaged)
+        self.assertEqual(self.issue_for(restaged), [])
+        with self._with_control_removed("superseded-candidate"):
+            self.assertEqual(self.issue_for(copy.deepcopy(restaged)), [inconsistent])
+        # Supersession is per chain: the same records on another never-landed,
+        # never-aborted chain stay counted and refused.
+        other_chain = copy.deepcopy(baseline)
+        foreign = self._superseded_set("foreign")
+        for record in foreign:
+            record["binding"] = self.binding(
+                record["id"] + "-foreign", chain_id="c-2026-08-28T120000Z-f0e1",
+                candidate=record["binding"]["candidate"],
+                review=record["binding"].get("review"),
+            )
+        other_chain[4:4] = foreign
+        self._relined(other_chain)
+        self.assertEqual(self.issue_for(other_chain), [inconsistent])
+        # A later set with the same candidate does not supersede an earlier one.
+        landed_candidate = baseline[4]["binding"]["candidate"]
+        repeated = copy.deepcopy(baseline)
+        repeat_set = self._superseded_set("repeat")
+        for record in repeat_set:
+            record["binding"] = self.binding(
+                record["id"] + "-repeat", candidate=landed_candidate,
+                review=record["binding"].get("review"),
+            )
+        repeated[4:4] = repeat_set
+        self._relined(repeated)
+        self.assertEqual(journal._superseded_binding_ids(repeated), set())
+        self.assertEqual(self.issue_for(repeated), [])
+        # A landing followed by a different candidate on its own chain is a
+        # chain that landed twice: refused, never treated as superseded.
+        relanded = copy.deepcopy(restaged)
+        landing_index = next(
+            index for index, record in enumerate(relanded)
+            if record.get("outcome") == "chain-landing"
+        )
+        relanded[landing_index + 1:landing_index + 1] = (
+            self._superseded_set("after-landing")[:3] + [
+                {
+                    "type": "decision", "id": "decision-relanding", "task": "task-01",
+                    "outcome": "chain-landing",
+                    "binding": self.binding(
+                        "relanding",
+                        candidate={"kind": "staged-diff-sha256", "value": key("after-landing-candidate")},
+                    ),
+                },
+            ]
+        )
+        self._relined(relanded)
+        first_landing_id = relanded[landing_index]["binding"]["binding_id"]
+        self.assertIn(first_landing_id, journal._superseded_binding_ids(relanded))
+        self.assertEqual(self.issue_for(relanded), [inconsistent])
+        # An abort decision carrying a different candidate on the landed chain
+        # is the landing-beside-abort contradiction, not a supersessor.
+        abort_after = copy.deepcopy(restaged)
+        abort_after.insert(landing_index + 1, {
+            "type": "decision", "id": "decision-abort-landed", "task": "task-01",
+            "outcome": "chain-abort",
+            "binding": self.binding(
+                "abort-landed",
+                candidate={"kind": "staged-diff-sha256", "value": key("abort-landed-candidate")},
+            ),
+        })
+        self._relined(abort_after)
+        self.assertEqual(self.issue_for(abort_after), [inconsistent])
+        # A-B-A: the landed candidate's set must be fresh. Gates for the landed
+        # candidate A, then a B set, then a re-implementation, then a landing
+        # on A without a fresh A set is refused; with a fresh A set it passes.
+        landed_candidate = baseline[4]["binding"]["candidate"]
+        stale_a = self._superseded_set("stale-a")[:3]
+        for record in stale_a:
+            record["binding"] = self.binding(
+                record["id"] + "-a", candidate=landed_candidate,
+                review=record["binding"].get("review"),
+            )
+        reimplementation = [
+            {
+                "type": "execution", "agent": "codex-impl-02", "execution": "execution-02",
+                "task": "task-01", "role": "implementation",
+            },
+            {
+                "type": "execution_result", "agent": "codex-impl-02",
+                "execution": "execution-02", "task": "task-01", "status": "complete",
+            },
+        ]
+        # A second task supplies the run-level gate passes so only the
+        # per-task correlation is under test at the gate-profile level.
+        other_task = [
+            {"type": "task", "id": "task-02", "status": "active"},
+            {
+                "type": "verification", "id": "check-t2-1", "task": "task-02",
+                "criterion": "gate-1: project tests", "result": "passed",
+                "binding": self.binding("t2-gate1", chain_id="c-2026-08-28T130000Z-0002"),
+            },
+            {
+                "type": "verification", "id": "check-t2-2", "task": "task-02",
+                "criterion": "gate-2: stack checks", "result": "passed",
+                "binding": self.binding("t2-gate2", chain_id="c-2026-08-28T130000Z-0002"),
+            },
+            {
+                "type": "verification", "id": "check-t2-3", "task": "task-02",
+                "criterion": journal.GATE_3_CRITERION, "result": "passed",
+                "binding": self.binding(
+                    "t2-gate3", chain_id="c-2026-08-28T130000Z-0002",
+                    review={
+                        "verdict": "PASS", "iteration": 1,
+                        "reviewer_role": "review-final", "package_digest": key("t2"),
+                    },
+                ),
+            },
+            {
+                "type": "decision", "id": "decision-t2", "task": "task-02",
+                "outcome": "chain-landing",
+                "binding": self.binding("t2-landing", chain_id="c-2026-08-28T130000Z-0002"),
+            },
+            {"type": "task", "id": "task-02", "status": "complete"},
+        ]
+        head = baseline[:4]                       # run, task, execution, result
+        fresh_a = baseline[4:7]                   # the landed A set
+        landing_and_tail = baseline[7:]           # landing A, task complete, run_closed
+        without_fresh = self._relined(copy.deepcopy(
+            head + stale_a + self._superseded_set("b") + reimplementation
+            + other_task + landing_and_tail
+        ))
+        self.assertEqual(self.issue_for(without_fresh), [inconsistent])
+        profile_issues: list[str] = []
+        journal.check_gate_profile(copy.deepcopy(without_fresh), profile_issues, [], None)
+        self.assertEqual(profile_issues, [inconsistent])
+        with self._with_control_removed("superseded-candidate"):
+            stale_binding = stale_a[0]["binding"]["binding_id"]
+            self.assertEqual(
+                self.issue_for(copy.deepcopy(without_fresh)),
+                [
+                    f"binding '{stale_binding}' precedes the last mutating "
+                    "execution for task 'task-01'"
+                ],
+            )
+        with_fresh = self._relined(copy.deepcopy(
+            head + stale_a + self._superseded_set("b") + reimplementation
+            + other_task + fresh_a + landing_and_tail
+        ))
+        self.assertEqual(self.issue_for(with_fresh), [])
+        profile_issues = []
+        journal.check_gate_profile(copy.deepcopy(with_fresh), profile_issues, [], None)
+        self.assertEqual(profile_issues, [])
+        # Variant: B set, mutation, then only an approval for C before landing B.
+        approval_only = self._relined(copy.deepcopy(
+            head + self._superseded_set("b2")[:3] + reimplementation + other_task + [
+                {
+                    "type": "decision", "id": "decision-c", "task": "task-01",
+                    "outcome": "chain-approval",
+                    "binding": self.binding(
+                        "c-approval",
+                        candidate={"kind": "staged-diff-sha256", "value": key("c-candidate")},
+                    ),
+                },
+            ] + [
+                {
+                    "type": "decision", "id": "decision-b2", "task": "task-01",
+                    "outcome": "chain-landing",
+                    "binding": self.binding(
+                        "b2-landing",
+                        candidate={"kind": "staged-diff-sha256", "value": key("b2-candidate")},
+                    ),
+                },
+            ] + baseline[8:]
+        ))
+        self.assertEqual(self.issue_for(approval_only), [inconsistent])
+        # The landed candidate's complete set remains required: removing its
+        # gate-3 leaves only the superseded gate-3, which does not count.
+        incomplete = copy.deepcopy(restaged)
+        incomplete = [
+            record for record in incomplete
+            if not (
+                record.get("criterion") == journal.GATE_3_CRITERION
+                and record.get("id") == "check-03"
+            )
+        ]
+        self._relined(incomplete)
+        self.assertEqual(self.issue_for(incomplete), [inconsistent])
+
+    def test_fr021_precedence_rule_scopes_to_the_landed_candidate(self) -> None:
+        """Revision 13 (2mu): superseded and abort-retired records may precede a re-implementation."""
+        baseline = self.correlation_records()
+        # Superseded gates drained before the (later) mutating execution result.
+        early = copy.deepcopy(baseline)
+        early[2:2] = self._superseded_set("early")
+        self._relined(early)
+        self.assertEqual(self.issue_for(early), [])
+        with self._with_control_removed("superseded-candidate"):
+            issues = self.issue_for(copy.deepcopy(early))
+            self.assertEqual(len(issues), 1)
+            self.assertTrue(
+                issues[0].startswith("binding '")
+                and issues[0].endswith("precedes the last mutating execution for task 'task-01'"),
+                issues,
+            )
+        # Abort-retired gates before the re-implementation are exempt as well.
+        aborted_chain = "c-2026-08-28T110000Z-ab02"
+        aborted_candidate = {"kind": "staged-diff-sha256", "value": key("aborted-early")}
+        aborted = copy.deepcopy(baseline)
+        aborted[2:2] = [
+            {
+                "type": "verification", "id": "check-ab", "task": "task-01",
+                "criterion": "gate-1: project tests", "result": "passed",
+                "binding": self.binding(
+                    "ab-gate", chain_id=aborted_chain, candidate=aborted_candidate
+                ),
+            },
+            {
+                "type": "decision", "id": "decision-ab", "task": "task-01",
+                "outcome": "chain-abort",
+                "binding": self.binding(
+                    "ab-abort", chain_id=aborted_chain, candidate=aborted_candidate
+                ),
+            },
+        ]
+        self._relined(aborted)
+        self.assertEqual(self.issue_for(aborted), [])
+        # The landed candidate's own gate preceding the last mutating result is still refused.
+        preceding = copy.deepcopy(early)
+        gate1_index = next(
+            index for index, record in enumerate(preceding) if record.get("id") == "check-01"
+        )
+        result_index = next(
+            index for index, record in enumerate(preceding)
+            if record.get("type") == "execution_result"
+        )
+        preceding.insert(result_index, preceding.pop(gate1_index))
+        self._relined(preceding)
+        binding_id = next(
+            record["binding"]["binding_id"] for record in preceding if record.get("id") == "check-01"
+        )
+        self.assertEqual(
+            self.issue_for(preceding),
+            [f"binding '{binding_id}' precedes the last mutating execution for task 'task-01'"],
+        )
+
+    def test_fr021_post_landing_result_moves_no_boundary(self) -> None:
+        """Revision 13 (2mu): a result appended after the task's landing is bookkeeping."""
+        baseline = self.correlation_records()
+        late = copy.deepcopy(baseline)
+        landing_index = next(
+            index for index, record in enumerate(late) if record.get("outcome") == "chain-landing"
+        )
+        started_before_landing = {
+            "type": "execution", "agent": "codex-impl-02", "execution": "execution-02",
+            "task": "task-01", "role": "implementation",
+        }
+        late_result = {
+            "type": "execution_result", "agent": "codex-impl-02",
+            "execution": "execution-02", "task": "task-01", "status": "complete",
+        }
+        # The execution was recorded before the landing (between the gates and
+        # the landing decision); only its result arrived afterwards.
+        late.insert(landing_index + 1, late_result)
+        late.insert(landing_index, started_before_landing)
+        self._relined(late)
+        self.assertEqual(self.issue_for(late), [])
+        # An execution started after the landing is a later mutation: refused
+        # by the precedence rule and by the run-level gate requirement.
+        started_after = copy.deepcopy(baseline)
+        started_after[landing_index + 1:landing_index + 1] = [
+            copy.deepcopy(started_before_landing), copy.deepcopy(late_result),
+        ]
+        self._relined(started_after)
+        after_binding = started_after[4]["binding"]["binding_id"]
+        self.assertEqual(
+            self.issue_for(started_after),
+            [
+                f"binding '{after_binding}' precedes the last mutating "
+                "execution for task 'task-01'"
+            ],
+        )
+        after_issues: list[str] = []
+        journal.check_gate_profile(copy.deepcopy(started_after), after_issues, [], None)
+        self.assertTrue(
+            any("without a passing 'gate-1' verification" in issue for issue in after_issues),
+            after_issues,
+        )
+        issues: list[str] = []
+        warnings: list[str] = []
+        journal.check_gate_profile(copy.deepcopy(late), issues, warnings, None)
+        self.assertEqual((issues, warnings), ([], []))
+        with self._with_control_removed("post-landing-result"):
+            expected_binding = late[4]["binding"]["binding_id"]
+            self.assertEqual(
+                self.issue_for(copy.deepcopy(late)),
+                [
+                    f"binding '{expected_binding}' precedes the last mutating "
+                    "execution for task 'task-01'"
+                ],
+            )
+            issues = []
+            journal.check_gate_profile(copy.deepcopy(late), issues, warnings, None)
+            self.assertEqual(
+                issues[:3],
+                [
+                    "run closed as passed without a passing 'gate-1' verification after the last mutating execution",
+                    "run closed as passed without a passing 'gate-2' verification after the last mutating execution",
+                    f"run closed as passed without a passing '{journal.GATE_3_CRITERION}' verification after the last mutating execution",
+                ],
+            )
+        # The same result placed before the landing still moves the boundary.
+        before = copy.deepcopy(baseline)
+        before[7:7] = [
+            {
+                "type": "execution", "agent": "codex-impl-02", "execution": "execution-02",
+                "task": "task-01", "role": "implementation",
+            },
+            {
+                "type": "execution_result", "agent": "codex-impl-02",
+                "execution": "execution-02", "task": "task-01", "status": "complete",
+            },
+        ]
+        self._relined(before)
+        binding_id = before[4]["binding"]["binding_id"]
+        self.assertEqual(
+            self.issue_for(before),
+            [f"binding '{binding_id}' precedes the last mutating execution for task 'task-01'"],
+        )
+        # An execution that never journaled a result is still refused at run level.
+        unterminated = copy.deepcopy(late)
+        unterminated = [
+            record for record in unterminated
+            if not (record.get("type") == "execution_result" and record.get("execution") == "execution-02")
+        ]
+        self._relined(unterminated)
+        issues = []
+        journal.check_gate_profile(unterminated, issues, warnings, None)
+        self.assertTrue(
+            any("without a passing 'gate-1' verification" in issue for issue in issues), issues
+        )
+
     def test_fr021_four_exact_correlation_issues_and_disabled_control(self) -> None:
         baseline = self.correlation_records()
         self.assertEqual(self.issue_for(baseline), [])

@@ -92,7 +92,14 @@ BINDING_REVIEW_ROLES = frozenset({"review-cheap", "review-final"})
 CHAIN_DECISION_OUTCOMES = frozenset(
     {"chain-approval", "chain-skip", "chain-landing", "chain-abort"}
 )
-BINDING_CORRELATION_CONTROLS = frozenset({"journal-only"})
+# Revision 13 (bead forge-plugin-2mu): ``superseded-candidate`` retires gate,
+# approval, and skip records bound to a candidate the same chain later replaced
+# (a BLOCK-then-restage cycle) from the landing correlation and from the
+# precedence rule; ``post-landing-result`` keeps an execution result appended
+# after its task's last landing decision from moving the mutating boundary.
+BINDING_CORRELATION_CONTROLS = frozenset(
+    {"journal-only", "superseded-candidate", "post-landing-result"}
+)
 HEX_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 CHAIN_ID_PATTERN = re.compile(r"c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}")
 DUPLICATE_CHAIN_BINDING = (
@@ -7128,6 +7135,87 @@ def _binding_chain_and_candidate(
     )
 
 
+def _last_landing_line_by_task(
+    records: list[dict[str, object]],
+) -> dict[str, int]:
+    """Line of each task's last bound ``chain-landing`` decision."""
+
+    lines: dict[str, int] = {}
+    for record in records:
+        task = record.get("task")
+        if (
+            record.get("type") != "decision"
+            or record.get("outcome") != "chain-landing"
+            or not isinstance(task, str)
+            or _binding_chain_and_candidate(record) is None
+        ):
+            continue
+        lines[task] = max(int(record.get("_line", 0)), lines.get(task, 0))
+    return lines
+
+
+def _result_moves_boundary(
+    execution_line: int,
+    result: dict[str, object],
+    task: str,
+    last_landing_lines: dict[str, int],
+) -> bool:
+    """Whether a terminal execution result anchors its task's mutating boundary.
+
+    Revision 13 ``post-landing-result``: a result appended after every landing
+    decision of its task, for an execution whose own record precedes that
+    landing, records completion bookkeeping for work whose landed bytes were
+    proved by the landing's replayed event, so it moves no boundary. An
+    execution started after the landing is a later mutation and keeps every
+    refusal.
+    """
+
+    if "post-landing-result" not in BINDING_CORRELATION_CONTROLS:
+        return True
+    landing_line = last_landing_lines.get(task)
+    if landing_line is None:
+        return True
+    return not (execution_line < landing_line < int(result.get("_line", 0)))
+
+
+def _superseded_binding_ids(
+    records: list[dict[str, object]],
+) -> set[str]:
+    """Binding ids of records bound to a candidate its chain later replaced.
+
+    Revision 13 ``superseded-candidate``: within one task and chain, a bound
+    record is superseded when a later bound record of the same task and chain
+    carries a different candidate. The chain drained those records for a
+    candidate it then restaged; they were never the landed candidate's
+    evidence, so gate, approval, and skip records are retired exactly as an
+    abort retires a whole chain. A superseded ``chain-landing`` decision is a
+    contradiction (one chain lands once) and is refused by the caller.
+    """
+
+    if "superseded-candidate" not in BINDING_CORRELATION_CONTROLS:
+        return set()
+    by_task_chain: dict[tuple[str, str], list[tuple[int, bytes, str]]] = {}
+    for record in records:
+        task = record.get("task")
+        if record.get("type") not in {"verification", "decision"} or not isinstance(
+            task, str
+        ):
+            continue
+        bound = _binding_chain_and_candidate(record)
+        if bound is None:
+            continue
+        by_task_chain.setdefault((task, bound[0]), []).append(
+            (int(record.get("_line", 0)), bound[1], bound[2])
+        )
+    superseded: set[str] = set()
+    for entries in by_task_chain.values():
+        entries.sort(key=lambda entry: entry[0])
+        for index, (_line, candidate, binding_id) in enumerate(entries):
+            if any(later[1] != candidate for later in entries[index + 1 :]):
+                superseded.add(binding_id)
+    return superseded
+
+
 def _check_binding_correlation(
     records: list[dict[str, object]],
     issues: list[str],
@@ -7174,6 +7262,7 @@ def _check_binding_correlation(
         for key, record in authoritative_results.items()
         if record.get("status") in TERMINAL_EXECUTION_STATUSES
     }
+    last_landing_lines = _last_landing_line_by_task(records)
     last_mutating_result_by_task: dict[str, int] = {}
     for execution in records:
         if execution.get("type") != "execution" or execution.get("role") == "review":
@@ -7183,20 +7272,45 @@ def _check_binding_correlation(
         result = terminal_results.get(key) if key is not None else None
         if not isinstance(task, str) or result is None:
             continue
+        if not _result_moves_boundary(
+            int(execution.get("_line", 0)), result, task, last_landing_lines
+        ):
+            continue
         line = int(result.get("_line", 0))
         last_mutating_result_by_task[task] = max(
             line, last_mutating_result_by_task.get(task, 0)
         )
 
+    superseded = _superseded_binding_ids(records)
+    aborted_chains_by_task: dict[str, set[str]] = {}
+    for record in records:
+        task = record.get("task")
+        if (
+            record.get("type") == "decision"
+            and record.get("outcome") == "chain-abort"
+            and isinstance(task, str)
+            and (bound := _binding_chain_and_candidate(record)) is not None
+        ):
+            aborted_chains_by_task.setdefault(task, set()).add(bound[0])
     bound_records = [
         record
         for record in records
         if record.get("type") in {"verification", "decision"}
         and _binding_chain_and_candidate(record) is not None
     ]
+    # The precedence rule applies to the landed candidate's evidence only:
+    # records bound to a superseded candidate or to an aborted chain were
+    # drained for bytes that never landed and legitimately precede a later
+    # re-implementation of the same task.
     for record in bound_records:
         task = record.get("task")
         if not isinstance(task, str):
+            continue
+        bound = _binding_chain_and_candidate(record)
+        assert bound is not None
+        if bound[2] in superseded or bound[0] in aborted_chains_by_task.get(
+            task, set()
+        ):
             continue
         last_result = last_mutating_result_by_task.get(task, 0)
         if int(record.get("_line", 0)) <= last_result:
@@ -7228,6 +7342,19 @@ def _check_binding_correlation(
             for record in landings
             if (bound := _binding_chain_and_candidate(record)) is not None
         }
+        # A landing followed by a different candidate on its own chain would
+        # mean the chain landed twice; that contradicts chain state exactly as
+        # a landing beside an abort does.
+        if any(
+            (bound := _binding_chain_and_candidate(record)) is not None
+            and bound[2] in superseded
+            for record in landings
+        ):
+            issues.append(
+                f"task {task!r} has inconsistent bound candidate across gate "
+                "and landing records"
+            )
+            return
         # Revision 13: a chain-abort decision retires every record bound to
         # its chain from the landing correlation; such records were drained by
         # a chain that never landed. A chain carrying both an abort and a
@@ -7254,7 +7381,7 @@ def _check_binding_correlation(
         for gate in task_gates:
             bound = _binding_chain_and_candidate(gate)
             assert bound is not None
-            if bound[0] in aborted_chains:
+            if bound[0] in aborted_chains or bound[2] in superseded:
                 continue
             if (bound[0], bound[1]) not in landing_keys:
                 issues.append(
@@ -7270,7 +7397,9 @@ def _check_binding_correlation(
             ):
                 continue
             bound = _binding_chain_and_candidate(decision)
-            if bound is not None and bound[0] in aborted_chains:
+            if bound is not None and (
+                bound[0] in aborted_chains or bound[2] in superseded
+            ):
                 continue
             if bound is None or (bound[0], bound[1]) not in landing_keys:
                 issues.append(
@@ -7281,11 +7410,16 @@ def _check_binding_correlation(
         for landing in landings:
             bound = _binding_chain_and_candidate(landing)
             assert bound is not None
+            # The landed candidate's complete set must be fresh: a gate the
+            # chain later superseded is exempt from precedence, so it cannot
+            # also count toward the landing (an A-B-A restage without a fresh
+            # A set is refused).
             matching = [
                 gate
                 for gate in task_gates
                 if (gate_bound := _binding_chain_and_candidate(gate)) is not None
                 and gate_bound[:2] == bound[:2]
+                and gate_bound[2] not in superseded
             ]
             criteria = [str(gate.get("criterion")) for gate in matching]
             if not (
@@ -7380,9 +7514,28 @@ def check_gate_profile(
             )
             for record in mutating_executions
         )
-        terminal_result_lines = [
-            int(record.get("_line", 0)) for record in terminal_results.values()
-        ]
+        last_landing_lines = _last_landing_line_by_task(records)
+        executions_by_key = {
+            key: record
+            for record in mutating_executions
+            if (key := execution_key(record)) is not None
+        }
+        terminal_result_lines = []
+        for key, record in terminal_results.items():
+            execution = executions_by_key.get(key)
+            task = execution.get("task") if execution is not None else None
+            # An unknown execution or task keeps the boundary (fail closed).
+            if (
+                execution is None
+                or not isinstance(task, str)
+                or _result_moves_boundary(
+                    int(execution.get("_line", 0)),
+                    record,
+                    task,
+                    last_landing_lines,
+                )
+            ):
+                terminal_result_lines.append(int(record.get("_line", 0)))
         last_mutating_result_line = max(terminal_result_lines, default=0)
         required_gates = (
             (
