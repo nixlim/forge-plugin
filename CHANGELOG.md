@@ -8,6 +8,28 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Changed
+
+- `/forge:worktree-merge` now takes its reintegration lock as FR-235's portable
+  Git-common-dir arbiter through the Forge CLI wrapper `common-lock hold
+  --owner-kind push --operation push`, waiting for the wrapper's readiness
+  record before any rebase step and releasing with the exact `release` frame
+  after the push; the skill-issued `flock --timeout 300` and `mkdir` mutex at
+  `agent-rebase.lockdir` are retired because they diverged from, and collided
+  with, the arbiter namespace every CLI merge and push entrant uses. The
+  wrapper must not inherit the shell's release-pipe descriptor, the readiness
+  wait ends as soon as the wrapper exits, every in-lock fenced command carries
+  `8<&- 9>&-` so no child inherits the lock pipes, the post-push wrapper wait is
+  bounded, the kernel `flock` layer is described by the wrapper's real predicate
+  (Python's `fcntl.flock`, not the `flock` binary), a dead owner
+  left by a killed holder is operator-cleared, and executable tests run the
+  skill's exact fenced bytes against the wrapper (acquire/release, early exit,
+  dead-owner refusal, and a descriptor disable proof). The init skill's lock
+  report and the spec's macOS scenario now describe the arbiter instead of the
+  retired `mkdir` fallback (spec revision 13 FR-062 amendment; bead
+  forge-plugin-9qf.7, the slice-1 consumer cutover decision-02 of
+  run-20260829-cli-phase3 deferred).
+
 ### Fixed
 
 - FR-021 journal-only correlation no longer refuses a `passed` close for a

@@ -358,9 +358,9 @@ approval request.
 
 ## Locked rebase reintegration
 
-<!-- forge: modified from upstream — halt path is plugin-rooted; re-verification is in-lock and pre-push. -->
+<!-- forge: modified from upstream — halt path is plugin-rooted; re-verification is in-lock and pre-push; the lock is FR-235's portable arbiter via `common-lock hold` (Revision 13, bead forge-plugin-9qf.7). -->
 
-Run the halt check before attempting either lock mechanism:
+Run the halt check before acquiring the lock:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh" || {
@@ -372,67 +372,118 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh" || {
 Only the operator may create, remove, or bypass a halt sentinel. A nonzero halt result stops before
 lock acquisition.
 
-Resolve the shared lock paths exactly from the Git common directory:
+The rebase lock is FR-235's mandatory Git-common-dir portable arbiter, held for this skill by the
+Forge CLI's long-lived wrapper `common-lock hold`. The wrapper acquires the portable owner first
+and the optional kernel `flock` layer second (through Python's `fcntl.flock` on `agent-rebase.lock`
+wherever the interpreter provides it — the `flock` binary is irrelevant to the wrapper), releases
+them in reverse order, and never selects a backend by host capability: Linux and macOS entrants
+contend on the same no-replace inode namespace, and `flock` alone is never a complete lock. This skill no longer creates `agent-rebase.lockdir` itself
+or falls back to a `mkdir` mutex; both would collide with the arbiter's namespace.
+
+Resolve the shared lock location exactly from the Git common directory and open the two
+readiness/release pipes the wrapper protocol requires:
 
 ```bash
 GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
-LOCK_FILE="${GIT_COMMON_DIR}/agent-rebase.lock"
-LOCK_DIR="${GIT_COMMON_DIR}/agent-rebase.lockdir"
+mkdir -p .forge/tmp
+LOCK_READY_FIFO=".forge/tmp/rebase-lock-ready.${FORGE_SESSION_PID}"
+LOCK_RELEASE_FIFO=".forge/tmp/rebase-lock-release.${FORGE_SESSION_PID}"
+LOCK_OUTCOME=".forge/tmp/rebase-lock-outcome.${FORGE_SESSION_PID}.json"
+rm -f "$LOCK_READY_FIFO" "$LOCK_RELEASE_FIFO" "$LOCK_OUTCOME"
+mkfifo -m 600 "$LOCK_READY_FIFO" "$LOCK_RELEASE_FIFO" || {
+  echo "forge: cannot create rebase lock pipes under .forge/tmp — not merging" >&2
+  exit 1
+}
+exec 8<>"$LOCK_READY_FIFO" 9<>"$LOCK_RELEASE_FIFO"
 ```
 
 Keep one lock-owning shell alive from acquisition through explicit release. This file-descriptor
 lock epoch is one composite invocation and must not be split across fresh tool shells. The shell
 inherits the stable live `FORGE_SESSION_PID` injected by the long-lived harness unchanged; never
-export or substitute `$$`, `$PPID`, or any transient tool-process PID as that identity. On systems
-with `flock`, use the lock file and a 300-second timeout:
+export or substitute `$$`, `$PPID`, or any transient tool-process PID as that identity. Start the
+holder as a standalone default-branch push entrant (owner kind `push`, operation `push`; this
+legacy skill owns no CLI merge chain) and wait for its readiness record, which arrives only once
+the complete lock is held:
 
 ```bash
-LOCK_KIND=flock
-exec 9>"$LOCK_FILE"
-flock --timeout 300 9 || {
-  echo "forge: rebase lock timeout after 300 s (holder hint: inspect $LOCK_FILE)" >&2
-  exit 1
-}
-```
-
-When `command -v flock` fails, require `mkdir` and acquire the atomic directory mutex instead:
-
-```bash
-command -v mkdir >/dev/null 2>&1 || {
-  echo "forge: flock unavailable and mkdir lock fallback unavailable — not merging" >&2
-  exit 1
-}
-LOCK_KIND=mkdir
-START_SECONDS="$(date +%s)"
-until mkdir "$LOCK_DIR" 2>/dev/null; do
-  NOW_SECONDS="$(date +%s)"
-  if [ $((NOW_SECONDS - START_SECONDS)) -ge 300 ]; then
-    echo "forge: rebase lock timeout after 300 s (holder hint: inspect $LOCK_DIR)" >&2
-    exit 1
-  fi
-  sleep 2
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py" --json --repo "$PWD" \
+  common-lock hold --owner-kind push --operation push --ready-fd 8 \
+  <"$LOCK_RELEASE_FIFO" >"$LOCK_OUTCOME" 2>&1 9>&- &
+LOCK_HOLDER_PID=$!
+LOCK_READY=""
+LOCK_WAITED=0
+while [ -z "$LOCK_READY" ]; do
+  read -r -t 5 LOCK_READY <&8 && break
+  LOCK_WAITED=$((LOCK_WAITED + 5))
+  kill -0 "$LOCK_HOLDER_PID" 2>/dev/null || break
+  [ "$LOCK_WAITED" -lt 330 ] || break
 done
-trap 'rmdir "$LOCK_DIR"' EXIT
+if [ -z "$LOCK_READY" ]; then
+  echo "forge: rebase lock unavailable (holder hint: inspect ${GIT_COMMON_DIR}/agent-rebase.lockdir and $LOCK_OUTCOME)" >&2
+  exec 8<&- 9>&-
+  wait "$LOCK_HOLDER_PID" 2>/dev/null
+  cat "$LOCK_OUTCOME" >&2 2>/dev/null
+  exit 1
+fi
+printf '%s\n' "$LOCK_READY" | python3 -c '
+import json, sys
+record = json.loads(sys.stdin.readline())
+assert record["schema"] == "forge-common-lock-ready/1"
+assert set(record) == {"schema", "owner_digest", "nonce", "pid"}
+' || {
+  echo "forge: rebase lock readiness record is malformed (holder hint: inspect ${GIT_COMMON_DIR}/agent-rebase.lockdir)" >&2
+  exec 8<&- 9>&-
+  wait "$LOCK_HOLDER_PID" 2>/dev/null
+  exit 1
+}
 ```
 
-Never skip locking. If neither mechanism can establish a mutex, fail loudly and leave the
-worktree intact. An exiting process releases the `flock` file descriptor; the fallback trap removes
-the lock directory on success, failure, interruption, and re-verification failure.
+The wrapper writes exactly one canonical `forge-common-lock-ready/1` record on descriptor 8 after
+the complete lock is held, then blocks on its stdin for the single release frame. The `9>&-` on the
+wrapper's command line is load-bearing: the wrapper reads the release pipe through its stdin only
+and must not inherit the shell's read-write descriptor 9, or it would itself hold a writer on that
+pipe and never observe the end-of-file that completes the release. The readiness wait polls in
+5-second slices so a wrapper that refuses or dies immediately stops the merge at once, while a
+contended lock waits up to the wrapper's 300-second shared deadline (330 seconds of slices). The
+same discipline applies to every command run inside the lock epoch: descriptors 8 and 9 are
+inherited by every child the shell starts, so run each in-lock command (the fetch, the rebase,
+every Gate 1/2/3 re-run, the mutation runner, the reviewer launch, and the push) with `8<&- 9>&-`
+appended, and never leave a backgrounded helper running past the release. A child that outlives
+the release while holding descriptor 9 keeps a writer on the release pipe and the wrapper cannot
+observe end-of-file; the bounded release wait below then reports `lock-release-failed` instead of
+hanging. A refusal, an
+exhausted 300-second shared deadline, or a holder that dies before readiness produces no record, so
+the bounded wait ends and the merge stops with the holder hint and the wrapper's own `forge-cli/2`
+outcome. Never skip locking. If the wrapper is unavailable or refuses, fail loudly and leave the
+worktree intact. The lock is released only by the explicit release frame below or by the wrapper
+observing end-of-file on its stdin: exiting the lock-owning shell closes descriptor 9, the wrapper
+releases the portable owner and any `flock` layer, and reports the missing frame as a refusal. A
+holder killed outright (for example by a harness kill of the whole process group) drops its kernel
+`flock` but leaves a dead portable owner record behind, and the next entrant refuses until that
+owner is cleared. In this phase no automated recovery surface is live for it: clearing a dead
+owner is an operator-reserved action. Never delete `agent-rebase.lockdir` or
+`agent-rebase.lock.intent` from this skill; report the holder hint, and the operator, after proving
+the recorded host and PID dead, removes exactly those two owner artifacts by hand and records the
+removal as a decision before any further reintegration.
 
 Inside the lock, first prove that HEAD is still the approved/reviewed candidate. Then fetch and
 rebase:
 
 ```bash
-[ "$(git rev-parse HEAD)" = "$CANDIDATE_HEAD" ] || {
+[ "$(git rev-parse HEAD 8<&- 9>&-)" = "$CANDIDATE_HEAD" ] || {
   echo "forge: candidate HEAD changed after gates — rerun /forge:worktree-merge" >&2
   exit 1
 }
-git fetch origin "$DEFAULT_BRANCH" --quiet
-FETCHED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
+git fetch origin "$DEFAULT_BRANCH" --quiet 8<&- 9>&-
+FETCHED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}" 8<&- 9>&-)"
 DEFAULT_ADVANCED=0
 [ "$FETCHED_BASE" = "$REVIEWED_BASE" ] || DEFAULT_ADVANCED=1
-git rebase "origin/${DEFAULT_BRANCH}"
+git rebase "origin/${DEFAULT_BRANCH}" 8<&- 9>&-
 ```
+
+Every command in the fences from here to the release carries `8<&- 9>&-`; apply the same suffix to
+any conflict-resolution command, `git rebase --continue`, `git rebase --abort`, and every gate,
+mutation, or reviewer launch you issue inside the lock.
 
 The canonical operations are `git fetch origin <default-branch>` followed by
 `git rebase origin/<default-branch>`. Never create a merge commit. Never run `git merge`, use a
@@ -440,15 +491,15 @@ non-rebase pull, or create or push an intermediate integration branch. Reintegra
 worktrees one at a time under this lock.
 
 If rebase stops on conflicts, keep the lock, resolve only the named conflicts, stage each resolved
-path explicitly, and run `git rebase --continue`. Record that conflicts were resolved. If they
+path explicitly, and run `git rebase --continue 8<&- 9>&-`. Record that conflicts were resolved. If they
 cannot be resolved safely, run `git rebase --abort`, exit without pushing, release the lock, and
 leave the worktree and branch present.
 
 After a successful rebase, capture the exact integrated identity before any re-verification:
 
 ```bash
-INTEGRATED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
-INTEGRATED_HEAD="$(git rev-parse HEAD)"
+INTEGRATED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}" 8<&- 9>&-)"
+INTEGRATED_HEAD="$(git rev-parse HEAD 8<&- 9>&-)"
 INTEGRATED_RANGE="${INTEGRATED_BASE}...${INTEGRATED_HEAD}"
 CANDIDATE_REWRITTEN=0
 [ "$INTEGRATED_HEAD" = "$CANDIDATE_HEAD" ] || CANDIDATE_REWRITTEN=1
@@ -466,7 +517,7 @@ Perform all required re-runs inside the lock and before push:
   ```bash
   TIER_EVIDENCE="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \
     --repo "$PWD" --policy-sha "$policy_sha" "${declared_args[@]}" \
-    --range "${INTEGRATED_BASE}...${INTEGRATED_HEAD}")" || exit 1
+    --range "${INTEGRATED_BASE}...${INTEGRATED_HEAD}" 8<&- 9>&-)" || exit 1
   ```
 
   Preserve this replacement evidence as the only tier authority for the integrated candidate.
@@ -500,33 +551,51 @@ approval. When the candidate was not rewritten, set `AUTHORIZED_HEAD="$CANDIDATE
 original Gate 4. Immediately before push, require `git rev-parse HEAD` to equal `AUTHORIZED_HEAD`;
 otherwise stop without touching the remote.
 
-Only after every required in-lock re-run passes, fast-forward the candidate with exactly:
+Only after every required in-lock re-run passes, fast-forward the candidate with exactly this ref
+mapping, the lock descriptors closed for the push process:
 
 ```bash
-git push origin HEAD:<default-branch>
+git push origin HEAD:<default-branch> 8<&- 9>&-
 ```
 
 Substitute the confirmed default branch for the placeholder. Do not push any other ref. Treat a
 non-fast-forward rejection or any other push error as a failed merge.
 
-After a successful push, release the active lock explicitly:
+After a successful push, release the lock explicitly by sending the wrapper its single release
+frame, closing the release pipe, and requiring the wrapper's final outcome to report the release:
 
 ```bash
-if [ "$LOCK_KIND" = flock ]; then
-  flock -u 9 || {
-    echo "forge: failed to release rebase lock" >&2
-    exec 9>&-
-    exit 1
-  }
-  exec 9>&-
-else
-  rmdir "$LOCK_DIR" || {
-    echo "forge: failed to release rebase lock directory: $LOCK_DIR" >&2
-    exit 1
-  }
-  trap - EXIT HUP INT TERM
+printf 'release\n' >&9
+exec 9>&- 8<&-
+LOCK_RELEASE_WAITED=0
+while kill -0 "$LOCK_HOLDER_PID" 2>/dev/null && [ "$LOCK_RELEASE_WAITED" -lt 60 ]; do
+  sleep 1
+  LOCK_RELEASE_WAITED=$((LOCK_RELEASE_WAITED + 1))
+done
+if kill -0 "$LOCK_HOLDER_PID" 2>/dev/null; then
+  echo "forge: failed to release rebase lock — lock-release-failed: holder still running after 60 s, a child may hold the release pipe (holder hint: inspect ${GIT_COMMON_DIR}/agent-rebase.lockdir and $LOCK_OUTCOME)" >&2
+  exit 1
 fi
+wait "$LOCK_HOLDER_PID"
+LOCK_EXIT=$?
+python3 -c '
+import json, sys
+outcome = json.loads(open(sys.argv[1], "rb").read().splitlines()[-1])
+assert outcome["schema"] == "forge-cli/2"
+assert outcome["reason_code"] == "ok"
+assert outcome["message"] == "forge: common rebase lock released"
+' "$LOCK_OUTCOME" && [ "$LOCK_EXIT" -eq 0 ] || {
+  echo "forge: failed to release rebase lock — lock-release-failed (holder hint: inspect ${GIT_COMMON_DIR}/agent-rebase.lockdir and $LOCK_OUTCOME)" >&2
+  exit 1
+}
+rm -f "$LOCK_READY_FIFO" "$LOCK_RELEASE_FIFO"
 ```
+
+The push has already landed when release runs; a release failure is reported as a failed merge
+step so the operator inspects the retained owner before any further reintegration, exactly as
+FR-235's `lock-release-failed` disposition requires. After a clean release the owner record and
+`agent-rebase.lockdir` are gone; the regular file `agent-rebase.lock` that the optional `flock`
+layer uses legitimately persists and is not a retained owner.
 
 ## Cleanup after successful push
 

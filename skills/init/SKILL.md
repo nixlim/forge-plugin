@@ -88,16 +88,25 @@ Complete every precondition before running the installer.
    Ask the user to confirm both the project name and default branch. Do not continue on an
    ambiguous or rejected answer.
 
-4. Resolve the Git common directory and run `command -v flock`. Report the exact merge lock path
-   that this repository will use:
+4. Resolve the Git common directory and run `command -v flock`. Report the exact merge lock
+   artifacts that this repository will use — FR-235's portable arbiter, held for
+   `/forge:worktree-merge` by the Forge CLI wrapper `common-lock hold` with a 300-second shared
+   deadline:
 
-   - when `flock` exists, `${GIT_COMMON_DIR}/agent-rebase.lock` with a 300-second `flock` timeout;
-   - otherwise, `${GIT_COMMON_DIR}/agent-rebase.lockdir` with the 300-second atomic `mkdir`
-     fallback.
+   - always, the portable owner record and its hard-linked owner directory
+     `${GIT_COMMON_DIR}/agent-rebase.lockdir` (with `agent-rebase.lock.intent`), which every
+     Linux and macOS entrant contends on;
+   - additionally, the optional kernel layer on `${GIT_COMMON_DIR}/agent-rebase.lock`, taken
+     through Python's `fcntl.flock` after the portable owner and released before it wherever the
+     interpreter provides `fcntl.flock` (every supported macOS and Linux host).
 
    Obtain `GIT_COMMON_DIR` with
-   `git rev-parse --path-format=absolute --git-common-dir`. Missing `flock` is not a blocker when
-   `mkdir` is available. Missing both lock mechanisms is a blocker. Never bypass locking.
+   `git rev-parse --path-format=absolute --git-common-dir`. The `command -v flock` probe is
+   informational only: the wrapper never consults the `flock` binary, a missing binary is not a
+   blocker, the portable arbiter alone is the complete lock, and no surface selects a backend by
+   host capability. The owner directory is not a disposable mutex — never remove `agent-rebase.lockdir`
+   or `agent-rebase.lock.intent` by hand except as the operator-reserved dead-owner clearing the
+   worktree-merge skill describes. Never bypass locking.
 
 5. Require `codex`. Read every `model = "..."` value from
    `${CLAUDE_PLUGIN_ROOT}/system/codex/agents/*.toml`, reject a missing or malformed value, and

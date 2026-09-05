@@ -371,7 +371,9 @@ class Fr149NonMutationTimeoutTests(unittest.TestCase):
         self.assertContains(
             lock, 'max_wait_seconds="${FORGE_COMMIT_LOCK_TIMEOUT:-300}"', "commit lock"
         )
-        self.assertContains(self.merge, "flock --timeout 300", "rebase lock")
+        self.assertContains(self.merge, "300-second shared deadline", "rebase lock")
+        self.assertContains(self.merge, "read -r -t 5 LOCK_READY <&8", "rebase lock wait slice")
+        self.assertContains(self.merge, '[ "$LOCK_WAITED" -lt 330 ] || break', "rebase lock wait bound")
         self.assertContains(
             self.commit, "2-second polling, and the 300-second", "commit lock prose"
         )
