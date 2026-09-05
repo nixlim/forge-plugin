@@ -150,6 +150,10 @@ STATES = {
     "aborted",
 }
 TERMINAL_STATES = {"closed", "aborted"}
+# Verbs that may touch a chain past its inactivity deadline or the iteration
+# cap: status, abort, and (Revision 13) the retrospective abort disposition,
+# which by construction targets chains nobody has touched for a long time.
+TERMINAL_TOUCH_VERBS = frozenset({"status", "commit abort", "commit abort-disposition"})
 # Explicit FR-211 transition authority.  Self-transitions are operational
 # no-ops (for example a repeated classification) and are admitted by
 # ``_transition_state`` without appearing in this table.
@@ -10167,6 +10171,7 @@ def build_parser() -> ContractArgumentParser:
     commit_commands.add_parser("rebase")
     abort = commit_commands.add_parser("abort")
     abort.add_argument("--reason")
+    commit_commands.add_parser("abort-disposition")
     approve = commit_commands.add_parser("approve")
     approve.add_argument("--candidate", required=True)
     skip = commit_commands.add_parser("skip")
@@ -10539,6 +10544,8 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
             return engine.rebase()
         if args.commit_command == "abort":
             return engine.abort(args.reason)
+        if args.commit_command == "abort-disposition":
+            return engine.abort_disposition()
         if args.commit_command == "approve":
             if not SHA256_RE.fullmatch(args.candidate):
                 raise Refusal(
@@ -10892,8 +10899,9 @@ def _build_chain_journal_records(
         "commit_produced",
         "commit_close_recovered",
         "chain_aborted",
+        "abort_disposition_recorded",
     }:
-        if event == "chain_aborted":
+        if event in {"chain_aborted", "abort_disposition_recorded"}:
             # Revision 13: an explicit abort of a never-landed chain carries a
             # journal-visible abort decision bound to the abandoned candidate.
             # `commit abort` refuses terminal chains before mutation, so the
@@ -10914,6 +10922,7 @@ def _build_chain_journal_records(
             "commit_produced": "chain-landing",
             "commit_close_recovered": "chain-landing",
             "chain_aborted": "chain-abort",
+            "abort_disposition_recorded": "chain-abort",
         }[event]
         resolution = {
             "operator_approved": "Forge commit chain approval recorded",
@@ -10931,6 +10940,10 @@ def _build_chain_journal_records(
             ),
             "chain_aborted": (
                 "Forge commit chain abort recorded: "
+                f"{details.get('reason') or 'no reason given'}"
+            ),
+            "abort_disposition_recorded": (
+                "Forge commit chain abort disposition recorded retrospectively: "
                 f"{details.get('reason') or 'no reason given'}"
             ),
         }[event]
@@ -19455,13 +19468,94 @@ def _command_run_lock_id(engine: "Engine", method_name: str) -> str | None:
             ):
                 return str(raw_binding["run_id"])
             return None
-    include_terminal = method_name in {"status", "abort", "operator_tombstone"}
+    include_terminal = method_name in {
+        "status",
+        "abort",
+        "abort_disposition",
+        "operator_tombstone",
+    }
     selected = _peek_selected_chain(engine, include_terminal=include_terminal)
     binding = selected.get("run_binding") if isinstance(selected, dict) else None
     if isinstance(binding, Mapping) and isinstance(binding.get("run_id"), str):
         return str(binding["run_id"])
     if method_name == "start" and engine.ctx.options.run_id is not None:
         return engine.ctx.options.run_id
+    return None
+
+
+ABORT_DISPOSITION_PRECONDITIONS = (
+    "run-bound",
+    "aborted",
+    "null-outbox",
+    "candidate",
+    "never-landed",
+    "uncarried-abort",
+    "journal-readable",
+    "no-journaled-decision",
+)
+
+
+def abort_disposition_refusal(
+    state: Mapping[str, Any],
+    events: Sequence[Mapping[str, Any]],
+    records: Sequence[Mapping[str, Any]],
+    journal_issues: Sequence[str],
+    *,
+    controls: Collection[str] = ABORT_DISPOSITION_PRECONDITIONS,
+) -> str | None:
+    """Return the expected-state text refusing a retrospective disposition, or None.
+
+    Each precondition is evaluated in order and independently so a single
+    violation is attributable; ``controls`` names the checks in force (tests
+    remove one at a time to prove each is load-bearing).
+    """
+    binding = state.get("run_binding")
+    if "run-bound" in controls and not isinstance(binding, Mapping):
+        return "a run-bound chain"
+    if "aborted" in controls and state.get("state") != "aborted":
+        return "an aborted chain"
+    if "null-outbox" in controls and state.get("journal_outbox") is not None:
+        return "an aborted chain with a null journal outbox"
+    candidate = state.get("candidate")
+    if "candidate" in controls and not (
+        isinstance(candidate, Mapping) and isinstance(candidate.get("sha256"), str)
+    ):
+        return "an aborted chain with a staged candidate"
+    result = state.get("commit_result")
+    if "never-landed" in controls and not (
+        isinstance(result, Mapping)
+        and result.get("commit_sha") is None
+        and isinstance(result.get("aborted_at"), str)
+    ):
+        return "an aborted chain with no landed commit"
+    if "uncarried-abort" in controls:
+        for event in events:
+            payload = event.get("payload") if isinstance(event, Mapping) else None
+            if not isinstance(payload, Mapping):
+                continue
+            details = payload.get("details")
+            if payload.get("event") in {"chain_aborted", "abort_disposition_recorded"} and (
+                isinstance(details, Mapping) and "journal_batch" in details
+            ):
+                return "an abort that carried no journal batch"
+    if "journal-readable" in controls and journal_issues:
+        return "a readable run journal"
+    if "no-journaled-decision" in controls:
+        chain_id = str(state.get("chain_id"))
+        for record in records:
+            binding_value = record.get("binding")
+            source = (
+                binding_value.get("source_record")
+                if isinstance(binding_value, Mapping)
+                else None
+            )
+            if (
+                record.get("type") == "decision"
+                and record.get("outcome") == "chain-abort"
+                and isinstance(source, Mapping)
+                and source.get("chain_id") == chain_id
+            ):
+                return "a chain without a journaled abort decision"
     return None
 
 
@@ -36852,7 +36946,7 @@ class Engine:
             )
         if (
             utc_now() >= parse_time(str(state["inactive_after"]))
-            and verb not in {"status", "commit abort"}
+            and verb not in TERMINAL_TOUCH_VERBS
         ):
             raise Refusal(
                 ReasonCode.INACTIVE_CHAIN,
@@ -36864,7 +36958,7 @@ class Engine:
             )
         if (
             int(state["review"].get("iteration", 0)) >= 8
-            and verb not in {"status", "commit abort"}
+            and verb not in TERMINAL_TOUCH_VERBS
         ):
             raise Refusal(
                 ReasonCode.ITERATION_CAP,
@@ -37328,6 +37422,59 @@ class Engine:
             state,
             f"chain {state['chain_id']} aborted",
             "forge commit start --paths <path>...",
+        )
+
+    @_serialize_worktree_command
+    def abort_disposition(self) -> Outcome:
+        """Carry a chain-abort decision for a chain aborted without one (Revision 13)."""
+        verb = "commit abort-disposition"
+        if self.ctx.options.chain_id is None:
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"{verb} requires --chain-id naming the aborted chain",
+                expected="--chain-id <id>",
+                observed="no chain selected",
+                remediation=f"forge {verb} --chain-id <id>",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        state = self.select(include_terminal=True)
+        self._preflight(
+            state,
+            verb,
+            allow_head_moved=True,
+            check_candidate=False,
+        )
+        chain_id = str(state["chain_id"])
+        binding = state.get("run_binding")
+        records: list[dict[str, Any]] = []
+        journal_issues: list[str] = []
+        if isinstance(binding, Mapping):
+            _batch, _builders, journal = _coordination_modules()
+            # The run lives under the resolved common root, exactly where the
+            # drain and validation paths look; the raw recorded repository is
+            # never trusted to locate it.
+            run_dir = (
+                self.ctx.store.common_root
+                / ".codex-orchestrator"
+                / "runs"
+                / str(binding["run_id"])
+            )
+            records, journal_issues = journal.read_journal(run_dir / "journal.jsonl")
+        expected = abort_disposition_refusal(
+            state, self.ctx.store._events(chain_id), records, journal_issues
+        )
+        if expected is not None:
+            self._wrong_state(state, expected, verb)
+        result = state["commit_result"]
+        self.ctx.store.persist(
+            state,
+            "abort_disposition_recorded",
+            {"reason": str(result.get("reason") or "")},
+        )
+        return _success(
+            state,
+            f"chain {chain_id} abort disposition recorded",
+            "none — chain remains aborted",
         )
 
     def _wrong_state(self, state: Mapping[str, Any], expected: str, verb: str) -> None:

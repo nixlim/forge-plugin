@@ -122,6 +122,7 @@ def _register_ingest_proof_verifier(verifier: IngestProofVerifier) -> None:
 
 _COMMIT_EVENT_NAMES = frozenset(
     {
+        "abort_disposition_recorded",
         "authorization_consumed",
         "authorized",
         "candidate_invalidated",
@@ -540,6 +541,7 @@ _COMMIT_EVENT_TOP_LEVEL_CHANGES: dict[str, frozenset[str]] = {
         }
     ),
     "candidate_staged": frozenset({"paths", "staging", "candidate"}),
+    "abort_disposition_recorded": frozenset(),
     "chain_aborted": frozenset({"state", "commit_result"}),
     "chain_closed": frozenset({"state", "commit_result"}),
     "chain_started": frozenset(_COMMIT_STATE_KEYS),
@@ -616,6 +618,7 @@ _COMMIT_DETAIL_KEYS: dict[str, frozenset[str]] = {
     ),
     "candidate_restaged": frozenset({"old_candidate", "new_candidate", "paths"}),
     "candidate_staged": frozenset({"candidate", "paths"}),
+    "abort_disposition_recorded": frozenset({"reason"}),
     "chain_aborted": frozenset({"reason"}),
     "chain_closed": frozenset({"commit_sha"}),
     "chain_started": frozenset({"paths"}),
@@ -2585,6 +2588,14 @@ def _commit_transition_valid(
         )
     if event_name in {"chain_aborted", "policy_changed"}:
         return after_state == "aborted"
+    if event_name == "abort_disposition_recorded":
+        # Revision 13: the sole self-event admitted on an aborted chain; it
+        # carries the retrospective chain-abort decision and changes nothing.
+        return bool(
+            after_state == "aborted"
+            and isinstance(prior, dict)
+            and prior.get("state") == "aborted"
+        )
     if event_name == "commit_intent_rolled_back":
         return after_state == "authorized"
     if event_name == "mechanical_verification_complete":
@@ -5007,10 +5018,18 @@ def _binding_matches_source_fact(
         )
     if outcome == "chain-abort":
         # Revision 13: an explicit abort of a never-landed chain is carried by
-        # its own chain_aborted event and bound to the candidate it abandoned.
+        # its own chain_aborted event and bound to the candidate it abandoned;
+        # a chain aborted without a carried decision may carry it later through
+        # the abort_disposition_recorded self-event, which changes no state.
         if binding.get("review") is not None or prior is None:
             return False
-        if event_name != "chain_aborted" or prior.get("state") == "aborted":
+        if event_name == "chain_aborted":
+            if prior.get("state") == "aborted":
+                return False
+        elif event_name == "abort_disposition_recorded":
+            if prior.get("state") != "aborted" or prior.get("commit_result") != current.get("commit_result"):
+                return False
+        else:
             return False
         if current.get("state") != "aborted":
             return False

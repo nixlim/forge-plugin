@@ -10,6 +10,13 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Retrospective chain abort disposition: `commit abort-disposition` on a
+  run-bound chain that was aborted before revision 13 (its abort carried no
+  decision) appends one `abort_disposition_recorded` self-event carrying the
+  `chain-abort` decision through the ordinary outbox and receipt path, so the
+  terminal guards, FR-021 correlation, and the archive see it exactly as a
+  current abort; the verb refuses every other chain and any retry (spec
+  revision 13, FR-210/FR-211/FR-222 amendments; bead forge-plugin-rtj).
 - Journal validation: `validate` and the run-close validation now resolve a
   relative citation against the run directory first and the run's
   layout-derived repository root second, matching FR-017's append-time

@@ -3530,6 +3530,112 @@ print("committed")
             builders._terminal_abort_disposition({**base, "kind": "merge", "journal_outbox": {"pending": True}})
         )
 
+    def _self_event_fixture(self) -> tuple[dict, dict, dict]:
+        """A minimal aborted commit state and its abort_disposition_recorded event."""
+        sha = key("self-event-candidate")
+        prior = {
+            "schema": "forge-chain/1",
+            "chain_id": "c-2026-09-05T000000Z-abcd",
+            "kind": "commit",
+            "state": "aborted",
+            "created_at": "2026-09-05T00:00:00Z",
+            "last_event_at": "2026-09-05T00:01:00Z",
+            "inactive_after": "2026-09-06T00:01:00Z",
+            "candidate": {"sha256": sha, "computed_at": "2026-09-05T00:00:30Z"},
+            "commit_result": {"aborted_at": "2026-09-05T00:01:00Z", "reason": "legacy"},
+            "run_binding": {
+                "run_id": "run-20260905-self-event",
+                "task_id": "task-01",
+                "repository": "/repo",
+                "policy_digest": key("policy"),
+            },
+            "journal_outbox": None,
+        }
+        current = copy.deepcopy(prior)
+        current["last_event_at"] = "2026-09-05T00:02:00Z"
+        current["inactive_after"] = "2026-09-06T00:02:00Z"
+        event = {
+            "sequence": 9,
+            "prev_digest": key("prev"),
+            "payload": {
+                "at": "2026-09-05T00:02:00Z",
+                "details": {"reason": "legacy"},
+                "event": "abort_disposition_recorded",
+                "state": copy.deepcopy(current),
+            },
+        }
+        return prior, current, event
+
+    def test_abort_disposition_self_event_admission_controls_are_load_bearing(self) -> None:
+        """Bead forge-plugin-rtj: the self-event replays only from aborted, unchanged."""
+        prior, current, event = self._self_event_fixture()
+        self.assertTrue(builders._commit_transition_valid(event, prior, current))
+        # Enum control: an unknown event name is refused.
+        with mock.patch.object(
+            builders, "_COMMIT_EVENT_NAMES",
+            builders._COMMIT_EVENT_NAMES - {"abort_disposition_recorded"},
+        ):
+            self.assertFalse(builders._commit_transition_valid(event, prior, current))
+        # Transition control: the self-event is admitted only from aborted.
+        live_prior = {**copy.deepcopy(prior), "state": "authorized"}
+        live_current = {**copy.deepcopy(current), "state": "authorized"}
+        live_event = copy.deepcopy(event); live_event["payload"]["state"] = copy.deepcopy(live_current)
+        self.assertFalse(builders._commit_transition_valid(live_event, live_prior, live_current))
+        with mock.patch.dict(
+            builders._COMMIT_STATE_TRANSITIONS, {"authorized": frozenset({"authorized"})}
+        ):
+            # Even with the table loosened, the event-specific branch refuses a
+            # non-aborted prior: both controls are load-bearing.
+            self.assertFalse(builders._commit_transition_valid(live_event, live_prior, live_current))
+        # Top-level control: the self-event may change no state field.
+        rewritten = copy.deepcopy(current)
+        rewritten["commit_result"] = {"aborted_at": "2026-09-05T00:02:00Z", "reason": "rewritten"}
+        rewritten_event = copy.deepcopy(event); rewritten_event["payload"]["state"] = copy.deepcopy(rewritten)
+        self.assertFalse(builders._commit_transition_valid(rewritten_event, prior, rewritten))
+        with mock.patch.dict(
+            builders._COMMIT_EVENT_TOP_LEVEL_CHANGES,
+            {"abort_disposition_recorded": frozenset({"commit_result"})},
+        ):
+            self.assertTrue(builders._commit_transition_valid(rewritten_event, prior, rewritten))
+
+    def test_abort_disposition_self_event_source_fact_requires_aborted_unchanged_prior(self) -> None:
+        prior, current, event = self._self_event_fixture()
+        binding = {
+            "candidate": {"kind": "staged-diff-sha256", "value": current["candidate"]["sha256"]},
+            "review": None,
+        }
+        record = {"type": "decision", "outcome": "chain-abort"}
+        self.assertTrue(
+            builders._binding_matches_source_fact(binding, record, event, prior, current, family="commit")
+        )
+        # Prior must already be aborted for the self-event branch.
+        live_prior = {**copy.deepcopy(prior), "state": "authorized"}
+        self.assertFalse(
+            builders._binding_matches_source_fact(binding, record, event, live_prior, current, family="commit")
+        )
+        # commit_result must be unchanged across the self-event.
+        changed_prior = copy.deepcopy(prior)
+        changed_prior["commit_result"] = {"aborted_at": "2026-09-05T00:00:59Z", "reason": "other"}
+        self.assertFalse(
+            builders._binding_matches_source_fact(binding, record, event, changed_prior, current, family="commit")
+        )
+        # A landed commit never carries an abort decision.
+        landed = copy.deepcopy(current); landed["commit_result"] = {**current["commit_result"], "commit_sha": "1" * 40}
+        landed_prior = copy.deepcopy(prior); landed_prior["commit_result"] = copy.deepcopy(landed["commit_result"])
+        self.assertFalse(
+            builders._binding_matches_source_fact(binding, record, event, landed_prior, landed, family="commit")
+        )
+        # The original chain_aborted branch still requires a transition into aborted.
+        aborted_event = copy.deepcopy(event); aborted_event["payload"]["event"] = "chain_aborted"
+        self.assertFalse(
+            builders._binding_matches_source_fact(binding, record, aborted_event, prior, current, family="commit")
+        )
+        # Any other event name is refused for a chain-abort binding.
+        other = copy.deepcopy(event); other["payload"]["event"] = "head_moved"
+        self.assertFalse(
+            builders._binding_matches_source_fact(binding, record, other, prior, current, family="commit")
+        )
+
     def test_terminal_builder_accepts_only_explicit_absent_chain_tombstone(self) -> None:
         with self.api_environment():
             repo, run_id, run_binding = self._terminal_control_repo(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import datetime
 import copy
 import hashlib
 import importlib.util
@@ -2396,6 +2397,241 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 task="task-01", status="complete",
             )
         self.assertEqual(finished.records[0]["status"], "complete")
+
+    def test_retrospective_abort_disposition_carries_the_decision_once(self) -> None:
+        """Bead forge-plugin-rtj: a legacy uncarried abort gains its disposition later."""
+        _batch, builders, journal = CLI._coordination_modules()
+        run_id = "run-20260905-retro-abort"
+        chain_id = self.start_bound_fast_chain(run_id)
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        # A pre-revision-13 abort shape: the chain_aborted event carries nothing.
+        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+            exit_code, aborted = self.invoke_cli(
+                "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
+            )
+        self.assertEqual(exit_code, 0, aborted)
+        events = self.events(chain_id)
+        self.assertEqual(events[-1]["payload"]["event"], "chain_aborted")
+        self.assertNotIn("journal_batch", events[-1]["payload"]["details"])
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        state_before = self.state(chain_id)
+
+        # Retrospective disposition: one self-event, one carried decision, receipted.
+        exit_code, disposed = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 0, disposed)
+        self.assertEqual(disposed["state"], "aborted")
+        events = self.events(chain_id)
+        self.assertEqual(
+            [event["payload"]["event"] for event in events[-2:]],
+            ["abort_disposition_recorded", "journal_receipted"],
+        )
+        carried = events[-2]["payload"]["details"]["journal_batch"]["records"]
+        self.assertEqual([record["outcome"] for record in carried], ["chain-abort"])
+        after = self.state(chain_id)
+        self.assertEqual(after["state"], "aborted")
+        self.assertEqual(after["commit_result"], state_before["commit_result"])
+        self.assertIsNone(after["journal_outbox"])
+        records = [
+            json.loads(line)
+            for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
+            if line
+        ]
+        aborts = [r for r in records if r.get("type") == "decision" and r.get("outcome") == "chain-abort"]
+        self.assertEqual(len(aborts), 1)
+        self.assertTrue(aborts[0]["resolution"].startswith("Forge commit chain abort disposition recorded retrospectively: "))
+        self.assertEqual(
+            aborts[0]["binding"]["source_record"]["event_digest"],
+            events[-2]["payload"]["details"]["source_event_digest"],
+        )
+        with self.cli_process_context():
+            resolved = builders.resolve_binding(
+                self.repo, chain_id, str(aborts[0]["binding"]["binding_id"]),
+                expected_type="decision", expected_fields={"task": "task-01", "outcome": "chain-abort"},
+                expected_run_id=run_id, expected_task_id="task-01",
+            )
+        self.assertEqual(resolved, aborts[0]["binding"])
+
+        # Single-shot: a retry refuses and changes nothing.
+        journal_after = (run_dir / "journal.jsonl").read_bytes()
+        events_after = self.events_path(chain_id).read_bytes()
+        exit_code, retried = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 1, retried)
+        self.assertEqual(retried["reason_code"], "state-precondition")
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_after)
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_after)
+        self.assertNotEqual(journal_after, journal_before)
+
+        # The disposition satisfies the guards, correlation, and validation.
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
+                task="task-01", status="complete",
+            )
+            self.assertEqual(finished.records[0]["status"], "complete")
+            closed = builders.run_close(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-close"),
+                judgment="passed", summary="Legacy abort dispositioned retrospectively",
+                risks=[], follow_ups=[],
+            )
+            self.assertFalse(closed.repeated)
+            validation = journal.validate_run(run_dir, gates=True)
+        self.assertTrue(validation["ok"], validation)
+
+    def test_abort_disposition_refuses_every_ineligible_chain(self) -> None:
+        """Bead forge-plugin-rtj: the verb is only for uncarried run-bound aborts."""
+        _batch, builders, journal = CLI._coordination_modules()
+        # A revision-13 abort already carried its decision: refuse.
+        run_id = "run-20260905-retro-carried"
+        chain_id = self.start_bound_fast_chain(run_id)
+        exit_code, aborted = self.invoke_cli(
+            "--chain-id", chain_id, "commit", "abort", "--reason", "current abort"
+        )
+        self.assertEqual(exit_code, 0, aborted)
+        events_before = self.events_path(chain_id).read_bytes()
+        exit_code, refused = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "state-precondition")
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+
+    def test_abort_disposition_preconditions_are_independently_load_bearing(self) -> None:
+        """Bead forge-plugin-rtj: each precondition refuses alone and only when in force."""
+        binding = {"run_id": "run-20260905-x", "task_id": "task-01", "repository": "/r", "policy_digest": "0" * 64}
+        good = {
+            "chain_id": "c-2026-09-05T000000Z-abcd", "state": "aborted", "journal_outbox": None,
+            "candidate": {"sha256": "1" * 64, "computed_at": "2026-09-05T00:00:00Z"},
+            "commit_result": {"aborted_at": "2026-09-05T00:01:00Z", "reason": "x"},
+            "run_binding": binding,
+        }
+        uncarried = [{"payload": {"event": "chain_aborted", "details": {"reason": "x"}}}]
+        self.assertIsNone(CLI.abort_disposition_refusal(good, uncarried, [], []))
+        decision = {"type": "decision", "outcome": "chain-abort",
+                    "binding": {"source_record": {"chain_id": good["chain_id"]}}}
+        violations = {
+            "run-bound": ({**good, "run_binding": None}, uncarried, [], []),
+            "aborted": ({**good, "state": "authorized"}, uncarried, [], []),
+            "null-outbox": ({**good, "journal_outbox": {"pending": True}}, uncarried, [], []),
+            "candidate": ({**good, "candidate": {"sha256": None, "computed_at": None}}, uncarried, [], []),
+            "never-landed": ({**good, "commit_result": {"aborted_at": "2026-09-05T00:01:00Z", "commit_sha": "2" * 40}}, uncarried, [], []),
+            "uncarried-abort": (good, [{"payload": {"event": "chain_aborted", "details": {"reason": "x", "journal_batch": {}}}}], [], []),
+            "journal-readable": (good, uncarried, [], ["line 3: malformed"]),
+            "no-journaled-decision": (good, uncarried, [decision], []),
+        }
+        self.assertEqual(set(violations), set(CLI.ABORT_DISPOSITION_PRECONDITIONS))
+        for name, (state, events, records, issues) in violations.items():
+            with self.subTest(precondition=name):
+                # In force: exactly this precondition refuses.
+                self.assertIsNotNone(CLI.abort_disposition_refusal(state, events, records, issues))
+                # Removed from the control set: the same input is accepted.
+                remaining = tuple(item for item in CLI.ABORT_DISPOSITION_PRECONDITIONS if item != name)
+                self.assertIsNone(
+                    CLI.abort_disposition_refusal(state, events, records, issues, controls=remaining)
+                )
+
+    def test_abort_disposition_reaches_a_dead_in_place_chain(self) -> None:
+        """Bead forge-plugin-rtj: the verb must reach chains untouched for over 24 hours."""
+        _batch, builders, journal = CLI._coordination_modules()
+        run_id = "run-20260905-retro-stale"
+        chain_id = self.start_bound_fast_chain(run_id)
+        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+            exit_code, aborted = self.invoke_cli(
+                "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
+            )
+        self.assertEqual(exit_code, 0, aborted)
+        inactive_after = CLI.parse_time(str(self.state(chain_id)["inactive_after"]))
+        later = inactive_after + datetime.timedelta(hours=1)
+        with mock.patch.object(CLI, "utc_now", return_value=later):
+            # Disable proof: without the exemption the deadline refuses the verb.
+            with mock.patch.object(
+                CLI, "TERMINAL_TOUCH_VERBS", frozenset({"status", "commit abort"})
+            ):
+                exit_code, refused = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+            self.assertEqual(exit_code, 1, refused)
+            self.assertEqual(refused["reason_code"], "inactive-chain")
+            exit_code, disposed = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 0, disposed)
+        events = self.events(chain_id)
+        self.assertEqual(
+            [event["payload"]["event"] for event in events[-2:]],
+            ["abort_disposition_recorded", "journal_receipted"],
+        )
+
+    def test_abort_disposition_is_exempt_from_the_iteration_cap(self) -> None:
+        """Bead forge-plugin-rtj: the FR-053 cap never strands a retrospective disposition."""
+        run_id = "run-20260905-retro-cap"
+        chain_id = self.start_bound_fast_chain(run_id)
+        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+            exit_code, aborted = self.invoke_cli(
+                "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
+            )
+        self.assertEqual(exit_code, 0, aborted)
+        # Drive the shared preflight directly on the real aborted state with the
+        # review iteration forced to the cap; only the exemption admits the verb.
+        state = self.state(chain_id)
+        state["review"]["iteration"] = 8
+        state["run_binding"] = None  # keep this a pure preflight-exemption probe
+        repository = CLI.Repository(self.repo)
+        context = CLI.CommandContext(
+            repo=repository,
+            store=CLI.ChainStore(repository.common_root()),
+            options=CLI.CLIOptions(repo=str(self.repo), chain_id=chain_id, revision9_face=True),
+        )
+        engine = CLI.Engine(context)
+        with self.cli_process_context():
+            engine._preflight(
+                state, "commit abort-disposition", mutating=False,
+                allow_head_moved=True, check_candidate=False,
+            )
+            with mock.patch.object(
+                CLI, "TERMINAL_TOUCH_VERBS", frozenset({"status", "commit abort"})
+            ), self.assertRaises(CLI.Refusal) as caught:
+                engine._preflight(
+                    state, "commit abort-disposition", mutating=False,
+                    allow_head_moved=True, check_candidate=False,
+                )
+        self.assertEqual(caught.exception.reason_code.value, "iteration-cap")
+
+    def test_abort_disposition_requires_a_chain_id_and_a_readable_journal(self) -> None:
+        _batch, builders, journal = CLI._coordination_modules()
+        run_id = "run-20260905-retro-args"
+        chain_id = self.start_bound_fast_chain(run_id)
+        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+            exit_code, aborted = self.invoke_cli(
+                "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
+            )
+        self.assertEqual(exit_code, 0, aborted)
+        events_before = self.events_path(chain_id).read_bytes()
+        exit_code, refused = self.invoke_cli("commit", "abort-disposition")
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "state-precondition")
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+        with mock.patch.object(journal, "read_journal", return_value=([], ["line 1: malformed"])):
+            exit_code, refused = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "state-precondition")
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+
+    def test_abort_disposition_refuses_a_live_bound_chain(self) -> None:
+        run_id = "run-20260905-retro-live"
+        chain_id = self.start_bound_fast_chain(run_id)
+        events_before = self.events_path(chain_id).read_bytes()
+        exit_code, refused = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "state-precondition")
+        self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+        self.assertEqual(self.state(chain_id)["state"], "authorized")
+
+    def test_abort_disposition_refuses_an_unbound_aborted_chain(self) -> None:
+        self.change("docs/guide.md", "# unbound\n")
+        exit_code, started = self.invoke_cli("commit", "start", "--paths", "docs/guide.md")
+        self.assertEqual(exit_code, 0, started)
+        unbound = str(started["chain_id"])
+        exit_code, aborted = self.invoke_cli("--chain-id", unbound, "commit", "abort", "--reason", "unbound")
+        self.assertEqual(exit_code, 0, aborted)
+        events_before = self.events_path(unbound).read_bytes()
+        exit_code, refused = self.invoke_cli("--chain-id", unbound, "commit", "abort-disposition")
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "state-precondition")
+        self.assertEqual(self.events_path(unbound).read_bytes(), events_before)
 
     def test_task_finish_inspects_only_the_finishing_tasks_chains(self) -> None:
         """Bead forge-plugin-437: another task's cited chain is not a refusal."""

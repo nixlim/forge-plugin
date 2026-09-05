@@ -93,6 +93,7 @@ FORGE_CLI_PAIRED_COMMANDS = frozenset(
         ("commit", "restage"),
         ("commit", "rebase"),
         ("commit", "abort"),
+        ("commit", "abort-disposition"),
         ("commit", "approve"),
         ("commit", "skip"),
         ("commit", "finalize"),
