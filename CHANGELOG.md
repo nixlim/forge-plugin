@@ -10,6 +10,15 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Journal validation: `validate` and the run-close validation now resolve a
+  relative citation against the run directory first and the run's
+  layout-derived repository root second, matching FR-017's append-time
+  ordering, so gate evidence drained by run-bound chains (repository-relative
+  `.forge/chains/…` paths) validates without a hand-made mirror, and the
+  archive's pre-close recompute passes the real run's root into its temp
+  mirror so a passed close stays archivable; absolute citations, symlink
+  escapes, and citations absent from both roots keep the upstream diagnostic
+  (spec revision 13, FR-011 amendment; bead forge-plugin-7t0).
 - Commit guard: a leading shell assignment (`VAR=value python3
   scripts/forge/cli.py commit approve …`) no longer bypasses the operator-verb
   denial; the CLI invocation matcher skips assignment words before and after

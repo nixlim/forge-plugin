@@ -2140,7 +2140,16 @@ def recompute_pre_close_validation(
                     target_is_directory=child.is_dir(),
                 )
             (mirror / "journal.jsonl").write_bytes(prefix)
-            return canonical_payload(validate_run(mirror, gates=True))
+            # The mirror sits outside the fixed run layout, so pass the real
+            # run's layout-derived repository root: repository-relative
+            # citations must resolve here exactly as they did at close.
+            return canonical_payload(
+                validate_run(
+                    mirror,
+                    gates=True,
+                    repository=journal_engine._layout_repository_root(run_dir),
+                )
+            )
     except (OSError, TypeError, ValueError) as exc:
         raise ArchiveRefusal(
             f"forge: archive refused — could not recompute pre-close validation: {exc}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -1544,6 +1545,220 @@ class ClosedLegacyCompatTests(unittest.TestCase):
             "forge: closed-legacy-compat refused — journal has no run_closed entry",
             refused.stderr.strip(),
         )
+
+
+class CitationRootTests(unittest.TestCase):
+    """Revision 13 (FR-011 amendment, bead forge-plugin-7t0): ordered citation roots."""
+
+    def layout(self, root: Path) -> tuple[Path, Path]:
+        repo = root / "repo"
+        run_dir = repo / ".codex-orchestrator" / "runs" / "run-20260904-roots"
+        run_dir.mkdir(parents=True)
+        return repo, run_dir
+
+    def gate_records(self, evidence: str) -> list[dict[str, object]]:
+        return [
+            {"type": "run_started"},
+            {"type": "task", "id": "task-01", "status": "complete"},
+            {
+                "type": "verification",
+                "id": "check-01",
+                "task": "task-01",
+                "criterion": "gate-1: unit tests",
+                "method": "unittest",
+                "check": "python3 -m unittest",
+                "result": "passed",
+                "observation": "OK",
+                "evidence": [evidence],
+            },
+            {"type": "run_closed", "judgment": "passed", "summary": "done"},
+        ]
+
+    def test_repository_root_resolves_drained_chain_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self.layout(Path(tmp))
+            evidence = repo / ".forge/chains/c-2026-09-04T000000Z-abcd/evidence"
+            evidence.mkdir(parents=True)
+            (evidence / "gate-1-01.log").write_text("OK\n", encoding="utf-8")
+            citation = ".forge/chains/c-2026-09-04T000000Z-abcd/evidence/gate-1-01.log"
+            write_journal(run_dir, self.gate_records(citation))
+            result = validate_run(run_dir)
+            self.assertTrue(result["ok"], result["issues"])
+            self.assertTrue(journal.declared_file_exists(run_dir, citation))
+            # A copy under the run directory still wins (run root first).
+            mirrored = run_dir / citation
+            mirrored.parent.mkdir(parents=True)
+            mirrored.write_text("OK\n", encoding="utf-8")
+            self.assertEqual(journal._resolve_declared_path(run_dir, citation), mirrored.resolve())
+            # Disabling the repository root in memory restores the refusal.
+            mirrored.unlink()
+            with mock.patch.object(journal, "VALIDATION_REPOSITORY_LEG", False):
+                disabled = validate_run(run_dir)
+            self.assertFalse(disabled["ok"])
+            self.assertTrue(
+                any("referenced evidence[0] file does not exist" in issue for issue in disabled["issues"]),
+                disabled["issues"],
+            )
+
+    def test_escapes_absent_paths_and_foreign_layouts_still_refuse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self.layout(Path(tmp))
+            outside = Path(tmp) / "outside.log"
+            outside.write_text("OK\n", encoding="utf-8")
+            link_dir = repo / "evidence"
+            link_dir.mkdir()
+            (link_dir / "escape.log").symlink_to(outside)
+            write_journal(run_dir, self.gate_records("evidence/escape.log"))
+            escaped = validate_run(run_dir)
+            self.assertFalse(escaped["ok"])
+            self.assertTrue(
+                any("referenced evidence[0] file does not exist" in issue for issue in escaped["issues"]),
+                escaped["issues"],
+            )
+            write_journal(run_dir, self.gate_records("evidence/absent.log"))
+            absent = validate_run(run_dir)
+            self.assertFalse(absent["ok"])
+            self.assertTrue(
+                any("referenced evidence[0] file does not exist" in issue for issue in absent["issues"]),
+                absent["issues"],
+            )
+            write_journal(run_dir, self.gate_records(str(outside)))
+            absolute = validate_run(run_dir)
+            self.assertTrue(absolute["ok"], absolute["issues"])  # upstream run-only reading of absolute paths is unchanged
+            # A run directory outside the fixed layout never gains a repository
+            # root, even when the cited file exists two levels up where the
+            # layout-derived root would have been.
+            foreign = Path(tmp) / "elsewhere" / "runs" / "run-20260904-foreign"
+            foreign.mkdir(parents=True)
+            would_be_root = Path(tmp) / "elsewhere"
+            (would_be_root / ".forge/chains/x/evidence").mkdir(parents=True)
+            (would_be_root / ".forge/chains/x/evidence/gate-1-01.log").write_text("OK\n", encoding="utf-8")
+            write_journal(foreign, self.gate_records(".forge/chains/x/evidence/gate-1-01.log"))
+            self.assertIsNone(journal._layout_repository_root(foreign))
+            foreign_result = validate_run(foreign)
+            self.assertFalse(foreign_result["ok"])
+            self.assertTrue(
+                any("referenced evidence[0] file does not exist" in issue for issue in foreign_result["issues"]),
+                foreign_result["issues"],
+            )
+
+    def test_legacy_missing_evidence_leg_consults_both_roots(self) -> None:
+        """FR-016 tolerates a missing evidence file only when both roots miss it."""
+        declaration = {
+            "type": "decision",
+            "id": "journal-dialect-compat",
+            "resolution": "legacy-dialect-compat: operator-approved migration",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self.layout(Path(tmp))
+            outside = Path(tmp) / "outside.log"
+            outside.write_text("OK\n", encoding="utf-8")
+            (repo / "evidence").mkdir()
+            (repo / "evidence" / "escape.log").symlink_to(outside)
+            (repo / "evidence" / "dir.log").mkdir()
+
+            def legacy_records(citation: str) -> list[dict[str, object]]:
+                records = self.gate_records(citation)
+                # The declaration must follow the pre-declaration record it covers.
+                return records[:-1] + [declaration, records[-1]]
+
+            for citation in ("evidence/escape.log", "evidence/dir.log"):
+                with self.subTest(citation=citation):
+                    write_journal(run_dir, legacy_records(citation))
+                    present_but_invalid = validate_run(run_dir)
+                    self.assertFalse(present_but_invalid["ok"], present_but_invalid)
+                    self.assertTrue(
+                        any("referenced evidence[0] file does not exist" in issue
+                            for issue in present_but_invalid["issues"]),
+                        present_but_invalid["issues"],
+                    )
+                    self.assertFalse(
+                        any("tolerated missing evidence" in warning
+                            for warning in present_but_invalid["warnings"])
+                    )
+                    # With the repository root disabled the old run-only leg
+                    # tolerates the same citation: the branch is load-bearing.
+                    with mock.patch.object(journal, "VALIDATION_REPOSITORY_LEG", False):
+                        tolerated = validate_run(run_dir)
+                    self.assertTrue(tolerated["ok"], tolerated["issues"])
+                    self.assertTrue(
+                        any("tolerated missing evidence[0] file" in warning
+                            for warning in tolerated["warnings"]),
+                        tolerated["warnings"],
+                    )
+            write_journal(run_dir, legacy_records("evidence/absent.log"))
+            absent = validate_run(run_dir)
+            self.assertTrue(absent["ok"], absent["issues"])
+            self.assertTrue(
+                any("tolerated missing evidence[0] file" in warning for warning in absent["warnings"]),
+                absent["warnings"],
+            )
+
+    def test_symlinked_run_directory_derives_the_physical_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_b, physical_run = self.layout(Path(tmp))
+            repo_a = Path(tmp) / "repo-a"
+            (repo_a / ".codex-orchestrator" / "runs").mkdir(parents=True)
+            linked_run = repo_a / ".codex-orchestrator" / "runs" / physical_run.name
+            linked_run.symlink_to(physical_run, target_is_directory=True)
+            evidence = repo_b / ".forge/chains/c-2026-09-04T000000Z-abcd/evidence"
+            evidence.mkdir(parents=True)
+            (evidence / "gate-1-01.log").write_text("OK\n", encoding="utf-8")
+            citation = ".forge/chains/c-2026-09-04T000000Z-abcd/evidence/gate-1-01.log"
+            write_journal(physical_run, self.gate_records(citation))
+            self.assertEqual(journal._layout_repository_root(linked_run), repo_b.resolve())
+            self.assertTrue(validate_run(linked_run)["ok"])
+            # The same file under repo-a (the link's spelling) is not the root.
+            (repo_a / ".forge/chains/c-2026-09-04T000000Z-abcd/evidence").mkdir(parents=True)
+            (evidence / "gate-1-01.log").unlink()
+            (repo_a / citation).write_text("OK\n", encoding="utf-8")
+            self.assertFalse(validate_run(linked_run)["ok"])
+
+    def test_mirror_validation_needs_the_explicit_repository_root(self) -> None:
+        """A journal validated outside the layout resolves only with the override."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, run_dir = self.layout(Path(tmp))
+            evidence = repo / ".forge/chains/c-2026-09-04T000000Z-abcd/evidence"
+            evidence.mkdir(parents=True)
+            (evidence / "gate-1-01.log").write_text("OK\n", encoding="utf-8")
+            citation = ".forge/chains/c-2026-09-04T000000Z-abcd/evidence/gate-1-01.log"
+            records = self.gate_records(citation)
+            write_journal(run_dir, records)
+            mirror = Path(tmp) / "mirror" / run_dir.name
+            mirror.mkdir(parents=True)
+            write_journal(mirror, records)
+            self.assertFalse(validate_run(mirror)["ok"])
+            self.assertTrue(validate_run(mirror, repository=repo)["ok"])
+            with mock.patch.object(journal, "VALIDATION_REPOSITORY_LEG", False):
+                self.assertFalse(validate_run(mirror, repository=repo)["ok"])
+            # The override never leaks past the call.
+            self.assertIsNone(journal._VALIDATION_REPOSITORY.get())
+            # The archive's pre-close recompute passes the real run's root.
+            archive = sys.modules.get("_forge_validation_archive_probe")
+            if archive is None:
+                specification = importlib.util.spec_from_file_location(
+                    "_forge_validation_archive_probe",
+                    ROOT / "scripts" / "forge" / "archive-run.py",
+                )
+                assert specification is not None and specification.loader is not None
+                archive = importlib.util.module_from_spec(specification)
+                sys.modules["_forge_validation_archive_probe"] = archive
+                specification.loader.exec_module(archive)
+            closed = records[:-1] + [
+                {"type": "run_closed", "judgment": "passed", "summary": "done",
+                 "validation": {"ok": True, "issues": [], "warnings": [],
+                                "non_passing_verifications": [], "profile": "gates"}}
+            ]
+            write_journal(run_dir, closed)
+            for line, record in enumerate(closed, start=1):
+                record["_line"] = line
+            fresh = archive.recompute_pre_close_validation(run_dir, closed)
+            self.assertTrue(fresh["ok"], fresh)
+            # The archive binds its own journal module instance; disable the
+            # control there to prove the recompute depends on it.
+            with mock.patch.object(archive.journal_engine, "VALIDATION_REPOSITORY_LEG", False):
+                degraded = archive.recompute_pre_close_validation(run_dir, closed)
+            self.assertFalse(degraded["ok"], degraded)
 
 
 if __name__ == "__main__":

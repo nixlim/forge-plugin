@@ -2275,7 +2275,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 self.repo,
                 run_id,
                 idempotency_key=key(f"{run_id}-close"),
-                judgment="blocked",
+                judgment="passed",
                 summary="The aborted chain is an explicit terminal disposition",
                 risks=[],
                 follow_ups=[],
@@ -2285,19 +2285,18 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(
             json.loads(self.state_path(chain_id).read_bytes())["state"], "aborted"
         )
-        # Journal-only FR-021 correlation accepts a passed close: the abort
-        # decision retired the chain's drained gate records. (The close above
-        # is `blocked` only because this fixture's gate records cite
-        # repository-relative evidence the run-relative validator cannot
-        # resolve — bead forge-plugin-7t0; correlation is
-        # proved here over the projected passed close.)
+        # The passed close validated: the abort decision retired the chain's
+        # drained gate records (FR-021) and their repository-relative evidence
+        # citations resolve through the run's repository root (FR-011,
+        # Revision 13). The correlation proof below repeats it in isolation.
+        with self.cli_process_context():
+            validation = journal.validate_run(run_dir, gates=True)
+        self.assertTrue(validation["ok"], validation)
         records = [
             json.loads(line)
             for line in (run_dir / "journal.jsonl").read_text(encoding="utf-8").splitlines()
             if line
         ]
-        records = [record for record in records if record.get("type") != "run_closed"]
-        records.append({"type": "run_closed", "judgment": "passed"})
         for line, record in enumerate(records, start=1):
             record["_line"] = line
         drained_gates = [

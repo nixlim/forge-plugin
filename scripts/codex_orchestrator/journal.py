@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import base64
 import binascii
+import contextvars
 import datetime as dt
 import errno
 import fcntl
@@ -6915,11 +6916,69 @@ def resolve_run_path(run_dir: Path, value: str) -> Path:
     return path.resolve() if path.is_absolute() else (run_dir / path).resolve()
 
 
+# Revision 13 (FR-011 amendment): validation resolves a relative citation
+# against the run directory first (upstream resolve-then-exist, unchanged)
+# and, only when absent there, against the run's repository root through
+# the same ordered resolve-then-contain predicate FR-017 applies at append
+# time. The repository root is derived only from the fixed run layout
+# ``<repository>/.codex-orchestrator/runs/<run-id>`` of the run being
+# validated, or supplied explicitly by a consumer that validates a mirrored
+# journal outside that layout (the archive's pre-close recompute). Journal
+# data never widens it. Setting the control to False restores
+# run-relative-only resolution.
+VALIDATION_REPOSITORY_LEG = True
+_VALIDATION_REPOSITORY: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "forge_validation_repository", default=None
+)
+
+
+def _layout_repository_root(run_dir: Path) -> Path | None:
+    """Return the repository root implied by the fixed run layout, if any."""
+    try:
+        resolved = run_dir.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if (
+        len(resolved.parents) < 3
+        or resolved.parent.name != "runs"
+        or resolved.parents[1].name != ".codex-orchestrator"
+    ):
+        return None
+    return resolved.parents[2]
+
+
+def _validation_repository(run_dir: Path) -> Path | None:
+    """The repository root for this validation: explicit override, else layout."""
+    if not VALIDATION_REPOSITORY_LEG:
+        return None
+    override = _VALIDATION_REPOSITORY.get()
+    if override is not None:
+        return override
+    return _layout_repository_root(run_dir)
+
+
+def _resolve_declared_path(run_dir: Path, value: str) -> Path:
+    """Resolve a citation for existence checks through the ordered roots."""
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return resolve_run_path(run_dir, value)
+    run_resolved = (run_dir / path).resolve()
+    if run_resolved.exists():
+        return run_resolved
+    repository = _validation_repository(run_dir)
+    if repository is None:
+        return run_resolved
+    selected = resolve_contained_path(value, (run_dir, repository))
+    if selected is None or not selected.contained or selected.root != repository:
+        return run_resolved
+    return selected.resolved
+
+
 def declared_file_exists(run_dir: Path, value: object, *, nonempty: bool = False) -> bool:
     if not isinstance(value, str) or not value:
         return False
     try:
-        path = resolve_run_path(run_dir, value)
+        path = _resolve_declared_path(run_dir, value)
         return path.is_file() and (not nonempty or path.stat().st_size > 0)
     except (OSError, RuntimeError, ValueError):
         return False
@@ -6987,6 +7046,18 @@ def _declared_path_is_missing(run_dir: Path, value: str) -> bool:
         if not spelled.is_absolute():
             spelled = run_dir / spelled
         os.lstat(spelled)
+        return False
+    except FileNotFoundError:
+        pass
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if Path(value).expanduser().is_absolute():
+        return True
+    repository = _validation_repository(run_dir)
+    if repository is None:
+        return True
+    try:
+        os.lstat(repository / Path(value).expanduser())
         return False
     except FileNotFoundError:
         return True
@@ -7388,6 +7459,30 @@ def check_gate_profile(
 
 # forge: modified from upstream — accept the opt-in Level B gate profile
 def validate_run(
+    run_dir: Path,
+    *,
+    gates: bool = False,
+    closed_legacy_compat: str | None = None,
+    repository: Path | None = None,
+) -> dict[str, object]:
+    """Validate one run; ``repository`` overrides the layout-derived root.
+
+    A consumer that validates a mirrored journal outside the fixed run layout
+    (the archive's pre-close recompute) passes the real run's layout-derived
+    repository root here so repository-relative citations resolve identically.
+    """
+    reset_handle = _VALIDATION_REPOSITORY.set(
+        repository.expanduser().resolve() if repository is not None else None
+    )
+    try:
+        return _validate_run(
+            run_dir, gates=gates, closed_legacy_compat=closed_legacy_compat
+        )
+    finally:
+        _VALIDATION_REPOSITORY.reset(reset_handle)
+
+
+def _validate_run(
     run_dir: Path,
     *,
     gates: bool = False,
