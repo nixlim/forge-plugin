@@ -19,6 +19,7 @@ from tests import test_cli_merge_adapters as ADAPTERS
 
 
 CLI = ADAPTERS.CLI
+RUNTIME = ADAPTERS.RUNTIME
 
 
 class _LogicalClock:
@@ -245,7 +246,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         patches = (
             mock.patch.object(
-                CLI, "COMMAND_TIMEOUT_SECONDS", self._PROCESS_TIMEOUT_SECONDS
+                RUNTIME, "COMMAND_TIMEOUT_SECONDS", self._PROCESS_TIMEOUT_SECONDS
             ),
             mock.patch.object(
                 CLI,
@@ -309,7 +310,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
         engine = CLI.MergeEngine(self.context(chain_id=str(started.chain_id)))
         with mock.patch.object(
-            CLI, "run_bounded", side_effect=self.passing_process
+            RUNTIME, "run_bounded", side_effect=self.passing_process
         ):
             verified = engine.verify()
         self.assertTrue(verified.ok)
@@ -1555,7 +1556,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                         "scope release recovery acquired the common lock"
                     ),
                 ) as common, mock.patch.object(
-                    CLI, "run_bounded", side_effect=record_bounded
+                    RUNTIME, "run_bounded", side_effect=record_bounded
                 ), mock.patch.object(
                     CLI,
                     "_remove_merge_claim",
@@ -2248,7 +2249,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI, "run_fenced_command", side_effect=record_recovery_observation
         ):
@@ -2346,7 +2347,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI, "run_fenced_command", side_effect=record_abort_observation
         ):
@@ -2657,7 +2658,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(CLI._merge_containment(parked), ("older", (True, False)))
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI, "run_fenced_command", side_effect=record_observation_children
         ), mock.patch.object(
@@ -2743,7 +2744,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI,
             "run_fenced_command",
@@ -2830,7 +2831,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI, "run_fenced_command", side_effect=record_observation
         ), mock.patch.object(
@@ -2952,7 +2953,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         with mock.patch.object(
             store, "_read_root_bytes", side_effect=hostile_event_prefix
         ), mock.patch.object(
-            CLI,
+            RUNTIME,
             "run_bounded",
             side_effect=AssertionError("inactive containment prefix launched a child"),
         ) as bounded, mock.patch.object(
@@ -3033,7 +3034,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         with mock.patch.object(
             store, "_read_root_bytes", side_effect=hostile_event_prefix
         ), mock.patch.object(
-            CLI,
+            RUNTIME,
             "run_bounded",
             side_effect=AssertionError("forged inactive observation launched a child"),
         ) as bounded, mock.patch.object(
@@ -3142,7 +3143,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         with mock.patch.object(
             store, "_read_root_bytes", side_effect=hostile_event_prefix
         ), mock.patch.object(
-            CLI,
+            RUNTIME,
             "run_bounded",
             side_effect=AssertionError("forged unavailable observation launched a child"),
         ) as bounded, mock.patch.object(
@@ -3197,7 +3198,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         }
         for child, launch in launchers.items():
             with self.subTest(child=child), mock.patch.object(
-                CLI, "utc_now", return_value=future
+                RUNTIME, "utc_now", return_value=future
             ), mock.patch.object(
                 CLI,
                 "run_fenced_command",
@@ -3248,7 +3249,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             engine,
             "_prepare_git_no_lazy_fetch_qualification",
@@ -3319,7 +3320,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         with mock.patch.object(
             store, "_read_root_bytes", side_effect=hostile_event_prefix
         ), mock.patch.object(
-            CLI,
+            RUNTIME,
             "run_bounded",
             side_effect=AssertionError("hostile inactive prefix launched a child"),
         ) as bounded, mock.patch.object(
@@ -3462,13 +3463,13 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return self.passing_process(argv, **kwargs)
 
         with mock.patch.object(
-            CLI, "utc_now", side_effect=selected_now
+            RUNTIME, "utc_now", side_effect=selected_now
         ), mock.patch.object(
             CLI,
             "acquire_common_lock",
             side_effect=acquire_across_inactivity_boundary,
         ), mock.patch.object(
-            CLI,
+            RUNTIME,
             "run_bounded",
             side_effect=bounded_before_deadline,
         ) as bounded, mock.patch.object(
@@ -3516,7 +3517,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI, "run_fenced_command", side_effect=record_historical_observation
         ):
@@ -3605,7 +3606,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI,
             "run_fenced_command",
@@ -3676,7 +3677,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             writer, "historical-after-intent.txt", "after release intent\n"
         )
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI,
             "run_fenced_command",
@@ -3735,7 +3736,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original_remove(selected_store, state, unlink=unlink)
 
         with mock.patch.object(
-            CLI, "utc_now", return_value=future
+            RUNTIME, "utc_now", return_value=future
         ), mock.patch.object(
             CLI,
             "run_fenced_command",
@@ -3993,7 +3994,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         starter = CLI.MergeEngine(self.context())
         started = starter.start_chain(str(self.worktree), remote_tip=self.base)
         engine = CLI.MergeEngine(self.context(chain_id=str(started.chain_id)))
-        with mock.patch.object(CLI, "run_bounded", side_effect=self.passing_process):
+        with mock.patch.object(RUNTIME, "run_bounded", side_effect=self.passing_process):
             engine.verify()
         engine.review_request()
         state = engine.store.load(str(started.chain_id))
@@ -4049,7 +4050,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original_fenced(lock, **kwargs)
 
         with mock.patch.object(
-            CLI, "run_bounded", side_effect=record_mode_read
+            RUNTIME, "run_bounded", side_effect=record_mode_read
         ), mock.patch.object(
             CLI, "run_fenced_command", side_effect=record_push_child
         ), self.assertRaises(CLI.Refusal) as caught:
@@ -4130,7 +4131,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
 
         with mock.patch.object(
-            CLI, "run_bounded", side_effect=unsupported
+            RUNTIME, "run_bounded", side_effect=unsupported
         ), mock.patch.object(
             CLI, "acquire_common_lock", wraps=CLI.acquire_common_lock
         ) as acquire, self.assertRaises(CLI.Refusal) as caught:
@@ -4217,7 +4218,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             "_git_executable_qualification",
             side_effect=drifting_identity,
         ), mock.patch.object(
-            CLI, "run_bounded", side_effect=bounded
+            RUNTIME, "run_bounded", side_effect=bounded
         ), mock.patch.object(
             CLI, "acquire_common_lock", wraps=CLI.acquire_common_lock
         ) as acquire, self.assertRaises(CLI.Refusal) as caught:
@@ -6210,7 +6211,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         second_chain_id = str(second_started.chain_id)
         second_engine = CLI.MergeEngine(self.context(chain_id=second_chain_id))
         with mock.patch.object(
-            CLI, "run_bounded", side_effect=self.passing_process
+            RUNTIME, "run_bounded", side_effect=self.passing_process
         ):
             second_verified = second_engine.verify()
         self.assertTrue(second_verified.ok)
@@ -7804,7 +7805,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
             engine.refresh(remote_tip=self.base)
             with mock.patch.object(
-                CLI, "run_bounded", side_effect=self.passing_process
+                RUNTIME, "run_bounded", side_effect=self.passing_process
             ):
                 engine.verify()
 
@@ -7886,7 +7887,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 "_write_merge_artifact",
                 side_effect=AssertionError("review artifact was written after cap"),
             ) as write_artifact, mock.patch.object(
-                CLI,
+                RUNTIME,
                 "run_bounded",
                 side_effect=AssertionError("bounded child ran after cap"),
             ) as bounded, mock.patch.object(

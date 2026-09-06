@@ -1137,9 +1137,10 @@ class Revision9RealIngestArchiveTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
     @contextlib.contextmanager
     def cli_context(self, cli: object):
         environment = self.environment(FORGE_SESSION_PID=str(os.getpid()))
+        # cli split phase 2a: the path roots are canonical runtime controls.
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
-            cli, "SCRIPT_DIR", self.helpers
-        ), mock.patch.object(cli, "PLUGIN_ROOT", ROOT), mock.patch.object(
+            cli.runtime, "SCRIPT_DIR", self.helpers
+        ), mock.patch.object(cli.runtime, "PLUGIN_ROOT", ROOT), mock.patch.object(
             cli, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield

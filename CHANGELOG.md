@@ -10,6 +10,15 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- CLI split phase 2a (bead forge-plugin-95e.3): `scripts/forge/forge_cli/runtime.py`
+  is the one canonical module for the patchable controls (`utc_now`,
+  `run_bounded`, `MERGE_LIFECYCLE_ACTIVE`, `REVISION9_STATE_CONTROLS`,
+  `SCRIPT_DIR`/`PLUGIN_ROOT`, the coordination-module loader, and
+  `_fast_mechanical_skips`); the shim reads them by attribute and forwards
+  reads of those names, so a single `mock.patch.object(forge_cli.runtime, ...)`
+  disables a control everywhere and the affected test patch sites now target
+  that module. The FR-230 manifest subject set covers `runtime.py`. No verb,
+  diagnostic, reason code, or `--help` byte changes.
 - CLI split phase 1 (bead forge-plugin-95e.2): the response envelope (reason
   codes, `Refusal`, `FrozenError`, `Outcome`, output schemas) and the
   committed-policy parser move verbatim from `scripts/forge/cli.py` into the

@@ -22,10 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-from tests._cli_loader import load_script  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_merge_store_tests", CLI_PATH)
+RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_cli_merge_store_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -172,7 +173,7 @@ class MergeStoreFixture(unittest.TestCase):
             changelog=None,
         )
         repository = CLI.Repository(self.root)
-        with mock.patch.object(CLI, "utc_now", return_value=fixed):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=fixed):
             state = CLI._new_state(
                 chain_id,
                 repository,
@@ -421,7 +422,7 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
         advanced_at = dt.datetime(
             2026, 1, 1, 11, 0, 1, tzinfo=dt.timezone.utc
         )
-        with mock.patch.object(CLI, "utc_now", return_value=advanced_at):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=advanced_at):
             store.persist(current, "fixture_tail_advanced", {"fixture": "current"})
 
         expected_tail = copy.deepcopy(current)
@@ -511,7 +512,7 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
         expected_state["inactive_after"] = CLI.iso_z(
             transition_at + dt.timedelta(seconds=CLI.INACTIVE_SECONDS)
         )
-        with mock.patch.object(CLI, "utc_now", return_value=transition_at):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=transition_at):
             store.persist(state, "fixture_verifying", transition_details)
 
         transition_payload = {
@@ -833,7 +834,7 @@ class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
     def test_event_first_carrier_crash_recovery_and_receipt_sequence(self) -> None:
         environment = self.environment(FORGE_SESSION_PID=str(os.getpid()))
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
-            CLI, "PLUGIN_ROOT", ROOT
+            RUNTIME, "PLUGIN_ROOT", ROOT
         ):
             _batch, builders, journal = CLI._coordination_modules()
             builders.run_open(

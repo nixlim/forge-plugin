@@ -22,10 +22,11 @@ CLI_PATH = ROOT / "scripts/forge/cli.py"
 CHAIN_ID = "c-2026-08-21T120000Z-0001"
 
 
-from tests._cli_loader import load_script  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_chain_finalize_tests", CLI_PATH)
+RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 
 
 POLICY = """\
@@ -233,7 +234,7 @@ class FinalizeFixture(unittest.TestCase):
             fail=fail,
             failure_output=output or b"fixture helper refusal",
         )
-        with mock.patch.object(CLI, "run_bounded", side_effect=runner), mock.patch.object(
+        with mock.patch.object(RUNTIME, "run_bounded", side_effect=runner), mock.patch.object(
             CLI.Engine, "_emit_decision", autospec=True
         ):
             yield calls
@@ -322,7 +323,7 @@ class AuthorizationTests(FinalizeFixture):
         self.state["created_at"] = "2025-01-01T00:00:00Z"
         self.state["last_event_at"] = "2026-08-20T00:00:00Z"
 
-        with mock.patch.object(CLI, "utc_now", return_value=issued):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=issued):
             CLI._issue_authorization(self.state)
 
         authorization = self.state["authorization"]
@@ -339,16 +340,16 @@ class AuthorizationTests(FinalizeFixture):
 
     def test_authorization_expiry_boundary_is_fail_closed(self) -> None:
         issued = dt.datetime(2026, 8, 21, 12, 0, 0, tzinfo=dt.timezone.utc)
-        with mock.patch.object(CLI, "utc_now", return_value=issued):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=issued):
             CLI._issue_authorization(self.state)
 
         with mock.patch.object(
-            CLI, "utc_now", return_value=issued + dt.timedelta(minutes=30, seconds=-1)
+            RUNTIME, "utc_now", return_value=issued + dt.timedelta(minutes=30, seconds=-1)
         ):
             self.assertIsNone(CLI._authorization_problem(self.state))
 
         boundary = issued + dt.timedelta(minutes=30)
-        with mock.patch.object(CLI, "utc_now", return_value=boundary):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=boundary):
             problem = CLI._authorization_problem(self.state)
 
         self.assertIsNotNone(problem)
@@ -400,12 +401,12 @@ class AuthorizationTests(FinalizeFixture):
 
     def test_authorization_rejects_a_stored_ttl_not_derived_from_issuance(self) -> None:
         issued = dt.datetime(2026, 8, 21, 12, 0, 0, tzinfo=dt.timezone.utc)
-        with mock.patch.object(CLI, "utc_now", return_value=issued):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=issued):
             CLI._issue_authorization(self.state)
         self.state["authorization"]["expires_at"] = "2026-08-21T12:31:00Z"
 
         with mock.patch.object(
-            CLI, "utc_now", return_value=issued + dt.timedelta(minutes=1)
+            RUNTIME, "utc_now", return_value=issued + dt.timedelta(minutes=1)
         ):
             problem = CLI._authorization_problem(self.state)
 
@@ -842,7 +843,7 @@ class FinalizeRecoveryTests(FinalizeFixture):
             return process_result(argv)
 
         with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": "7777"}), mock.patch.object(
-            CLI, "run_bounded", side_effect=traced_helpers
+            RUNTIME, "run_bounded", side_effect=traced_helpers
         ), mock.patch.object(
             CLI.Engine, "_emit_decision", autospec=True
         ), mock.patch.object(
@@ -916,7 +917,7 @@ class FinalizeRecoveryTests(FinalizeFixture):
             return process_result(argv)
 
         with mock.patch.dict(os.environ, {"FORGE_SESSION_PID": "7777"}), mock.patch.object(
-            CLI, "run_bounded", side_effect=live_owner
+            RUNTIME, "run_bounded", side_effect=live_owner
         ), mock.patch.object(CLI.Engine, "_emit_decision", autospec=True):
             with self.assertRaises(CLI.Refusal) as raised:
                 self.engine.status()

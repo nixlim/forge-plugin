@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-import bisect
 import contextlib
 import copy
 import dataclasses
@@ -36,7 +35,6 @@ import sys
 import tempfile
 import threading
 import time
-from enum import Enum
 from typing import Any, Callable, Collection, Iterable, Mapping, MutableMapping, Sequence
 
 # cli split phase 1 (bead forge-plugin-95e.2): the response envelope and the committed-policy
@@ -72,10 +70,21 @@ from forge_cli.policy import (  # noqa: E402
     parse_policy,
     sha256_bytes,
 )
+from forge_cli import runtime  # noqa: E402
 
 
-# Descriptive compatibility alias for callers that imported the initial
-# Revision-9 implementation name while still exposing the complete v2 union.
+def __getattr__(name: str) -> Any:
+    """Forward reads of moved runtime controls to the canonical module (PEP 562).
+
+    ``CLI.utc_now`` and friends stay readable on this shim, and always reflect the live
+    value on ``forge_cli.runtime``; patch them there, never here.
+    """
+
+    if name in runtime.__all__:
+        return getattr(runtime, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 
 
 SCHEMA = "forge-chain/1"
@@ -236,11 +245,9 @@ MERGE_CONSEQUENTIAL_EVENTS = frozenset(
 TIER_RANK = {"fast": 0, "standard": 1, "hard": 2}
 INACTIVE_SECONDS = 24 * 60 * 60
 TOKEN_TTL_SECONDS = 30 * 60
-COMMAND_TIMEOUT_SECONDS = 1200.0
-OUTPUT_CAP_BYTES = 65536
 FENCED_CHILD_ACK_TIMEOUT_SECONDS = 1.0
 FENCED_CHILD_DRAIN_SECONDS = 0.1
-FENCED_CHILD_DRAIN_CAP_BYTES = OUTPUT_CAP_BYTES + 1
+FENCED_CHILD_DRAIN_CAP_BYTES = runtime.OUTPUT_CAP_BYTES + 1
 FENCED_CHILD_STOP_GRACE_SECONDS = 0.25
 FENCED_CHILD_REAP_SECONDS = 0.5
 ZERO_DIGEST = "0" * 64
@@ -370,10 +377,6 @@ CHAIN_TOMBSTONE_EVENT = "frozen-abort"
 CHAIN_TOMBSTONE_KEYS = frozenset(
     {"schema", "chain_id", "event", "reason", "recorded_at", "operator", "artifacts"}
 )
-_REQUIRED_REVISION9_STATE_CONTROLS = frozenset(
-    {"run-binding-shape", "journal-outbox-shape"}
-)
-REVISION9_STATE_CONTROLS = _REQUIRED_REVISION9_STATE_CONTROLS
 _REQUIRED_MERGE_STORE_CONTROLS = frozenset(
     {
         "event-first-family",
@@ -433,7 +436,6 @@ MERGE_INTEGRATION_CONTROLS = _REQUIRED_MERGE_INTEGRATION_CONTROLS
 # Slice 8 is the only candidate authorized to flip this switch.  Keeping the
 # grammar construction immediately adjacent to the flag makes dormancy a
 # mechanically testable property rather than a deployment convention.
-MERGE_LIFECYCLE_ACTIVE = False
 _REQUIRED_ARCHIVE_RECHECK_CONTROLS = frozenset(
     {"start", "authorization", "commit"}
 )
@@ -462,8 +464,6 @@ INGEST_PROOF_CONTROLS = _REQUIRED_INGEST_PROOF_CONTROLS
 # Lazy coordination imports preserve the phase-1 module's import-safe and
 # old-face behavior.  The shared task-03 modules are imported only for a
 # Revision-9 face or when replay discovers a bound chain.
-_COORDINATION_MODULE_CACHE: tuple[Any, Any, Any] | None = None
-_COORDINATION_MODULE_LOCK = threading.Lock()
 _CHAIN_CAPABILITY_LOCK = threading.Lock()
 _CHAIN_CAPABILITIES: dict[object, dict[str, Any]] = {}
 _ARCHIVE_MODULE: Any | None = None
@@ -565,8 +565,6 @@ def _exclusive_descriptor_lock(
 
 # Test seams.  Tests may replace these module globals without touching the real
 # plugin controls or the live repository.
-SCRIPT_DIR = Path(__file__).resolve().parent
-PLUGIN_ROOT = SCRIPT_DIR.parents[1]
 CODEX_EXECUTABLE = "codex"
 
 REVIEW_INSTRUCTION = """Review these changes adversarially using `{constitution_path}`.
@@ -734,38 +732,16 @@ finally:
 '''
 
 
-def utc_now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
-
-
 def canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
 
 
-def _coordination_modules() -> tuple[Any, Any, Any]:
-    """Load the task-03 package from the plugin's scripts parent on demand."""
-
-    global _COORDINATION_MODULE_CACHE
-    if _COORDINATION_MODULE_CACHE is not None:
-        return _COORDINATION_MODULE_CACHE
-    with _COORDINATION_MODULE_LOCK:
-        if _COORDINATION_MODULE_CACHE is not None:
-            return _COORDINATION_MODULE_CACHE
-        scripts_parent = str(PLUGIN_ROOT / "scripts")
-        if scripts_parent not in sys.path:
-            sys.path.insert(0, scripts_parent)
-        from codex_orchestrator import batch, builders, journal
-
-        _COORDINATION_MODULE_CACHE = (batch, builders, journal)
-        return _COORDINATION_MODULE_CACHE
-
-
 def _chain_storage_root(repository: Path) -> Path:
     """Resolve the shared Git-common DM-012/DM-014 authority root."""
 
-    _coordination_modules()
+    runtime._coordination_modules()
     from codex_orchestrator.chain_paths import chain_storage_root
 
     return chain_storage_root(repository)
@@ -782,7 +758,7 @@ def _validated_commitment_path(
 ) -> object | None:
     """Project one CLI path decision through the shared FR-017 inventory."""
 
-    _coordination_modules()
+    runtime._coordination_modules()
     from commitment_paths import commitment_surface, validate_surface_path
 
     try:
@@ -802,7 +778,7 @@ def _validated_commitment_path(
 def _parsed_run_captured_path(value: str, run_id: str) -> object | None:
     """Apply the shared grammar for run-relative ingest captures."""
 
-    _coordination_modules()
+    runtime._coordination_modules()
     from commitment_paths import parse_run_captured_path
 
     return parse_run_captured_path(value, run_id=run_id)
@@ -813,7 +789,7 @@ def _require_ingest_proof(
 ) -> None:
     """Fail closed when a named proof is disabled or reached out of order."""
 
-    _batch, builders, journal = _coordination_modules()
+    _batch, builders, journal = runtime._coordination_modules()
     if (
         name not in _REQUIRED_INGEST_PROOF_CONTROLS
         or name not in INGEST_PROOF_CONTROLS
@@ -895,7 +871,7 @@ def reduce_merge_event(
         state: dict[str, object] = copy.deepcopy(previous)
         state["journal_outbox"] = None
     else:
-        _batch, builders, _journal = _coordination_modules()
+        _batch, builders, _journal = runtime._coordination_modules()
         try:
             delta = _merge_payload_delta(event, previous, builders=builders)
         except (KeyError, TypeError, ValueError) as exc:
@@ -1722,7 +1698,7 @@ def _validate_merge_scope_proof(
         and _valid_sorted_unique_strings(value.get("admitted_scope"))
     ):
         try:
-            _batch, _builders, journal = _coordination_modules()
+            _batch, _builders, journal = runtime._coordination_modules()
             expected_out_of_scope = [
                 path
                 for path in value["changed_paths"]
@@ -3007,13 +2983,13 @@ def _merge_cleanup_process_result_valid(
         and math.isfinite(duration)
         and duration >= 0
         and isinstance(output, bytes)
-        and len(output) <= OUTPUT_CAP_BYTES
+        and len(output) <= runtime.OUTPUT_CAP_BYTES
         and base64.b64encode(output).decode("ascii") == output_base64
         and isinstance(value.get("output_digest"), str)
         and SHA256_RE.fullmatch(value["output_digest"]) is not None
         and (
             value.get("output_limit") is True
-            and len(output) == OUTPUT_CAP_BYTES
+            and len(output) == runtime.OUTPUT_CAP_BYTES
             or value.get("output_limit") is False
             and sha256_bytes(output) == value.get("output_digest")
         )
@@ -5926,7 +5902,7 @@ def _merge_transition_valid(
 def _authorize_chain_batch(**arguments: Any) -> object:
     """Exchange one process-local opaque capability for task-03 authority."""
 
-    batch, builders, journal = _coordination_modules()
+    batch, builders, journal = runtime._coordination_modules()
     capability = arguments.get("capability")
     registry = getattr(batch, "_FORGE_CLI_CHAIN_CAPABILITIES", None)
     registry_lock = getattr(batch, "_FORGE_CLI_CHAIN_CAPABILITIES_LOCK", None)
@@ -6053,7 +6029,7 @@ def _read_ingest_input(
 ) -> bytes:
     """Read one repository input or canonical run capture without symlinks."""
 
-    _batch, _builders, journal = _coordination_modules()
+    _batch, _builders, journal = runtime._coordination_modules()
     candidate_relative = Path(relative)
     inventory_labels = {
         "ingest.state_file",
@@ -6224,7 +6200,7 @@ def _capture_ingest_blob(
 ) -> str:
     """Install one immutable content-addressed direct-child capture."""
 
-    _batch, _builders, journal = _coordination_modules()
+    _batch, _builders, journal = runtime._coordination_modules()
     descriptors: list[int] = []
     try:
         current, _observation = journal._open_bound_directory(run_dir)
@@ -6340,7 +6316,7 @@ def _capture_ingest_record_evidence(
     captured: list[str] = []
     for citation in evidence:
         if not isinstance(citation, str):
-            _batch, builders, journal = _coordination_modules()
+            _batch, builders, journal = runtime._coordination_modules()
             raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
         parsed = _parsed_run_captured_path(citation, run_dir.name)
         if parsed is not None:
@@ -6376,7 +6352,7 @@ def _read_ingest_sources(
     dict[str, str],
     dict[str, str],
 ]:
-    _batch, _builders, journal = _coordination_modules()
+    _batch, _builders, journal = runtime._coordination_modules()
     canonical_repository, state_root = journal._resolve_repository(
         repository, "journal ingest-chain"
     )
@@ -6433,7 +6409,7 @@ def _ingest_captured_paths(
 ) -> dict[str, str]:
     """Derive the only citable paths from the request's captured digests."""
 
-    _batch, builders, journal = _coordination_modules()
+    _batch, builders, journal = runtime._coordination_modules()
     names = {
         "state_file": "state.json",
         "events_file": "events.jsonl",
@@ -6548,7 +6524,7 @@ def _ingest_secret_scan_is_current(
 ) -> bool:
     """Select only the exact latest current-candidate secret-scan append."""
 
-    _batch, builders, _journal = _coordination_modules()
+    _batch, builders, _journal = runtime._coordination_modules()
     introduced = builders._commit_secret_scan_delta(
         event, prior_state, event_state
     )
@@ -6611,7 +6587,7 @@ def _prove_ingest_live_chain(
 ) -> None:
     """Bind captured bytes to the stable live chain without consuming grammar."""
 
-    _batch, builders, journal = _coordination_modules()
+    _batch, builders, journal = runtime._coordination_modules()
     chains_root = _chain_storage_root(repository)
     descriptor: int | None = None
     try:
@@ -6948,7 +6924,7 @@ def _verify_and_build_merge_ingest_records(
 ) -> tuple[Sequence[dict[str, object]], tuple[str, ...]]:
     """Prove a closed DM-014 landing and synthesize its ordinary journal rows."""
 
-    _batch, builders, journal = _coordination_modules()
+    _batch, builders, journal = runtime._coordination_modules()
 
     # Proof 3: the terminal, previously unbound merge chain belongs to the
     # repository selected by the caller.
@@ -7525,7 +7501,7 @@ def _verify_and_build_ingest_records(
     closed instead of becoming implicit authority.
     """
 
-    _batch, builders, journal = _coordination_modules()
+    _batch, builders, journal = runtime._coordination_modules()
     if (
         INGEST_PROOF_CONTROLS != _REQUIRED_INGEST_PROOF_CONTROLS
         or tuple(builders._INGEST_PROOF_ORDER) != INGEST_PROOF_ORDER
@@ -7822,7 +7798,7 @@ def _verify_and_build_ingest_records(
         or (
             tier.get("effective") == "fast"
             and (
-                bool(_fast_mechanical_skips(materialized))
+                bool(runtime._fast_mechanical_skips(materialized))
                 or not _latest_current_pass(materialized, "fast-eligibility")
                 or not _latest_current_pass(
                     materialized, "fast-finalize-eligibility"
@@ -8271,7 +8247,7 @@ for _seam in (reduce_merge_event, _authorize_chain_batch, _ingest_proof_verifier
 def register_coordination_seams() -> None:
     """Idempotently install task-04 authority in the shared task-03 modules."""
 
-    batch, builders, _journal = _coordination_modules()
+    batch, builders, _journal = runtime._coordination_modules()
     existing_reducer = builders.MERGE_TRANSITION_REDUCER
     if existing_reducer is None:
         builders.register_merge_transition_reducer(reduce_merge_event)
@@ -8303,7 +8279,7 @@ def register_coordination_seams() -> None:
 def _coordination_refusal(exc: BaseException) -> Refusal | FrozenError:
     """Map task-03 diagnostics onto the closed Revision-9 CLI union."""
 
-    batch, builders, journal = _coordination_modules()
+    batch, builders, journal = runtime._coordination_modules()
     message = str(exc)
     if message == journal.BATCH_PENDING:
         return Refusal(
@@ -8369,7 +8345,7 @@ def commit_message_bytes(message: str) -> bytes:
 
 
 def iso_z(value: dt.datetime | None = None) -> str:
-    current = value or utc_now()
+    current = value or runtime.utc_now()
     current = current.astimezone(dt.timezone.utc).replace(microsecond=0)
     return current.isoformat().replace("+00:00", "Z")
 
@@ -8384,7 +8360,7 @@ def parse_time(value: str) -> dt.datetime:
 
 
 def chain_id_now() -> str:
-    stamp = utc_now().astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    stamp = runtime.utc_now().astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
     return f"c-{stamp}-{secrets.token_hex(2)}"
 
 
@@ -8406,146 +8382,6 @@ def _transition_state(state: MutableMapping[str, Any], target: str) -> None:
             observed=f"{current} -> {target}",
         )
     state["state"] = target
-
-
-@dataclasses.dataclass
-class ProcessResult:
-    argv: list[str]
-    returncode: int
-    duration_seconds: float
-    output: bytes
-    output_digest: str
-    timed_out: bool = False
-    output_limit: bool = False
-
-
-def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    except OSError:
-        try:
-            process.terminate()
-        except OSError:
-            return
-    try:
-        process.wait(timeout=0.25)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except OSError:
-        try:
-            process.kill()
-        except OSError:
-            pass
-
-
-def run_bounded(
-    argv: Sequence[str],
-    *,
-    cwd: Path,
-    env: Mapping[str, str] | None = None,
-    timeout: float = COMMAND_TIMEOUT_SECONDS,
-    cap: int = OUTPUT_CAP_BYTES,
-    verbose: bool = False,
-) -> ProcessResult:
-    """Run one process group while bounding combined output and wall time."""
-
-    started = time.monotonic()
-    process = subprocess.Popen(
-        list(argv),
-        cwd=str(cwd),
-        env=dict(env) if env is not None else None,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    assert process.stdout is not None
-    descriptor = process.stdout.fileno()
-    os.set_blocking(descriptor, False)
-    selector = selectors.DefaultSelector()
-    selector.register(descriptor, selectors.EVENT_READ)
-    kept = bytearray()
-    digest = hashlib.sha256()
-    total = 0
-    timed_out = False
-    output_limit = False
-    eof = False
-    try:
-        while not eof:
-            remaining = timeout - (time.monotonic() - started)
-            if remaining <= 0:
-                timed_out = True
-                _kill_process_group(process)
-                remaining = 0
-            events = selector.select(min(max(remaining, 0.0), 0.1))
-            if not events:
-                if timed_out:
-                    break
-                if process.poll() is not None:
-                    try:
-                        chunk = os.read(descriptor, 8192)
-                    except BlockingIOError:
-                        continue
-                    if not chunk:
-                        eof = True
-                        break
-                    events = [(None, None)]
-                else:
-                    continue
-            if events and events[0][0] is None:
-                # The post-exit drain above already populated ``chunk``.
-                chunks = [chunk]
-            else:
-                chunks = []
-                while True:
-                    try:
-                        part = os.read(descriptor, 8192)
-                    except BlockingIOError:
-                        break
-                    if not part:
-                        eof = True
-                        break
-                    chunks.append(part)
-            for part in chunks:
-                digest.update(part)
-                total += len(part)
-                if len(kept) < cap:
-                    kept.extend(part[: cap - len(kept)])
-                if verbose:
-                    sys.stderr.write(part.decode("utf-8", "replace"))
-                    sys.stderr.flush()
-                if total > cap and not output_limit:
-                    output_limit = True
-                    _kill_process_group(process)
-            if output_limit:
-                # Drain whatever was already in the pipe, without waiting on
-                # the terminated producer.
-                if process.poll() is not None and not chunks:
-                    break
-        try:
-            returncode = process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            _kill_process_group(process)
-            returncode = process.wait()
-    finally:
-        selector.close()
-        process.stdout.close()
-    return ProcessResult(
-        argv=list(argv),
-        returncode=returncode,
-        duration_seconds=time.monotonic() - started,
-        output=bytes(kept),
-        output_digest=digest.hexdigest(),
-        timed_out=timed_out,
-        output_limit=output_limit,
-    )
 
 
 class Repository:
@@ -8600,7 +8436,7 @@ class Repository:
         return value
 
     def common_root(self) -> Path:
-        _coordination_modules()
+        runtime._coordination_modules()
         from codex_orchestrator.chain_paths import common_worktree_root
 
         return common_worktree_root(self.root)
@@ -8719,7 +8555,7 @@ def _committed_changelog_output_paths(policy: Policy) -> frozenset[str]:
 
 
 def validate_state(state: Any, chain_id: str | None = None) -> dict[str, Any]:
-    if REVISION9_STATE_CONTROLS != _REQUIRED_REVISION9_STATE_CONTROLS:
+    if runtime.REVISION9_STATE_CONTROLS != runtime._REQUIRED_REVISION9_STATE_CONTROLS:
         raise FrozenError(
             "Revision-9 chain-state validation control is unavailable",
             chain_id=chain_id,
@@ -8970,7 +8806,7 @@ def validate_merge_state(
             observed=str(actual_id),
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    _batch, builders, _journal = _coordination_modules()
+    _batch, builders, _journal = runtime._coordination_modules()
     if (
         MERGE_STATE_KEYS != builders._MERGE_STATE_KEYS
         or MERGE_EVENT_NAMES != builders._MERGE_EVENT_NAMES
@@ -9023,7 +8859,7 @@ def _replay_merge_event_bytes(
             chain_id=chain_id,
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    _batch, builders, _journal = _coordination_modules()
+    _batch, builders, _journal = runtime._coordination_modules()
     if (
         MERGE_STATE_KEYS != builders._MERGE_STATE_KEYS
         or MERGE_EVENT_NAMES != builders._MERGE_EVENT_NAMES
@@ -9279,7 +9115,7 @@ def _finalize_lock(context: FinalizeContext) -> bool:
     environment = os.environ.copy()
     environment["FORGE_SESSION_PID"] = session_pid
     try:
-        process = run_bounded(
+        process = runtime.run_bounded(
             ["bash", str(context.engine.ctx.helper("acquire-commit-lock.sh"))],
             cwd=context.engine.ctx.repo.root,
             env=environment,
@@ -9349,7 +9185,7 @@ def _finalize_evidence(context: FinalizeContext) -> bool:
             remediation=_forge_command(state, "classify"),
             chain=state,
         )
-    fast_skips = _fast_mechanical_skips(state)
+    fast_skips = runtime._fast_mechanical_skips(state)
     if fast_skips:
         raise Refusal(
             ReasonCode.EVIDENCE_INCOMPLETE,
@@ -9495,7 +9331,7 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[CLIOptions, list[str]]
         "--dispense-citation",
         "--dispense-reason",
     }
-    if MERGE_LIFECYCLE_ACTIVE:
+    if runtime.MERGE_LIFECYCLE_ACTIVE:
         verb_value_options.add("--worktree")
     seen_singletons: set[str] = set()
     index = 0
@@ -9665,7 +9501,7 @@ def build_parser() -> ContractArgumentParser:
     commands.add_parser("status")
     commands.add_parser("verify")
     commands.add_parser("classify")
-    if MERGE_LIFECYCLE_ACTIVE:
+    if runtime.MERGE_LIFECYCLE_ACTIVE:
         _attach_merge_lifecycle_parser(commands)
 
     commit = commands.add_parser("commit")
@@ -9806,7 +9642,7 @@ def _validate_revision9_cross_options(
         return
 
     if (
-        MERGE_LIFECYCLE_ACTIVE
+        runtime.MERGE_LIFECYCLE_ACTIVE
         and args.command == "merge"
         and args.merge_command == "start"
     ):
@@ -9829,7 +9665,7 @@ def _validate_revision9_cross_options(
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
         return
-    if MERGE_LIFECYCLE_ACTIVE and args.command == "merge":
+    if runtime.MERGE_LIFECYCLE_ACTIVE and args.command == "merge":
         if options.chain_id is None:
             raise Refusal(
                 V2ReasonCode.STATE_PRECONDITION,
@@ -9946,7 +9782,7 @@ def dispatch(engine: Engine, args: argparse.Namespace) -> Outcome:
         return _route_shared_chain_engine(engine).status()
     if args.command == "chain" and args.chain_command == "tombstone":
         return engine.operator_tombstone(args.reason)
-    if MERGE_LIFECYCLE_ACTIVE and args.command == "merge":
+    if runtime.MERGE_LIFECYCLE_ACTIVE and args.command == "merge":
         merge_engine = _merge_command_engine(engine)
         if args.merge_command == "start":
             return merge_engine.start_chain(
@@ -10139,7 +9975,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         original_argv=tuple(raw_argv),
         revision9_face=(
             raw_command == "common-lock"
-            or (MERGE_LIFECYCLE_ACTIVE and raw_command == "merge")
+            or (runtime.MERGE_LIFECYCLE_ACTIVE and raw_command == "merge")
         ),
     )
     try:
@@ -10152,7 +9988,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             or "journal" in command_argv
             or bool(command_argv and command_argv[0] == "common-lock")
             or bool(
-                MERGE_LIFECYCLE_ACTIVE
+                runtime.MERGE_LIFECYCLE_ACTIVE
                 and command_argv
                 and command_argv[0] == "merge"
             )
@@ -10172,7 +10008,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = build_parser().parse_args(command_argv)
         options.revision9_face = options.revision9_face or bool(
             args.command in {"journal", "common-lock"}
-            or (MERGE_LIFECYCLE_ACTIVE and args.command == "merge")
+            or (runtime.MERGE_LIFECYCLE_ACTIVE and args.command == "merge")
             or (
                 args.command == "commit"
                 and args.commit_command == "start"
@@ -10186,7 +10022,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_id_admitted = bool(
             args.command == "journal"
             or (
-                MERGE_LIFECYCLE_ACTIVE
+                runtime.MERGE_LIFECYCLE_ACTIVE
                 and args.command == "merge"
                 and args.merge_command == "start"
             )
@@ -10281,7 +10117,7 @@ def _build_chain_journal_records(
         return ()
     run_id = str(binding["run_id"])
     task_id = str(binding["task_id"])
-    batch, builders, journal = _coordination_modules()
+    batch, builders, journal = runtime._coordination_modules()
     _canonical_repository, state_root = journal._resolve_repository(
         repository, "journal batch"
     )
@@ -10502,7 +10338,7 @@ def _drain_chain_batch_capability(
             chain_id=str(state.get("chain_id") or "") or None,
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    batch, _builders, _journal = _coordination_modules()
+    batch, _builders, _journal = runtime._coordination_modules()
     capability = object()
     registry = batch._FORGE_CLI_CHAIN_CAPABILITIES
     registry_lock = batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK
@@ -11731,7 +11567,7 @@ class ChainStore(_ChainStoragePrimitives):
         """
 
         register_coordination_seams()
-        batch, builders, journal = _coordination_modules()
+        batch, builders, journal = runtime._coordination_modules()
         run_dir = (
             self.common_root
             / ".codex-orchestrator"
@@ -11950,7 +11786,7 @@ class ChainStore(_ChainStoragePrimitives):
                 )
             self._atomic_state(replayed)
         if isinstance(binding, Mapping):
-            _batch, builders, journal = _coordination_modules()
+            _batch, builders, journal = runtime._coordination_modules()
             try:
                 with self.root_descriptor() as root:
                     root_observation = journal._file_observation(os.fstat(root))
@@ -12011,7 +11847,7 @@ class ChainStore(_ChainStoragePrimitives):
         binding = state.get("run_binding")
         if isinstance(binding, Mapping) and not _journal_locked:
             register_coordination_seams()
-            batch, _builders, journal = _coordination_modules()
+            batch, _builders, journal = runtime._coordination_modules()
             run_dir = (
                 self.common_root
                 / ".codex-orchestrator"
@@ -12057,7 +11893,7 @@ class ChainStore(_ChainStoragePrimitives):
                 )
             elif self._root_entry_exists(self.events_path(chain_id).name):
                 raise FrozenError("initial event log already exists", chain_id=chain_id)
-            when = utc_now()
+            when = runtime.utc_now()
             if touch:
                 state["last_event_at"] = iso_z(when)
                 state["inactive_after"] = iso_z(
@@ -12087,7 +11923,7 @@ class ChainStore(_ChainStoragePrimitives):
                     source_event_digest,
                 )
                 if carried_records:
-                    _batch, _builders, journal = _coordination_modules()
+                    _batch, _builders, journal = runtime._coordination_modules()
                     batch_bytes = b"".join(
                         journal._journal_line(record)
                         for record in carried_records
@@ -12142,7 +11978,7 @@ class ChainStore(_ChainStoragePrimitives):
             )
         if not journal_locked:
             register_coordination_seams()
-            batch, _builders, journal = _coordination_modules()
+            batch, _builders, journal = runtime._coordination_modules()
             run_dir = (
                 self.common_root
                 / ".codex-orchestrator"
@@ -12195,7 +12031,7 @@ class ChainStore(_ChainStoragePrimitives):
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
         register_coordination_seams()
-        batch, _builders, journal = _coordination_modules()
+        batch, _builders, journal = runtime._coordination_modules()
         run_dir = (
             self.common_root
             / ".codex-orchestrator"
@@ -12284,7 +12120,7 @@ def _build_merge_chain_journal_records(
         )
     run_id = str(binding["run_id"])
     task_id = str(binding["task_id"])
-    _batch, builders, journal = _coordination_modules()
+    _batch, builders, journal = runtime._coordination_modules()
     _canonical_repository, state_root = journal._resolve_repository(
         repository, "journal batch"
     )
@@ -12450,7 +12286,7 @@ class MergeChainStore(_ChainStoragePrimitives):
             yield
             return
         register_coordination_seams()
-        batch, _builders, journal = _coordination_modules()
+        batch, _builders, journal = runtime._coordination_modules()
         run_dir = (
             self.common_root
             / ".codex-orchestrator"
@@ -12541,7 +12377,7 @@ class MergeChainStore(_ChainStoragePrimitives):
                     )
             return copy.deepcopy(replay.state)
         register_coordination_seams()
-        _batch, builders, journal = _coordination_modules()
+        _batch, builders, journal = runtime._coordination_modules()
         try:
             with self.root_descriptor() as root:
                 root_observation = journal._file_observation(os.fstat(root))
@@ -12702,7 +12538,7 @@ class MergeChainStore(_ChainStoragePrimitives):
         pending_outbox: dict[str, Any] | None = None
         if records:
             _require_merge_store_control("projected-journal-outbox")
-            _batch, _builders, journal = _coordination_modules()
+            _batch, _builders, journal = runtime._coordination_modules()
             batch_bytes = b"".join(journal._journal_line(record) for record in records)
             batch_digest = sha256_bytes(batch_bytes)
             final_payload.update(
@@ -12739,7 +12575,7 @@ class MergeChainStore(_ChainStoragePrimitives):
                 schema=REVISION9_OUTPUT_SCHEMA,
             ) from exc
         _require_merge_store_control("builder-transition-validation")
-        _batch, builders, _journal = _coordination_modules()
+        _batch, builders, _journal = runtime._coordination_modules()
         validation_context = (
             copy.deepcopy(replay.context) if replay is not None else {}
         )
@@ -13018,7 +12854,7 @@ class MergeChainStore(_ChainStoragePrimitives):
                 current = reduce_merge_event(
                     copy.deepcopy(replay.state), copy.deepcopy(event)
                 )
-                _batch, builders, _journal = _coordination_modules()
+                _batch, builders, _journal = runtime._coordination_modules()
                 context = copy.deepcopy(replay.context)
                 if not _merge_state_shape_valid(
                     builders, current, chain_id
@@ -14714,7 +14550,7 @@ class CommonRebaseLock:
                     inflight=current,
                     host=str(self.owner.record["host"]),
                     pid=int(self.owner.record["pid"]),
-                    now=utc_now,
+                    now=runtime.utc_now,
                 ),
                 self._boundary,
                 deadline=self.deadline,
@@ -15124,7 +14960,7 @@ def acquire_common_lock(
     use_flock: bool | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
-    now: Callable[[], dt.datetime] = utc_now,
+    now: Callable[[], dt.datetime] = runtime.utc_now,
     host: str | None = None,
     pid: int | None = None,
     pid_probe: Callable[[int], str] = _process_probe,
@@ -15885,7 +15721,7 @@ def acquire_chain_lease(
     exclusion: CommonRebaseLock | RecoveryReservation | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
-    now: Callable[[], dt.datetime] = utc_now,
+    now: Callable[[], dt.datetime] = runtime.utc_now,
     host: str | None = None,
     pid: int | None = None,
     pid_probe: Callable[[int], str] = _process_probe,
@@ -16764,8 +16600,8 @@ def run_fenced_command(
     cwd: Path,
     persist_result: Callable[[FencedProcessResult], Any],
     env: Mapping[str, str] | None = None,
-    timeout: float = COMMAND_TIMEOUT_SECONDS,
-    cap: int = OUTPUT_CAP_BYTES,
+    timeout: float = runtime.COMMAND_TIMEOUT_SECONDS,
+    cap: int = runtime.OUTPUT_CAP_BYTES,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
     group_probe: Callable[[int], str] | None = None,
@@ -16798,7 +16634,7 @@ def run_fenced_command(
         not isinstance(timeout, (int, float))
         or timeout <= 0
         or cap <= 0
-        or cap > OUTPUT_CAP_BYTES
+        or cap > runtime.OUTPUT_CAP_BYTES
     ):
         raise ValueError(
             "fenced timeout must be positive and output cap must be within the fixed maximum"
@@ -17244,13 +17080,13 @@ class CommandContext:
         plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
         if plugin_root:
             return (Path(plugin_root).resolve() / "scripts" / "forge")
-        return SCRIPT_DIR
+        return runtime.SCRIPT_DIR
 
     def plugin_root(self) -> Path:
         plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
         if plugin_root:
             return Path(plugin_root).resolve()
-        return PLUGIN_ROOT
+        return runtime.PLUGIN_ROOT
 
     def helper(self, name: str) -> Path:
         return self.scripts_dir() / name
@@ -17294,7 +17130,7 @@ def _new_state(
     declared_tier: str | None,
     run_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    now = utc_now()
+    now = runtime.utc_now()
     session_identity = os.environ.get("CLAUDE_SESSION_ID")
     if not session_identity:
         session_identity = f"pid:{os.environ.get('FORGE_SESSION_PID') or os.getppid()}"
@@ -17381,7 +17217,7 @@ def _prove_run_task_binding(
 ) -> dict[str, str]:
     """Prove the immutable run/task/repository/scope/policy start tuple."""
 
-    batch, _builders, journal = _coordination_modules()
+    batch, _builders, journal = runtime._coordination_modules()
     run_dir = ctx.store.common_root / ".codex-orchestrator" / "runs" / run_id
     try:
         with batch.batch_lock(run_dir, create=False):
@@ -17444,7 +17280,7 @@ def _validate_bound_chain_state(state: Mapping[str, Any]) -> None:
     binding = state.get("run_binding")
     if not isinstance(binding, Mapping):
         return
-    batch, _builders, journal = _coordination_modules()
+    batch, _builders, journal = runtime._coordination_modules()
     repository = Path(str(binding.get("repository", "")))
     run_id = str(binding.get("run_id", ""))
     task_id = str(binding.get("task_id", ""))
@@ -17539,7 +17375,7 @@ def _archive_module() -> Any:
     with _ARCHIVE_MODULE_LOCK:
         if _ARCHIVE_MODULE is not None:
             return _ARCHIVE_MODULE
-        path = SCRIPT_DIR / "archive-run.py"
+        path = runtime.SCRIPT_DIR / "archive-run.py"
         specification = importlib.util.spec_from_file_location(
             "forge_archive_run_revision9", path
         )
@@ -18134,7 +17970,7 @@ def _record_process_step(
     state: MutableMapping[str, Any],
     step_id: str,
     argv: Sequence[str],
-    process: ProcessResult,
+    process: runtime.ProcessResult,
     *,
     details: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -18194,15 +18030,6 @@ def _user_skip(state: Mapping[str, Any], gate_id: str) -> dict[str, Any] | None:
     return record if isinstance(record, dict) else None
 
 
-def _fast_mechanical_skips(state: Mapping[str, Any]) -> list[str]:
-    if state["tier"].get("effective") != "fast":
-        return []
-    skips = state["steps"].get("user_skips", {})
-    if not isinstance(skips, dict):
-        return []
-    return sorted(str(gate_id) for gate_id in skips if gate_id != "review")
-
-
 def _gate_satisfied(state: Mapping[str, Any], gate_id: str) -> bool:
     if _user_skip(state, gate_id) is not None:
         return True
@@ -18259,10 +18086,10 @@ def _run_classification(
 ) -> dict[str, Any]:
     policy = _policy_for_state(ctx, state)
     argv = _classification_argv(ctx, state)
-    process = run_bounded(
+    process = runtime.run_bounded(
         argv,
         cwd=ctx.repo.root,
-        timeout=COMMAND_TIMEOUT_SECONDS,
+        timeout=runtime.COMMAND_TIMEOUT_SECONDS,
         verbose=ctx.options.verbose,
     )
     if process.returncode != 0 or process.timed_out or process.output_limit:
@@ -18723,7 +18550,7 @@ def _issue_authorization(
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
         _archive_recheck(ctx, state, "authorization")
-    issued = utc_now()
+    issued = runtime.utc_now()
     state["authorization"] = {
         "token": secrets.token_hex(16),
         "candidate": state["candidate"]["sha256"],
@@ -18814,7 +18641,7 @@ def _authorization_problem(state: Mapping[str, Any]) -> Refusal | None:
             remediation=_forge_command(state, "verify"),
             chain=state,
         )
-    if utc_now() >= derived_expiry:
+    if runtime.utc_now() >= derived_expiry:
         return Refusal(
             ReasonCode.TTL_EXPIRED,
             "authorization token expired 30 minutes after issuance",
@@ -18847,7 +18674,7 @@ def _verify_operator_harness(
         str(ctx.plugin_root()),
     ]
     try:
-        process = run_bounded(
+        process = runtime.run_bounded(
             argv,
             cwd=ctx.repo.root,
             timeout=120.0,
@@ -18895,7 +18722,7 @@ def _run_halt(
 ) -> None:
     argv = ["bash", str(ctx.helper("check-halt.sh")), scope]
     try:
-        process = run_bounded(
+        process = runtime.run_bounded(
             argv,
             cwd=cwd or ctx.repo.root,
             timeout=30.0,
@@ -19121,7 +18948,7 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
                         continue
                     return method(self, *args, **kwargs)
             register_coordination_seams()
-            batch, _builders, journal = _coordination_modules()
+            batch, _builders, journal = runtime._coordination_modules()
             run_dir = (
                 self.ctx.store.common_root
                 / ".codex-orchestrator"
@@ -19630,7 +19457,7 @@ def _merge_conflict_path_is_canonical(path: str) -> bool:
 
 
 def _parse_merge_conflict_paths(raw: bytes) -> tuple[str, ...]:
-    if not raw or not raw.endswith(b"\0") or len(raw) > OUTPUT_CAP_BYTES:
+    if not raw or not raw.endswith(b"\0") or len(raw) > runtime.OUTPUT_CAP_BYTES:
         raise ValueError("conflict path output is not bounded NUL-delimited data")
     fields = raw[:-1].split(b"\0")
     if not fields or any(not field for field in fields):
@@ -19667,7 +19494,7 @@ def _normalize_merge_conflict_paths(paths: Sequence[str]) -> tuple[str, ...]:
 
 
 def _merge_nonconflict_index_bytes(raw: bytes, paths: Sequence[str]) -> bytes:
-    if len(raw) > OUTPUT_CAP_BYTES or (raw and not raw.endswith(b"\0")):
+    if len(raw) > runtime.OUTPUT_CAP_BYTES or (raw and not raw.endswith(b"\0")):
         raise ValueError("index baseline is not NUL-delimited")
     excluded = {path.encode("utf-8") for path in paths}
     kept: list[bytes] = []
@@ -19681,7 +19508,7 @@ def _merge_nonconflict_index_bytes(raw: bytes, paths: Sequence[str]) -> bytes:
 
 
 def _merge_nonconflict_status_bytes(raw: bytes, paths: Sequence[str]) -> bytes:
-    if len(raw) > OUTPUT_CAP_BYTES or (raw and not raw.endswith(b"\0")):
+    if len(raw) > runtime.OUTPUT_CAP_BYTES or (raw and not raw.endswith(b"\0")):
         raise ValueError("status baseline is not NUL-delimited")
     excluded = {path.encode("utf-8") for path in paths}
     fields = raw[:-1].split(b"\0") if raw else []
@@ -19736,7 +19563,7 @@ def _observe_merge_post_add(
     except (TypeError, ValueError):
         return None
     if (
-        any(len(raw) > OUTPUT_CAP_BYTES for raw in (unmerged_raw, index_raw, status_raw))
+        any(len(raw) > runtime.OUTPUT_CAP_BYTES for raw in (unmerged_raw, index_raw, status_raw))
         or unmerged_raw != b""
     ):
         return None
@@ -19914,9 +19741,9 @@ def _merge_branch_reflog_proves_integrated(
             before = os.fstat(descriptor)
             if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid():
                 return False
-            start = max(0, before.st_size - OUTPUT_CAP_BYTES)
+            start = max(0, before.st_size - runtime.OUTPUT_CAP_BYTES)
             os.lseek(descriptor, start, os.SEEK_SET)
-            raw = os.read(descriptor, OUTPUT_CAP_BYTES + 1)
+            raw = os.read(descriptor, runtime.OUTPUT_CAP_BYTES + 1)
             after = os.fstat(descriptor)
         finally:
             os.close(descriptor)
@@ -19939,7 +19766,7 @@ def _merge_branch_reflog_proves_integrated(
         or rebound.st_ctime_ns != after.st_ctime_ns
         or not stat.S_ISREG(rebound.st_mode)
         or rebound.st_uid != os.geteuid()
-        or len(raw) > OUTPUT_CAP_BYTES
+        or len(raw) > runtime.OUTPUT_CAP_BYTES
         or not raw.endswith(b"\n")
     ):
         return False
@@ -20138,7 +19965,7 @@ def _prove_merge_run_task_binding(
     task_id: str,
     policy_digest: str,
 ) -> MergeRunTaskSnapshot:
-    batch, _builders, journal = _coordination_modules()
+    batch, _builders, journal = runtime._coordination_modules()
     run_dir = common_root / ".codex-orchestrator" / "runs" / run_id
     try:
         with batch.batch_lock(run_dir, create=False):
@@ -20510,12 +20337,12 @@ def _qualify_git_no_lazy_fetch(
     environment = _merge_scope_environment()
     before = _git_executable_qualification(cwd, environment)
     argv = ["git", "--no-lazy-fetch", "--version"]
-    result = run_bounded(
+    result = runtime.run_bounded(
         argv,
         cwd=cwd,
         env=environment,
-        timeout=min(COMMAND_TIMEOUT_SECONDS, COMMON_LOCK_TIMEOUT_SECONDS),
-        cap=OUTPUT_CAP_BYTES,
+        timeout=min(runtime.COMMAND_TIMEOUT_SECONDS, COMMON_LOCK_TIMEOUT_SECONDS),
+        cap=runtime.OUTPUT_CAP_BYTES,
         verbose=verbose,
     )
     after = _git_executable_qualification(cwd, environment)
@@ -21607,7 +21434,7 @@ def _merge_bootstrap_child_main(encoded_payload: str) -> int:
     except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
         os.write(1, canonical_bytes({"schema": "forge-bootstrap-composite-error/1", "error": str(exc)}))
         return 2
-    cap = int(payload.get("cap", OUTPUT_CAP_BYTES))
+    cap = int(payload.get("cap", runtime.OUTPUT_CAP_BYTES))
     worktree = Path(str(payload["worktree"]))
     candidate_head = str(payload["candidate_head"])
     supplied_tip = payload.get("remote_tip")
@@ -21790,7 +21617,7 @@ def _merge_bootstrap_child_main(encoded_payload: str) -> int:
         "full_patch": full_patch,
     }
     encoded = canonical_bytes(protocol)
-    if len(encoded) > OUTPUT_CAP_BYTES:
+    if len(encoded) > runtime.OUTPUT_CAP_BYTES:
         return 3
     os.write(1, encoded)
     return 0
@@ -21810,7 +21637,7 @@ def _merge_bootstrap_child_argv(
         "remote_tip": remote_tip,
         "run_bound": admission.run_task is not None,
         "fetch_argv": list(fetch_argv),
-        "cap": OUTPUT_CAP_BYTES,
+        "cap": runtime.OUTPUT_CAP_BYTES,
     }
     encoded = base64.urlsafe_b64encode(canonical_bytes(payload)).decode("ascii")
     return [
@@ -21945,7 +21772,7 @@ def _decode_merge_bootstrap_result(
                     raise ValueError("composite name-status argv diverges")
                 paths = protocol.get("scope_changed_paths")
                 if passed(scope):
-                    _batch, _builders, journal = _coordination_modules()
+                    _batch, _builders, journal = runtime._coordination_modules()
                     if not _valid_sorted_unique_strings(paths) or not all(
                         journal._valid_scope_item(path) for path in paths
                     ):
@@ -22028,7 +21855,7 @@ def _parse_merge_name_status_output(raw: bytes) -> tuple[str, ...]:
     fields = raw.split(b"\0")[:-1] if raw else []
     paths: list[str] = []
     index = 0
-    _batch, _builders, journal = _coordination_modules()
+    _batch, _builders, journal = runtime._coordination_modules()
     while index < len(fields):
         try:
             status = fields[index].decode("ascii")
@@ -22075,12 +21902,12 @@ def _derive_merge_scope(
     )
     environment = _merge_scope_environment()
     try:
-        process = run_bounded(
+        process = runtime.run_bounded(
             argv,
             cwd=admission.worktree,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
         )
     except OSError as exc:
         raise _merge_refusal(
@@ -22112,7 +21939,7 @@ def _derive_merge_scope(
             expected="the exact NUL-delimited name-status grammar",
             observed=str(exc),
         ) from exc
-    _batch, _builders, journal = _coordination_modules()
+    _batch, _builders, journal = runtime._coordination_modules()
     out_of_scope = tuple(
         path
         for path in changed_paths
@@ -22176,7 +22003,7 @@ def _merge_scope_from_candidate_observation(
             "forge: merge start refused — durable run/task scope evidence is malformed",
             observed=str(exc),
         ) from exc
-    _batch, _builders, journal = _coordination_modules()
+    _batch, _builders, journal = runtime._coordination_modules()
     out_of_scope = tuple(
         path
         for path in changed_paths
@@ -22418,11 +22245,11 @@ def bind_merge_candidate_generation(
         if admission.declared_tier is not None:
             argv.extend(["--declared-tier", admission.declared_tier])
         try:
-            process = run_bounded(
+            process = runtime.run_bounded(
                 argv,
                 cwd=admission.worktree,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=ctx.options.verbose,
             )
         except OSError as exc:
@@ -23448,7 +23275,7 @@ def _resolve_recorded_merge_tip(
 
 def _merge_inactive(state: Mapping[str, Any]) -> bool:
     try:
-        return utc_now() >= parse_time(str(state["inactive_after"]))
+        return runtime.utc_now() >= parse_time(str(state["inactive_after"]))
     except (KeyError, TypeError, ValueError):
         raise FrozenError(
             "merge inactivity deadline is malformed",
@@ -24972,7 +24799,7 @@ def _merge_candidate_observation_step_specs(
     if classify:
         classifier = [
             sys.executable,
-            str(SCRIPT_DIR / "risk_tier.py"),
+            str(runtime.SCRIPT_DIR / "risk_tier.py"),
             "--repo",
             str(worktree_path),
             "--policy-sha",
@@ -25165,7 +24992,7 @@ def _merge_candidate_observation_record_valid(
         and (child.get("exit") is None or type(child.get("exit")) is int)
         and SHA256_RE.fullmatch(str(child.get("inflight_digest", ""))) is not None
         and SHA256_RE.fullmatch(str(child.get("output_digest", ""))) is not None
-        and len(output) <= OUTPUT_CAP_BYTES
+        and len(output) <= runtime.OUTPUT_CAP_BYTES
         and SHA256_RE.fullmatch(str(child.get("stored_output_digest", "")))
         is not None
         and sha256_bytes(output) == child.get("stored_output_digest")
@@ -26696,8 +26523,8 @@ class MergeEngine:
                 cwd=cwd,
                 persist_result=persist_observation,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
             durable = state.get("integration", {}).get("intent")
@@ -27275,7 +27102,7 @@ class MergeEngine:
                         chain_id=str(state["chain_id"]),
                         schema=REVISION9_OUTPUT_SCHEMA,
                     )
-                _batch, _builders, journal = _coordination_modules()
+                _batch, _builders, journal = runtime._coordination_modules()
                 snapshot = admission.run_task
                 out_of_scope = tuple(
                     path
@@ -27502,8 +27329,8 @@ class MergeEngine:
             cwd=admission.worktree,
             persist_result=persist,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
             verbose=False,
             result_transform=lambda raw: _decode_merge_bootstrap_result(
                 raw,
@@ -29035,12 +28862,12 @@ class MergeEngine:
         environment = os.environ.copy()
         environment.pop("FORGE_SESSION_PID", None)
         try:
-            process = run_bounded(
+            process = runtime.run_bounded(
                 argv,
                 cwd=repository.root,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
         except OSError as exc:
@@ -29056,7 +28883,7 @@ class MergeEngine:
                     ),
                 }
             ) + b"\n"
-            process = ProcessResult(
+            process = runtime.ProcessResult(
                 argv=argv,
                 returncode=127,
                 duration_seconds=0.0,
@@ -29096,7 +28923,7 @@ class MergeEngine:
         suite: Sequence[str],
         gate_id: str,
         argv: Sequence[str],
-        process: ProcessResult,
+        process: runtime.ProcessResult,
         details: Mapping[str, Any],
     ) -> dict[str, Any]:
         candidate = state["candidate"]
@@ -29193,7 +29020,7 @@ class MergeEngine:
         for cell_index, cell_argv in enumerate(cells, 1):
             if gate_id == "assertion-sensor" and not details["test_paths"]:
                 output = b"forge: no touched test files - assertion sensor not applicable\n"
-                process = ProcessResult(
+                process = runtime.ProcessResult(
                     argv=list(cell_argv),
                     returncode=0,
                     duration_seconds=0.0,
@@ -29203,19 +29030,19 @@ class MergeEngine:
                 cell_details = {**details, "not_applicable": True}
             else:
                 try:
-                    process = run_bounded(
+                    process = runtime.run_bounded(
                         cell_argv,
                         cwd=repository.root,
                         env=environment,
-                        timeout=COMMAND_TIMEOUT_SECONDS,
-                        cap=OUTPUT_CAP_BYTES,
+                        timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                        cap=runtime.OUTPUT_CAP_BYTES,
                         verbose=self.ctx.options.verbose,
                     )
                 except OSError as exc:
                     output = f"forge: merge gate launch failed: {exc}\n".encode(
                         "utf-8", "replace"
                     )
-                    process = ProcessResult(
+                    process = runtime.ProcessResult(
                         argv=list(cell_argv),
                         returncode=127,
                         duration_seconds=0.0,
@@ -29461,7 +29288,7 @@ class MergeEngine:
         )
         iteration = prior_iteration + 1
         package_digest = sha256_bytes(package)
-        if len(package) > OUTPUT_CAP_BYTES:
+        if len(package) > runtime.OUTPUT_CAP_BYTES:
             bound = _merge_run_directory(state)
             package_ref = (
                 (
@@ -29612,13 +29439,13 @@ class MergeEngine:
             chunks: list[bytes] = []
             total = 0
             while True:
-                chunk = os.read(descriptor, OUTPUT_CAP_BYTES + 1 - total)
+                chunk = os.read(descriptor, runtime.OUTPUT_CAP_BYTES + 1 - total)
                 if not chunk:
                     break
                 chunks.append(chunk)
                 total += len(chunk)
-                if total > OUTPUT_CAP_BYTES:
-                    raise OSError(f"verdict exceeds {OUTPUT_CAP_BYTES} bytes")
+                if total > runtime.OUTPUT_CAP_BYTES:
+                    raise OSError(f"verdict exceeds {runtime.OUTPUT_CAP_BYTES} bytes")
             data = b"".join(chunks)
         except OSError as exc:
             raise _merge_refusal(
@@ -30274,8 +30101,8 @@ class MergeEngine:
             cwd=Path(str(state["worktree"]["path"])),
             persist_result=persist,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
             verbose=self.ctx.options.verbose,
         )
         durable = state.get("integration", {}).get("intent")
@@ -30398,8 +30225,8 @@ class MergeEngine:
             cwd=Path(str(state["worktree"]["path"])),
             persist_result=persist,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
             verbose=self.ctx.options.verbose,
         )
         durable = state.get("integration", {}).get("intent")
@@ -30740,8 +30567,8 @@ class MergeEngine:
             cwd=Path(str(state["worktree"]["path"])),
             persist_result=persist,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
             verbose=self.ctx.options.verbose,
         )
         state = self._recover_rebase_observation_locked(state, lock, lease)
@@ -31016,8 +30843,8 @@ class MergeEngine:
                 cwd=repository.root,
                 persist_result=persist,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
             try:
@@ -31328,8 +31155,8 @@ class MergeEngine:
             cwd=Path(str(state["worktree"]["path"])),
             persist_result=persist,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
             verbose=self.ctx.options.verbose,
         )
         progress = state.get("integration", {}).get("intent")
@@ -31443,8 +31270,8 @@ class MergeEngine:
                 cwd=Path(str(state["worktree"]["path"])),
                 persist_result=persist_containment,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
             durable = state.get("integration", {}).get("intent")
@@ -31778,12 +31605,12 @@ class MergeEngine:
                 worktree,
                 environment,
             )
-            result = run_bounded(
+            result = runtime.run_bounded(
                 argv,
                 cwd=worktree,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
             lock.assert_held()
@@ -32032,8 +31859,8 @@ class MergeEngine:
             cwd=Path(str(state["worktree"]["path"])),
             persist_result=persist,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            cap=OUTPUT_CAP_BYTES,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
             verbose=self.ctx.options.verbose,
         )
         state = self._run_remote_observation(
@@ -32378,8 +32205,8 @@ class MergeEngine:
                 cwd=self.ctx.repo.root,
                 persist_result=persist,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
         except CommonLockUnavailable:
@@ -33078,8 +32905,8 @@ class MergeEngine:
                 cwd=worktree,
                 persist_result=persist_observation,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
             durable = state.get("integration", {}).get("intent", {}).get(
@@ -33724,8 +33551,8 @@ class MergeEngine:
                 cwd=worktree,
                 persist_result=persist_observation,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
             durable_result = state.get("integration", {}).get("intent", {}).get(
@@ -34272,8 +34099,8 @@ class MergeEngine:
                     cwd=worktree,
                     persist_result=persist_stage,
                     env=environment,
-                    timeout=COMMAND_TIMEOUT_SECONDS,
-                    cap=OUTPUT_CAP_BYTES,
+                    timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                    cap=runtime.OUTPUT_CAP_BYTES,
                     verbose=self.ctx.options.verbose,
                 )
                 continuation_phase = "stage-result"
@@ -34439,8 +34266,8 @@ class MergeEngine:
                 cwd=worktree,
                 persist_result=persist_continue,
                 env=continue_environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
             disposition = classify_continue_result()
@@ -34546,8 +34373,8 @@ class MergeEngine:
                 cwd=worktree,
                 persist_result=persist_abort,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-                cap=OUTPUT_CAP_BYTES,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+                cap=runtime.OUTPUT_CAP_BYTES,
                 verbose=self.ctx.options.verbose,
             )
 
@@ -36154,7 +35981,7 @@ class Engine:
     @staticmethod
     def _require_tombstone_control() -> None:
         register_coordination_seams()
-        _batch, builders, _journal = _coordination_modules()
+        _batch, builders, _journal = runtime._coordination_modules()
         if "tombstone" not in builders.TERMINAL_CHAIN_CONTROLS:
             raise FrozenError(
                 "chain tombstone control is unavailable",
@@ -36230,7 +36057,7 @@ class Engine:
 
     def journal_batch_recover(self) -> Outcome:
         register_coordination_seams()
-        batch, _builders, journal = _coordination_modules()
+        batch, _builders, journal = runtime._coordination_modules()
         run_id = self.ctx.options.run_id
         if run_id is None:
             raise Refusal(
@@ -36264,7 +36091,7 @@ class Engine:
         idempotency_key: str,
     ) -> Outcome:
         register_coordination_seams()
-        batch, builders, journal = _coordination_modules()
+        batch, builders, journal = runtime._coordination_modules()
         run_id = self.ctx.options.run_id
         if run_id is None:
             raise Refusal(
@@ -36491,7 +36318,7 @@ class Engine:
                 chain=state,
             )
         if (
-            utc_now() >= parse_time(str(state["inactive_after"]))
+            runtime.utc_now() >= parse_time(str(state["inactive_after"]))
             and verb not in TERMINAL_TOUCH_VERBS
         ):
             raise Refusal(
@@ -36612,7 +36439,7 @@ class Engine:
                         )
         if (
             state["state"] not in TERMINAL_STATES
-            and utc_now() >= parse_time(str(state["inactive_after"]))
+            and runtime.utc_now() >= parse_time(str(state["inactive_after"]))
         ):
             return _success(
                 state,
@@ -37012,7 +36839,7 @@ class Engine:
         records: list[dict[str, Any]] = []
         journal_issues: list[str] = []
         if isinstance(binding, Mapping):
-            _batch, _builders, journal = _coordination_modules()
+            _batch, _builders, journal = runtime._coordination_modules()
             # The run lives under the resolved common root, exactly where the
             # drain and validation paths look; the raw recorded repository is
             # never trusted to locate it.
@@ -37074,7 +36901,7 @@ class Engine:
                 "a tombstone whose state and events artifacts are both absent",
                 "tombstone retains captured artifacts",
             )
-        _batch, builders, journal = _coordination_modules()
+        _batch, builders, journal = runtime._coordination_modules()
         run_dir = self.ctx.store.common_root / ".codex-orchestrator" / "runs" / str(run_id)
         records, journal_issues = journal.read_journal(run_dir / "journal.jsonl")
         if journal_issues or not records:
@@ -37426,7 +37253,7 @@ class Engine:
                 output = (
                     b"forge: no touched test files - assertion sensor not applicable\n"
                 )
-                synthetic = ProcessResult(
+                synthetic = runtime.ProcessResult(
                     argv=[
                         sys.executable,
                         str(self.ctx.helper("check-test-quality.py")),
@@ -37473,11 +37300,11 @@ class Engine:
         environment.pop("FORGE_SESSION_PID", None)
         if gate_id == "strict-evals":
             environment["STRICT"] = "1"
-        process = run_bounded(
+        process = runtime.run_bounded(
             argv,
             cwd=self.ctx.repo.root,
             env=environment,
-            timeout=COMMAND_TIMEOUT_SECONDS,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
             verbose=self.ctx.options.verbose,
         )
         # A mutating writer is recorded only after its declared outputs join
@@ -37547,11 +37374,11 @@ class Engine:
             )
         for cell_index, cell in enumerate(remaining_cells, 2):
             extra_argv = ["bash", "-c", cell, "forge", *state["paths"]]
-            extra_process = run_bounded(
+            extra_process = runtime.run_bounded(
                 extra_argv,
                 cwd=self.ctx.repo.root,
                 env=environment,
-                timeout=COMMAND_TIMEOUT_SECONDS,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
                 verbose=self.ctx.options.verbose,
             )
             extra_record = _record_process_step(
@@ -37665,7 +37492,7 @@ class Engine:
     def verify(self) -> Outcome:
         state = self.select(include_terminal=False)
         self._preflight(state, "verify")
-        fast_skips = _fast_mechanical_skips(state)
+        fast_skips = runtime._fast_mechanical_skips(state)
         if fast_skips:
             raise Refusal(
                 ReasonCode.EVIDENCE_INCOMPLETE,
@@ -37698,10 +37525,10 @@ class Engine:
             # Independent finalize-time-style eligibility recomputation at
             # authorization entry; actual finalize repeats it.
             argv = _classification_argv(self.ctx, state, require_effective="fast")
-            process = run_bounded(
+            process = runtime.run_bounded(
                 argv,
                 cwd=self.ctx.repo.root,
-                timeout=COMMAND_TIMEOUT_SECONDS,
+                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
                 verbose=self.ctx.options.verbose,
             )
             record = _record_process_step(
@@ -38317,7 +38144,7 @@ class Engine:
                 completion_ref,
                 None,
                 "review completion",
-                max_bytes=OUTPUT_CAP_BYTES,
+                max_bytes=runtime.OUTPUT_CAP_BYTES,
             )
         except Refusal as exc:
             raise Refusal(
@@ -38405,7 +38232,7 @@ class Engine:
             verdict_ref,
             str(completion["verdict_digest"]),
             "review verdict",
-            max_bytes=OUTPUT_CAP_BYTES,
+            max_bytes=runtime.OUTPUT_CAP_BYTES,
         )
         if len(data) != int(completion["verdict_size"]):
             raise Refusal(
@@ -38486,14 +38313,14 @@ class Engine:
             parts: list[bytes] = []
             total = 0
             while True:
-                chunk = os.read(descriptor, OUTPUT_CAP_BYTES + 1 - total)
+                chunk = os.read(descriptor, runtime.OUTPUT_CAP_BYTES + 1 - total)
                 if not chunk:
                     break
                 parts.append(chunk)
                 total += len(chunk)
-                if total > OUTPUT_CAP_BYTES:
+                if total > runtime.OUTPUT_CAP_BYTES:
                     raise OSError(
-                        f"verdict exceeds {OUTPUT_CAP_BYTES} bytes"
+                        f"verdict exceeds {runtime.OUTPUT_CAP_BYTES} bytes"
                     )
             data = b"".join(parts)
         except OSError as exc:
@@ -38746,7 +38573,7 @@ class Engine:
             "forge-cli",
         ]
         try:
-            process = run_bounded(
+            process = runtime.run_bounded(
                 argv,
                 cwd=self.ctx.repo.root,
                 timeout=30.0,
@@ -38832,10 +38659,10 @@ class Engine:
                     )
             if state["tier"].get("effective") == "fast":
                 argv = _classification_argv(self.ctx, state, require_effective="fast")
-                process = run_bounded(
+                process = runtime.run_bounded(
                     argv,
                     cwd=self.ctx.repo.root,
-                    timeout=COMMAND_TIMEOUT_SECONDS,
+                    timeout=runtime.COMMAND_TIMEOUT_SECONDS,
                     verbose=self.ctx.options.verbose,
                 )
                 record = _record_process_step(
@@ -38960,7 +38787,7 @@ class Engine:
         environment = os.environ.copy()
         environment["FORGE_SESSION_PID"] = session_pid
         try:
-            process = run_bounded(
+            process = runtime.run_bounded(
                 ["bash", str(self.ctx.helper("release-commit-lock.sh"))],
                 cwd=self.ctx.repo.root,
                 env=environment,

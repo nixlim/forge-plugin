@@ -20,6 +20,7 @@ from tests import test_cli_merge_adapters as ADAPTERS
 
 
 CLI = ADAPTERS.CLI
+RUNTIME = ADAPTERS.RUNTIME
 
 
 class MergeCarriedRegressionTests(ADAPTERS.MergeAdapterFixture):
@@ -4165,7 +4166,7 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
             (["merge", "cleanup"], "cleanup"),
             (["merge", "abort", "--reason", "stop"], "abort"),
         )
-        with mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", True):
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True):
             for argv, command in cases:
                 with self.subTest(argv=argv):
                     parsed = CLI.build_parser().parse_args(argv)
@@ -4198,14 +4199,14 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
 
     def test_activation_does_not_change_commit_family_grammar(self) -> None:
         argv = ["commit", "start", "--paths", "src/app.py", "--declare-tier", "hard"]
-        with mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", False):
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", False):
             dormant = vars(CLI.build_parser().parse_args(argv))
-        with mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", True):
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True):
             active = vars(CLI.build_parser().parse_args(argv))
         self.assertEqual(active, dormant)
 
     def test_active_merge_start_run_task_pairing_is_checked_before_discovery(self) -> None:
-        with mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", True):
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True):
             options, remaining = CLI._extract_global_options(
                 [
                     "--run-id",
@@ -4241,7 +4242,7 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
                 schema="forge-cli/2",
             )
 
-        with mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
             CLI, "dispatch", side_effect=dispatch
         ), contextlib.redirect_stdout(io.StringIO()):
             result = CLI.main(
@@ -4262,7 +4263,7 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(captured, [(self.run_id, "merge", "start")])
 
         output = io.StringIO()
-        with mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
             CLI, "dispatch", side_effect=AssertionError("dispatch must not run")
         ), contextlib.redirect_stdout(output):
             result = CLI.main(
@@ -4378,7 +4379,7 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
             (["merge", "cleanup"], ("cleanup",)),
             (["merge", "abort", "--reason", "stop"], ("abort", "stop")),
         )
-        with mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
             CLI, "_merge_command_engine", return_value=FakeMerge()
         ):
             for argv, expected in vectors:
@@ -4401,7 +4402,7 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
         }
         for control, call in calls.items():
             activation = (
-                mock.patch.object(CLI, "MERGE_LIFECYCLE_ACTIVE", True)
+                mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True)
                 if control == "dormant-parser-gate"
                 else contextlib.nullcontext()
             )

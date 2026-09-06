@@ -49,7 +49,8 @@
       "scripts/forge/commit-guard.sh",
       "scripts/forge/forge_cli/__init__.py",
       "scripts/forge/forge_cli/envelope.py",
-      "scripts/forge/forge_cli/policy.py"
+      "scripts/forge/forge_cli/policy.py",
+      "scripts/forge/forge_cli/runtime.py"
     ],
     "tests": [
       "tests/test_cli_merge_integration.py",
@@ -70,19 +71,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "bcf0de00e2011e0b817987f2da7be771d6df82a2fa4a09fc5c61f97b161a023c"
+      "result_sha256": "5a8240570fc9f9ee8fd9ce92b0fa261cee433c48735b0672199569682b6716b5"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "953696fe5c7ee6e53ba1389c976789906427a5df1b3c8cd14335afb0b3b4955c"
+      "result_sha256": "c69a8305aff3c262c735a1fdd55e14bdc97ca1934c6cb22953ca898b0f6fa37c"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "48fcc81c2330cfa383be5314685d977f5da59ff399d3103cd92a11df535e0491"
+      "result_sha256": "c2edceeec7b76660e932b9fee99d138a5429d7ead19de647c43eaa297c2ce325"
     },
     {
       "slot": "push",
@@ -100,13 +101,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "1d1af6afd26649b8d853c11ee2bef231f90cb8425f5ddf48865dc0dd318eddad"
+      "result_sha256": "0c0459ee87bb137b4f5ad69d1d490598ed04070b75e7586eb3da0e58f76744fa"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "b6c92e92a5aa2bf6a1285f9d9a8940016e0a5c45e02d454fc37fbd412306698c"
+      "result_sha256": "21e1bfd9ad05ebd1f11ed19ccbf2a4b09c68bea72e8051a5254ee80e5b450bed"
     }
   ]
 }

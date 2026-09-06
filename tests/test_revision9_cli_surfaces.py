@@ -37,10 +37,11 @@ ENVELOPE_KEYS = {
 }
 
 
-from tests._cli_loader import load_script  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_revision9_cli_surface_tests", CLI_PATH)
+RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_cli_fixture_support", ROOT / "tests" / "test_cli_chain.py"
 )
@@ -431,7 +432,7 @@ class Revision9CommitStateTests(unittest.TestCase):
         )
         for control in CLI.REVISION9_STATE_CONTROLS:
             with self.subTest(control=control), mock.patch.object(
-                CLI,
+                RUNTIME,
                 "REVISION9_STATE_CONTROLS",
                 CLI.REVISION9_STATE_CONTROLS - {control},
             ), self.assertRaisesRegex(
@@ -701,7 +702,7 @@ class Revision9IngestProofControlTests(unittest.TestCase):
             _scan_run=lambda _run_dir: run_state,
         )
         with mock.patch.object(
-            CLI,
+            RUNTIME,
             "_coordination_modules",
             return_value=(SimpleNamespace(), fake_builders, fake_journal),
         ):
@@ -948,9 +949,9 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         with mock.patch.dict(
             os.environ, self.revision9_environment(), clear=True
         ), mock.patch.object(
-            CLI, "SCRIPT_DIR", self.helpers
+            RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(
-            CLI, "PLUGIN_ROOT", ROOT
+            RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
             CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
@@ -1204,7 +1205,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         chain_id = str(started["chain_id"])
 
         construction_bypass = (
-            mock.patch.object(CLI, "_fast_mechanical_skips", return_value=[])
+            mock.patch.object(RUNTIME, "_fast_mechanical_skips", return_value=[])
             if mechanical_skip
             else contextlib.nullcontext()
         )
@@ -2800,7 +2801,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(exit_code, 0, aborted)
         inactive_after = CLI.parse_time(str(self.state(chain_id)["inactive_after"]))
         later = inactive_after + datetime.timedelta(hours=1)
-        with mock.patch.object(CLI, "utc_now", return_value=later):
+        with mock.patch.object(RUNTIME, "utc_now", return_value=later):
             # Disable proof: without the exemption the deadline refuses the verb.
             with mock.patch.object(
                 CLI, "TERMINAL_TOUCH_VERBS", frozenset({"status", "commit abort"})

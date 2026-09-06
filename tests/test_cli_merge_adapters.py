@@ -22,10 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-from tests._cli_loader import load_script  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_merge_adapter_tests", CLI_PATH)
+RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 FIXTURE_SUPPORT = load_script(
     "forge_cli_merge_adapter_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -118,10 +119,10 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
         environment_patch = mock.patch.dict(os.environ, environment, clear=True)
         environment_patch.start()
         self.addCleanup(environment_patch.stop)
-        script_patch = mock.patch.object(CLI, "SCRIPT_DIR", self.helpers)
+        script_patch = mock.patch.object(RUNTIME, "SCRIPT_DIR", self.helpers)
         script_patch.start()
         self.addCleanup(script_patch.stop)
-        plugin_patch = mock.patch.object(CLI, "PLUGIN_ROOT", ROOT)
+        plugin_patch = mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT)
         plugin_patch.start()
         self.addCleanup(plugin_patch.stop)
         CLI.register_coordination_seams()
@@ -432,7 +433,7 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
             calls.append((list(argv), dict(kwargs)))
             return self.passing_process(argv, **kwargs)
 
-        with mock.patch.object(CLI, "run_bounded", side_effect=passing):
+        with mock.patch.object(RUNTIME, "run_bounded", side_effect=passing):
             outcome = engine.verify()
         return admission, generation, store, engine, outcome, calls
 
@@ -454,7 +455,7 @@ class MergeAdmissionAdapterTests(MergeAdapterFixture):
         engine = CLI.MergeEngine(self.context(run_id=self.run_id))
         admission = engine.start(str(self.worktree), task=self.task_id)
         with mock.patch.object(
-            CLI, "run_bounded", wraps=CLI.run_bounded
+            RUNTIME, "run_bounded", wraps=CLI.run_bounded
         ) as bounded:
             generation = engine.bind_candidate(admission, self.base)
         launched = [list(call.args[0]) for call in bounded.call_args_list]
@@ -669,7 +670,7 @@ class MergeAdmissionAdapterTests(MergeAdapterFixture):
             output=malformed,
             output_digest=digest(malformed),
         )
-        with mock.patch.object(CLI, "run_bounded", return_value=process):
+        with mock.patch.object(RUNTIME, "run_bounded", return_value=process):
             with self.assertRaises(CLI.Refusal) as caught:
                 engine.bind_candidate(admission, self.base)
         self.assertEqual(
@@ -685,7 +686,7 @@ class MergeAdmissionAdapterTests(MergeAdapterFixture):
         engine = CLI.MergeEngine(self.context(run_id=self.run_id))
         admission = engine.start(str(self.worktree), task=self.task_id)
         with mock.patch.object(
-            CLI, "run_bounded", side_effect=OSError("scope executable missing")
+            RUNTIME, "run_bounded", side_effect=OSError("scope executable missing")
         ):
             with self.assertRaises(CLI.Refusal) as caught:
                 engine.bind_candidate(admission, self.base)
@@ -897,7 +898,7 @@ class MergeGateAdapterTests(MergeAdapterFixture):
                 return self.passing_process(argv, **kwargs)
             raise OSError("fixture gate missing")
 
-        with mock.patch.object(CLI, "run_bounded", side_effect=unavailable_gate):
+        with mock.patch.object(RUNTIME, "run_bounded", side_effect=unavailable_gate):
             with self.assertRaises(CLI.Refusal) as caught:
                 engine.verify()
         self.assertEqual(caught.exception.reason_code, CLI.V2ReasonCode.MERGE_GATE_FAILED)
@@ -912,7 +913,7 @@ class MergeGateAdapterTests(MergeAdapterFixture):
             self.base,
         )
         with mock.patch.object(
-            CLI, "run_bounded", side_effect=self.passing_process
+            RUNTIME, "run_bounded", side_effect=self.passing_process
         ):
             outcome = engine.verify()
         self.assertTrue(outcome.ok)
@@ -1056,7 +1057,7 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
         self.chain_id = str(started.chain_id)
         store = starter.store
         engine = CLI.MergeEngine(self.context(chain_id=self.chain_id))
-        with mock.patch.object(CLI, "run_bounded", side_effect=self.passing_process):
+        with mock.patch.object(RUNTIME, "run_bounded", side_effect=self.passing_process):
             verified = engine.verify()
         self.assertEqual(verified.state, "reviewing")
         admitted_history = [

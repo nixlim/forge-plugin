@@ -34,10 +34,11 @@ ENVELOPE_KEYS = {
 }
 
 
-from tests._cli_loader import load_script  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_revision9_ingest_negative_cli", CLI_PATH)
+RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_ingest_negative_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -59,9 +60,9 @@ class Revision9IngestPredicateNegativeTests(
         with mock.patch.dict(
             os.environ, self.revision9_environment(), clear=True
         ), mock.patch.object(
-            CLI, "SCRIPT_DIR", self.helpers
+            RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(
-            CLI, "PLUGIN_ROOT", ROOT
+            RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
             CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):

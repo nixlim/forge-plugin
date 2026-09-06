@@ -76,8 +76,9 @@ if spec is None or spec.loader is None:
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
-module.SCRIPT_DIR = Path(scripts_dir).resolve()
-module.PLUGIN_ROOT = Path(plugin_root).resolve()
+# cli split phase 2a: the shim reads its path roots through the canonical runtime module.
+module.runtime.SCRIPT_DIR = Path(scripts_dir).resolve()
+module.runtime.PLUGIN_ROOT = Path(plugin_root).resolve()
 module.CODEX_EXECUTABLE = codex_executable
 raise SystemExit(module.main(cli_argv))
 """

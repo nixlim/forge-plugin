@@ -20,7 +20,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 ARCHIVE_PATH = ROOT / "scripts" / "forge" / "archive-run.py"
 
 
-from tests._cli_loader import load_cached as load_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_cached as load_module, package_module  # cli split phase 0: one shared loader
 
 
 def canonical(value: object) -> bytes:
@@ -34,6 +34,7 @@ CLI_FIXTURE_SUPPORT = load_module(
     ROOT / "tests" / "test_cli_chain.py",
 )
 CLI = load_module("_forge_revision9_matrix_cli", CLI_PATH)
+RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 ARCHIVE = load_module("_forge_revision9_matrix_archive", ARCHIVE_PATH)
 
 
@@ -48,8 +49,8 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
     def cli_context(self):
         environment = self.environment(FORGE_SESSION_PID=str(os.getpid()))
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
-            CLI, "SCRIPT_DIR", self.helpers
-        ), mock.patch.object(CLI, "PLUGIN_ROOT", ROOT), mock.patch.object(
+            RUNTIME, "SCRIPT_DIR", self.helpers
+        ), mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT), mock.patch.object(
             CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield

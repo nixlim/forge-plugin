@@ -24,10 +24,11 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 HARNESS_TIMEOUT_SECONDS = 45.0
 
 
-from tests._cli_loader import load_cached as load_script  # cli split phase 0: one shared loader
+from tests._cli_loader import load_cached as load_script, package_module  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_revision9_terminal_race_cli", CLI_PATH)
+RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_terminal_race_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -118,9 +119,9 @@ def _race_worker(
         ), mock.patch.object(
             batch, "batch_lock", controlled_lock
         ), mock.patch.object(
-            CLI, "SCRIPT_DIR", Path(str(config["helpers"]))
+            RUNTIME, "SCRIPT_DIR", Path(str(config["helpers"]))
         ), mock.patch.object(
-            CLI, "PLUGIN_ROOT", ROOT
+            RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
             CLI,
             "CODEX_EXECUTABLE",
@@ -205,9 +206,9 @@ class Revision9TerminalRaceTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         with mock.patch.dict(
             os.environ, self.revision9_environment(), clear=True
         ), mock.patch.object(
-            CLI, "SCRIPT_DIR", self.helpers
+            RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(
-            CLI, "PLUGIN_ROOT", ROOT
+            RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
             CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
