@@ -29,6 +29,7 @@ from tests._cli_loader import load_cached as load_script, package_module  # cli 
 
 CLI = load_script("forge_revision9_terminal_race_cli", CLI_PATH)
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
+ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_terminal_race_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -123,7 +124,7 @@ def _race_worker(
         ), mock.patch.object(
             RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
-            CLI,
+            ENGINE,
             "CODEX_EXECUTABLE",
             str(Path(str(config["helpers"])) / "fake-codex"),
         ):
@@ -210,7 +211,7 @@ class Revision9TerminalRaceTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         ), mock.patch.object(
             RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
-            CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 

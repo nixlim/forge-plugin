@@ -5,6 +5,8 @@ Nothing in this package is executable; `cli.py` remains the sole invoked entry p
 Refusal, FrozenError, Outcome), `policy` (the committed-policy parser), `runtime` (the one
 canonical module for the patchable controls and the late-bound journal-record seam), and
 `chain_core` (process runner, common-lock arbiter, chain storage, merge state, ingest
-verifiers). The shim re-imports envelope and policy names by explicit lists and forwards
-reads of runtime and chain_core names through a module __getattr__ (bead forge-plugin-95e).
+verifiers), `engine` (commit-chain engine, parser construction, and shared helpers), and
+`app` (merge engine, routing, argument parsing, dispatch, and main). The shim re-imports
+envelope and policy names by explicit lists and forwards runtime, chain_core, engine, and
+app exports through a module __getattr__ (bead forge-plugin-95e).
 """

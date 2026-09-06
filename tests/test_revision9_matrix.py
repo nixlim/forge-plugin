@@ -35,6 +35,7 @@ CLI_FIXTURE_SUPPORT = load_module(
 )
 CLI = load_module("_forge_revision9_matrix_cli", CLI_PATH)
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
+ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
 ARCHIVE = load_module("_forge_revision9_matrix_archive", ARCHIVE_PATH)
 
 
@@ -51,7 +52,7 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
             RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT), mock.patch.object(
-            CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 

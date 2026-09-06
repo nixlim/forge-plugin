@@ -16,11 +16,14 @@ from pathlib import Path
 from unittest import mock
 
 from tests import test_cli_merge_adapters as ADAPTERS
+from tests._cli_loader import package_module
 
 
 CLI = ADAPTERS.CLI
 RUNTIME = ADAPTERS.RUNTIME
 CORE = ADAPTERS.CORE
+ENGINE = package_module("engine")
+APP = package_module("app")
 
 
 class _LogicalClock:
@@ -1559,7 +1562,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 ) as common, mock.patch.object(
                     RUNTIME, "run_bounded", side_effect=record_bounded
                 ), mock.patch.object(
-                    CLI,
+                    ENGINE,
                     "_remove_merge_claim",
                     side_effect=retain_second_tombstone,
                 ), mock.patch.object(
@@ -1871,7 +1874,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original_remove(selected_store, state, unlink=False)
 
         with mock.patch.object(
-            CLI, "_remove_merge_claim", side_effect=fail_only_tombstone_collection
+            ENGINE, "_remove_merge_claim", side_effect=fail_only_tombstone_collection
         ):
             aborted = engine.abort("fixture retained tombstone")
 
@@ -3743,7 +3746,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             "run_fenced_command",
             side_effect=record_only_initial_historical_observation,
         ), mock.patch.object(
-            CLI,
+            ENGINE,
             "_remove_merge_claim",
             side_effect=fail_terminal_tombstone_collection,
         ), mock.patch.object(
@@ -4215,7 +4218,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original_bounded(argv, **kwargs)
 
         with mock.patch.object(
-            CLI,
+            ENGINE,
             "_git_executable_qualification",
             side_effect=drifting_identity,
         ), mock.patch.object(
@@ -4261,7 +4264,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             "MERGE_INTEGRATION_CONTROLS",
             CLI.MERGE_INTEGRATION_CONTROLS - {"final-intended-head-mode"},
         ), mock.patch.object(
-            CLI, "_qualify_git_no_lazy_fetch"
+            ENGINE, "_qualify_git_no_lazy_fetch"
         ) as probe, self.assertRaisesRegex(
             CLI.FrozenError,
             "merge integration control is unavailable: final-intended-head-mode",
@@ -7876,15 +7879,15 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 "_review_package",
                 side_effect=AssertionError("review package was inspected after cap"),
             ) as review_package, mock.patch.object(
-                CLI,
+                APP,
                 "_observe_current_merge_candidate",
                 side_effect=AssertionError("candidate evidence was inspected after cap"),
             ) as observe_candidate, mock.patch.object(
-                CLI,
+                ENGINE,
                 "_read_merge_artifact",
                 side_effect=AssertionError("review artifact was read after cap"),
             ) as read_artifact, mock.patch.object(
-                CLI,
+                ENGINE,
                 "_write_merge_artifact",
                 side_effect=AssertionError("review artifact was written after cap"),
             ) as write_artifact, mock.patch.object(

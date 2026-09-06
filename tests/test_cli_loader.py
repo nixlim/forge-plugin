@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import stat
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # public name of the package modules (their __all__) plus the envelope and policy exports.
 def _moved_names() -> frozenset[str]:
     names: set[str] = set()
-    for module_name in ("runtime", "chain_core"):
+    for module_name in ("runtime", "chain_core", "engine", "app"):
         names.update(_cli_loader.package_module(module_name).__all__)
     for module_name in ("envelope", "policy"):
         module = _cli_loader.package_module(module_name)
@@ -26,6 +27,69 @@ def _moved_names() -> frozenset[str]:
 
 
 MOVED_NAMES = _moved_names()
+
+
+def _dotted_name(node: ast.AST) -> str | None:
+    """Return a simple dotted expression without evaluating test code."""
+
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        if prefix is not None:
+            return f"{prefix}.{node.attr}"
+    return None
+
+
+def _is_cli_shaped_alias(target: str) -> bool:
+    """Recognize only aliases whose final component explicitly denotes the CLI."""
+
+    tail = target.rsplit(".", 1)[-1].casefold().strip("_")
+    return tail == "module" or "cli" in tail.split("_")
+
+
+def _literal_string(node: ast.AST) -> str | None:
+    try:
+        value = ast.literal_eval(node)
+    except (ValueError, TypeError, SyntaxError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _moved_shim_patch_offenders(path: Path, text: str) -> list[str]:
+    """Find writes whose target is a per-load shim rather than a canonical module."""
+
+    offenders: list[str] = []
+    tree = ast.parse(text, filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = _dotted_name(node.func)
+        target: str | None = None
+        name: str | None = None
+        operation = "patches"
+        if function is not None and function.endswith("patch.object") and len(node.args) >= 2:
+            target = _dotted_name(node.args[0])
+            name = _literal_string(node.args[1])
+        elif function is not None and (
+            function == "patch" or function.endswith(".patch")
+        ) and node.args:
+            dotted_target = _literal_string(node.args[0])
+            if dotted_target is not None and "." in dotted_target:
+                target, name = dotted_target.rsplit(".", 1)
+        elif function in {"setattr", "builtins.setattr"} and len(node.args) >= 2:
+            target = _dotted_name(node.args[0])
+            name = _literal_string(node.args[1])
+            operation = "sets"
+        if (
+            target is not None
+            and name in MOVED_NAMES
+            and _is_cli_shaped_alias(target)
+        ):
+            offenders.append(
+                f"{path.name}:{node.lineno}: {operation} moved name {name} on {target}"
+            )
+    return offenders
 
 
 class CliLoaderTests(unittest.TestCase):
@@ -37,12 +101,13 @@ class CliLoaderTests(unittest.TestCase):
         self.assertIs(sys.modules["_cli_loader_test_first"], first)
         self.assertIs(sys.modules["_cli_loader_test_second"], second)
         self.assertEqual(first.__file__, str(_cli_loader.CLI_PATH))
-        # Shim-resident names stay independently patchable per module: patching one
-        # load never touches the other (moved names are canonical instead; see below).
-        original = second.INACTIVE_SECONDS
-        with mock.patch.object(first, "INACTIVE_SECONDS", original + 1):
-            self.assertEqual(second.INACTIVE_SECONDS, original)
-            self.assertEqual(first.INACTIVE_SECONDS, original + 1)
+        # Explicit envelope re-import bindings belong to each shim copy. Patching one
+        # demonstrates copy independence without shadowing a moved production control.
+        original = second.Outcome
+        sentinel = object()
+        with mock.patch.object(first, "Outcome", sentinel):
+            self.assertIs(second.Outcome, original)
+            self.assertIs(first.Outcome, sentinel)
         # The canonical in-memory control seams remain attributes of each load.
         self.assertTrue(hasattr(first, "REVISION9_STATE_CONTROLS"))
         self.assertTrue(callable(getattr(first, "validate_state", None)))
@@ -90,21 +155,38 @@ class CliLoaderTests(unittest.TestCase):
             if loads_cli and shared_import.search(text) is None:
                 offenders.append(f"{path.name}: loads cli.py without the shared loader")
             # A moved name patched on a per-module CLI copy would be silently ineffective:
-            # the shim reads runtime controls by attribute and the package modules are
-            # process-global, so such patches must target the canonical module.
-            for match in re.finditer(
-                r"patch\.object\(\s*([A-Za-z_][A-Za-z_0-9.]*)\s*,\s*\"([A-Za-z_0-9]+)\"", text
-            ):
-                target, name = match.group(1), match.group(2)
-                cli_alias = target in {"CLI", "cli"} or target.endswith(".CLI")
-                if name in MOVED_NAMES and cli_alias:
-                    offenders.append(f"{path.name}: patches moved name {name} on {target}")
+            # package-module globals are process-global, so all writes must target the
+            # canonical runtime/chain_core/engine/app module instead.
+            offenders.extend(_moved_shim_patch_offenders(path, text))
         self.assertEqual(offenders, [])
+
+    def test_moved_name_patch_sweep_covers_cli_alias_forms(self) -> None:
+        source = """
+mock.patch.object(CLI, "CODEX_EXECUTABLE", value)
+mock.patch.object(module, 'CODEX_EXECUTABLE', value)
+mock.patch("cli.CODEX_EXECUTABLE", value)
+patch('self.cli.CODEX_EXECUTABLE', value)
+setattr(MODULE, "CODEX_EXECUTABLE", value)
+mock.patch.object(suite.CLI, 'CODEX_EXECUTABLE', value)
+mock.patch.object(subject_cli, "CODEX_EXECUTABLE", value)
+mock.patch.object(builders, "CODEX_EXECUTABLE", value)
+mock.patch.object(archive.journal_builders, "CODEX_EXECUTABLE", value)
+mock.patch.object(ENGINE, "CODEX_EXECUTABLE", value)
+"""
+        offenders = _moved_shim_patch_offenders(Path("synthetic.py"), source)
+        self.assertEqual(len(offenders), 7)
+        self.assertTrue(any(" on CLI" in offender for offender in offenders))
+        self.assertTrue(any(" on module" in offender for offender in offenders))
+        self.assertTrue(any(" on self.cli" in offender for offender in offenders))
+        self.assertTrue(any(" on suite.CLI" in offender for offender in offenders))
+        self.assertTrue(any(" on subject_cli" in offender for offender in offenders))
+        self.assertFalse(any("builders" in offender for offender in offenders))
 
     def test_chain_core_is_canonical_and_forwarded_by_the_shim(self) -> None:
         """Phase 2b: the process/lock/storage component is one canonical module."""
         core = _cli_loader.package_module("chain_core")
         runtime = _cli_loader.package_module("runtime")
+        engine = _cli_loader.package_module("engine")
         cli = _cli_loader.load_cli("_cli_loader_test_core")
         other = _cli_loader.load_cli("_cli_loader_test_core_other")
         for name in ("ChainStore", "MergeChainStore", "Repository", "CommandContext", "CLIOptions",
@@ -115,17 +197,25 @@ class CliLoaderTests(unittest.TestCase):
                 self.assertIs(getattr(cli, name), getattr(core, name))
                 self.assertIs(getattr(other, name), getattr(core, name))
                 self.assertNotIn(name, vars(cli))
-        # The journal-record builder stays in the shim and is bound onto the runtime seam
-        # at import time; chain_core reaches it only through that seam. With several shim
-        # instances in one process (tests only) the seam holds the most recently loaded
-        # shim's builder; production has exactly one shim.
-        self.assertIs(runtime._build_chain_journal_records, other._build_chain_journal_records)
-        self.assertEqual(cli._build_chain_journal_records.__name__, "_build_chain_journal_records")
-        self.assertIn("_build_chain_journal_records", vars(cli))
+        # Phase 3 moves the journal-record builder to the canonical engine. Loading another
+        # shim must leave the runtime seam bound to that same engine function.
+        self.assertIs(runtime._build_chain_journal_records, engine._build_chain_journal_records)
+        self.assertIs(cli._build_chain_journal_records, engine._build_chain_journal_records)
+        self.assertNotIn("_build_chain_journal_records", vars(cli))
         again = _cli_loader.load_cli("_cli_loader_test_core_again")
-        self.assertIs(runtime._build_chain_journal_records, again._build_chain_journal_records)
-        self.assertIn("runtime._build_chain_journal_records", Path(core.__file__).read_text(encoding="utf-8"))
+        self.assertIs(runtime._build_chain_journal_records, engine._build_chain_journal_records)
+        self.assertIs(again._build_chain_journal_records, engine._build_chain_journal_records)
+        self.assertIn(
+            "runtime._build_chain_journal_records = _build_chain_journal_records",
+            Path(engine.__file__).read_text(encoding="utf-8"),
+        )
         self.assertNotIn("_build_chain_journal_records", core.__all__)
+        for seam in (
+            core.reduce_merge_event,
+            core._authorize_chain_batch,
+            core._ingest_proof_verifier,
+        ):
+            self.assertIs(getattr(seam, "_forge_cli_revision9_seam", False), True)
         # A patch on the canonical module is what the shim's remaining callers observe.
         sentinel = object()
         with mock.patch.object(core, "run_fenced_command", lambda *a, **k: sentinel):
@@ -139,6 +229,24 @@ class CliLoaderTests(unittest.TestCase):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in set(core.__all__)
         })
         self.assertEqual(bare, [])
+
+    def test_engine_and_app_are_canonical_and_forwarded_by_the_shim(self) -> None:
+        """Phase 3: engine/application globals are patched only on canonical modules."""
+
+        engine = _cli_loader.package_module("engine")
+        app = _cli_loader.package_module("app")
+        cli = _cli_loader.load_cli("_cli_loader_test_phase3")
+        other = _cli_loader.load_cli("_cli_loader_test_phase3_other")
+        for module, name in ((engine, "scan_added_secrets"), (app, "dispatch")):
+            with self.subTest(module=module.__name__, name=name):
+                self.assertIn(name, module.__all__)
+                self.assertIs(getattr(cli, name), getattr(module, name))
+                self.assertIs(getattr(other, name), getattr(module, name))
+                self.assertNotIn(name, vars(cli))
+                sentinel = object()
+                with mock.patch.object(module, name, sentinel):
+                    self.assertIs(getattr(cli, name), sentinel)
+                    self.assertIs(getattr(other, name), sentinel)
 
     def test_runtime_controls_are_canonical_and_forwarded_by_the_shim(self) -> None:
         """Phase 2a: the shim reads runtime controls by attribute and forwards reads (PEP 562)."""

@@ -40,6 +40,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 CLI = load_script("forge_revision9_ingest_negative_cli", CLI_PATH)
 CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
+ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_ingest_negative_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -65,7 +66,7 @@ class Revision9IngestPredicateNegativeTests(
         ), mock.patch.object(
             RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
-            CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 

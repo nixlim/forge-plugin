@@ -10,6 +10,14 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- CLI split phase 3 (bead forge-plugin-95e.4): the remaining 183 top-level
+  names move verbatim into `scripts/forge/forge_cli/engine.py` (the commit-chain
+  engine, parser construction, and helpers, including the journal-record-builder
+  runtime binding) and `app.py` (`MergeEngine`, shared routing, argument parsing,
+  dispatch, and main);
+  `scripts/forge/cli.py` is now a 131-line forwarding shim, and the Revision-9
+  seam-marker loop moves beside `register_coordination_seams` in
+  `chain_core.py`. No verb, diagnostic, reason code, or `--help` byte changes.
 - Gate 1 wall time (bead forge-plugin-pwy): the committed `gate1-test-command`
   cell now fans full unittest discovery out over `min(4, cpu)` shards inside the
   one `bash -c` cell, fail-closed on any failing shard, empty module set, or

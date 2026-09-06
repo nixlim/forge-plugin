@@ -8001,6 +8001,13 @@ def register_coordination_seams() -> None:
         batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK = threading.Lock()
 
 
+# The Revision-9 seam marker rides on the callables themselves so the registrar above can
+# tell an already-installed forge seam from a foreign registration (moved here from the
+# shim in cli split phase 3; the shim no longer defines any seam callable).
+for _seam in (reduce_merge_event, _authorize_chain_batch, _ingest_proof_verifier):
+    setattr(_seam, "_forge_cli_revision9_seam", True)
+
+
 def _coordination_refusal(exc: BaseException) -> Refusal | FrozenError:
     """Map task-03 diagnostics onto the closed Revision-9 CLI union."""
 

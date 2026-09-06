@@ -18,6 +18,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests._cli_loader import package_module
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVER = ROOT / "scripts" / "forge" / "archive-run.py"
@@ -41,6 +43,7 @@ def load_archiver() -> object:
 
 
 archive = load_archiver()
+ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
 
 
 def load_cli_fixture_support() -> object:
@@ -1141,7 +1144,7 @@ class Revision9RealIngestArchiveTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
             cli.runtime, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(cli.runtime, "PLUGIN_ROOT", ROOT), mock.patch.object(
-            cli, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 

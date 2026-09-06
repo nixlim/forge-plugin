@@ -43,6 +43,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 CLI = load_script("forge_revision9_cli_surface_tests", CLI_PATH)
 CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
+ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_cli_fixture_support", ROOT / "tests" / "test_cli_chain.py"
 )
@@ -874,9 +875,9 @@ class Revision9ArchiveRecheckTests(unittest.TestCase):
                 state = self.archive_state(legacy=legacy)
                 context = self.archive_context(state)
                 with self.subTest(legacy=legacy, phase=phase), mock.patch.object(
-                    CLI, "_render_archive_bytes", return_value=b"archive\n"
+                    ENGINE, "_render_archive_bytes", return_value=b"archive\n"
                 ) as render, mock.patch.object(
-                    CLI, "_read_archive_candidate", return_value=b"archive\n"
+                    ENGINE, "_read_archive_candidate", return_value=b"archive\n"
                 ) as read:
                     CLI._archive_recheck(context, state, phase)
                 render.assert_called_once_with(
@@ -892,9 +893,9 @@ class Revision9ArchiveRecheckTests(unittest.TestCase):
         for phase in sorted(CLI.ARCHIVE_RECHECK_CONTROLS):
             context = self.archive_context(state)
             with self.subTest(phase=phase), mock.patch.object(
-                CLI, "_render_archive_bytes", return_value=b"changed\n"
+                ENGINE, "_render_archive_bytes", return_value=b"changed\n"
             ), mock.patch.object(
-                CLI, "_read_archive_candidate", return_value=b"archive\n"
+                ENGINE, "_read_archive_candidate", return_value=b"archive\n"
             ), self.assertRaises(CLI.Refusal) as raised:
                 CLI._archive_recheck(context, state, phase)
             envelope = raised.exception.outcome().envelope()
@@ -909,9 +910,9 @@ class Revision9ArchiveRecheckTests(unittest.TestCase):
         context = self.archive_context(state)
         context.repo.staged_paths.return_value.append("src/unrelated.py")
         with mock.patch.object(
-            CLI, "_render_archive_bytes", return_value=b"archive\n"
+            ENGINE, "_render_archive_bytes", return_value=b"archive\n"
         ), mock.patch.object(
-            CLI, "_read_archive_candidate", return_value=b"archive\n"
+            ENGINE, "_read_archive_candidate", return_value=b"archive\n"
         ), self.assertRaises(CLI.Refusal) as raised:
             CLI._archive_recheck(context, state, "authorization")
         envelope = raised.exception.outcome().envelope()
@@ -927,13 +928,13 @@ class Revision9ArchiveRecheckTests(unittest.TestCase):
         context = self.archive_context(state)
         for control in CLI.ARCHIVE_RECHECK_CONTROLS:
             with self.subTest(control=control), mock.patch.object(
-                CLI,
+                ENGINE,
                 "ARCHIVE_RECHECK_CONTROLS",
                 CLI.ARCHIVE_RECHECK_CONTROLS - {control},
             ), mock.patch.object(
-                CLI, "_render_archive_bytes", return_value=b"archive\n"
+                ENGINE, "_render_archive_bytes", return_value=b"archive\n"
             ), mock.patch.object(
-                CLI, "_read_archive_candidate", return_value=b"archive\n"
+                ENGINE, "_read_archive_candidate", return_value=b"archive\n"
             ), self.assertRaisesRegex(
                 CLI.FrozenError,
                 "Revision-9 archive rerender control is unavailable",
@@ -954,7 +955,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         ), mock.patch.object(
             RUNTIME, "PLUGIN_ROOT", ROOT
         ), mock.patch.object(
-            CLI, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 
@@ -2805,7 +2806,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         with mock.patch.object(RUNTIME, "utc_now", return_value=later):
             # Disable proof: without the exemption the deadline refuses the verb.
             with mock.patch.object(
-                CLI, "TERMINAL_TOUCH_VERBS", frozenset({"status", "commit abort"})
+                ENGINE, "TERMINAL_TOUCH_VERBS", frozenset({"status", "commit abort"})
             ):
                 exit_code, refused = self.invoke_cli("--chain-id", chain_id, "commit", "abort-disposition")
             self.assertEqual(exit_code, 1, refused)
@@ -2845,7 +2846,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 allow_head_moved=True, check_candidate=False,
             )
             with mock.patch.object(
-                CLI, "TERMINAL_TOUCH_VERBS", frozenset({"status", "commit abort"})
+                ENGINE, "TERMINAL_TOUCH_VERBS", frozenset({"status", "commit abort"})
             ), self.assertRaises(CLI.Refusal) as caught:
                 engine._preflight(
                     state, "commit abort-disposition", mutating=False,

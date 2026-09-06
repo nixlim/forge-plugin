@@ -27,6 +27,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 
 CLI = load_script("forge_cli_chain_finalize_tests", CLI_PATH)
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
+ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
 
 
 POLICY = """\
@@ -1139,7 +1140,7 @@ class CommittingStateTests(FinalizeFixture):
                 "commit skip",
             ),
         }
-        with mock.patch.object(CLI, "_run_halt", autospec=True) as halt:
+        with mock.patch.object(ENGINE, "_run_halt", autospec=True) as halt:
             for verb, (invoke, observed) in verbs.items():
                 with self.subTest(verb=verb):
                     with self.assertRaises(CLI.Refusal) as raised:
