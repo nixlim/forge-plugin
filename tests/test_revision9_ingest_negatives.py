@@ -38,6 +38,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 
 
 CLI = load_script("forge_revision9_ingest_negative_cli", CLI_PATH)
+CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_ingest_negative_fixture_support",
@@ -578,7 +579,9 @@ class Revision9IngestPredicateNegativeTests(
         with self.cli_process_context():
             CLI.register_coordination_seams()
         verifier = CLI._ingest_proof_verifier
-        self.assertIs(verifier.__globals__, vars(CLI))
+        # cli split phase 2b: the ingest verifiers live in the canonical chain-core module,
+        # so their authority globals are that module's, shared by every loaded shim.
+        self.assertIs(verifier.__globals__, vars(CORE))
         self.assertIs(getattr(verifier, "_forge_cli_revision9_seam", None), True)
         return verifier.__globals__
 
@@ -898,7 +901,7 @@ class Revision9IngestPredicateNegativeTests(
         )
 
         with mock.patch.object(
-            CLI, "_committed_changelog_output_paths", return_value=frozenset()
+            CORE, "_committed_changelog_output_paths", return_value=frozenset()
         ):
             self.assert_ingest_refusal(prepared, "scope-membership")
 

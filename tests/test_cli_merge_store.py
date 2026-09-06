@@ -26,6 +26,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 
 
 CLI = load_script("forge_cli_merge_store_tests", CLI_PATH)
+CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_cli_merge_store_fixture_support",
@@ -680,7 +681,7 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
         )
         for control in sorted(CLI._REQUIRED_MERGE_STORE_CONTROLS):
             with self.subTest(control=control), mock.patch.object(
-                CLI,
+                CORE,
                 "MERGE_STORE_CONTROLS",
                 CLI._REQUIRED_MERGE_STORE_CONTROLS - {control},
             ), self.assertRaises(CLI.FrozenError):
@@ -1005,7 +1006,7 @@ class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
             self.boundaries.clear()
             with mock.patch.object(
-                CLI,
+                CORE,
                 "_drain_chain_batch_capability",
                 side_effect=crash_after_persistence,
             ), self.assertRaisesRegex(RuntimeError, "simulated drain crash"):
@@ -1068,7 +1069,7 @@ class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
             self.boundaries.clear()
             with mock.patch.object(
-                CLI, "_drain_chain_batch_capability", wraps=original_drain
+                CORE, "_drain_chain_batch_capability", wraps=original_drain
             ):
                 recovered = store.recover_pending_outbox(
                     self.chain_id, session="bound-merge-session"

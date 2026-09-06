@@ -10,6 +10,17 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- CLI split phase 2b (bead forge-plugin-95e.3): the fenced process runner, the
+  FR-235 common-lock arbiter and chain leases, chain and merge-chain storage,
+  merge state and transition validation, and the ingest verifiers (288
+  definitions) move verbatim into `scripts/forge/forge_cli/chain_core.py`; the
+  shim reads them by attribute and forwards reads of those names, the
+  journal-record builder stays in the shim and is bound onto a late-bound
+  `forge_cli.runtime` seam that chain_core calls, the remaining test patch
+  sites for `run_fenced_command` and the record builder target the canonical
+  modules, and the FR-230 manifest subject set covers `chain_core.py`. The shim
+  is now about 21k lines. No verb, diagnostic, reason code, or `--help` byte
+  changes.
 - CLI split phase 2a (bead forge-plugin-95e.3): `scripts/forge/forge_cli/runtime.py`
   is the one canonical module for the patchable controls (`utc_now`,
   `run_bounded`, `MERGE_LIFECYCLE_ACTIVE`, `REVISION9_STATE_CONTROLS`,

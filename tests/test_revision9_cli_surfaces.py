@@ -41,6 +41,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 
 
 CLI = load_script("forge_revision9_cli_surface_tests", CLI_PATH)
+CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_cli_fixture_support", ROOT / "tests" / "test_cli_chain.py"
@@ -1078,7 +1079,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertTrue(changed["ok"])
 
         with mock.patch.object(
-            CLI, "_committed_changelog_output_paths", return_value=frozenset()
+            CORE, "_committed_changelog_output_paths", return_value=frozenset()
         ):
             exit_code, refused = self.invoke_cli(
                 "--chain-id", chain_id, "gate", "run", "gate-1"
@@ -1473,7 +1474,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         intent_path = prepared.run_dir / journal.BATCH_INTENT_NAME
         self.assertFalse(intent_path.exists())
         with mock.patch.object(
-            CLI,
+            CORE,
             "_verify_and_build_ingest_records",
             side_effect=AssertionError("receipted retry attempted re-proof"),
         ) as verifier, mock.patch.object(
@@ -1669,11 +1670,11 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
             enabled = frozenset(proof_order) - {control}
             with self.subTest(control=control), mock.patch.object(
-                CLI, "INGEST_PROOF_CONTROLS", enabled
+                CORE, "INGEST_PROOF_CONTROLS", enabled
             ), mock.patch.object(
-                CLI, "_REQUIRED_INGEST_PROOF_CONTROLS", enabled
+                CORE, "_REQUIRED_INGEST_PROOF_CONTROLS", enabled
             ), mock.patch.object(
-                CLI, "_require_ingest_proof", side_effect=track_boundary
+                CORE, "_require_ingest_proof", side_effect=track_boundary
             ), self.assertRaises(
                 journal.CoordinationRefusal
             ) as raised:
@@ -1724,7 +1725,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             original_require(name, completed_proofs)
 
         with mock.patch.object(
-            CLI, "_require_ingest_proof", side_effect=track_boundary
+            CORE, "_require_ingest_proof", side_effect=track_boundary
         ), self.assertRaises(journal.CoordinationRefusal) as raised:
             CLI._verify_and_build_ingest_records(
                 self.repo, prepared.run_id, prepared.verifier_inputs
@@ -2399,7 +2400,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         chain_id = self.start_bound_fast_chain(run_id)
         run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
         # A pre-revision-13 abort shape: the chain_aborted event carries nothing.
-        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+        with mock.patch.object(RUNTIME, "_build_chain_journal_records", return_value=()):
             exit_code, aborted = self.invoke_cli(
                 "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
             )
@@ -2637,7 +2638,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         run_id = "run-20260905-retro-runid"
         chain_id = self.start_bound_fast_chain(run_id)
         run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
-        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+        with mock.patch.object(RUNTIME, "_build_chain_journal_records", return_value=()):
             exit_code, aborted = self.invoke_cli(
                 "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
             )
@@ -2794,7 +2795,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         _batch, builders, journal = CLI._coordination_modules()
         run_id = "run-20260905-retro-stale"
         chain_id = self.start_bound_fast_chain(run_id)
-        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+        with mock.patch.object(RUNTIME, "_build_chain_journal_records", return_value=()):
             exit_code, aborted = self.invoke_cli(
                 "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
             )
@@ -2821,7 +2822,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         """Bead forge-plugin-rtj: the FR-053 cap never strands a retrospective disposition."""
         run_id = "run-20260905-retro-cap"
         chain_id = self.start_bound_fast_chain(run_id)
-        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+        with mock.patch.object(RUNTIME, "_build_chain_journal_records", return_value=()):
             exit_code, aborted = self.invoke_cli(
                 "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
             )
@@ -2856,7 +2857,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         _batch, builders, journal = CLI._coordination_modules()
         run_id = "run-20260905-retro-args"
         chain_id = self.start_bound_fast_chain(run_id)
-        with mock.patch.object(CLI, "_build_chain_journal_records", return_value=()):
+        with mock.patch.object(RUNTIME, "_build_chain_journal_records", return_value=()):
             exit_code, aborted = self.invoke_cli(
                 "--chain-id", chain_id, "commit", "abort", "--reason", "legacy abort"
             )

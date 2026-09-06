@@ -26,6 +26,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 
 
 CLI = load_script("forge_cli_merge_adapter_tests", CLI_PATH)
+CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 FIXTURE_SUPPORT = load_script(
     "forge_cli_merge_adapter_fixture_support",
@@ -781,7 +782,7 @@ class MergeAdmissionAdapterTests(MergeAdapterFixture):
         }
         for control, call in calls.items():
             with self.subTest(control=control), mock.patch.object(
-                CLI,
+                CORE,
                 "MERGE_ADAPTER_CONTROLS",
                 CLI.MERGE_ADAPTER_CONTROLS - {control},
             ), self.assertRaisesRegex(
