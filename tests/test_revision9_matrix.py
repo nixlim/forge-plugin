@@ -20,16 +20,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 ARCHIVE_PATH = ROOT / "scripts" / "forge" / "archive-run.py"
 
 
-def load_module(name: str, path: Path) -> object:
-    cached = sys.modules.get(name)
-    if cached is not None:
-        return cached
-    specification = importlib.util.spec_from_file_location(name, path)
-    assert specification is not None and specification.loader is not None
-    module = importlib.util.module_from_spec(specification)
-    sys.modules[name] = module
-    specification.loader.exec_module(module)
-    return module
+from tests._cli_loader import load_cached as load_module  # cli split phase 0: one shared loader
 
 
 def canonical(value: object) -> bytes:

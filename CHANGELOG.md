@@ -10,6 +10,15 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- CLI split phase 0 (bead forge-plugin-95e.1): every test module now loads
+  `scripts/forge/cli.py` through one shared loader, `tests/_cli_loader.py`
+  (`load_cli`, `load_script`, and the memoizing `load_cached`), with identical
+  fresh-module semantics so per-module `mock.patch.object(CLI, ...)` isolation
+  is unchanged; a loader contract test pins the shim path, the independent
+  globals, and that no test module keeps a private loader. Spec §5 records
+  `scripts/forge/forge_cli/` as the interpreter-loaded package the CLI is being
+  split into, outside the executable-script inventory, with `cli.py` remaining
+  the sole invoked entry point. No runtime behaviour changes.
 - `/forge:worktree-merge` now takes its reintegration lock as FR-235's portable
   Git-common-dir arbiter through the Forge CLI wrapper `common-lock hold
   --owner-kind push --operation push`, waiting for the wrapper's readiness

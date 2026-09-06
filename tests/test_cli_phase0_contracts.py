@@ -53,14 +53,7 @@ PHASE1_SKIP = (
 )
 
 
-def load_script(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+from tests._cli_loader import load_script  # cli split phase 0: one shared loader
 
 
 FR223_EVAL = load_script("forge_fr223_eval_tests", EVAL_SCRIPT)

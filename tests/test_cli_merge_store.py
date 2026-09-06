@@ -22,14 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-def load_script(name: str, path: Path) -> ModuleType:
-    specification = importlib.util.spec_from_file_location(name, path)
-    if specification is None or specification.loader is None:
-        raise RuntimeError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(specification)
-    sys.modules[name] = module
-    specification.loader.exec_module(module)
-    return module
+from tests._cli_loader import load_script  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_merge_store_tests", CLI_PATH)

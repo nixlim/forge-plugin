@@ -26,14 +26,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 CHAIN_ID = "c-2026-08-29T120000Z-abcd"
 
 
-def load_script(name: str, path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+from tests._cli_loader import load_script  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_common_lock_tests", CLI_PATH)

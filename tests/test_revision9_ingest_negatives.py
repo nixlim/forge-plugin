@@ -34,14 +34,7 @@ ENVELOPE_KEYS = {
 }
 
 
-def load_script(name: str, path: Path) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+from tests._cli_loader import load_script  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_revision9_ingest_negative_cli", CLI_PATH)

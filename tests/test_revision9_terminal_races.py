@@ -24,17 +24,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 HARNESS_TIMEOUT_SECONDS = 45.0
 
 
-def load_script(name: str, path: Path) -> ModuleType:
-    cached = sys.modules.get(name)
-    if cached is not None:
-        return cached
-    specification = importlib.util.spec_from_file_location(name, path)
-    if specification is None or specification.loader is None:
-        raise RuntimeError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(specification)
-    sys.modules[name] = module
-    specification.loader.exec_module(module)
-    return module
+from tests._cli_loader import load_cached as load_script  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_revision9_terminal_race_cli", CLI_PATH)
