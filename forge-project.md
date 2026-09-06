@@ -99,7 +99,47 @@ python3 -m unittest tests.test_repo_conformance
 
 <!-- FORGE:REGION gate1-test-command BEGIN -->
 ```bash
-python3 -m unittest discover -s tests
+python3 - <<'PY'
+# Full unittest discovery, fanned out across shards inside this one cell (bead
+# forge-plugin-pwy): the same modules `python3 -m unittest discover -s tests`
+# would collect, partitioned round-robin over min(4, cpu) workers that share the
+# cell's process group and timeout. Fail-closed: any shard exit other than zero,
+# any shard without a final unittest summary, or an empty module set fails the
+# cell; each shard prints at most its last 8 KiB of bytes (sliced before decoding)
+# so the combined output stays within the 65,536-byte cap.
+import glob
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+modules = sorted(pathlib.Path(path).stem for path in glob.glob("tests/test_*.py"))
+if not modules:
+    print("gate-1: no test modules under tests/", file=sys.stderr)
+    raise SystemExit(1)
+shards = max(1, min(4, os.cpu_count() or 1))
+groups = [[f"tests.{name}" for index, name in enumerate(modules) if index % shards == i] for i in range(shards)]
+processes = [
+    subprocess.Popen(
+        [sys.executable, "-m", "unittest", *group],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    for group in groups
+    if group
+]
+failed = False
+for index, process in enumerate(processes):
+    output, _ = process.communicate()
+    summary = re.search(rb"^Ran (\d+) tests? in", output, flags=re.MULTILINE)
+    verdict = "OK" if process.returncode == 0 and summary else "FAILED"
+    if verdict == "FAILED":
+        failed = True
+    print(f"gate-1 shard {index + 1}/{len(processes)}: exit {process.returncode} {verdict}")
+    print(output[-8192:].decode("utf-8", "replace"))
+raise SystemExit(1 if failed else 0)
+PY
 ```
 <!-- FORGE:REGION gate1-test-command END -->
 

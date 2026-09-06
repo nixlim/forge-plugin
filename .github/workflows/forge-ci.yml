@@ -24,8 +24,35 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Gate 1 — full unittest discovery
-        run: python3 -m unittest discover -s tests
+      - name: Gate 1 — committed gate-1 policy cell (sharded full discovery)
+        run: |
+          # Run the exact committed gate1-test-command cell through the repository's own
+          # FR-149 runner (forge_cli.runtime.run_bounded: isolated process group, kill on
+          # timeout, 65,536-byte output cap, fixed 1200 s bound) with `forge` as $0, so CI
+          # exercises the same sharded discovery the commit, merge, and drift gates run.
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts/forge")
+          from forge_cli.policy import parse_policy
+          from forge_cli.runtime import run_bounded
+
+          head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+          raw = subprocess.run(["git", "show", f"{head}:forge-project.md"], capture_output=True, check=True).stdout
+          cell = parse_policy(head, raw).gate1
+          result = run_bounded(["bash", "-c", cell, "forge"], cwd=Path.cwd(), timeout=1200)
+          sys.stdout.buffer.write(result.output)
+          sys.stdout.flush()
+          if result.timed_out:
+              print("gate-1: cell exceeded the 1200-second fail-closed timeout", file=sys.stderr)
+              raise SystemExit(2)
+          if result.output_limit:
+              print("gate-1: cell exceeded the 65,536-byte output cap", file=sys.stderr)
+              raise SystemExit(2)
+          raise SystemExit(result.returncode)
+          PY
 
       - name: Routing and executable-inventory conformance
         run: python3 -m unittest tests.test_repo_conformance

@@ -242,7 +242,12 @@ of scope.
 python3 -m unittest discover -s tests
 ```
 
-The suite is stdlib only and currently runs roughly 650 tests. `UPSTREAM` records
+The committed gate-1 cell in `forge-project.md` runs that same discovery fanned out
+over up to four shards inside one cell (roughly a third of the sequential wall time on
+a four-core host);
+the plain command above remains the vendored-suite contract.
+
+The suite is stdlib only and currently runs roughly 1,500 tests. `UPSTREAM` records
 both vendored upstream SHAs and every deliberate deviation.
 
 - Design decisions: [docs/design/0001-founding-decisions.md](docs/design/0001-founding-decisions.md)

@@ -10,6 +10,17 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Gate 1 wall time (bead forge-plugin-pwy): the committed `gate1-test-command`
+  cell now fans full unittest discovery out over `min(4, cpu)` shards inside the
+  one `bash -c` cell, fail-closed on any failing shard, empty module set, or
+  shard without a unittest summary, with per-shard output tails kept under the
+  65,536-byte cap (tails sliced in bytes before decoding); the same 1,514 tests
+  run in about 320 to 390 s instead of about 1,060 s on an eight-core host, and
+  CI's gate-1 step runs the committed cell through the repository's FR-149
+  runner (`forge_cli.runtime.run_bounded`: process group, output cap, 1,200 s
+  bound), after its drift-check rerun had timed out at that bound on the
+  slower runner. FR-149 gains a Revision-13 amendment authorising
+  in-cell parallel workers under the cell's process group and output cap.
 - CLI split phase 2b (bead forge-plugin-95e.3): the fenced process runner, the
   FR-235 common-lock arbiter and chain leases, chain and merge-chain storage,
   merge state and transition validation, and the ingest verifiers (288
