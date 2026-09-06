@@ -61,14 +61,40 @@ class CliLoaderTests(unittest.TestCase):
     def test_every_test_module_loads_the_cli_through_the_shared_loader(self) -> None:
         """No test module keeps a private CLI loader (later phases retarget one place)."""
         offenders: list[str] = []
+        shared_import = re.compile(r"^from tests\._cli_loader import ", flags=re.MULTILINE)
         for path in sorted(ROOT.glob("tests/test_*.py")):
+            if path.name == Path(__file__).name:
+                continue
             text = path.read_text(encoding="utf-8")
             if re.search(r"^def (load_script|load_module)\(", text, flags=re.MULTILINE):
                 offenders.append(f"{path.name}: private load_script/load_module definition")
-            loads_cli = re.search(r"load_(script|module|cached)\([^)]*CLI_PATH\)", text) is not None
-            if loads_cli and "from tests._cli_loader import" not in text:
-                offenders.append(f"{path.name}: loads CLI_PATH without the shared loader")
+            # Any in-process load of the shim: through a loader call naming the CLI
+            # path constant, or a direct spec_from_file_location on cli.py.
+            loads_cli = (
+                re.search(r"load_(script|module|cached)\(\s*[^)]*\b(CLI_PATH|CLI)\s*\)", text) is not None
+                or re.search(r"spec_from_file_location\([^)]*cli\.py", text) is not None
+            )
+            if loads_cli and shared_import.search(text) is None:
+                offenders.append(f"{path.name}: loads cli.py without the shared loader")
         self.assertEqual(offenders, [])
+
+    def test_package_modules_are_canonical_and_reexported_by_the_shim(self) -> None:
+        """Phase 1: envelope and policy live in forge_cli; the shim re-exports the same objects."""
+        envelope = _cli_loader.package_module("envelope")
+        policy = _cli_loader.package_module("policy")
+        cli = _cli_loader.load_cli("_cli_loader_test_reexport")
+        other = _cli_loader.load_cli("_cli_loader_test_reexport_other")
+        for name in ("ReasonCode", "V2ReasonCode", "Refusal", "FrozenError", "Outcome", "OUTPUT_SCHEMA", "REVISION9_OUTPUT_SCHEMA"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(cli, name), getattr(envelope, name))
+                self.assertIs(getattr(other, name), getattr(envelope, name))
+        for name in ("parse_policy", "Policy", "PolicyError", "_fence_lines", "_dedent_fenced_cell", "sha256_bytes"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(cli, name), getattr(policy, name))
+        self.assertIs(_cli_loader.package_module("policy"), policy)
+        # A patch on the canonical module is what parse_policy observes.
+        with mock.patch.object(policy, "_dedent_fenced_cell", lambda cell, prefix: "PATCHED"):
+            self.assertEqual(policy._fenced_shell_cells.__globals__["_dedent_fenced_cell"]("x", ""), "PATCHED")
 
 
 if __name__ == "__main__":

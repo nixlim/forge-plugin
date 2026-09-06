@@ -6,7 +6,10 @@ per-module ``load_script`` helpers this replaces: a fresh module object is creat
 file location under the caller-chosen name, registered in ``sys.modules`` under that name
 before execution (so intra-module imports and dataclass machinery resolve), and executed
 once. Distinct names yield distinct module objects with independent globals, which is what
-keeps ``mock.patch.object(CLI, ...)`` in one test module invisible to every other.
+keeps ``mock.patch.object(CLI, ...)`` on a name still defined in the shim invisible to every
+other test module. Names that have moved into ``forge_cli`` are different: the package modules
+are process-global (see :func:`package_module`), so a patch on a moved control must target the
+canonical package module and must always run inside a restoring context.
 
 Only the interpreter-loaded entry point is loaded here: ``scripts/forge/cli.py`` stays the
 shim path the FR-221 guard matcher and the fr223 corpora pin, and nothing under
@@ -15,6 +18,7 @@ shim path the FR-221 guard matcher and the fr223 corpora pin, and nothing under
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -51,3 +55,17 @@ def load_cached(name: str, path: Path) -> ModuleType:
     if cached is not None:
         return cached
     return load_script(name, path)
+
+
+def package_module(name: str) -> ModuleType:
+    """Import ``forge_cli.<name>`` once, exactly as the shim does, and return it.
+
+    The package modules are canonical (one object shared by every loaded CLI
+    instance), so a test that patches a moved control patches it here, not on a
+    per-module copy of the name.
+    """
+
+    scripts_dir = str(SCRIPTS_DIR)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    return importlib.import_module(f"forge_cli.{name}")

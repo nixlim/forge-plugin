@@ -10,6 +10,19 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- CLI split phase 1 (bead forge-plugin-95e.2): the response envelope (reason
+  codes, `Refusal`, `FrozenError`, `Outcome`, output schemas) and the
+  committed-policy parser move verbatim from `scripts/forge/cli.py` into the
+  interpreter-loaded package `scripts/forge/forge_cli/` (`envelope.py`,
+  `policy.py`); the shim re-imports every moved name by an explicit list so all
+  module attributes, verbs, diagnostics, reason codes, and `--help` bytes are
+  unchanged, and the policy-fence tests now patch the fence helpers on the
+  canonical package module. The FR-230 phase-3 manifest's production subject
+  set now covers the package modules beside `cli.py` and `commit-guard.sh`, so
+  a change to a moved definition changes the subject candidate exactly as a
+  shim edit does. The transition-table and ingest-verifier clusters stay in the
+  shim for now: their closures reach patched controls and the coordination
+  cache, so they move with the runtime module in later phases.
 - CLI split phase 0 (bead forge-plugin-95e.1): every test module now loads
   `scripts/forge/cli.py` through one shared loader, `tests/_cli_loader.py`
   (`load_cli`, `load_script`, and the memoizing `load_cached`), with identical

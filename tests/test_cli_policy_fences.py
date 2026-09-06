@@ -16,10 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts/forge/cli.py"
 
 
-from tests._cli_loader import load_script  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_policy_fence_tests", CLI_PATH)
+# cli split phase 1: the fence helpers are canonical package seams, patched where they live.
+POLICY = package_module("policy")
 
 FLAT_CELL = 'python3 -m unittest discover -s tests\n# blast radius\npython3 -m unittest tests.test_repo_conformance "$@"'
 
@@ -177,7 +179,7 @@ class FencedShellCellTests(unittest.TestCase):
             return openings, {prefix: list(merged) for _index, prefix in openings}
 
         body = "  ```bash\n  echo one\n```\n"
-        with mock.patch.object(CLI, "_fence_lines", lenient):
+        with mock.patch.object(POLICY, "_fence_lines", lenient):
             self.assertEqual(CLI._fenced_shell_cells(body), ["echo one"])
         self.assertEqual(CLI._fenced_shell_cells(body), [])
 
@@ -213,7 +215,7 @@ class ParsePolicyTests(unittest.TestCase):
         # Proof that the dedent helper is the control: with it neutralised the
         # nested cell no longer equals the flat cell, so a regression that
         # short-circuits the helper cannot pass the equivalence test above.
-        with mock.patch.object(CLI, "_dedent_fenced_cell", lambda cell, prefix: cell):
+        with mock.patch.object(POLICY, "_dedent_fenced_cell", lambda cell, prefix: cell):
             nested = CLI.parse_policy("f" * 40, policy(NESTED_GATE1))
         self.assertNotEqual(nested.gate1, FLAT_CELL)
         self.assertTrue(nested.gate1.startswith("  "))

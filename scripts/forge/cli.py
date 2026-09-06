@@ -39,104 +39,46 @@ import time
 from enum import Enum
 from typing import Any, Callable, Collection, Iterable, Mapping, MutableMapping, Sequence
 
-
-class ReasonCode(str, Enum):
-    """The closed FR-220 reason-code corpus; values must remain literal."""
-
-    AMBIGUOUS_TARGET = "ambiguous-target"
-    APPROVAL_REQUIRED = "approval-required"
-    CANDIDATE_STALE = "candidate-stale"
-    CITATION_OUT_OF_ROOT = "citation-out-of-root"
-    DIRTY_INDEX = "dirty-index"
-    DRIFT_TREE_INDEX = "drift-tree-index"
-    EVIDENCE_INCOMPLETE = "evidence-incomplete"
-    FROZEN_CHAIN = "frozen-chain"
-    HALT_ENGAGED = "halt-engaged"
-    HEAD_MOVED = "head-moved"
-    INACTIVE_CHAIN = "inactive-chain"
-    ITERATION_CAP = "iteration-cap"
-    LIVE_CHAIN_EXISTS = "live-chain-exists"
-    LOCK_UNAVAILABLE = "lock-unavailable"
-    MUTATING_GATE_PENDING = "mutating-gate-pending"
-    OK = "ok"
-    OPERATOR_VERB_DENIED = "operator-verb-denied"
-    PATH_MISSING = "path-missing"
-    POLICY_CHANGED = "policy-changed"
-    POLICY_UNREADABLE = "policy-unreadable"
-    REVIEW_VERDICT_INVALID = "review-verdict-invalid"
-    SKIP_NOT_PERMITTED = "skip-not-permitted"
-    STATE_PRECONDITION = "state-precondition"
-    TOKEN_CONSUMED = "token-consumed"
-    TTL_EXPIRED = "ttl-expired"
-
-
-class V2ReasonCode(str, Enum):
-    """The complete additive 54-member ``forge-cli/2`` reason union."""
-
-    AMBIGUOUS_TARGET = "ambiguous-target"
-    APPROVAL_REQUIRED = "approval-required"
-    ARCHIVE_RERENDER_MISMATCH = "archive-rerender-mismatch"
-    ARCHIVE_SIZE_LIMIT = "archive-size-limit"
-    BATCH_IDEMPOTENCY_CONFLICT = "batch-idempotency-conflict"
-    BATCH_PENDING = "batch-pending"
-    BINDING_INVALID = "binding-invalid"
-    CANDIDATE_STALE = "candidate-stale"
-    CITATION_OUT_OF_ROOT = "citation-out-of-root"
-    CLEANUP_FAILED = "cleanup-failed"
-    DIRTY_INDEX = "dirty-index"
-    DIRTY_WORKTREE = "dirty-worktree"
-    DRIFT_TREE_INDEX = "drift-tree-index"
-    EVIDENCE_INCOMPLETE = "evidence-incomplete"
-    FETCH_FAILED = "fetch-failed"
-    FROZEN_CHAIN = "frozen-chain"
-    HALT_ENGAGED = "halt-engaged"
-    HEAD_MOVED = "head-moved"
-    INACTIVE_CHAIN = "inactive-chain"
-    INGEST_PROOF_INVALID = "ingest-proof-invalid"
-    ITERATION_CAP = "iteration-cap"
-    JOURNAL_OUTBOX_PENDING = "journal-outbox-pending"
-    LEGACY_RECOVERY_APPROVAL_REQUIRED = "legacy-recovery-approval-required"
-    LIVE_CHAIN_EXISTS = "live-chain-exists"
-    LIVE_MERGE_CHAIN_EXISTS = "live-merge-chain-exists"
-    LOCK_RELEASE_FAILED = "lock-release-failed"
-    LOCK_UNAVAILABLE = "lock-unavailable"
-    MERGE_GATE_FAILED = "merge-gate-failed"
-    MUTATING_GATE_PENDING = "mutating-gate-pending"
-    NON_FAST_FORWARD = "non-fast-forward"
-    OK = "ok"
-    OPERATOR_VERB_DENIED = "operator-verb-denied"
-    OPTION_DUPLICATE = "option-duplicate"
-    OPTION_EMPTY = "option-empty"
-    PATH_MISSING = "path-missing"
-    POLICY_CHANGED = "policy-changed"
-    POLICY_UNREADABLE = "policy-unreadable"
-    PUSH_FAILED = "push-failed"
-    PUSH_OUTCOME_UNKNOWN = "push-outcome-unknown"
-    PUSH_TARGET_INVALID = "push-target-invalid"
-    REBASE_CONFLICT = "rebase-conflict"
-    REBASE_FAILED = "rebase-failed"
-    REBASE_LOCK_UNAVAILABLE = "rebase-lock-unavailable"
-    REMOTE_CHURN = "remote-churn"
-    REVIEW_VERDICT_INVALID = "review-verdict-invalid"
-    RUN_TASK_BINDING_INVALID = "run-task-binding-invalid"
-    RUN_TASK_BINDING_REQUIRED = "run-task-binding-required"
-    RUN_SCOPE_EXCEEDED = "run-scope-exceeded"
-    SKIP_NOT_PERMITTED = "skip-not-permitted"
-    STATE_PRECONDITION = "state-precondition"
-    TOKEN_CONSUMED = "token-consumed"
-    TTL_EXPIRED = "ttl-expired"
-    WORKTREE_INVALID = "worktree-invalid"
-    WORKTREE_MISSING = "worktree-missing"
+# cli split phase 1 (bead forge-plugin-95e.2): the response envelope and the committed-policy
+# parser live in the interpreter-loaded forge_cli package beside this shim. Explicit named
+# imports keep every historical `CLI.<name>` attribute resolvable on this module.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from forge_cli.envelope import (  # noqa: E402
+    ENVELOPE_KEYS,
+    FrozenError,
+    OUTPUT_SCHEMA,
+    Outcome,
+    REVISION9_OUTPUT_SCHEMA,
+    ReasonCode,
+    Refusal,
+    Revision9ReasonCode,
+    V2ReasonCode,
+)
+from forge_cli.policy import (  # noqa: E402
+    Policy,
+    PolicyError,
+    REGION_ORDER,
+    _FENCE_CLOSE_LINE,
+    _FENCE_OPEN_LINE,
+    _dedent_fenced_cell,
+    _fence_lines,
+    _fenced_shell_cells,
+    _parse_changelog,
+    _parse_invariants,
+    _parse_regions,
+    _separator,
+    _split_markdown_row,
+    parse_policy,
+    sha256_bytes,
+)
 
 
 # Descriptive compatibility alias for callers that imported the initial
 # Revision-9 implementation name while still exposing the complete v2 union.
-Revision9ReasonCode = V2ReasonCode
 
 
 SCHEMA = "forge-chain/1"
-OUTPUT_SCHEMA = "forge-cli/1"
-REVISION9_OUTPUT_SCHEMA = "forge-cli/2"
 KIND = "commit"
 STATES = {
     "classifying",
@@ -291,19 +233,6 @@ MERGE_CONSEQUENTIAL_EVENTS = frozenset(
         "push_observed",
     }
 )
-ENVELOPE_KEYS = {
-    "chain_id",
-    "evidence_refs",
-    "expected",
-    "message",
-    "next_required_step",
-    "observed",
-    "ok",
-    "reason_code",
-    "remediation",
-    "schema",
-    "state",
-}
 TIER_RANK = {"fast": 0, "standard": 1, "hard": 2}
 INACTIVE_SECONDS = 24 * 60 * 60
 TOKEN_TTL_SECONDS = 30 * 60
@@ -8433,10 +8362,6 @@ def _coordination_refusal(exc: BaseException) -> Refusal | FrozenError:
     )
 
 
-def sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
 def commit_message_bytes(message: str) -> bytes:
     """Bytes Git stores for one verbatim ``-m`` argument."""
     encoded = message.encode("utf-8")
@@ -8466,142 +8391,6 @@ def chain_id_now() -> str:
 def promoted_tier(*tiers: str | None) -> str:
     present = [tier for tier in tiers if tier in TIER_RANK]
     return max(present, key=TIER_RANK.__getitem__) if present else "standard"
-
-
-@dataclasses.dataclass(frozen=True)
-class Outcome:
-    ok: bool
-    reason_code: ReasonCode | Revision9ReasonCode
-    message: str
-    chain_id: str | None = None
-    state: str | None = None
-    expected: str | None = None
-    observed: str | None = None
-    remediation: str | None = None
-    next_required_step: str = "none — chain closed"
-    evidence_refs: tuple[str, ...] = ()
-    schema: str = OUTPUT_SCHEMA
-
-    @property
-    def exit_code(self) -> int:
-        if self.reason_code.value == "ok" and self.ok:
-            return 0
-        if self.reason_code.value == "frozen-chain":
-            return 2
-        return 1
-
-    def envelope(self) -> dict[str, Any]:
-        result = {
-            "chain_id": self.chain_id,
-            "evidence_refs": list(self.evidence_refs),
-            "expected": self.expected,
-            "message": self.message,
-            "next_required_step": self.next_required_step,
-            "observed": self.observed,
-            "ok": self.ok,
-            "reason_code": self.reason_code.value,
-            "remediation": self.remediation,
-            "schema": self.schema,
-            "state": self.state,
-        }
-        assert set(result) == ENVELOPE_KEYS
-        return result
-
-
-class Refusal(Exception):
-    def __init__(
-        self,
-        reason_code: ReasonCode | Revision9ReasonCode,
-        message: str,
-        *,
-        expected: str | None = None,
-        observed: str | None = None,
-        remediation: str | None = None,
-        next_required_step: str | None = None,
-        chain: Mapping[str, Any] | None = None,
-        evidence_refs: Iterable[str] = (),
-        schema: str | None = None,
-    ) -> None:
-        super().__init__(message)
-        if reason_code.value in {"ok", "frozen-chain"}:
-            raise ValueError("refusal must use an exit-1 reason code")
-        self.reason_code = reason_code
-        self.message = message
-        self.expected = expected or "the command precondition to be satisfied"
-        self.observed = observed or message
-        self.remediation = remediation or "inspect chain status and follow the required step"
-        self.next_required_step = next_required_step or self.remediation
-        self.chain = chain
-        self.evidence_refs = tuple(evidence_refs)
-        chain_is_revision9 = bool(
-            isinstance(chain, Mapping)
-            and (
-                chain.get("kind") == "merge"
-                or chain.get("schema") == "forge-merge-chain/1"
-                or chain.get("run_binding") is not None
-                or isinstance(chain.get("staging"), Mapping)
-                and chain.get("staging", {}).get("archive") is not None
-            )
-        )
-        self.schema = schema or (
-            REVISION9_OUTPUT_SCHEMA
-            if isinstance(reason_code, V2ReasonCode) or chain_is_revision9
-            else OUTPUT_SCHEMA
-        )
-
-    def outcome(self) -> Outcome:
-        return Outcome(
-            ok=False,
-            reason_code=self.reason_code,
-            message=self.message,
-            chain_id=str(self.chain["chain_id"]) if self.chain else None,
-            state=str(self.chain["state"]) if self.chain else None,
-            expected=self.expected,
-            observed=self.observed or "on-disk state unavailable or invalid",
-            remediation=self.remediation,
-            next_required_step=self.next_required_step,
-            evidence_refs=self.evidence_refs,
-            schema=self.schema,
-        )
-
-
-class FrozenError(Exception):
-    def __init__(
-        self,
-        message: str,
-        *,
-        chain_id: str | None = None,
-        state: str | None = None,
-        observed: str | None = None,
-        schema: str = OUTPUT_SCHEMA,
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.chain_id = chain_id
-        self.state = state
-        self.observed = observed
-        self.schema = schema
-
-    def outcome(self) -> Outcome:
-        remediation = (
-            f"forge status --chain-id {self.chain_id}"
-            if self.chain_id
-            else "forge status"
-        )
-        return Outcome(
-            ok=False,
-            reason_code=ReasonCode.FROZEN_CHAIN,
-            message=(
-                f"{self.message}; chain frozen pending status/abort, never a guessed recovery"
-            ),
-            chain_id=self.chain_id,
-            state=self.state,
-            expected="digest-valid reconstructible chain state",
-            observed=self.observed,
-            remediation=remediation,
-            next_required_step=remediation,
-            schema=self.schema,
-        )
 
 
 def _transition_state(state: MutableMapping[str, Any], target: str) -> None:
@@ -8914,274 +8703,6 @@ class Repository:
             if label not in normalized:
                 normalized.append(label)
         return normalized
-
-
-@dataclasses.dataclass
-class Policy:
-    sha: str
-    raw: bytes
-    digest: str
-    regions: dict[str, str]
-    gate1: str
-    stack_commands: list[str]
-    invariants: list[dict[str, str | int]]
-    changelog: dict[str, Any] | None
-
-
-REGION_ORDER = (
-    "project-overview",
-    "file-categories",
-    "stack-validations",
-    "gate1-test-command",
-    "changelog-policy",
-    "review-prompt-project-focus",
-    "project-triggers",
-    "completeness-project-items",
-    "agent-project-context",
-    "mutation-testing",
-    "invariants",
-    "risk-tiers",
-    "drift-config",
-    "trigger-paths",
-)
-
-
-class PolicyError(ValueError):
-    pass
-
-
-def _parse_regions(raw: bytes) -> dict[str, str]:
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise PolicyError("committed forge-project.md is not UTF-8") from exc
-    begin_re = re.compile(r"^<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->$")
-    end_re = re.compile(r"^<!-- FORGE:REGION ([a-z0-9-]+) END -->$")
-    result: dict[str, str] = {}
-    active: str | None = None
-    body: list[str] = []
-    seen_order: list[str] = []
-    for line in text.splitlines(keepends=True):
-        plain = line.rstrip("\r\n")
-        begin = begin_re.fullmatch(plain)
-        end = end_re.fullmatch(plain)
-        if begin:
-            if active is not None:
-                raise PolicyError("nested Forge region marker")
-            active = begin.group(1)
-            if active in result or active in seen_order:
-                raise PolicyError(f"duplicate Forge region: {active}")
-            seen_order.append(active)
-            body = []
-            continue
-        if end:
-            if active != end.group(1):
-                raise PolicyError("mismatched Forge region marker")
-            result[active] = "".join(body)
-            active = None
-            body = []
-            continue
-        if active is not None:
-            body.append(line)
-    if active is not None:
-        raise PolicyError(f"unterminated Forge region: {active}")
-    if tuple(seen_order) != REGION_ORDER:
-        raise PolicyError("Forge region inventory/order does not match committed schema")
-    return result
-
-
-_FENCE_OPEN_LINE = re.compile(r"([ \t]*)```(?:bash|sh)\r?")
-_FENCE_CLOSE_LINE = re.compile(r"([ \t]*)```[ \t]*\r?")
-
-
-def _fence_lines(lines: list[str]) -> tuple[list[tuple[int, str]], dict[str, list[int]]]:
-    """Classify fence lines in one linear pass.
-
-    Returns the opening fences as ``(line index, prefix)`` pairs and, for every
-    prefix, the ascending line indexes of the closing fences at exactly that
-    indentation.  A closing fence must sit at the opening fence's exact column.
-    """
-    openings: list[tuple[int, str]] = []
-    closings: dict[str, list[int]] = {}
-    for index, line in enumerate(lines):
-        match = _FENCE_OPEN_LINE.fullmatch(line)
-        if match:
-            openings.append((index, match.group(1)))
-            continue
-        match = _FENCE_CLOSE_LINE.fullmatch(line)
-        if match:
-            closings.setdefault(match.group(1), []).append(index)
-    return openings, closings
-
-
-def _dedent_fenced_cell(cell: str, prefix: str) -> str:
-    """Strip the opening fence's exact indentation from every nonblank cell line.
-
-    An indented fence (for example one nested under a Markdown list item, as
-    ``/forge:init`` writes it) must yield byte-identical cell text to the same
-    fence at column 0.  A nonblank line that does not carry the fence's exact
-    prefix is a misaligned or mixed-indentation cell and is malformed policy.
-    """
-    if not prefix:
-        return cell
-    lines: list[str] = []
-    for line in cell.split("\n"):
-        if not line.strip():
-            # A blank line inside the cell carries no prefix to strip; keep
-            # only its line ending so CRLF cells stay internally consistent.
-            lines.append("\r" if line.endswith("\r") else "")
-            continue
-        if not line.startswith(prefix):
-            raise PolicyError("forge: executable policy row malformed")
-        lines.append(line[len(prefix):])
-    return "\n".join(lines)
-
-
-def _fenced_shell_cells(body: str) -> list[str]:
-    """Return every ``bash``/``sh`` fenced cell of ``body`` as flat cell text.
-
-    A line scan with per-prefix closing-fence indexes keeps parsing linear in
-    the body size; a hostile policy full of unmatched or indented openings
-    cannot stall the reader.  An opening fence that never closes at its own
-    column is skipped, and the search resumes after each closed cell.
-    """
-    lines = body.split("\n")
-    openings, closings = _fence_lines(lines)
-    cells: list[str] = []
-    resume_after = -1
-    for index, prefix in openings:
-        if index <= resume_after:
-            continue
-        candidates = closings.get(prefix, [])
-        position = bisect.bisect_right(candidates, index)
-        if position == len(candidates):
-            continue
-        close = candidates[position]
-        cell = "\n".join(lines[index + 1 : close])
-        if cell.endswith("\r"):
-            cell = cell[:-1]
-        if not cell.strip() or "\x00" in cell:
-            # The complete fenced cell is one argv element to ``bash -c``;
-            # embedded newlines remain bytes inside that one cell.
-            raise PolicyError("forge: executable policy row malformed")
-        cells.append(_dedent_fenced_cell(cell, prefix))
-        resume_after = close
-    return cells
-
-
-def _split_markdown_row(line: str) -> list[str] | None:
-    stripped = line.strip()
-    if not stripped.startswith("|") or not stripped.endswith("|"):
-        return None
-    cells: list[str] = []
-    current: list[str] = []
-    escaped = False
-    for char in stripped[1:-1]:
-        if escaped:
-            if char == "|":
-                current.append("|")
-            else:
-                current.extend(("\\", char))
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == "|":
-            cells.append("".join(current).strip().strip("`"))
-            current = []
-        else:
-            current.append(char)
-    if escaped:
-        current.append("\\")
-    cells.append("".join(current).strip().strip("`"))
-    return cells
-
-
-def _separator(cells: Sequence[str]) -> bool:
-    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
-
-
-def _parse_invariants(body: str) -> list[dict[str, str | int]]:
-    rows = [_split_markdown_row(line) for line in body.splitlines()]
-    rows = [row for row in rows if row is not None]
-    if not rows:
-        return []
-    if [cell.lower() for cell in rows[0]] != [
-        "invariant",
-        "check command",
-        "enforcement point",
-    ]:
-        raise PolicyError("forge: executable policy row malformed")
-    if len(rows) < 2 or not _separator(rows[1]):
-        raise PolicyError("forge: executable policy row malformed")
-    parsed: list[dict[str, str | int]] = []
-    for row_number, row in enumerate(rows[2:], 1):
-        if len(row) != 3 or any(not value for value in row):
-            raise PolicyError("forge: executable policy row malformed")
-        if row[2] not in {"commit", "merge", "hook"}:
-            raise PolicyError("forge: executable policy row malformed")
-        if any(char in row[1] for char in "\r\n\x00"):
-            raise PolicyError("forge: executable policy row malformed")
-        parsed.append(
-            {
-                "row_number": row_number,
-                "invariant": row[0],
-                "command": row[1],
-                "enforcement": row[2],
-            }
-        )
-    return parsed
-
-
-def _parse_changelog(body: str) -> dict[str, Any] | None:
-    normalized = body.strip()
-    if re.fullmatch(
-        r"No changelog gate (?:is configured|applies)(?: for| to)?(?: this)? .*?repository\.",
-        normalized,
-        re.IGNORECASE | re.DOTALL,
-    ):
-        return None
-    cells = _fenced_shell_cells(body)
-    if len(cells) != 1:
-        raise PolicyError("configured changelog gate must contain exactly one shell cell")
-    outputs: list[str] = []
-    output_match = re.search(r"(?im)^output paths?:\s*(.+?)\s*$", body)
-    if output_match:
-        outputs.extend(
-            token.strip().strip("`")
-            for token in output_match.group(1).split(",")
-            if token.strip()
-        )
-    for line in body.splitlines():
-        row = _split_markdown_row(line)
-        if row and len(row) >= 2 and row[0].lower() in {"output", "output path", "output paths"}:
-            outputs.extend(token.strip() for token in row[1].split(",") if token.strip())
-    outputs = list(dict.fromkeys(outputs))
-    if not outputs:
-        raise PolicyError("configured changelog gate must declare output paths")
-    return {"command": cells[0], "outputs": outputs, "mutating": True}
-
-
-def parse_policy(sha: str, raw: bytes) -> Policy:
-    regions = _parse_regions(raw)
-    for required in ("file-categories", "stack-validations", "gate1-test-command"):
-        if not regions[required].strip() or "forge-init:" in regions[required]:
-            raise PolicyError(f"forge: {required} not configured — run /forge:init")
-    gate_cells = _fenced_shell_cells(regions["gate1-test-command"])
-    if len(gate_cells) != 1:
-        raise PolicyError("gate1-test-command must contain exactly one shell cell")
-    stack_cells = _fenced_shell_cells(regions["stack-validations"])
-    if not stack_cells:
-        raise PolicyError("forge: stack-validations not configured — run /forge:init")
-    return Policy(
-        sha=sha,
-        raw=raw,
-        digest=sha256_bytes(raw),
-        regions=regions,
-        gate1=gate_cells[0],
-        stack_commands=stack_cells,
-        invariants=_parse_invariants(regions["invariants"]),
-        changelog=_parse_changelog(regions["changelog-policy"]),
-    )
 
 
 def _committed_changelog_output_paths(policy: Policy) -> frozenset[str]:
