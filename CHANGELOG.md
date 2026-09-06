@@ -93,6 +93,14 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Commitment audit (bead forge-plugin-a57, external-review follow-on): the
+  unknown-task matcher treats a `task-<suffix>` compound in decision resolution
+  prose as an unresolved reference only when the suffix begins with a digit, so
+  ordinary English compounds ("task-binding", "task-level") no longer fail the
+  audit closed and permanently block a run's archive; numeric references
+  (`task-99`), known-id resolution, and the record task-field validation keep
+  their fail-closed behavior, each pinned by new focused tests including a
+  disable-in-memory proof.
 - `commit abort-disposition --run-id <run> --chain-id <chain>` now dispositions
   an operator-tombstoned run-bound chain (a chain that froze and was sealed
   under Revision 11 without ever landing): it appends one `chain-abort`

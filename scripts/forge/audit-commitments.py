@@ -252,7 +252,7 @@ def resolution_task_pattern(known: set[str]) -> re.Pattern[str] | None:
     known_branch = f"{alternatives}|" if alternatives else ""
     return re.compile(
         rf"(?<![A-Za-z0-9_.-])({known_branch}(?:[A-Za-z0-9]+[._-])*task[._-]"
-        rf"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_.-]|\.(?![A-Za-z0-9]))",
+        rf"[0-9][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*)(?=$|[^A-Za-z0-9_.-]|\.(?![A-Za-z0-9]))",
         re.IGNORECASE,
     )
 

@@ -346,6 +346,107 @@ class AuditCommitmentsTests(unittest.TestCase):
             b"task-99 (decision decision-01 task field)\n",
         )
 
+    def test_alphabetic_structured_task_reference_is_still_unknown(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            records[3]["task"] = "task-binding"
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            3,
+            b"forge: commitment audit failed \xe2\x80\x94 unknown task reference: "
+            b"task-binding (decision decision-01 task field)\n",
+        )
+
+    def test_unknown_numeric_resolution_task_reference_is_positive_control(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            replacements = {"task-07": "task-01", "task-08": "task-02"}
+            for record in records:
+                for field in ("id", "task"):
+                    value = record.get(field)
+                    if value in replacements:
+                        record[field] = replacements[value]
+            records[3]["resolution"] = "Defer task-99."
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            3,
+            b"forge: commitment audit failed \xe2\x80\x94 unknown task reference: "
+            b"task-99 (decision decision-01 resolution)\n",
+        )
+
+    def test_alphabetic_resolution_task_compounds_are_ordinary_prose(self) -> None:
+        resolutions = (
+            "Recorded during task-binding diagnosis; superseded by the full-path chain.",
+            "Apply the task-level rule to task-specific evidence.",
+            "The task-b3 label is ordinary prose.",
+        )
+        for resolution in resolutions:
+            with self.subTest(resolution=resolution):
+                self.setUp_fixture_again()
+                self.mutate(
+                    lambda records: records[3].__setitem__("resolution", resolution)
+                )
+                result = self.invoke()
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(EXPECTED, result.stdout)
+
+    def test_numeric_resolution_task_compound_boundaries_remain_exact(self) -> None:
+        references = ("task-3b", "2.task-07", "pre-task-07")
+        for reference in references:
+            with self.subTest(reference=reference):
+                self.setUp_fixture_again()
+                self.mutate(
+                    lambda records: records[3].__setitem__(
+                        "resolution", f"Defer {reference}."
+                    )
+                )
+                self.assert_failure(
+                    self.invoke(),
+                    3,
+                    b"forge: commitment audit failed \xe2\x80\x94 unknown task reference: "
+                    + reference.encode()
+                    + b" (decision decision-01 resolution)\n",
+                )
+
+    def test_resolution_task_suffix_narrowing_is_load_bearing_in_memory(self) -> None:
+        module = self.load_audit_module("resolution_task_suffix")
+        records = self.records()
+        records[3]["resolution"] = (
+            "Recorded during task-binding diagnosis; superseded by the full-path chain."
+        )
+        self.write_records(records)
+        self.assertEqual(EXPECTED.decode(), module.audit(self.run_dir))
+
+        def broad_resolution_task_pattern(known: set[str]):
+            alternatives = "|".join(
+                module.re.escape(value)
+                for value in sorted(known, key=len, reverse=True)
+            )
+            known_branch = f"{alternatives}|" if alternatives else ""
+            return module.re.compile(
+                rf"(?<![A-Za-z0-9_.-])({known_branch}"
+                rf"(?:[A-Za-z0-9]+[._-])*task[._-]"
+                rf"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*)"
+                rf"(?=$|[^A-Za-z0-9_.-]|\.(?![A-Za-z0-9]))",
+                module.re.IGNORECASE,
+            )
+
+        with mock.patch.object(
+            module,
+            "resolution_task_pattern",
+            broad_resolution_task_pattern,
+        ):
+            with self.assertRaises(module.Failure) as caught:
+                module.audit(self.run_dir)
+            self.assertEqual(3, caught.exception.exit_code)
+            self.assertEqual(
+                "unknown task reference: task-binding "
+                "(decision decision-01 resolution)",
+                caught.exception.diagnostic,
+            )
+
     def test_recorded_branch_name_in_decision_prose_is_not_a_task_reference(self) -> None:
         def change(records: list[dict[str, object]]) -> None:
             records.insert(
