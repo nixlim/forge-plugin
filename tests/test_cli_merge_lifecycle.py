@@ -40,31 +40,46 @@ class MergeCarriedRegressionTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(len(detached_rows), 1)
         self.assertEqual(detached_rows[0]["detached"], "")
 
-    def test_oversized_review_request_retry_is_the_same_structured_refusal(self) -> None:
+    def test_oversized_review_request_retry_preserves_the_first_master_receipt(self) -> None:
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
-        oversized = b"x" * (CLI.OUTPUT_CAP_BYTES + 1)
+        byte_length = ENGINE.REVIEW_DIRECT_PACKAGE_MAX_BYTES + 1
+        oversized = b"x" * byte_length
 
         with mock.patch.object(
             engine, "_review_package", return_value=(oversized, [], {})
         ):
-            refusals = []
-            for _attempt in range(2):
-                with self.assertRaises(CLI.Refusal) as caught:
-                    engine.review_request()
-                refusals.append(caught.exception)
+            first = engine.review_request()
+            requested = store.load(self.chain_id)
+            request = copy.deepcopy(requested["review"]["request"])
+            master = self.repo / str(request["package"])
+            master_bytes = master.read_bytes()
+            events_before_retry = store.events_path(self.chain_id).read_bytes()
+
+            with self.assertRaises(CLI.Refusal) as caught:
+                engine.review_request()
 
         self.assertEqual(
-            [refusal.reason_code for refusal in refusals],
-            [CLI.V2ReasonCode.EVIDENCE_INCOMPLETE] * 2,
+            caught.exception.reason_code,
+            CLI.V2ReasonCode.STATE_PRECONDITION,
         )
         self.assertEqual(
-            [refusal.message for refusal in refusals],
-            [
-                "forge: review refused — reviewer cannot inspect the complete authoritative package"
-            ]
-            * 2,
+            caught.exception.message,
+            "forge: review request refused — merge transition is not admitted",
         )
-        self.assertEqual(store.load(self.chain_id)["review"], {})
+        self.assertTrue(first.ok)
+        self.assertEqual(request["transport"], "single-master-package")
+        self.assertEqual(request["byte_length"], byte_length)
+        self.assertEqual(request["window_size"], 65_536)
+        self.assertEqual(
+            request["window_count"],
+            (byte_length + 65_535) // 65_536,
+        )
+        self.assertEqual(master_bytes, oversized)
+        self.assertEqual(master.read_bytes(), master_bytes)
+        self.assertEqual(store.load(self.chain_id)["review"]["request"], request)
+        self.assertEqual(
+            store.events_path(self.chain_id).read_bytes(), events_before_retry
+        )
 
     def test_git_status_failure_is_a_structured_v2_refusal(self) -> None:
         original = CLI.Repository.git

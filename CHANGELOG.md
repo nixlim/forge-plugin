@@ -10,6 +10,15 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Oversized review packages (bead forge-plugin-8lu, revision-10 FR-216/FR-170..174
+  amendments): review packaging for commit, merge, and archive candidates now uses
+  the single-master-package transport above a 786,432-byte threshold — the launch
+  carries the authoritative package path, byte length, and lowercase SHA-256 with
+  deterministic 65,536-byte window arithmetic instead of embedded bytes, the reader
+  verifies identity and digest before the first and after the last window, and any
+  mismatch refuses with the exact amendment literal; at or under the threshold the
+  packaging is byte-identical to before, and the previous outright refusal for
+  oversized merge packages upgrades to the same transport.
 - CLI split phase 3 (bead forge-plugin-95e.4): the remaining 183 top-level
   names move verbatim into `scripts/forge/forge_cli/engine.py` (the commit-chain
   engine, parser construction, and helpers, including the journal-record-builder

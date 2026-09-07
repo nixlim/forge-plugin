@@ -28,6 +28,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 CLI = load_script("forge_cli_merge_adapter_tests", CLI_PATH)
 CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
+ENGINE = package_module("engine")  # revision 10: canonical review-transport controls
 FIXTURE_SUPPORT = load_script(
     "forge_cli_merge_adapter_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -1032,25 +1033,71 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
         )
         self.assertIn(b"--- BEGIN UNTRUSTED CANDIDATE DIFF ---", package_bytes)
 
-    def test_oversized_master_package_uses_exact_fail_closed_literal(self) -> None:
+    def test_oversized_master_package_uses_single_master_transport(self) -> None:
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
         before_events = store.events_path(self.chain_id).read_bytes()
-        oversized = b"x" * (CLI.OUTPUT_CAP_BYTES + 1)
+        marker = b"OVERSIZED_MERGE_MASTER_BYTES_MUST_NOT_BE_EMBEDDED"
+        byte_length = ENGINE.REVIEW_DIRECT_PACKAGE_MAX_BYTES + 1
+        oversized = marker + (b"x" * (byte_length - len(marker)))
         with mock.patch.object(
             engine,
             "_review_package",
             return_value=(oversized, [], {}),
         ):
-            with self.assertRaises(CLI.Refusal) as caught:
-                engine.review_request()
-        self.assertEqual(caught.exception.reason_code, CLI.V2ReasonCode.EVIDENCE_INCOMPLETE)
+            outcome = engine.review_request()
+
+        state = store.load(self.chain_id)
+        request = state["review"]["request"]
+        package_path = self.repo / request["package"]
+        package_digest = digest(oversized)
+        window_size = ENGINE.REVIEW_MASTER_WINDOW_BYTES
+        window_count = (byte_length + window_size - 1) // window_size
+        receipt = f"{outcome.message}\n{request['invocation']}"
+
+        self.assertEqual(state["state"], "reviewing")
+        self.assertEqual(request["transport"], "single-master-package")
+        self.assertEqual(request["byte_length"], byte_length)
+        self.assertEqual(request["window_size"], 65_536)
+        self.assertEqual(request["window_count"], window_count)
+        self.assertEqual(request["package_digest"], package_digest)
+        self.assertRegex(request["package_digest"], r"^[0-9a-f]{64}$")
+        self.assertTrue(package_path.is_file())
+        self.assertEqual(package_path.stat().st_uid, os.geteuid())
+        self.assertEqual(package_path.stat().st_nlink, 1)
+        self.assertEqual(package_path.read_bytes(), oversized)
         self.assertEqual(
-            caught.exception.message,
-            "forge: review refused — reviewer cannot inspect the complete authoritative package",
+            b"".join(
+                ENGINE.iter_verified_master_package_windows(
+                    package_path, byte_length, package_digest
+                )
+            ),
+            oversized,
         )
-        self.assertEqual(store.events_path(self.chain_id).read_bytes(), before_events)
-        self.assertEqual(store.load(self.chain_id)["review"], {})
-        self.assertEqual(len(caught.exception.evidence_refs), 1)
+        self.assertIn("authoritative-master", receipt)
+        self.assertIn(
+            f"path={json.dumps(str(package_path), ensure_ascii=True)}", receipt
+        )
+        self.assertIn(f"byte-length={byte_length}", receipt)
+        self.assertIn(f"sha256={package_digest}", receipt)
+        self.assertIn(
+            "windows=[65536*n, min(65536*(n+1), byte_length))", receipt
+        )
+        self.assertIn(
+            f"window-count=ceil({byte_length}/65536)={window_count}", receipt
+        )
+        self.assertIn(
+            "reader=forge_cli.engine.iter_verified_master_package_windows", receipt
+        )
+        self.assertNotIn(marker.decode(), receipt)
+        self.assertEqual(
+            sorted(path.name for path in package_path.parent.iterdir()),
+            ["master-package.txt"],
+        )
+        after_events = store.events_path(self.chain_id).read_bytes()
+        self.assertTrue(after_events.startswith(before_events))
+        self.assertEqual(
+            len(after_events.splitlines()), len(before_events.splitlines()) + 1
+        )
 
     def test_disposition_slot_allows_minor_then_exactly_one_above_minor(self) -> None:
         starter = CLI.MergeEngine(self.context())

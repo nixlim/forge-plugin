@@ -4593,34 +4593,7 @@ class MergeEngine:
         )
         iteration = prior_iteration + 1
         package_digest = sha256_bytes(package)
-        if len(package) > runtime.OUTPUT_CAP_BYTES:
-            bound = engine._merge_run_directory(state)
-            package_ref = (
-                (
-                    Path("captured")
-                    / "sha256"
-                    / package_digest
-                    / "state.json"
-                ).as_posix()
-                if bound is not None
-                else (
-                    Path(".forge")
-                    / "chains"
-                    / str(state["chain_id"])
-                    / "review"
-                    / f"iteration-{iteration:02d}"
-                    / "master-package.txt"
-                ).as_posix()
-            )
-            raise chain_core._merge_refusal(
-                V2ReasonCode.EVIDENCE_INCOMPLETE,
-                "forge: review refused — reviewer cannot inspect the complete authoritative package",
-                expected="one reviewer inspecting every master-package byte through verified bounded windows",
-                observed=f"master bytes={len(package)}; bounded-window adapter not active",
-                remediation="escalate for the bounded-window review transport adapter",
-                chain=state,
-                evidence_refs=[package_ref],
-            )
+        oversized = engine._review_package_is_oversized(package)
         package_ref = engine._write_merge_artifact(
             self.ctx,
             state,
@@ -4640,13 +4613,38 @@ class MergeEngine:
             "profiles": profiles,
             "profile_map": profile_map,
             "byte_length": len(package),
-            "invocation": (
+        }
+        if oversized:
+            bound = engine._merge_run_directory(state)
+            package_path = (
+                self.ctx.store.common_root / package_ref
+                if bound is None
+                else bound[1] / package_ref
+            )
+            request.update(
+                {
+                    "transport": "single-master-package",
+                    "window_size": engine.REVIEW_MASTER_WINDOW_BYTES,
+                    "window_count": engine._review_master_window_count(len(package)),
+                    "invocation": (
+                        "spawn one review-final with oversized "
+                        + engine._review_master_transport(
+                            package_path, len(package), package_digest
+                        )
+                        + f" candidate={state['candidate']['candidate_head']}"
+                        + f" generation={state['candidate']['generation_digest']}"
+                        + f" target={state['target']['destination_ref']}"
+                        + f" package={package_digest}"
+                    ),
+                }
+            )
+        else:
+            request["invocation"] = (
                 "spawn one review-final with master package "
                 f"{package_ref} candidate {state['candidate']['candidate_head']} "
                 f"generation {state['candidate']['generation_digest']} "
                 f"target {state['target']['destination_ref']} digest {package_digest}"
-            ),
-        }
+            )
         current = self.store.transition(
             state,
             "review_requested",
@@ -4657,8 +4655,12 @@ class MergeEngine:
         return engine._success(
             current,
             (
-                f"review-final package={package_ref} digest={package_digest}; "
-                f"invocation={request['invocation']}"
+                f"review-final oversized; invocation={request['invocation']}"
+                if oversized
+                else (
+                    f"review-final package={package_ref} digest={package_digest}; "
+                    f"invocation={request['invocation']}"
+                )
             ),
             f"forge review attach --verdict-file <path> --chain-id {state['chain_id']}",
             evidence_refs=[package_ref],
