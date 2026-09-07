@@ -83,7 +83,7 @@ test gate. Installed repository surfaces are rendered from `system/`, `skills/`,
 |---|---|
 | `python` | `*.py` |
 | `bash` | `*.sh` |
-| `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**`, `.forge/evals/candidates/**` |
+| `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**`, `LICENSE`, `.forge/evals/candidates/**` |
 | `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `.claude-plugin/**`, `hooks/**`, `system/**`, `.beads/**` |
 | `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**`, `tests/fixtures/**` |
 <!-- FORGE:REGION file-categories END -->
@@ -100,14 +100,133 @@ python3 -m unittest tests.test_repo_conformance
 
 <!-- FORGE:REGION gate1-test-command BEGIN -->
 ```bash
-python3 -m unittest discover -s tests
+python3 - <<'PY'
+# Full unittest discovery, fanned out across shards inside this one cell (bead
+# forge-plugin-pwy): the same modules `python3 -m unittest discover -s tests`
+# would collect, partitioned round-robin over min(4, cpu) workers that share the
+# cell's process group and timeout. Fail-closed: any shard exit other than zero,
+# any shard without a final unittest summary, or an empty module set fails the
+# cell; each shard prints at most its last 8 KiB of bytes (sliced before decoding)
+# so the combined output stays within the 65,536-byte cap.
+import glob
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+modules = sorted(pathlib.Path(path).stem for path in glob.glob("tests/test_*.py"))
+if not modules:
+    print("gate-1: no test modules under tests/", file=sys.stderr)
+    raise SystemExit(1)
+shards = max(1, min(4, os.cpu_count() or 1))
+groups = [[f"tests.{name}" for index, name in enumerate(modules) if index % shards == i] for i in range(shards)]
+processes = [
+    subprocess.Popen(
+        [sys.executable, "-m", "unittest", *group],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    for group in groups
+    if group
+]
+failed = False
+for index, process in enumerate(processes):
+    output, _ = process.communicate()
+    summary = re.search(rb"^Ran (\d+) tests? in", output, flags=re.MULTILINE)
+    verdict = "OK" if process.returncode == 0 and summary else "FAILED"
+    if verdict == "FAILED":
+        failed = True
+    print(f"gate-1 shard {index + 1}/{len(processes)}: exit {process.returncode} {verdict}")
+    print(output[-8192:].decode("utf-8", "replace"))
+raise SystemExit(1 if failed else 0)
+PY
 ```
 <!-- FORGE:REGION gate1-test-command END -->
 
 ## Changelog Policy
 
 <!-- FORGE:REGION changelog-policy BEGIN -->
-No changelog gate is configured for this repository.
+A `CHANGELOG.md` in Keep a Changelog format is maintained at the repository root. A commit whose
+staged paths touch the `python`, `bash`, `config`, or `control` categories requires at least one
+new changelog entry line staged in the same candidate — normally under the `## [Unreleased]`
+heading; a release commit instead moves the `[Unreleased]` body under the new version heading,
+which the mechanical check deliberately also accepts. A commit whose
+staged paths are exclusively docs-class (`docs/**`, `.forge/history/**`,
+`.forge/evals/candidates/**`, `*.md`/`*.txt` outside control locations, `UPSTREAM`, and
+`CHANGELOG.md` itself) is exempt. Release commits move the `[Unreleased]` body under the new
+version heading. Archive-only chains skip this gate under the operator's standing direction of
+2026-08-31 (recorded per chain via `commit skip changelog`).
+
+```bash
+python3 - "$@" <<'PY'
+import re
+import subprocess
+import sys
+
+paths = sys.argv[1:]
+if not paths:
+    print("changelog gate: no target paths supplied", file=sys.stderr)
+    raise SystemExit(1)
+
+EXEMPT_PREFIXES = ("docs/", ".forge/history/", ".forge/evals/candidates/")
+CONTROL_PREFIXES = (
+    "docs/specs/", "skills/", "hooks/", "scripts/", "rules/", "agents/",
+    ".claude-plugin/", "system/", ".codex/", ".forge/evals/tasks/",
+    ".github/workflows/", "tests/fixtures/", ".beads/", ".claude/",
+)
+CONTROL_FILES = {"forge-project.md", ".forge-manifest", "AGENTS.md", "CLAUDE.md"}
+CODE_SUFFIXES = (".py", ".sh", ".yml", ".yaml", ".json", ".jsonl", ".toml")
+
+
+def requires_entry(path: str) -> bool:
+    if path == "CHANGELOG.md":
+        return False
+    if path in CONTROL_FILES:
+        return True
+    if any(path.startswith(prefix) for prefix in CONTROL_PREFIXES):
+        return True
+    if path.startswith(EXEMPT_PREFIXES):
+        return False
+    if path == ".gitignore" or path.endswith(CODE_SUFFIXES):
+        return True
+    return False
+
+
+required = sorted(path for path in paths if requires_entry(path))
+if not required:
+    print("changelog gate: docs-class candidate, no entry required")
+    raise SystemExit(0)
+
+diff = subprocess.run(
+    ["git", "diff", "--cached", "--", "CHANGELOG.md"],
+    capture_output=True, text=True, check=False,
+)
+if diff.returncode != 0:
+    print("changelog gate: git diff --cached failed", file=sys.stderr)
+    raise SystemExit(1)
+added_entries = [
+    line for line in diff.stdout.splitlines()
+    if line.startswith("+- ") or re.match(r"^\+\s+- ", line)
+]
+staged = subprocess.run(
+    ["git", "show", ":CHANGELOG.md"], capture_output=True, text=True, check=False,
+)
+if added_entries and staged.returncode == 0 and "## [Unreleased]" in staged.stdout:
+    print(f"changelog gate: entry present for {len(required)} in-scope path(s)")
+    raise SystemExit(0)
+print(
+    "changelog gate: staged candidate touches "
+    + ", ".join(required[:5])
+    + (" …" if len(required) > 5 else "")
+    + " but adds no CHANGELOG.md [Unreleased] entry",
+    file=sys.stderr,
+)
+raise SystemExit(1)
+PY
+```
+
+Output path: `CHANGELOG.md`
 <!-- FORGE:REGION changelog-policy END -->
 
 ## Review Prompt Project Focus

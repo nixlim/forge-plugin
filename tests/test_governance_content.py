@@ -155,7 +155,9 @@ class ReviewFinalContentTests(unittest.TestCase):
         self.assertEqual(values["effort"], "high")
         self.assertEqual(tools, ["Read", "Bash", "Glob", "Grep", "LS"])
 
-    def test_read_only_and_blind_spot_clauses_are_preserved(self) -> None:
+    def test_instruction_bounded_execution_and_blind_spot_clauses_are_preserved(
+        self,
+    ) -> None:
         blind_spot = (
             "You are reviewing code that may have been written by an LLM coding agent. The "
             "developer and reviewer share the same training data and reasoning patterns — you "
@@ -163,19 +165,22 @@ class ReviewFinalContentTests(unittest.TestCase):
             "model before reading the code, and by hunting for LLM-specific failure patterns "
             "that the developer is statistically likely to produce."
         )
-        read_only = (
-            "**Read-only execution (least privilege — spec §16 S12; separation of duties — §16 "
-            "S2):** You MUST NOT modify any file or the working tree. You have no Edit/Write "
-            "tools, and you MUST NOT use the shell to write either — never run `sed -i`, `tee`, "
-            "output redirection (`>`/`>>`) into repository files, `git apply`/`git "
+        instruction_boundary = (
+            "**Instruction-bounded, execution-capable review (separation of duties — §16 S2):** "
+            "Bash is deliberately available for inspection and execution evidence. Your no-write "
+            "boundary is an instruction, not an OS sandbox; unlike the Codex first-pass reviewer, "
+            "which runs in an OS-level read-only sandbox, this Claude subagent shares the "
+            "orchestrator's worktree. You have no Edit/Write tools, but Bash can mutate files, so "
+            "you MUST NOT modify any file or the working tree through it — never run `sed -i`, "
+            "`tee`, output redirection (`>`/`>>`) into repository files, `git apply`/`git "
             "checkout`/`git restore`/`git stash`, `patch`, or any command that mutates tracked "
-            "files. Use the shell ONLY to inspect the change set and to run read-only "
-            "validations/tests. If a change is needed, report it as a finding — never make it "
-            "yourself."
+            "files. Use Bash only to inspect the change set and gather execution evidence. If a "
+            "change is needed, report it as a finding — never make it yourself."
         )
 
         self.assertIn(blind_spot, REVIEW_FINAL)
-        self.assertIn(read_only, REVIEW_FINAL)
+        self.assertIn(instruction_boundary, REVIEW_FINAL)
+        self.assertNotIn("**Read-only execution", REVIEW_FINAL)
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md", REVIEW_FINAL)
         assert_final_reviewer_uses_coding_verification_method(self, REVIEW_FINAL)
         self.assertNotIn("disable that control in memory", REVIEW_FINAL)

@@ -52,13 +52,14 @@ Role split:
 |------|---------|-------|
 | Orchestrator / verifier | Claude (main session) | Owns journal, worktrees, gate chain, everything touching `main` |
 | Implementer | Codex agent (fresh session) | May commit **only inside its execution worktree** |
-| First-pass reviewer (`review-cheap` analog) | Codex agent (fresh session) | Independent, per orchestration contract; confirmation rounds resume its session |
-| Final reviewer (`review-final`) | Claude subagent (read-only) | Binding PASS/BLOCK; cross-model separation of duties by construction |
+| First-pass reviewer (`review-cheap` analog) | Codex agent (fresh session) | Independent and OS-sandboxed read-only; confirmation rounds resume its session |
+| Final reviewer (`review-final`) | Claude subagent (instruction-bounded no-write; Bash available) | Execution-capable binding PASS/BLOCK; cross-model separation of duties by construction |
 
-Cross-model separation of duties: the author (Codex/GPT family) and the binding
-reviewer (Claude family) never share a model's blind spots. This is stronger than
-upstream forge's same-family separation and is the heterogeneous-ensemble argument
-from codex-orchestrator's README made structural.
+The Claude reviewer is execution-capable: Bash is deliberately available for
+evidence gathering, and its no-write boundary is an instruction rather than an OS
+sandbox. Cross-model separation of duties reduces correlated mistakes, but it cannot
+eliminate them. This makes the heterogeneous-ensemble argument from
+codex-orchestrator's README structural without claiming independent blind spots.
 
 ## The Five Decisions — Resolutions
 
@@ -79,8 +80,8 @@ re-verified (Gate 1/2 re-run by the orchestrator in its own environment), and re
 re-runs — up to forge's 8-iteration cap, at which point residual risk is recorded and
 the run escalates; it never commits. Reviewer confirmation rounds may resume the
 reviewer's session (persistent adversary with memory of its own findings) — the
-single sanctioned use of `codex exec resume`, acceptable because reviewers are
-read-only.
+single sanctioned use of `codex exec resume`, acceptable because the Codex reviewer
+runs in an OS-level read-only sandbox.
 
 ### D3 — Plugin vs per-repo layer: RESOLVED — single region file, two render targets
 

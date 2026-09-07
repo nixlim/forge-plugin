@@ -21,8 +21,10 @@ property-based/scripted invariants.
 
 Cross-cutting constraints carried forward from 0001 and the spec:
 
-- Plugin runtime stays Python ≥ 3.10 stdlib + bash. Target repos use their own
-  toolchains — feasibility mining happens at `/forge:init` time, per stack.
+- Plugin runtime targets Python ≥ 3.10 stdlib + bash. Current CI evidence covers
+  Ubuntu with Python 3.13; the broader Python 3.10+ and macOS matrix remains intended
+  but unproven. Target repos use their own toolchains — feasibility mining happens
+  at `/forge:init` time, per stack.
 - Journal schema stays the upstream seven entry types. `validate --gates` recognizes
   exactly `gate-1: `/`gate-2: `/`gate-3: ` and rejects other `gate-*` prefixes
   (FR-023) — new sensors therefore enter as **ordinary verifications first**, and are
@@ -190,7 +192,7 @@ everything else is unchanged or stricter.
   unknown is at least standard. The slopsquatting/keyv evidence makes deps
   supply-chain surface, not low-risk churn.
 - **standard** — today's default chain unchanged: review-cheap (Codex, fresh,
-  read-only) with the full iteration protocol.
+  OS-sandboxed read-only) with the full iteration protocol.
 - **hard** — review-final binding verdict; where the change is control-class,
   explicit human approval as today. A `trigger-paths` match promotes to hard even
   outside control paths (auth, crypto, migrations — per-repo).
@@ -524,10 +526,11 @@ These are verified, not assumed:
   blocked against the main-checkout lock and timed out naming it.
 - **Kill-switch is repo-wide.** `AGENT_HALT` resolves to the main checkout root
   from any worktree.
-- **Event appends are atomic on supported local POSIX filesystems.** Emitters register
+- **Event appends use the local-POSIX atomic-append design.** Emitters register
   in-flight writers, wait up to 5 seconds with sub-second retries while a live prune
   owns `.forge/tmp/events.lock`, and make one checked `O_APPEND` write after the lock
-  clears. A timeout skips the append and records `event-append-lock-timeout` through
+  clears. Current CI evidence covers Ubuntu; macOS remains an intended but unproven
+  target. A timeout skips the append and records `event-append-lock-timeout` through
   the advisory failure audit. Emitters never acquire the lock; it is reserved for
   prune read-and-replace.
 

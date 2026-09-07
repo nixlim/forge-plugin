@@ -1,9 +1,10 @@
 # Updating forge
 
-Forge is not an ordinary plugin: it is your repository's gate authority. Its
-skills, hooks, commit guard, and review routing decide what may be committed
-and merged. Updating it therefore deserves a deliberate choice between two
-postures — both fully supported.
+Forge is not an ordinary plugin: its skills, hooks, commit guard, and review
+routing help cooperative agents follow the repository's gate workflow, avoid
+mistakes, and understand refusals. These controls do not form a tamper-proof OS
+boundary, so updating them deserves a deliberate choice between two postures —
+both supported by the plugin's update flow.
 
 ## How updates propagate
 
@@ -31,15 +32,17 @@ fixes (often for failure modes you have not hit yet) at the next session
 start, with no action.
 
 Trade-off: control-surface changes arrive without your operator reviewing
-them first. Forge releases are themselves gate-reviewed before they ship, but
-that is our review, not yours.
+them first. The project workflow requires a separate gate review before a
+release ships, but the automated release end-to-end test is only plumbing
+integration: it uses scripted verdicts, including a literal `PASS`, rather than
+a live reviewer. Any actual project review is our review, not yours.
 
 ## Posture 2 — pin and review (rigor)
 
-Best when your own governance posture says a gate authority never changes
-silently — the same principle forge enforces inside your repository. Pin the
-plugin entry to a version or commit `sha` in your marketplace registration,
-and move deliberately:
+Best when your own governance posture says gate instructions should not change
+silently — the same principle the Forge workflow asks cooperative agents to
+follow inside your repository. Pin the plugin entry to a version or commit `sha`
+in your marketplace registration, and move deliberately:
 
 1. Read the release notes and the `[Unreleased]`→version diff in
    `CHANGELOG.md`.

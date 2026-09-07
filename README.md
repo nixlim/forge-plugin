@@ -1,7 +1,7 @@
 # forge-plugin
 
-A Claude Code plugin for running headless coding agents against a repository you
-still trust afterwards.
+A Claude Code plugin that helps cooperative Claude and Codex agents follow a
+reviewable workflow, avoid common mistakes, and understand why a step refused.
 
 Generating code has become cheap. Verifying it, understanding it, and being able
 to say honestly what was checked has not. forge-plugin is built around that
@@ -16,38 +16,56 @@ orchestrates, verifies, and holds the binding review verdict. Codex implements a
 performs the first-pass review. Support for other harnesses is deliberately out of
 scope.
 
+Forge assumes that agents cooperate with the documented workflow. Its hooks,
+checks, and refusal messages make the intended sequence easier to follow and
+mistakes easier to diagnose; they are not a tamper-proof boundary against a process
+with the operator's OS authority.
+
 ## How it works
 
 **Separate the author from the judge, across model families.** The implementer is
-a fresh Codex agent in an isolated worktree. The first-pass reviewer is a
-different Codex agent that never sees the implementer's handoff or its claimed
-results. The binding verdict comes from a read-only Claude reviewer. An author and
-its judge never share a model's blind spots.
+a fresh Codex agent in an isolated worktree. The first-pass reviewer is a different
+Codex agent, OS-sandboxed read-only, that never sees the implementer's handoff or
+its claimed results. The binding verdict comes from an instruction-bounded,
+execution-capable Claude reviewer: Bash is deliberately available for gathering
+execution evidence, while its no-write rule is an instruction rather than an OS
+sandbox. Crossing model families reduces correlated mistakes; it cannot eliminate
+them.
 
 **Trust nothing that was merely reported.** Agent handoffs are claims, not
-evidence. The orchestrator re-runs every gate in its own environment before any
-commit. A run's history records what was actually observed — command output, exit
-codes, SHAs read from git rather than remembered.
+evidence. Within a Forge workflow, the orchestrator re-runs each required gate in
+its own environment before authorizing a commit. A run's history records what was
+actually observed — command output, exit codes, SHAs read from git rather than
+remembered.
 
 **Fail closed.** Gates are unconfigured until `/forge:init` fills them, and an
-unconfigured gate refuses rather than passes. A commit without a review-backed
-marker is denied by a `PreToolUse` hook, not by an agent's good intentions.
+unconfigured gate refuses rather than passes. For recognized direct Git commands,
+a Claude Code `PreToolUse` guard helps a cooperative agent avoid committing without
+the expected review-backed authorization. It is a mistake-prevention backstop, not
+a security boundary.
 
-**Prove the controls work.** Gates ship with tests that fail when the control is
-disabled. A test that still passes with its control removed is treated as a
-defect, not as coverage.
+**Exercise the mechanical controls.** Load-bearing mechanical controls ship with
+tests designed to fail when the control is disabled. A test that still passes with
+its control removed is treated as a defect, not as coverage. Prompt-text checks are
+described separately because instruction presence is not model compliance.
 
 ## Requirements
 
 - Claude Code ≥ 2.x
-- Python ≥ 3.10 (standard library only — no packages, no build step)
+- Python ≥ 3.10 is the intended runtime target (standard library only — no
+  packages, no build step)
 - OpenAI Codex CLI on `PATH` (`codex --version`), authenticated
-- bash on macOS (BSD userland) or Linux. Reintegration locking needs no `flock`
-  binary: the worktree-merge skill holds the portable Git-common-dir arbiter
+- bash on Linux or macOS (BSD userland) is the intended shell target.
+  Reintegration locking needs no `flock` binary: the worktree-merge skill holds
+  the portable Git-common-dir arbiter
   through the Forge CLI (`common-lock hold`), which takes its optional kernel
   layer through Python's `fcntl`. Only the commit-lock helper pair
   (`acquire-commit-lock.sh` and `release-commit-lock.sh`, which also guard the
   decision-event lock) needs `flock` or `lockf`.
+
+Repository CI currently proves Ubuntu with Python 3.13. macOS and the broader
+Python 3.10+ matrix are intended but currently unproven; portability fixes are
+tracked separately.
 
 ## Install
 
@@ -74,10 +92,11 @@ eight skills:
 | `/forge:drift` | Mechanical drift sensing, then an operator-invoked periodic semantic review |
 | `/forge:learn` | Advisory journal-derived learning: proposes eval candidates and traceable gotchas |
 
-Installing also registers a **PreToolUse commit guard**, an advisory **PostToolUse
-invariant guard**, a **Stop union** that independently runs telemetry aggregation
-and the drift-staleness nudge, and a **SessionStart** nudge. Every Stop and
-SessionStart member is silent and inert outside a forge-initialized repository.
+Installing also registers a **PreToolUse mistake-prevention guard for recognized
+direct Git invocations**, an advisory **PostToolUse invariant guard**, a **Stop
+union** that independently runs telemetry aggregation and the drift-staleness
+nudge, and a **SessionStart** nudge. Every Stop and SessionStart member is silent
+and inert outside a forge-initialized repository.
 
 ## Per-repository setup
 
@@ -127,19 +146,24 @@ tier.
 ## Operator controls
 
 - **Kill-switch** — create `AGENT_HALT` (or scoped `AGENT_HALT_commit`) at the
-  main checkout root and every commit, push and reintegration stops until you
-  remove it. Agents never create or clear sentinels.
-- **Control-class changes** — gates, the constitution, agent routing, hooks,
-  evals and `forge-project.md` always route to the binding reviewer and wait for
-  your explicit approval.
+  main checkout root. The Claude Code `PreToolUse` guard parses recognized direct
+  `git` invocations and selected environment-prefix forms while the sentinel is
+  present. It inspects but never executes the submitted command; `bash -c`
+  wrappers, `command git`, and Git alias configurations are outside its coverage
+  by design. The guard assumes cooperative agents and prevents mistakes rather
+  than providing tamper-proof enforcement. Agents are instructed never to create
+  or clear sentinels.
+- **Control-class changes** — within the Forge workflow, gates, the constitution,
+  agent routing, hooks, evals and `forge-project.md` route to the binding reviewer
+  and wait for your explicit approval.
 - **Audit** — guard denials and halt detections append to
   `.forge/tmp/halt-audit.log`; full orchestration history lives in the run journal
   under `.codex-orchestrator/runs/<run-id>/`.
 - **Dead merge-lock owner** — a reintegration holder killed outright leaves its
   arbiter owner record (`agent-rebase.lockdir` and `agent-rebase.lock.intent`
   in the Git common directory) and later entrants refuse until it is cleared.
-  Only you clear it, after proving the recorded host and PID dead; agents never
-  remove lock artifacts.
+  Forge instructions reserve clearing it for you after proving the recorded host
+  and PID dead.
 
 ## The durable record
 
@@ -226,15 +250,16 @@ writes a block that refuses new runs until you clear it.
 
 Several agents can work in one repository. Per-commit authorization is
 content-addressed by the staged diff, so two chains can hold authorization at once
-and one candidate's marker can never admit another. Journals record an owner and
-refuse an append from a live foreign owner. Runs are admitted by declared file
-scope rather than refused outright, and overlapping scopes are named on refusal.
-Reintegrations serialize through one portable arbiter in the Git common directory,
-so every worktree and every entrant on Linux or macOS contends on the same lock.
+and, for commands the guard evaluates, one candidate's marker cannot admit
+another. Journals record an owner and refuse an append from a live foreign owner.
+Runs are admitted by declared file scope rather than refused outright, and
+overlapping scopes are named on refusal. Reintegrations serialize through one
+arbiter in the Git common directory, so worktrees using that common directory
+contend on the same lock.
 
-Decision-event emission is lossless under concurrency on local POSIX filesystems
-(macOS and Linux). The guarantee does not extend to NFS or SMB, and Windows is out
-of scope.
+Decision-event emission is designed for lossless concurrent appends on local POSIX
+filesystems. Current CI evidence covers Ubuntu; macOS is an intended but unproven
+target. NFS and SMB are unsupported, and Windows is out of scope.
 
 ## Development
 
@@ -242,13 +267,22 @@ of scope.
 python3 -m unittest discover -s tests
 ```
 
-The committed gate-1 cell in `forge-project.md` runs that same discovery fanned out
-over up to four shards inside one cell (roughly a third of the sequential wall time on
-a four-core host);
-the plain command above remains the vendored-suite contract.
+The plain command above is the sequential developer form. The committed gate-1
+cell in `forge-project.md` discovers the same modules and partitions them round-robin
+across `max(1, min(4, os.cpu_count() or 1))` shards inside one cell. The previously
+observed roughly-one-third sequential wall time was measured on an eight-core host
+while the cell used four shards; it is not a four-core benchmark or a promised
+speedup.
 
-The suite is stdlib only and currently runs roughly 1,500 tests. `UPSTREAM` records
-both vendored upstream SHAs and every deliberate deviation.
+The Python entry point `scripts/forge/cli.py` is a compatibility shim over the
+implementation modules under `scripts/forge/forge_cli/`.
+
+The suite is stdlib only; the current four-shard discovery finds 1,554 tests. Its
+prose-contract tests are instruction-presence and textual-consistency checks: they
+verify that required instructions exist, not that a model follows them. The release
+end-to-end test checks plumbing with scripted verdicts, including a literal `PASS`;
+it does not run a live reviewer. `UPSTREAM` records both vendored upstream SHAs and
+every deliberate deviation.
 
 - Design decisions: [docs/design/0001-founding-decisions.md](docs/design/0001-founding-decisions.md)
   and [docs/design/0002-verification-expansion.md](docs/design/0002-verification-expansion.md)
@@ -262,4 +296,4 @@ Upstreams (assessed cherry-pick, no automatic sync):
 
 ## Licence
 
-Apache-2.0. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

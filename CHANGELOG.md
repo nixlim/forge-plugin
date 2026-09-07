@@ -10,6 +10,20 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Documentation honesty batch (external-review findings 1, 6, and 8; beads
+  forge-plugin-x0h part 1, ryt, bfg, 9xb, x68): the README states the commit
+  guard's real coverage (direct git invocations at the tool-use boundary,
+  cooperative-agent assumption, wrappers intentionally out of scope); provider
+  diversity is described as reducing correlated mistakes, not eliminating
+  them; the binding Claude reviewer is described as instruction-bounded and
+  execution-capable (deliberately keeping Bash for execution evidence) in
+  contrast to the OS-sandboxed Codex first-pass reviewer; prose-contract tests
+  and the release e2e are labeled as instruction-presence checks and scripted
+  plumbing integration; platform claims are scoped to CI evidence; the
+  standard MIT LICENSE is added per the operator's licensing decision and the
+  README licence section fixed; stale README figures corrected; the AGENTS.md
+  splice re-rendered byte-equal to committed policy; and the `docs` file
+  category now classifies the root `LICENSE` file.
 - Oversized review packages (bead forge-plugin-8lu, revision-10 FR-216/FR-170..174
   amendments): review packaging for commit, merge, and archive candidates now uses
   the single-master-package transport above a 786,432-byte threshold — the launch

@@ -14,8 +14,10 @@ reviewed the committed spec text at HEAD `b7acebda2f29ea81cc0d29ad598cbee42e7510
 Provenance of the report below:
 
 - Reviewer: the plugin `forge:review-final` agent definition (`agents/review-final.md`,
-  model fable, read-only tools), spawned as subagent `fr016-review` by orchestrator
-  session `edb48c72-0313-4b28-a4c5-618e93b42d6f` on host `v2202608347457500837`.
+  model fable, no Edit/Write tools, with Bash deliberately available for execution
+  evidence). Its no-write boundary was instruction-bounded rather than OS-sandboxed.
+  It was spawned as subagent `fr016-review` by orchestrator session
+  `edb48c72-0313-4b28-a4c5-618e93b42d6f` on host `v2202608347457500837`.
 - Timeline (UTC, 2026-08-17): spawned ≈22:47; the reviewer's transcript held the complete
   report by 22:56:49 (its first idle notification); outbound messaging is disabled for
   `forge:review-final` agents by design, so the orchestrator directed file delivery, and
