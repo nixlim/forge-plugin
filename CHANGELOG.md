@@ -93,6 +93,16 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Archive rendering of an operator-tombstoned chain (bead forge-plugin-cyg):
+  when a journal-bound chain's artifacts are absent but a valid
+  forge-chain-tombstone/1 record exists, the archive captures the tombstone's
+  exact bytes as the chain's terminal artifact, renders bound records as
+  explicitly not replay-authenticated with a `tombstoned_chain`
+  non-authoritative discrepancy row, authenticates the tombstone-sourced
+  chain-abort decision by carried-record equality, and keeps every fail-closed
+  edge (missing or malformed tombstones refuse; real artifacts win; rerender
+  determinism and the archive recheck cover the tombstone file) — with the
+  Revision-13 spec amendment. Unblocks the run-20260829-cli-phase3 archive.
 - Commitment audit (bead forge-plugin-a57, external-review follow-on): the
   unknown-task matcher treats a `task-<suffix>` compound in decision resolution
   prose as an unresolved reference only when the suffix begins with a digit, so

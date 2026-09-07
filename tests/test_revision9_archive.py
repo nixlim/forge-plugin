@@ -150,6 +150,7 @@ class Revision9ArchiveBlocksTests(unittest.TestCase):
                 "result_verdict_conflict",
                 "snapshot_changed",
                 "structured_chain_mismatch",
+                "tombstoned_chain",
                 "unbound_approval",
             ),
         )
@@ -170,6 +171,15 @@ class Revision9ArchiveBlocksTests(unittest.TestCase):
                 "ignored_nonreview_verdict",
                 "legacy_decision_shape",
             },
+        )
+        self.assertEqual(
+            archive.NON_AUTHORITATIVE_DISCREPANCIES,
+            archive.LEGACY_DISPLAY_DISCREPANCIES | {"tombstoned_chain"},
+        )
+        self.assertEqual(
+            set(archive.DISCREPANCY_CODES),
+            archive.AUTHORITATIVE_DISCREPANCIES
+            | archive.NON_AUTHORITATIVE_DISCREPANCIES,
         )
         for code in archive.AUTHORITATIVE_DISCREPANCIES:
             with self.subTest(code=code), self.assertRaisesRegex(
@@ -464,6 +474,151 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
         (root / f"{chain_id}.events.jsonl").write_bytes(events_raw)
         return state_raw, events_raw
 
+    def write_absent_tombstone(
+        self,
+        chain_id: str,
+        *,
+        value: dict[str, object] | None = None,
+        raw: bytes | None = None,
+    ) -> tuple[Path, dict[str, object], bytes]:
+        tombstones = self.repo / ".forge" / "chains" / "tombstones"
+        tombstones.mkdir(parents=True, exist_ok=True)
+        if value is None:
+            value = {
+                "schema": "forge-chain-tombstone/1",
+                "chain_id": chain_id,
+                "event": "frozen-abort",
+                "reason": "operator froze hostile ````` evidence — exact bytes",
+                "recorded_at": "2026-08-31T17:44:33Z",
+                "operator": {
+                    "host": "archive-fixture",
+                    "pid": os.getpid(),
+                    "uid": os.geteuid(),
+                },
+                "artifacts": {
+                    "state": {"status": "absent"},
+                    "events": {"status": "absent"},
+                },
+            }
+        if raw is None:
+            raw = canonical(value) + b"\n"
+        path = tombstones / f"{chain_id}.json"
+        path.write_bytes(raw)
+        return path, value, raw
+
+    @staticmethod
+    def binding(
+        chain_id: str,
+        candidate: str,
+        source_digest: str,
+        *,
+        review: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        preimage: dict[str, object] = {
+            "schema": "forge-gate-binding/1",
+            "source_record": {
+                "chain_id": chain_id,
+                "event_digest": source_digest,
+            },
+            "candidate": {
+                "kind": "staged-diff-sha256",
+                "value": candidate,
+            },
+            "review": review,
+        }
+        return {
+            **preimage,
+            "binding_id": hashlib.sha256(canonical(preimage)).hexdigest(),
+        }
+
+    def tombstone_bound_records(
+        self,
+        chain_id: str,
+        tombstone: dict[str, object],
+        *,
+        candidate: str = "a" * 64,
+    ) -> list[dict[str, object]]:
+        gate = {
+            "_line": 3,
+            "type": "verification",
+            "id": "check-01",
+            "task": "task-01",
+            "criterion": "gate-1: project tests",
+            "method": "command",
+            "check": "python3 -m unittest",
+            "result": "passed",
+            "observation": "OK",
+            "binding": self.binding(chain_id, candidate, "b" * 64),
+        }
+        abort_binding = archive.journal_builders.tombstone_abort_binding(
+            tombstone, chain_id, candidate
+        )
+        abort = {
+            "_line": 5,
+            "type": "decision",
+            "id": "decision-01",
+            "task": "task-01",
+            "outcome": "chain-abort",
+            "resolution": "Operator tombstone disposition",
+            "basis": [f".forge/chains/tombstones/{chain_id}.json"],
+            "binding": abort_binding,
+        }
+        return [gate, abort]
+
+    def full_tombstone_archive_records(
+        self, bound: list[dict[str, object]]
+    ) -> tuple[list[dict[str, object]], str, dict[str, object]]:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        validation: dict[str, object] = {
+            "ok": True,
+            "issues": [],
+            "warnings": [],
+            "non_passing_verifications": [],
+            "profile": "gates",
+        }
+        records: list[dict[str, object]] = [
+            {
+                "_line": 1,
+                "type": "run_started",
+                "run_id": self.run_dir.name,
+                "repo": str(self.repo.resolve()),
+                "repo_head": head,
+                "goal": "Archive an operator tombstone",
+                "scope": ["tests/**"],
+                "writer_contract": "forge-journal-binding/1",
+            },
+            {
+                "_line": 2,
+                "type": "task",
+                "id": "task-01",
+                "goal": "Render tombstone evidence",
+                "acceptance": ["Exact deterministic rendering"],
+                "status": "in_progress",
+            },
+            bound[0],
+            {
+                "_line": 4,
+                "type": "task",
+                "id": "task-01",
+                "status": "complete",
+                "outcome": "Tombstone rendered",
+            },
+            bound[1],
+            {
+                "_line": 6,
+                "type": "run_closed",
+                "judgment": "passed",
+                "validation": validation,
+            },
+        ]
+        return records, head, validation
+
     def write_captured_ingest(
         self,
         family: str,
@@ -628,6 +783,425 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
         )
         self.assertEqual([item.chain_id for item in package.chains], [cited])
         self.assertEqual(package.chains[0].state_file.raw, repo_state)
+
+    def test_tombstoned_chain_capture_binding_and_render_are_deterministic(
+        self,
+    ) -> None:
+        chain_id = "c-2026-08-28T000011Z-abcd"
+        _path, tombstone, raw = self.write_absent_tombstone(chain_id)
+        bound = self.tombstone_bound_records(chain_id, tombstone)
+
+        package = archive.capture_archive_chain_package(
+            self.repo, self.run_dir, bound, {chain_id}, activated=True
+        )
+        self.assertEqual(package.chains, ())
+        self.assertEqual(len(package.tombstones), 1)
+        snapshot = package.tombstones[0]
+        self.assertEqual(snapshot.record_file.raw, raw)
+        self.assertEqual(snapshot.record, tombstone)
+        raw_digest = hashlib.sha256(raw).hexdigest()
+        canonical_digest = hashlib.sha256(canonical(tombstone)).hexdigest()
+        self.assertEqual(snapshot.canonical_digest, canonical_digest)
+        self.assertNotEqual(raw_digest, canonical_digest)
+
+        with mock.patch.object(
+            archive.journal_builders,
+            "_resolve_binding_from_descriptor",
+            side_effect=AssertionError("tombstone bindings must not replay events"),
+        ) as replay:
+            resolved = archive.resolve_archive_bindings(
+                self.repo, self.run_dir, bound, package, True
+            )
+        replay.assert_not_called()
+        self.assertEqual(set(resolved), {3, 5})
+        discrepancies = archive.tombstone_discrepancies(package, bound)
+        self.assertEqual(len(discrepancies), 1)
+        self.assertEqual(discrepancies[0].code, "tombstoned_chain")
+
+        records, head, validation = self.full_tombstone_archive_records(bound)
+        first = archive.render_archive(
+            repo=self.repo,
+            run_dir=self.run_dir,
+            records=records,
+            closing_head=head,
+            post_close=validation,
+            audit_fragment="## Commitment audit\n\nPASS\n",
+            package=package,
+            bindings=resolved,
+            discrepancies=discrepancies,
+        )
+        second = archive.render_archive(
+            repo=self.repo,
+            run_dir=self.run_dir,
+            records=records,
+            closing_head=head,
+            post_close=validation,
+            audit_fragment="## Commitment audit\n\nPASS\n",
+            package=package,
+            bindings=resolved,
+            discrepancies=discrepancies,
+        )
+        self.assertEqual(first.encode("utf-8"), second.encode("utf-8"))
+        expected_block = (
+            f"<!-- FORGE:CHAIN-TOMBSTONE v1 bytes={len(raw)} "
+            f"sha256={raw_digest} canonical-sha256={canonical_digest} fence=6 -->\n"
+            "``````json\n"
+            f"{raw.decode('utf-8')}"
+            "``````\n"
+            "<!-- /FORGE:CHAIN-TOMBSTONE -->"
+        )
+        self.assertIn(expected_block, first)
+        self.assertEqual(first.count("<!-- FORGE:CHAIN-TOMBSTONE v1"), 1)
+        self.assertIn("Chain status: TOMBSTONED", first)
+        self.assertIn("Binding authentication: NOT replay-authenticated", first)
+        self.assertIn(f"Tombstone exact-byte SHA-256: {raw_digest}", first)
+        self.assertIn(f"Tombstone canonical SHA-256: {canonical_digest}", first)
+        self.assertIn("TOMBSTONED — NOT replay-authenticated", first)
+        self.assertIn("TOMBSTONE-AUTHENTICATED — NOT replay-authenticated", first)
+        self.assertIn(
+            "Tombstone-authenticated abort binding:\n\n"
+            f"- {bound[1]['binding']['binding_id']}",
+            first,
+        )
+        self.assertNotIn("<!-- FORGE:CHAIN-STATE v1", first)
+        self.assertNotIn("<!-- FORGE:CHAIN-EVIDENCE v1", first)
+        self.assertNotIn(
+            "<!-- BEGIN VERBATIM DOCUMENT: "
+            f".forge/chains/tombstones/{chain_id}.json -->",
+            first,
+        )
+
+    def test_tombstone_abort_binding_requires_exact_captured_source_fact(self) -> None:
+        chain_id = "c-2026-08-28T000012Z-abcd"
+        _path, tombstone, raw = self.write_absent_tombstone(chain_id)
+        records = self.tombstone_bound_records(chain_id, tombstone)
+        package = archive.capture_archive_chain_package(
+            self.repo, self.run_dir, records, {chain_id}, activated=True
+        )
+        snapshot = package.tombstones[0]
+        self.assertEqual(
+            archive.resolve_tombstone_bindings(snapshot, records)[5],
+            records[1]["binding"],
+        )
+
+        def refresh_binding(record: dict[str, object]) -> None:
+            binding = record["binding"]
+            assert isinstance(binding, dict)
+            preimage = {
+                name: copy.deepcopy(value)
+                for name, value in binding.items()
+                if name != "binding_id"
+            }
+            binding["binding_id"] = hashlib.sha256(canonical(preimage)).hexdigest()
+
+        hostile_records: list[tuple[str, list[dict[str, object]]]] = []
+        wrong_basis = copy.deepcopy(records)
+        wrong_basis[1]["basis"] = []
+        hostile_records.append(("basis", wrong_basis))
+
+        raw_digest_source = copy.deepcopy(records)
+        raw_binding = raw_digest_source[1]["binding"]
+        assert isinstance(raw_binding, dict)
+        raw_source = raw_binding["source_record"]
+        assert isinstance(raw_source, dict)
+        raw_source["event_digest"] = hashlib.sha256(raw).hexdigest()
+        refresh_binding(raw_digest_source[1])
+        hostile_records.append(("raw-file-digest", raw_digest_source))
+
+        wrong_candidate = copy.deepcopy(records)
+        candidate_binding = wrong_candidate[1]["binding"]
+        assert isinstance(candidate_binding, dict)
+        candidate_binding["candidate"] = {
+            "kind": "staged-diff-sha256",
+            "value": "c" * 64,
+        }
+        refresh_binding(wrong_candidate[1])
+        hostile_records.append(("candidate", wrong_candidate))
+
+        wrong_outcome = copy.deepcopy(records)
+        wrong_outcome[1]["outcome"] = "chain-skip"
+        hostile_records.append(("outcome", wrong_outcome))
+
+        reviewed = copy.deepcopy(records)
+        reviewed_binding = reviewed[1]["binding"]
+        assert isinstance(reviewed_binding, dict)
+        reviewed_binding["review"] = {
+            "verdict": "PASS",
+            "iteration": 1,
+            "reviewer_role": "review-final",
+            "package_digest": "d" * 64,
+        }
+        refresh_binding(reviewed[1])
+        hostile_records.append(("review", reviewed))
+
+        forged_id = copy.deepcopy(records)
+        forged_binding = forged_id[1]["binding"]
+        assert isinstance(forged_binding, dict)
+        forged_binding["binding_id"] = "e" * 64
+        hostile_records.append(("binding-id", forged_id))
+
+        for name, hostile in hostile_records:
+            with self.subTest(name=name), self.assertRaisesRegex(
+                archive.ArchiveRefusal, "structured_chain_mismatch$"
+            ):
+                archive.resolve_tombstone_bindings(snapshot, hostile)
+
+        changed_record = copy.deepcopy(snapshot.record)
+        changed_record["reason"] = "different parsed record"
+        inconsistent = archive.TombstoneSnapshot(
+            snapshot.chain_id,
+            snapshot.directory_identity,
+            snapshot.record_file,
+            changed_record,
+            snapshot.canonical_digest,
+        )
+        with self.assertRaisesRegex(
+            archive.ArchiveRefusal, "structured_chain_mismatch$"
+        ):
+            archive.resolve_tombstone_bindings(inconsistent, records)
+
+    def test_tombstone_validation_control_is_load_bearing(self) -> None:
+        chain_id = "c-2026-08-28T000013Z-abcd"
+        _path, tombstone, _raw = self.write_absent_tombstone(chain_id)
+        records = self.tombstone_bound_records(chain_id, tombstone)
+        package = archive.capture_archive_chain_package(
+            self.repo, self.run_dir, records, {chain_id}, activated=True
+        )
+        disabled = archive.RENDERER_CONTROLS - {"tombstone-validation"}
+        with mock.patch.object(archive, "RENDERER_CONTROLS", disabled):
+            with self.assertRaisesRegex(
+                archive.ArchiveRefusal, "missing_chain_artifact$"
+            ):
+                archive.capture_archive_chain_package(
+                    self.repo, self.run_dir, records, {chain_id}, activated=True
+                )
+            with self.assertRaisesRegex(
+                archive.ArchiveRefusal, "structured_chain_mismatch$"
+            ):
+                archive.resolve_tombstone_bindings(package.tombstones[0], records)
+
+    def test_malformed_tombstones_never_replace_missing_chain_artifacts(self) -> None:
+        variants = (
+            "wrong-schema",
+            "wrong-chain-id",
+            "invalid-json",
+            "missing-lf",
+            "noncanonical-json",
+            "symlink",
+            "oversized",
+            "mixed-facts",
+            "captured-facts",
+        )
+        for index, variant in enumerate(variants, start=1):
+            chain_id = f"c-2026-08-28T01{index:04d}Z-{index:04x}"
+            path, value, raw = self.write_absent_tombstone(chain_id)
+            if variant == "wrong-schema":
+                value["schema"] = "forge-chain-tombstone/0"
+                path.write_bytes(canonical(value) + b"\n")
+            elif variant == "wrong-chain-id":
+                value["chain_id"] = "c-2026-08-28T235959Z-dead"
+                path.write_bytes(canonical(value) + b"\n")
+            elif variant == "invalid-json":
+                path.write_bytes(b"{not-json}\n")
+            elif variant == "missing-lf":
+                path.write_bytes(raw.removesuffix(b"\n"))
+            elif variant == "noncanonical-json":
+                path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+            elif variant == "symlink":
+                target = self.root / f"tombstone-target-{index}.json"
+                target.write_bytes(raw)
+                path.unlink()
+                path.symlink_to(target)
+            elif variant == "oversized":
+                path.write_bytes(b"x" * (archive.TOMBSTONE_SIZE_LIMIT + 1))
+            elif variant == "mixed-facts":
+                value["artifacts"] = {
+                    "state": {"status": "absent"},
+                    "events": {
+                        "status": "captured",
+                        "sha256": "f" * 64,
+                        "bytes": 1,
+                    },
+                }
+                path.write_bytes(canonical(value) + b"\n")
+            elif variant == "captured-facts":
+                value["artifacts"] = {
+                    name: {
+                        "status": "captured",
+                        "sha256": "f" * 64,
+                        "bytes": 1,
+                    }
+                    for name in ("state", "events")
+                }
+                path.write_bytes(canonical(value) + b"\n")
+            with self.subTest(variant=variant), self.assertRaisesRegex(
+                archive.ArchiveRefusal, "missing_chain_artifact$"
+            ):
+                archive.capture_archive_chain_package(
+                    self.repo, self.run_dir, [], {chain_id}, activated=True
+                )
+
+    def test_missing_and_partial_chain_artifacts_keep_existing_refusal(self) -> None:
+        missing = "c-2026-08-28T000014Z-abcd"
+        with self.assertRaisesRegex(archive.ArchiveRefusal, "missing_chain_artifact$"):
+            archive.capture_archive_chain_package(
+                self.repo, self.run_dir, [], {missing}, activated=True
+            )
+
+        empty = "c-2026-08-28T000015Z-abcd"
+        (self.repo / ".forge" / "chains" / "tombstones").mkdir(
+            parents=True, exist_ok=True
+        )
+        with self.assertRaisesRegex(archive.ArchiveRefusal, "missing_chain_artifact$"):
+            archive.capture_archive_chain_package(
+                self.repo, self.run_dir, [], {empty}, activated=True
+            )
+
+        for index, retained in enumerate(("state", "events"), start=1):
+            chain_id = f"c-2026-08-28T0000{index + 15:02d}Z-abcd"
+            self.write_absent_tombstone(chain_id)
+            chains = self.repo / ".forge" / "chains"
+            suffix = ".json" if retained == "state" else ".events.jsonl"
+            (chains / f"{chain_id}{suffix}").write_bytes(b"partial")
+            with self.subTest(retained=retained), self.assertRaisesRegex(
+                archive.ArchiveRefusal, "missing_chain_artifact$"
+            ):
+                archive.capture_archive_chain_package(
+                    self.repo, self.run_dir, [], {chain_id}, activated=True
+                )
+
+    def test_complete_real_chain_artifacts_win_without_consulting_tombstone(
+        self,
+    ) -> None:
+        chain_id = "c-2026-08-28T000018Z-abcd"
+        chains = self.repo / ".forge" / "chains"
+        state_raw, events_raw = self.write_legacy_chain(chains, chain_id, "real pair")
+        tombstone_path, _value, _raw = self.write_absent_tombstone(chain_id)
+
+        with mock.patch.object(
+            archive,
+            "capture_terminal_tombstone",
+            side_effect=AssertionError("a complete real pair must win"),
+        ) as tombstone_capture:
+            package = archive.capture_archive_chain_package(
+                self.repo, self.run_dir, [], {chain_id}, activated=True
+            )
+        tombstone_capture.assert_not_called()
+        self.assertEqual(package.tombstones, ())
+        self.assertEqual(package.chains[0].state_file.raw, state_raw)
+        self.assertEqual(package.chains[0].events_file.raw, events_raw)
+        tombstone_path.write_bytes(b"malformed and ignored")
+        archive.recheck_chain_package(package)
+        rendered = "\n".join(
+            archive.render_chain_sections(package, [], {}, [])
+        )
+        self.assertNotIn("FORGE:CHAIN-TOMBSTONE", rendered)
+        self.assertNotIn("TOMBSTONED", rendered)
+
+    def test_ordinary_pair_is_safely_opened_before_either_payload_is_read(
+        self,
+    ) -> None:
+        chain_id = "c-2026-08-28T000019Z-abcd"
+        self.write_absent_tombstone(chain_id)
+        chains = self.repo / ".forge" / "chains"
+        state_path = chains / f"{chain_id}.json"
+        with state_path.open("wb") as handle:
+            handle.truncate(archive.ARCHIVE_SIZE_LIMIT * 2)
+        events_target = self.root / "unsafe-events.jsonl"
+        events_target.write_bytes(b"outside\n")
+        (chains / f"{chain_id}.events.jsonl").symlink_to(events_target)
+
+        with mock.patch.object(
+            archive,
+            "read_descriptor_bytes",
+            side_effect=AssertionError("payload read preceded pair classification"),
+        ) as payload_read, mock.patch.object(
+            archive,
+            "capture_terminal_tombstone",
+            side_effect=AssertionError("an unsafe pair must not consult a tombstone"),
+        ) as tombstone_capture, self.assertRaisesRegex(
+            archive.ArchiveRefusal, "missing_chain_artifact$"
+        ):
+            archive.capture_archive_chain_package(
+                self.repo, self.run_dir, [], {chain_id}, activated=True
+            )
+        payload_read.assert_not_called()
+        tombstone_capture.assert_not_called()
+
+    def test_tombstone_alias_topology_skips_normal_scan_and_bounds_crash_scan(
+        self,
+    ) -> None:
+        normal_id = "c-2026-08-28T000020Z-abcd"
+        self.write_absent_tombstone(normal_id)
+        with mock.patch.object(
+            archive.os,
+            "scandir",
+            side_effect=AssertionError("one-link tombstones require no directory scan"),
+        ) as scan:
+            package = archive.capture_archive_chain_package(
+                self.repo, self.run_dir, [], {normal_id}, activated=True
+            )
+        scan.assert_not_called()
+        self.assertEqual(package.tombstones[0].record_file.identity.links, 1)
+
+        crash_id = "c-2026-08-28T000021Z-abcd"
+        crash_path, _value, _raw = self.write_absent_tombstone(crash_id)
+        crash_alias = crash_path.with_name(f".{crash_id}.1234.{'a' * 16}.tmp")
+        os.link(crash_path, crash_alias)
+        with mock.patch.object(
+            archive.os,
+            "listdir",
+            side_effect=AssertionError("crash topology must use a streaming scan"),
+        ) as listing:
+            package = archive.capture_archive_chain_package(
+                self.repo, self.run_dir, [], {crash_id}, activated=True
+            )
+        listing.assert_not_called()
+        self.assertEqual(package.tombstones[0].record_file.identity.links, 2)
+
+        with mock.patch.object(
+            archive, "TOMBSTONE_DIRECTORY_ENTRY_LIMIT", 1
+        ), self.assertRaisesRegex(
+            archive.ArchiveRefusal, "missing_chain_artifact$"
+        ):
+            archive.capture_archive_chain_package(
+                self.repo, self.run_dir, [], {crash_id}, activated=True
+            )
+
+    def test_tombstone_recheck_detects_post_render_change(self) -> None:
+        mutations = ("content", "replacement", "deletion", "state", "events")
+        for index, mutation in enumerate(mutations, start=1):
+            chain_id = f"c-2026-08-28T02{index:04d}Z-{index:04x}"
+            path, tombstone, raw = self.write_absent_tombstone(chain_id)
+            records = self.tombstone_bound_records(chain_id, tombstone)
+            package = archive.capture_archive_chain_package(
+                self.repo, self.run_dir, records, {chain_id}, activated=True
+            )
+            resolved = archive.resolve_archive_bindings(
+                self.repo, self.run_dir, records, package, True
+            )
+            archive.render_chain_sections(
+                package,
+                records,
+                resolved,
+                archive.tombstone_discrepancies(package, records),
+            )
+            if mutation == "content":
+                path.write_bytes(raw[:-2] + b"x\n")
+            elif mutation == "replacement":
+                path.unlink()
+                path.write_bytes(raw)
+            elif mutation == "deletion":
+                path.unlink()
+            else:
+                suffix = ".json" if mutation == "state" else ".events.jsonl"
+                (self.repo / ".forge" / "chains" / f"{chain_id}{suffix}").write_bytes(
+                    b"reappeared"
+                )
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(
+                archive.ArchiveRefusal, "snapshot_changed$"
+            ):
+                archive.recheck_chain_package(package)
 
     def test_retrospective_commit_and_merge_replay_captured_packages(self) -> None:
         for family, suffix in (("commit", "01"), ("merge", "02")):

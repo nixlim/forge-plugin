@@ -94,9 +94,13 @@ LEGACY_APPROVAL = re.compile(
 WRITER_CONTRACT = "forge-journal-binding/1"
 CHAIN_STATE_SCHEMA = "forge-chain/1"
 MERGE_STATE_SCHEMA = "forge-merge-chain/1"
+CHAIN_TOMBSTONE_SCHEMA = "forge-chain-tombstone/1"
 CHAIN_STATE_MARKER = "FORGE:CHAIN-STATE"
 CHAIN_EVIDENCE_MARKER = "FORGE:CHAIN-EVIDENCE"
+CHAIN_TOMBSTONE_MARKER = "FORGE:CHAIN-TOMBSTONE"
 EVENT_EMBED_LIMIT = 2_097_152
+TOMBSTONE_SIZE_LIMIT = 65_536
+TOMBSTONE_DIRECTORY_ENTRY_LIMIT = 4_096
 ARCHIVE_SIZE_LIMIT = 16_777_216
 
 # DM-001 is a closed control enum.  The disposition set is deliberately
@@ -109,6 +113,7 @@ DISCREPANCY_CODES = (
     "result_verdict_conflict",
     "snapshot_changed",
     "structured_chain_mismatch",
+    "tombstoned_chain",
     "unbound_approval",
 )
 AUTHORITATIVE_DISCREPANCIES = frozenset(
@@ -120,7 +125,21 @@ AUTHORITATIVE_DISCREPANCIES = frozenset(
         "snapshot_changed",
     }
 )
-LEGACY_DISPLAY_DISCREPANCIES = frozenset(DISCREPANCY_CODES) - AUTHORITATIVE_DISCREPANCIES
+LEGACY_DISPLAY_DISCREPANCIES = frozenset(
+    {
+        "ambiguous_legacy_candidate",
+        "ignored_nonreview_verdict",
+        "legacy_decision_shape",
+    }
+)
+NON_AUTHORITATIVE_DISCREPANCIES = frozenset(
+    {
+        "ambiguous_legacy_candidate",
+        "ignored_nonreview_verdict",
+        "legacy_decision_shape",
+        "tombstoned_chain",
+    }
+)
 RENDERER_CONTROLS = frozenset(
     {
         "binding-only",
@@ -138,6 +157,7 @@ RENDERER_CONTROLS = frozenset(
         "captured-ingest-replay",
         "captured-ingest-binding",
         "captured-ingest-eligibility",
+        "tombstone-validation",
     }
 )
 
@@ -174,12 +194,22 @@ class ChainSnapshot:
 
 
 @dataclass(frozen=True)
+class TombstoneSnapshot:
+    chain_id: str
+    directory_identity: FileIdentity
+    record_file: ExactFile
+    record: dict[str, object]
+    canonical_digest: str
+
+
+@dataclass(frozen=True)
 class ChainPackage:
     root: Path | None
     root_identity: FileIdentity | None
     names: tuple[str, ...]
     chains: tuple[ChainSnapshot, ...]
     captured: tuple[CapturedIngestSnapshot, ...] = ()
+    tombstones: tuple[TombstoneSnapshot, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -262,7 +292,8 @@ def authoritative_discrepancy(code: str) -> None:
         "closed-discrepancies" not in RENDERER_CONTROLS
         or code not in AUTHORITATIVE_DISCREPANCIES
         or frozenset(DISCREPANCY_CODES)
-        != AUTHORITATIVE_DISCREPANCIES | LEGACY_DISPLAY_DISCREPANCIES
+        != AUTHORITATIVE_DISCREPANCIES | NON_AUTHORITATIVE_DISCREPANCIES
+        or not LEGACY_DISPLAY_DISCREPANCIES <= NON_AUTHORITATIVE_DISCREPANCIES
     ):
         raise ArchiveRefusal("forge: archive refused — renderer discrepancy control unavailable")
     raise ArchiveRefusal(
@@ -294,47 +325,294 @@ def owner_directory(value: os.stat_result) -> bool:
     return bool(stat.S_ISDIR(value.st_mode) and value.st_uid == os.geteuid())
 
 
-def read_exact_file(directory: int, name: str) -> ExactFile:
-    descriptor: int | None = None
+def read_descriptor_bytes(descriptor: int) -> bytes:
+    """Read an already-classified ordinary artifact exactly."""
+
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def read_exact_files(directory: int, names: Sequence[str]) -> tuple[ExactFile, ...]:
+    """Open and identity-check every entry before reading any payload bytes."""
+
+    opened: list[tuple[str, int, FileIdentity]] = []
     try:
-        before = os.stat(name, dir_fd=directory, follow_symlinks=False)
-        if not owner_regular(before):
-            authoritative_discrepancy("missing_chain_artifact")
-        descriptor = os.open(
-            name,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0),
-            dir_fd=directory,
-        )
-        opened = os.fstat(descriptor)
-        if file_identity(opened) != file_identity(before):
-            authoritative_discrepancy("snapshot_changed")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        raw = b"".join(chunks)
-        after = os.fstat(descriptor)
-        rebound = os.stat(name, dir_fd=directory, follow_symlinks=False)
-        identity = file_identity(before)
-        if (
-            file_identity(after) != identity
-            or file_identity(rebound) != identity
-            or len(raw) != before.st_size
+        for name in names:
+            before = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if not owner_regular(before):
+                authoritative_discrepancy("missing_chain_artifact")
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=directory,
+            )
+            identity = file_identity(before)
+            opened.append((name, descriptor, identity))
+            if file_identity(os.fstat(descriptor)) != identity:
+                authoritative_discrepancy("snapshot_changed")
+
+        payloads = [
+            read_descriptor_bytes(descriptor)
+            for _name, descriptor, _identity in opened
+        ]
+
+        result: list[ExactFile] = []
+        for (name, descriptor, identity), raw in zip(
+            opened, payloads, strict=True
         ):
-            authoritative_discrepancy("snapshot_changed")
-        return ExactFile(name, raw, identity)
+            rebound = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if (
+                file_identity(os.fstat(descriptor)) != identity
+                or file_identity(rebound) != identity
+                or len(raw) != identity.size
+            ):
+                authoritative_discrepancy("snapshot_changed")
+            result.append(ExactFile(name, raw, identity))
+        return tuple(result)
     except ArchiveRefusal:
         raise
     except (OSError, ValueError):
         authoritative_discrepancy("missing_chain_artifact")
         raise AssertionError("unreachable")
     finally:
+        for _name, descriptor, _identity in opened:
+            os.close(descriptor)
+
+
+def read_exact_file(directory: int, name: str) -> ExactFile:
+    """Read one exact file through the shared no-follow capture discipline."""
+
+    return read_exact_files(directory, (name,))[0]
+
+
+def entry_present(directory: int, name: str) -> bool:
+    """Classify one no-follow directory entry without accepting its type."""
+
+    try:
+        os.stat(name, dir_fd=directory, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        authoritative_discrepancy("missing_chain_artifact")
+    raise AssertionError("unreachable")
+
+
+def _valid_absent_tombstone_record(value: object, chain_id: str) -> bool:
+    """Recognize only the canonical absent-artifact tombstone terminal fact."""
+
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "schema",
+            "chain_id",
+            "event",
+            "reason",
+            "recorded_at",
+            "operator",
+            "artifacts",
+        }
+        or value.get("schema") != CHAIN_TOMBSTONE_SCHEMA
+        or value.get("chain_id") != chain_id
+        or value.get("event") != "frozen-abort"
+        or not isinstance(value.get("recorded_at"), str)
+        or not journal_engine._valid_utc(value["recorded_at"])
+    ):
+        return False
+    reason = value.get("reason")
+    operator = value.get("operator")
+    artifacts = value.get("artifacts")
+    try:
+        reason_bytes = reason.encode("utf-8") if isinstance(reason, str) else b""
+    except UnicodeError:
+        return False
+    return bool(
+        isinstance(reason, str)
+        and reason.strip()
+        and reason_bytes
+        and len(reason_bytes) <= 4096
+        and "\x00" not in reason
+        and isinstance(operator, dict)
+        and set(operator) == {"host", "pid", "uid"}
+        and isinstance(operator.get("host"), str)
+        and bool(operator.get("host"))
+        and type(operator.get("pid")) is int
+        and int(operator["pid"]) > 0
+        and type(operator.get("uid")) is int
+        and isinstance(artifacts, dict)
+        and set(artifacts) == {"state", "events"}
+        and all(
+            isinstance(fact, dict) and fact == {"status": "absent"}
+            for fact in artifacts.values()
+        )
+    )
+
+
+def valid_tombstone_alias_topology(
+    directory: int,
+    identity: FileIdentity,
+    chain_id: str,
+    name: str,
+) -> bool:
+    """Validate the optional crash alias with constant memory and a hard scan cap."""
+
+    if identity.links == 1:
+        return True
+    if identity.links != 2:
+        return False
+    temporary_pattern = re.compile(
+        rf"^\.{re.escape(chain_id)}\.[1-9][0-9]*\.[0-9a-f]{{16}}\.tmp$"
+    )
+    owner_seen = False
+    temporary_seen = False
+    observed = 0
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                observed += 1
+                if observed > TOMBSTONE_DIRECTORY_ENTRY_LIMIT:
+                    return False
+                try:
+                    candidate = entry.stat(follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if (
+                    candidate.st_dev != identity.device
+                    or candidate.st_ino != identity.inode
+                ):
+                    continue
+                if entry.name == name and not owner_seen:
+                    owner_seen = True
+                elif temporary_pattern.fullmatch(entry.name) and not temporary_seen:
+                    temporary_seen = True
+                else:
+                    return False
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return owner_seen and temporary_seen
+
+
+def capture_terminal_tombstone(
+    chains_directory: int, chain_id: str
+) -> TombstoneSnapshot:
+    """Capture one bounded, canonical tombstone through no-follow fences."""
+
+    if "tombstone-validation" not in RENDERER_CONTROLS:
+        authoritative_discrepancy("missing_chain_artifact")
+    tombstones_directory: int | None = None
+    descriptor: int | None = None
+    try:
+        before_directory = os.stat(
+            "tombstones", dir_fd=chains_directory, follow_symlinks=False
+        )
+        if not owner_directory(before_directory):
+            authoritative_discrepancy("missing_chain_artifact")
+        tombstones_directory = os.open(
+            "tombstones",
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=chains_directory,
+        )
+        directory_identity = file_identity(before_directory)
+        if file_identity(os.fstat(tombstones_directory)) != directory_identity:
+            authoritative_discrepancy("snapshot_changed")
+
+        name = f"{chain_id}.json"
+        before = os.stat(name, dir_fd=tombstones_directory, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink not in {1, 2}
+            or before.st_size <= 0
+            or before.st_size > TOMBSTONE_SIZE_LIMIT
+        ):
+            authoritative_discrepancy("missing_chain_artifact")
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=tombstones_directory,
+        )
+        identity = file_identity(before)
+        if file_identity(os.fstat(descriptor)) != identity:
+            authoritative_discrepancy("snapshot_changed")
+        chunks: list[bytes] = []
+        remaining = TOMBSTONE_SIZE_LIMIT + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=tombstones_directory, follow_symlinks=False)
+        if (
+            len(raw) > TOMBSTONE_SIZE_LIMIT
+            or len(raw) != identity.size
+            or file_identity(after) != identity
+            or file_identity(rebound) != identity
+        ):
+            authoritative_discrepancy("snapshot_changed")
+
+        if not valid_tombstone_alias_topology(
+            tombstones_directory, identity, chain_id, name
+        ):
+            authoritative_discrepancy("missing_chain_artifact")
+
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, ValueError, RecursionError):
+            authoritative_discrepancy("missing_chain_artifact")
+        if not _valid_absent_tombstone_record(value, chain_id):
+            authoritative_discrepancy("missing_chain_artifact")
+        try:
+            canonical = journal_engine._canonical_json_bytes(value)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            authoritative_discrepancy("missing_chain_artifact")
+        if raw != canonical + b"\n":
+            authoritative_discrepancy("missing_chain_artifact")
+        if any(
+            entry_present(chains_directory, artifact)
+            for artifact in (f"{chain_id}.json", f"{chain_id}.events.jsonl")
+        ):
+            authoritative_discrepancy("snapshot_changed")
+        rebound_directory = os.stat(
+            "tombstones", dir_fd=chains_directory, follow_symlinks=False
+        )
+        if (
+            file_identity(os.fstat(tombstones_directory)) != directory_identity
+            or file_identity(rebound_directory) != directory_identity
+        ):
+            authoritative_discrepancy("snapshot_changed")
+        assert isinstance(value, dict)
+        return TombstoneSnapshot(
+            chain_id,
+            directory_identity,
+            ExactFile(name, raw, identity),
+            value,
+            hashlib.sha256(canonical).hexdigest(),
+        )
+    except ArchiveRefusal:
+        raise
+    except (OSError, RuntimeError, ValueError):
+        authoritative_discrepancy("missing_chain_artifact")
+        raise AssertionError("unreachable")
+    finally:
         if descriptor is not None:
             os.close(descriptor)
+        if tombstones_directory is not None:
+            os.close(tombstones_directory)
 
 
 def stable_journal_snapshot(run_dir: Path) -> tuple[list[dict[str, Any]], bytes]:
@@ -926,17 +1204,29 @@ def capture_chain_package(
         root_identity = file_identity(root_before)
         if file_identity(os.fstat(directory)) != root_identity:
             authoritative_discrepancy("snapshot_changed")
-        names = tuple(
-            name
-            for chain_id in sorted(required_chain_ids, key=os.fsencode)
-            for name in (f"{chain_id}.json", f"{chain_id}.events.jsonl")
-        )
+        names: list[str] = []
         chains: list[ChainSnapshot] = []
+        tombstones: list[TombstoneSnapshot] = []
         for chain_id in sorted(required_chain_ids, key=os.fsencode):
             if journal_engine.CHAIN_ID_PATTERN.fullmatch(chain_id) is None:
                 authoritative_discrepancy("missing_chain_artifact")
-            state_file = read_exact_file(directory, f"{chain_id}.json")
-            events_file = read_exact_file(directory, f"{chain_id}.events.jsonl")
+            state_name = f"{chain_id}.json"
+            events_name = f"{chain_id}.events.jsonl"
+            state_present = entry_present(directory, state_name)
+            events_present = entry_present(directory, events_name)
+            if state_present != events_present:
+                authoritative_discrepancy("missing_chain_artifact")
+            if not state_present:
+                if not activated:
+                    authoritative_discrepancy("missing_chain_artifact")
+                tombstone = capture_terminal_tombstone(directory, chain_id)
+                tombstones.append(tombstone)
+                names.append(f"tombstones/{tombstone.record_file.name}")
+                continue
+            names.extend((state_name, events_name))
+            state_file, events_file = read_exact_files(
+                directory, (state_name, events_name)
+            )
             try:
                 state = json.loads(state_file.raw.decode("utf-8"))
             except (UnicodeError, ValueError, RecursionError):
@@ -969,7 +1259,14 @@ def capture_chain_package(
             or file_identity(rebound) != root_identity
         ):
             authoritative_discrepancy("snapshot_changed")
-        return ChainPackage(root, root_identity, names, tuple(chains))
+        return ChainPackage(
+            root,
+            root_identity,
+            tuple(names),
+            tuple(chains),
+            (),
+            tuple(tombstones),
+        )
     except ArchiveRefusal:
         raise
     except (OSError, RuntimeError, ValueError):
@@ -1002,10 +1299,20 @@ def recheck_chain_package(package: ChainPackage) -> None:
         for chain in package.chains:
             if chain.chain_id in captured_ids:
                 continue
-            for exact in (chain.state_file, chain.events_file):
-                current = read_exact_file(directory, exact.name)
+            expected = (chain.state_file, chain.events_file)
+            current_pair = read_exact_files(
+                directory, tuple(exact.name for exact in expected)
+            )
+            for exact, current in zip(expected, current_pair, strict=True):
                 if current.identity != exact.identity or current.raw != exact.raw:
                     authoritative_discrepancy("snapshot_changed")
+        for tombstone in package.tombstones:
+            try:
+                current = capture_terminal_tombstone(directory, tombstone.chain_id)
+            except ArchiveRefusal:
+                authoritative_discrepancy("snapshot_changed")
+            if current != tombstone:
+                authoritative_discrepancy("snapshot_changed")
     except ArchiveRefusal:
         raise
     except (OSError, RuntimeError, ValueError):
@@ -1856,6 +2163,7 @@ def capture_archive_chain_package(
         live.names,
         chains,
         captured,
+        live.tombstones,
     )
 
 
@@ -1879,12 +2187,27 @@ def recheck_captured_ingest_packages(package: ChainPackage) -> None:
 
 
 def captured_chain_evidence_paths(package: ChainPackage) -> frozenset[Path]:
-    """Paths already carried through the bounded DM-012 evidence blocks."""
+    """Paths already carried through bounded chain-evidence blocks."""
 
-    return frozenset(
+    captured = {
         document.path
         for snapshot in package.captured
         for document in snapshot.documents[:2]
+    }
+    if package.root is not None:
+        captured.update(
+            package.root / "tombstones" / snapshot.record_file.name
+            for snapshot in package.tombstones
+        )
+    return frozenset(captured)
+
+
+def tombstone_evidence_citations(package: ChainPackage) -> frozenset[str]:
+    """Canonical journal citations satisfied by carried tombstone bytes."""
+
+    return frozenset(
+        f".forge/chains/tombstones/{snapshot.chain_id}.json"
+        for snapshot in package.tombstones
     )
 
 
@@ -2311,6 +2634,91 @@ def require_exact_carried_record(
         authoritative_discrepancy("structured_chain_mismatch")
 
 
+def resolve_tombstone_bindings(
+    snapshot: TombstoneSnapshot,
+    chain_records: Sequence[dict[str, Any]],
+) -> dict[int, dict[str, object]]:
+    """Authenticate one tombstone disposition and retain cited rows for display."""
+
+    if (
+        "tombstone-validation" not in RENDERER_CONTROLS
+        or not chain_records
+    ):
+        authoritative_discrepancy("structured_chain_mismatch")
+    aborts = [
+        record
+        for record in chain_records
+        if record.get("type") == "decision"
+        and record.get("outcome") == "chain-abort"
+    ]
+    landings = [
+        record
+        for record in chain_records
+        if record.get("type") == "decision"
+        and record.get("outcome") == "chain-landing"
+    ]
+    if len(aborts) > 1 or (aborts and landings):
+        authoritative_discrepancy("structured_chain_mismatch")
+    try:
+        canonical = journal_engine._canonical_json_bytes(snapshot.record)
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        authoritative_discrepancy("structured_chain_mismatch")
+    if (
+        snapshot.record_file.raw != canonical + b"\n"
+        or hashlib.sha256(canonical).hexdigest() != snapshot.canonical_digest
+    ):
+        authoritative_discrepancy("structured_chain_mismatch")
+    tombstone_sourced = [
+        record
+        for record in chain_records
+        if isinstance(record.get("binding"), dict)
+        and isinstance(record["binding"].get("source_record"), dict)
+        and record["binding"]["source_record"].get("event_digest")
+        == snapshot.canonical_digest
+    ]
+    if tombstone_sourced != aborts:
+        authoritative_discrepancy("structured_chain_mismatch")
+    if aborts:
+        abort = aborts[0]
+        expected_path = f".forge/chains/tombstones/{snapshot.chain_id}.json"
+        binding = abort.get("binding")
+        candidate = binding.get("candidate") if isinstance(binding, dict) else None
+        candidate_value = (
+            candidate.get("value") if isinstance(candidate, dict) else None
+        )
+        if (
+            "carried-record-equality" not in RENDERER_CONTROLS
+            or abort.get("basis") != [expected_path]
+            or not isinstance(binding, dict)
+            or not isinstance(candidate, dict)
+            or candidate.get("kind") != "staged-diff-sha256"
+            or not isinstance(candidate_value, str)
+            or journal_engine.HEX_SHA256_PATTERN.fullmatch(candidate_value) is None
+            or any(
+                not isinstance(record.get("binding"), dict)
+                or record["binding"].get("candidate") != candidate
+                for record in chain_records
+            )
+        ):
+            authoritative_discrepancy("structured_chain_mismatch")
+        expected_binding = journal_builders.tombstone_abort_binding(
+            snapshot.record, snapshot.chain_id, candidate_value
+        )
+        if journal_engine._canonical_json_bytes(
+            binding
+        ) != journal_engine._canonical_json_bytes(expected_binding):
+            authoritative_discrepancy("structured_chain_mismatch")
+
+    resolved: dict[int, dict[str, object]] = {}
+    for record in chain_records:
+        record_binding = record.get("binding")
+        line = record_line_number(record)
+        if not isinstance(record_binding, dict) or line is None or line in resolved:
+            authoritative_discrepancy("structured_chain_mismatch")
+        resolved[line] = dict(record_binding)
+    return resolved
+
+
 def resolve_captured_ingest_bindings(
     snapshot: CapturedIngestSnapshot,
     chain_records: Sequence[dict[str, Any]],
@@ -2429,6 +2837,7 @@ def resolve_archive_bindings(
     if not required:
         return {}
     captured = {snapshot.chain.chain_id: snapshot for snapshot in package.captured}
+    tombstones = {snapshot.chain_id: snapshot for snapshot in package.tombstones}
     required_by_chain: dict[str, list[dict[str, Any]]] = {}
     for record in required:
         binding = record.get("binding")
@@ -2437,7 +2846,7 @@ def resolve_archive_bindings(
         if not isinstance(chain_id, str):
             authoritative_discrepancy("structured_chain_mismatch")
         required_by_chain.setdefault(chain_id, []).append(record)
-    live_ids = set(required_by_chain) - set(captured)
+    live_ids = set(required_by_chain) - set(captured) - set(tombstones)
     if live_ids and package.root is None:
         authoritative_discrepancy("missing_chain_artifact")
     directory: int | None = None
@@ -2456,11 +2865,20 @@ def resolve_archive_bindings(
                 authoritative_discrepancy("snapshot_changed")
         register_archive_merge_reducer()
         chains = {chain.chain_id: chain for chain in package.chains}
-        if set(required_by_chain) - set(chains):
+        if set(required_by_chain) - set(chains) - set(tombstones):
             authoritative_discrepancy("missing_chain_artifact")
         for chain_id, snapshot in captured.items():
             chain_resolved = resolve_captured_ingest_bindings(
                 snapshot, required_by_chain.get(chain_id, ()), records
+            )
+            if set(chain_resolved) & set(resolved):
+                authoritative_discrepancy("structured_chain_mismatch")
+            resolved.update(chain_resolved)
+        for chain_id, snapshot in sorted(
+            tombstones.items(), key=lambda item: os.fsencode(item[0])
+        ):
+            chain_resolved = resolve_tombstone_bindings(
+                snapshot, required_by_chain.get(chain_id, ())
             )
             if set(chain_resolved) & set(resolved):
                 authoritative_discrepancy("structured_chain_mismatch")
@@ -2615,6 +3033,46 @@ def legacy_discrepancies(
     return result
 
 
+def tombstone_discrepancies(
+    package: ChainPackage, records: Sequence[dict[str, Any]]
+) -> list[Discrepancy]:
+    """Emit one explicit, non-authoritative row per tombstoned chain."""
+
+    result: list[Discrepancy] = []
+    for snapshot in package.tombstones:
+        cited = [
+            record
+            for record in records
+            if isinstance(record.get("binding"), dict)
+            and isinstance(record["binding"].get("source_record"), dict)
+            and record["binding"]["source_record"].get("chain_id")
+            == snapshot.chain_id
+        ]
+        disposition = next(
+            (
+                record
+                for record in cited
+                if record.get("type") == "decision"
+                and record.get("outcome") == "chain-abort"
+            ),
+            cited[0] if cited else {},
+        )
+        result.append(
+            Discrepancy(
+                "tombstoned_chain",
+                record_line_number(disposition),
+                record_identifier(disposition),
+                "operator tombstone canonical SHA-256 "
+                f"{snapshot.canonical_digest}; {len(cited)} binding(s) are "
+                "NOT replay-authenticated",
+                snapshot.chain_id,
+            )
+        )
+    if any(item.code not in NON_AUTHORITATIVE_DISCREPANCIES for item in result):
+        authoritative_discrepancy("structured_chain_mismatch")
+    return result
+
+
 def longest_backtick_run(value: str) -> int:
     return max((len(match.group(0)) for match in re.finditer(r"`+", value)), default=0)
 
@@ -2654,6 +3112,28 @@ def render_chain_event_block(raw: bytes) -> str:
     )
 
 
+def render_chain_tombstone_block(snapshot: TombstoneSnapshot) -> str:
+    """Render exact tombstone bytes while distinguishing its two digests."""
+
+    try:
+        decoded = snapshot.record_file.raw.decode("utf-8")
+    except UnicodeError:
+        authoritative_discrepancy("structured_chain_mismatch")
+    fence = max(3, longest_backtick_run(decoded) + 1)
+    raw_digest = hashlib.sha256(snapshot.record_file.raw).hexdigest()
+    separator = "" if snapshot.record_file.raw.endswith(b"\n") else "\n"
+    ticks = "`" * fence
+    return (
+        f"<!-- {CHAIN_TOMBSTONE_MARKER} v1 bytes={len(snapshot.record_file.raw)} "
+        f"sha256={raw_digest} canonical-sha256={snapshot.canonical_digest} "
+        f"fence={fence} -->\n"
+        f"{ticks}json\n"
+        f"{decoded}{separator}"
+        f"{ticks}\n"
+        f"<!-- /{CHAIN_TOMBSTONE_MARKER} -->\n"
+    )
+
+
 def binding_candidate_display(binding: dict[str, object]) -> str:
     candidate = binding.get("candidate")
     if not isinstance(candidate, dict):
@@ -2685,16 +3165,118 @@ def render_chain_sections(
     discrepancies: list[Discrepancy],
 ) -> list[str]:
     lines = ["## Chain evidence", ""]
-    if not package.chains:
+    if not package.chains and not package.tombstones:
         return [*lines, NONE, ""]
-    for chain in package.chains:
+    evidence: list[tuple[str, ChainSnapshot | TombstoneSnapshot]] = [
+        ("chain", chain) for chain in package.chains
+    ]
+    evidence.extend(("tombstone", snapshot) for snapshot in package.tombstones)
+    for kind, item in sorted(
+        evidence, key=lambda entry: os.fsencode(entry[1].chain_id)
+    ):
         selected = [
             (line, binding)
             for line, binding in sorted(bindings.items())
             if isinstance(binding.get("source_record"), dict)
-            and binding["source_record"].get("chain_id") == chain.chain_id
+            and binding["source_record"].get("chain_id") == item.chain_id
         ]
-        related = [item for item in discrepancies if item.chain_id == chain.chain_id]
+        related = [
+            discrepancy
+            for discrepancy in discrepancies
+            if discrepancy.chain_id == item.chain_id
+        ]
+        if kind == "tombstone":
+            assert isinstance(item, TombstoneSnapshot)
+            authenticated_lines: set[int] = set()
+            for record in records:
+                record_binding = record.get("binding")
+                source = (
+                    record_binding.get("source_record")
+                    if isinstance(record_binding, dict)
+                    else None
+                )
+                line = record_line_number(record)
+                if (
+                    record.get("type") == "decision"
+                    and record.get("outcome") == "chain-abort"
+                    and isinstance(line, int)
+                    and isinstance(source, dict)
+                    and source.get("chain_id") == item.chain_id
+                    and source.get("event_digest") == item.canonical_digest
+                    and record.get("basis")
+                    == [f".forge/chains/tombstones/{item.chain_id}.json"]
+                    and bindings.get(line) == record_binding
+                ):
+                    authenticated_lines.add(line)
+            authenticated = [
+                str(binding["binding_id"])
+                for line, binding in selected
+                if line in authenticated_lines
+            ]
+            lines.extend(
+                [
+                    f"### {item.chain_id}",
+                    "",
+                    "Chain status: TOMBSTONED",
+                    "",
+                    "Binding authentication: NOT replay-authenticated",
+                    "",
+                    "Tombstone path: "
+                    f".forge/chains/tombstones/{item.chain_id}.json",
+                    "",
+                    f"Tombstone bytes: {len(item.record_file.raw)}",
+                    "",
+                    "Tombstone exact-byte SHA-256: "
+                    f"{hashlib.sha256(item.record_file.raw).hexdigest()}",
+                    "",
+                    f"Tombstone canonical SHA-256: {item.canonical_digest}",
+                    "",
+                    "Tombstone-authenticated abort binding:",
+                    "",
+                    *([f"- {value}" for value in authenticated] or [NONE]),
+                    "",
+                    "Selected binding IDs:",
+                    "",
+                    *(
+                        [f"- {binding['binding_id']}" for _, binding in selected]
+                        if selected
+                        else [NONE]
+                    ),
+                    "",
+                    "Journal-line mappings:",
+                    "",
+                    *(
+                        [
+                            f"- line {line}: {binding['binding_id']} — "
+                            + (
+                                "TOMBSTONE-AUTHENTICATED; "
+                                if line in authenticated_lines
+                                else "TOMBSTONED; "
+                            )
+                            + "NOT replay-authenticated"
+                            for line, binding in selected
+                        ]
+                        if selected
+                        else [NONE]
+                    ),
+                    "",
+                    "Discrepancies:",
+                    "",
+                    *(
+                        [
+                            f"- `{discrepancy.code}`: {discrepancy.detail}"
+                            for discrepancy in related
+                        ]
+                        if related
+                        else [NONE]
+                    ),
+                    "",
+                    render_chain_tombstone_block(item).removesuffix("\n"),
+                ]
+            )
+            continue
+        assert isinstance(item, ChainSnapshot)
+        chain = item
         lines.extend(
             [
                 f"### {chain.chain_id}",
@@ -2900,7 +3482,12 @@ def document_path(repo: Path, run_dir: Path, value: str) -> Path | None:
 
 
 def basis_documents(
-    repo: Path, run_dir: Path, decisions: list[dict[str, Any]]
+    repo: Path,
+    run_dir: Path,
+    decisions: list[dict[str, Any]],
+    *,
+    excluded_paths: frozenset[Path] = frozenset(),
+    excluded_references: frozenset[str] = frozenset(),
 ) -> list[BasisDocument]:
     documents: list[BasisDocument] = []
     seen: set[tuple[int, int]] = set()
@@ -2912,8 +3499,12 @@ def basis_documents(
             if not isinstance(value, str) or not value:
                 continue
             for reference in document_references(value):
+                if reference in excluded_references:
+                    continue
                 relative = safe_basis_relative(reference)
                 if relative is None:
+                    continue
+                if any(root / relative in excluded_paths for root in (run_dir, repo)):
                     continue
                 captured: tuple[
                     Path, ExactFile, tuple[tuple[str, FileIdentity], ...]
@@ -3016,17 +3607,31 @@ def render_archive(
         )
     if package is None:
         package = ChainPackage(None, None, (), ())
+    tombstone_citations = tombstone_evidence_citations(package)
     if bindings is None:
         bindings = {}
     if discrepancies is None:
-        discrepancies = legacy_discrepancies(
-            records, started.get("writer_contract") == WRITER_CONTRACT
-        )
+        discrepancies = [
+            *legacy_discrepancies(
+                records, started.get("writer_contract") == WRITER_CONTRACT
+            ),
+            *tombstone_discrepancies(package, records),
+        ]
     if documents is None:
         decisions_for_documents = [
             record for record in records if record.get("type") == "decision"
         ]
-        documents = basis_documents(repo, run_dir, decisions_for_documents)
+        documents = basis_documents(
+            repo,
+            run_dir,
+            decisions_for_documents,
+            excluded_references=tombstone_citations,
+        )
+    documents = tuple(
+        document
+        for document in documents
+        if not tombstone_citations.intersection(document_references(document.label))
+    )
     run_id = run_dir.name
     if started.get("run_id") != run_id or closed.get("judgment") != "passed":
         raise ArchiveRefusal("forge: archive refused — invalid run journal")
@@ -3082,6 +3687,10 @@ def render_archive(
         and isinstance(record.get("criterion"), str)
         and record["criterion"].startswith(("gate-1: ", "gate-2: ", "gate-3: "))
     ]
+    tombstones_by_id = {
+        snapshot.chain_id: snapshot for snapshot in package.tombstones
+    }
+    tombstone_ids = set(tombstones_by_id)
 
     lines = [
         f"# Durable intent archive: {run_id}",
@@ -3140,9 +3749,44 @@ def render_archive(
                 "",
             ]
         )
+        physical_line = record_line_number(decision)
+        decision_binding = bindings.get(physical_line or -1)
+        decision_source = (
+            decision_binding.get("source_record")
+            if isinstance(decision_binding, dict)
+            else None
+        )
+        if (
+            isinstance(decision_source, dict)
+            and decision_source.get("chain_id") in tombstone_ids
+        ):
+            tombstone = tombstones_by_id[str(decision_source["chain_id"])]
+            decision_status = (
+                "TOMBSTONE-AUTHENTICATED"
+                if (
+                    decision.get("outcome") == "chain-abort"
+                    and decision.get("basis")
+                    == [
+                        ".forge/chains/tombstones/"
+                        f"{tombstone.chain_id}.json"
+                    ]
+                    and decision_source.get("event_digest")
+                    == tombstone.canonical_digest
+                )
+                else "TOMBSTONED"
+            )
+            lines.extend(
+                [
+                    "Binding source: "
+                    f"{decision_source['chain_id']}@{decision_source['event_digest']}",
+                    "",
+                    f"Binding status: {decision_status} — NOT replay-authenticated "
+                    f"({decision_binding['binding_id']})",
+                    "",
+                ]
+            )
         legacy_value = decision.get("decision")
         if isinstance(legacy_value, str):
-            physical_line = record_line_number(decision)
             raw_line = raw_lines.get(physical_line or -1)
             if raw_line is None:
                 authoritative_discrepancy("snapshot_changed")
@@ -3180,6 +3824,7 @@ def render_archive(
         for value in decision.get("basis", [])
         if isinstance(value, str)
         for reference in document_references(value)
+        if reference not in tombstone_citations
         if (path := document_path(repo, run_dir, reference)) is not None
     }
     if {document.path for document in documents} != referenced_documents:
@@ -3222,7 +3867,13 @@ def render_archive(
                 verdict = review.get("verdict") if isinstance(review, dict) else NONE
                 iteration = review.get("iteration") if isinstance(review, dict) else NONE
                 binding_source = f"{source['chain_id']}@{source['event_digest']}"
-                binding_status = f"BOUND ({binding['binding_id']})"
+                if source.get("chain_id") in tombstone_ids:
+                    binding_status = (
+                        "TOMBSTONED — NOT replay-authenticated "
+                        f"({binding['binding_id']})"
+                    )
+                else:
+                    binding_status = f"BOUND ({binding['binding_id']})"
             else:
                 candidate, verdict, iteration = legacy_review_values(gate, [])
                 binding_source = UNBOUND
@@ -3590,9 +4241,17 @@ def _render_archive_candidate(
         activated=activated,
     )
     bindings = resolve_archive_bindings(repo, run_dir, records, package, activated)
-    discrepancies = legacy_discrepancies(records, activated)
+    discrepancies = [
+        *legacy_discrepancies(records, activated),
+        *tombstone_discrepancies(package, records),
+    ]
     decisions = [record for record in records if record.get("type") == "decision"]
-    documents = basis_documents(repo, run_dir, decisions)
+    documents = basis_documents(
+        repo,
+        run_dir,
+        decisions,
+        excluded_references=tombstone_evidence_citations(package),
+    )
     content = render_archive(
         repo=repo,
         run_dir=run_dir,
