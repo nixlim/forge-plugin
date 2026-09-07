@@ -137,6 +137,12 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- FR-221 sentence shape restored (hotfix for the 41da640 amendment): the
+  denial-literal sentence returns to the exact "with exactly `…(commit
+  approve)` or `…(commit skip)` as the deny reason" phrasing that the phase-0
+  contracts extractor pins against committed HEAD; the literals themselves
+  never changed. The extractor reads HEAD by design, so the regression was
+  invisible to every pre-commit gate and appeared only in post-landing CI.
 - Bounded runner group termination (bead forge-plugin-8u4, external-review
   finding 4): `_kill_process_group` now proves process-group death — after
   SIGTERM and the full 0.25 s grace it probes the group and escalates SIGKILL
