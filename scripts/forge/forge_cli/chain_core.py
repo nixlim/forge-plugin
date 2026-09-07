@@ -34,6 +34,7 @@ import sys
 import threading
 import time
 
+from forge_cli import candidate as candidate_module
 from forge_cli import runtime
 from forge_cli.envelope import (
     FrozenError,
@@ -7637,78 +7638,124 @@ def _verify_and_build_ingest_records(
         or SHA256_RE.fullmatch(str(intent["message_digest"])) is None
     ):
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
-    parent = subprocess.run(
-        ["git", "-C", str(canonical_repository), "rev-parse", f"{commit_sha}^"],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    if parent.returncode != 0:
-        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
-    parent_sha = parent.stdout.decode("ascii", "replace").strip()
-    commit_object = subprocess.run(
-        ["git", "-C", str(canonical_repository), "cat-file", "commit", commit_sha],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        commit_headers, commit_message = commit_object.stdout.split(b"\n\n", 1)
-    except IndexError as exc:
-        raise journal.CoordinationRefusal(
-            builders.INGEST_PROOF_INVALID
-        ) from exc
-    parent_headers = [
-        line[len(b"parent ") :]
-        for line in commit_headers.splitlines()
-        if line.startswith(b"parent ")
-    ]
-    diff = subprocess.run(
-        ["git", "-C", str(canonical_repository), "diff", parent_sha, commit_sha],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    names = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(canonical_repository),
-            "diff",
-            "--name-only",
-            "-z",
-            parent_sha,
-            commit_sha,
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        changed_paths = tuple(
-            item.decode("utf-8") for item in names.stdout.split(b"\0") if item
+    if candidate_is_v2(materialized):
+        candidate_record = materialized["candidate"]
+        identity = result.get("identity") if isinstance(result, dict) else None
+        if (
+            intent.get("authorization_id") != candidate_record.get("authorization_id")
+            or intent.get("object_format") != candidate_record.get("object_format")
+            or intent.get("expected_tree_oid") != candidate_record.get("tree_oid")
+            or candidate_record.get("base_commit_oid") != intent.get("pre_head")
+            or not isinstance(identity, dict)
+            or identity.get("result") != "passed"
+            or identity.get("produced_sha") != commit_sha
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        try:
+            candidate_context = candidate_module.discover_context(canonical_repository)
+            committed = candidate_module.read_commit_object(
+                candidate_context, commit_sha
+            )
+            parent_object = candidate_module.read_commit_object(
+                candidate_context, str(intent["pre_head"])
+            )
+            if len(parent_object.tree_headers) != 1:
+                raise candidate_module.CandidateError(
+                    "pre-commit object has malformed tree headers"
+                )
+            _path_bytes, changed_paths = candidate_module.enumerate_tree_pair(
+                candidate_context,
+                parent_object.tree_headers[0],
+                str(candidate_record["tree_oid"]),
+            )
+        except (candidate_module.CandidateError, KeyError, OSError) as exc:
+            raise journal.CoordinationRefusal(
+                builders.INGEST_PROOF_INVALID
+            ) from exc
+        if (
+            committed.parent_headers != (str(intent["pre_head"]),)
+            or committed.tree_headers != (str(candidate_record["tree_oid"]),)
+            or sha256_bytes(committed.message) != intent["message_digest"]
+            or tuple(materialized.get("paths", ())) != changed_paths
+            or not changed_paths
+            or not all(journal._valid_scope_item(path) for path in changed_paths)
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    else:
+        parent = subprocess.run(
+            ["git", "-C", str(canonical_repository), "rev-parse", f"{commit_sha}^"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-    except UnicodeDecodeError as exc:
-        raise journal.CoordinationRefusal(
-            builders.INGEST_PROOF_INVALID
-        ) from exc
-    if (
-        parent_sha != intent["pre_head"]
-        or commit_object.returncode != 0
-        or parent_headers != [str(intent["pre_head"]).encode("ascii")]
-        or sha256_bytes(commit_message) != intent["message_digest"]
-        or diff.returncode != 0
-        or names.returncode != 0
-        or sha256_bytes(diff.stdout) != materialized["candidate"]["sha256"]
-        or not changed_paths
-        or not all(journal._valid_scope_item(path) for path in changed_paths)
-    ):
-        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        if parent.returncode != 0:
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+        parent_sha = parent.stdout.decode("ascii", "replace").strip()
+        commit_object = subprocess.run(
+            ["git", "-C", str(canonical_repository), "cat-file", "commit", commit_sha],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            commit_headers, commit_message = commit_object.stdout.split(b"\n\n", 1)
+        except IndexError as exc:
+            raise journal.CoordinationRefusal(
+                builders.INGEST_PROOF_INVALID
+            ) from exc
+        parent_headers = [
+            line[len(b"parent ") :]
+            for line in commit_headers.splitlines()
+            if line.startswith(b"parent ")
+        ]
+        diff = subprocess.run(
+            ["git", "-C", str(canonical_repository), "diff", parent_sha, commit_sha],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        names = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(canonical_repository),
+                "diff",
+                "--name-only",
+                "-z",
+                parent_sha,
+                commit_sha,
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            changed_paths = tuple(
+                item.decode("utf-8") for item in names.stdout.split(b"\0") if item
+            )
+        except UnicodeDecodeError as exc:
+            raise journal.CoordinationRefusal(
+                builders.INGEST_PROOF_INVALID
+            ) from exc
+        if (
+            parent_sha != intent["pre_head"]
+            or commit_object.returncode != 0
+            or parent_headers != [str(intent["pre_head"]).encode("ascii")]
+            or sha256_bytes(commit_message) != intent["message_digest"]
+            or diff.returncode != 0
+            or names.returncode != 0
+            or sha256_bytes(diff.stdout) != materialized["candidate"]["sha256"]
+            or not changed_paths
+            or not all(journal._valid_scope_item(path) for path in changed_paths)
+        ):
+            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
 
     # Proof 13: every native transition is monotonic in its original order.
     _require_ingest_proof("monotonic-transitions", completed_proofs)
     if any(
-        not builders._commit_transition_valid(event, prior_state, event_state)
+        not _commit_transition_valid_with_candidate_v2(
+            builders, event, prior_state, event_state
+        )
         for event, prior_state, event_state in events
     ):
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
@@ -7853,6 +7900,12 @@ def _verify_and_build_ingest_records(
                 and _user_skip(materialized, gate_id)
                 == _user_skip(event_state, gate_id)
             )
+        elif event_name == "commit_identity_checked":
+            active = bool(
+                event_state.get("commit_result", {}).get("identity")
+                == materialized.get("commit_result", {}).get("identity")
+                and details.get("result") == "passed"
+            )
         elif event_name in {"commit_produced", "commit_close_recovered"}:
             active = details.get("commit_sha") == commit_sha
         if active and event_state.get("candidate", {}).get("sha256") == final_candidate:
@@ -7911,7 +7964,9 @@ def _verify_and_build_ingest_records(
             record_binding = record.get("binding")
             if (
                 not isinstance(record_binding, dict)
-                or not builders._binding_matches_source_fact(
+                or not _binding_matches_source_fact_with_candidate_v2(
+                    builders,
+                    journal,
                     record_binding,
                     record,
                     event,
@@ -7919,7 +7974,9 @@ def _verify_and_build_ingest_records(
                     event_state,
                     family="commit",
                 )
-                or not builders._binding_is_current(
+                or not _binding_is_current_with_candidate_v2(
+                    builders,
+                    journal,
                     materialized,
                     record_binding,
                     record,
@@ -8085,27 +8142,140 @@ def parse_time(value: str) -> dt.datetime:
     return parsed.astimezone(dt.timezone.utc)
 
 
+def candidate_is_v2(state: Mapping[str, Any]) -> bool:
+    record = state.get("candidate")
+    return bool(
+        isinstance(record, Mapping)
+        and record.get("schema") == candidate_module.CANDIDATE_SCHEMA
+        and record.get("authorization_id") == record.get("sha256")
+    )
+
+
+def _candidate_binding_for_state_with_candidate_v2(
+    builders: Any,
+    family: str,
+    state: Mapping[str, Any],
+) -> dict[str, object] | None:
+    """Delegate candidate binding reconstruction to the canonical builders."""
+
+    return builders._candidate_binding_for_state(family, state)
+
+
+def _binding_shape_valid_with_candidate_v2(
+    journal: Any,
+    value: object,
+    *,
+    record: Mapping[str, object] | None = None,
+) -> bool:
+    """Delegate every binding dialect to the canonical journal grammar."""
+
+    return bool(journal._binding_shape_valid(value, record=record))
+
+
+def _event_batch_records_with_candidate_v2(
+    builders: Any,
+    journal: Any,
+    event: Mapping[str, object],
+    family: str,
+) -> tuple[
+    tuple[dict[str, object], ...],
+    dict[str, object] | None,
+    str | None,
+]:
+    """Delegate event-carrier decoding to the canonical builders."""
+
+    del journal
+    return builders._event_batch_records(event, family)
+
+
+def _binding_matches_source_fact_with_candidate_v2(
+    builders: Any,
+    journal: Any,
+    binding: Mapping[str, object],
+    record: Mapping[str, object],
+    event: Mapping[str, object],
+    prior: Mapping[str, object] | None,
+    current: Mapping[str, object],
+    *,
+    family: str,
+) -> bool:
+    """Delegate source-fact matching without projecting the candidate dialect."""
+
+    del journal
+    return bool(
+        builders._binding_matches_source_fact(
+            binding, record, event, prior, current, family=family
+        )
+    )
+
+
+def _binding_is_current_with_candidate_v2(
+    builders: Any,
+    journal: Any,
+    state: Mapping[str, object],
+    binding: Mapping[str, object],
+    record: Mapping[str, object],
+    source_event: Mapping[str, object],
+    source_prior: Mapping[str, object] | None,
+    source_state: Mapping[str, object],
+    replay_entries: Sequence[
+        tuple[
+            dict[str, object],
+            dict[str, object] | None,
+            dict[str, object],
+            tuple[dict[str, object], ...],
+            str | None,
+        ]
+    ],
+    *,
+    chain_family: str,
+) -> bool:
+    """Delegate currentness without projecting the candidate dialect."""
+
+    del journal
+    return bool(
+        builders._binding_is_current(
+            state,
+            binding,
+            record,
+            source_event,
+            source_prior,
+            source_state,
+            replay_entries,
+            chain_family=chain_family,
+        )
+    )
+
+
+def _commit_transition_valid_with_candidate_v2(
+    builders: Any,
+    event: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    current: Mapping[str, Any],
+) -> bool:
+    """Delegate every commit transition to the canonical builders."""
+
+    return bool(builders._commit_transition_valid(event, prior, current))
+
+
 class Repository:
     def __init__(self, root: Path) -> None:
         self.root = Path(os.path.realpath(root))
+        self._candidate_context: candidate_module.GitContext | None = None
 
     @classmethod
     def discover(cls, explicit: str | None = None) -> "Repository":
         cwd = Path(explicit).resolve() if explicit else Path.cwd()
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        if result.returncode != 0:
+        try:
+            candidate_context = candidate_module.discover_context(cwd)
+        except candidate_module.CandidateError as exc:
             raise FrozenError(
                 "cannot resolve Git worktree while attempting Forge CLI command",
-                observed=result.stderr.decode("utf-8", "replace").strip() or "not a repository",
-            )
-        return cls(Path(os.fsdecode(result.stdout.rstrip(b"\n"))))
+                observed=str(exc) or "not a repository",
+            ) from exc
+        repository = cls(candidate_context.worktree_root)
+        repository._candidate_context = candidate_context
+        return repository
 
     def git(
         self,
@@ -8115,6 +8285,17 @@ class Repository:
         check: bool = True,
         env: Mapping[str, str] | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
+        context = self.candidate_context()
+        selected_environment = dict(os.environ if env is None else env)
+        pinned_environment = candidate_module.context_from_paths(
+            worktree_root=context.worktree_root,
+            git_dir=context.git_dir,
+            common_dir=context.common_dir,
+            index_file=context.index_file,
+            bare=context.bare,
+            environment=selected_environment,
+            effective_cwd=context.worktree_root,
+        ).environment()
         result = subprocess.run(
             ["git", *args],
             cwd=str(self.root),
@@ -8122,7 +8303,7 @@ class Repository:
             stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=dict(env) if env is not None else None,
+            env=pinned_environment,
             check=False,
         )
         if check and result.returncode != 0:
@@ -8185,18 +8366,36 @@ class Repository:
             )
         return resolved, result.stdout
 
+    def candidate_context(self) -> candidate_module.GitContext:
+        """Return the command-lifetime pinned Git worktree/index context."""
+
+        if self._candidate_context is None:
+            self._candidate_context = candidate_module.discover_context(self.root)
+        return self._candidate_context
+
+    def candidate_snapshot(
+        self, *, computed_at: str | None = None
+    ) -> candidate_module.CandidateSnapshot:
+        return candidate_module.snapshot(
+            self.candidate_context(), computed_at=computed_at or iso_z()
+        )
+
+    def candidate_observation(self) -> candidate_module.CandidateObservation:
+        return candidate_module.observe_index(self.candidate_context())
+
     def candidate_bytes(self) -> bytes:
-        # DM-012 binds candidate identity to this command's exact stdout.
-        return self.git(["diff", "--cached"]).stdout
+        # Compatibility method: these are deterministic immutable review bytes,
+        # never the v2 authorization identity.
+        return self.candidate_snapshot().review_diff
 
     def candidate_hash(self) -> str:
-        return sha256_bytes(self.candidate_bytes())
+        return self.candidate_observation().authorization_id
 
     def staged_paths(self) -> list[str]:
-        raw = self.git(
-            ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACDMRTUXB"]
-        ).stdout
-        return [os.fsdecode(item) for item in raw.split(b"\0") if item]
+        return list(candidate_module.index_paths(self.candidate_context()))
+
+    def read_commit_object(self, commit_sha: str) -> candidate_module.CommitObject:
+        return candidate_module.read_commit_object(self.candidate_context(), commit_sha)
 
     def commit_message_argument_digest(self, commit_sha: str) -> str:
         """Return the digest of the exact message body in a commit object."""
@@ -8324,9 +8523,272 @@ def validate_state(state: Any, chain_id: str | None = None) -> dict[str, Any]:
         parse_time(state["inactive_after"])
     except (KeyError, TypeError, ValueError) as exc:
         raise FrozenError("chain timestamps are malformed", chain_id=actual_id) from exc
-    candidate = state["candidate"].get("sha256")
+    candidate_record = state["candidate"]
+    candidate = candidate_record.get("sha256")
     if candidate is not None and not SHA256_RE.fullmatch(str(candidate)):
         raise FrozenError("chain candidate digest is malformed", chain_id=actual_id)
+    candidate_schema = candidate_record.get("schema")
+    if candidate_schema is not None:
+        v2_keys = {
+            "schema",
+            "sha256",
+            "authorization_id",
+            "object_format",
+            "tree_oid",
+            "base_commit_oid",
+            "review_diff_sha256",
+            "review_diff_byte_count",
+            "computed_at",
+        }
+        object_format = candidate_record.get("object_format")
+        oid_length = {"sha1": 40, "sha256": 64}.get(str(object_format), 0)
+        tree_oid = candidate_record.get("tree_oid")
+        base_commit_oid = candidate_record.get("base_commit_oid")
+        if (
+            candidate_schema != candidate_module.CANDIDATE_SCHEMA
+            or set(candidate_record) != v2_keys
+            or candidate_record.get("authorization_id") != candidate
+            or not isinstance(tree_oid, str)
+            or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", tree_oid) is None
+            or (
+                base_commit_oid is not None
+                and (
+                    not isinstance(base_commit_oid, str)
+                    or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", base_commit_oid)
+                    is None
+                )
+            )
+            or not isinstance(candidate_record.get("review_diff_sha256"), str)
+            or SHA256_RE.fullmatch(str(candidate_record["review_diff_sha256"]))
+            is None
+            or type(candidate_record.get("review_diff_byte_count")) is not int
+            or int(candidate_record["review_diff_byte_count"]) < 0
+            or not isinstance(candidate_record.get("computed_at"), str)
+        ):
+            raise FrozenError("chain v2 candidate record is malformed", chain_id=actual_id)
+        try:
+            parse_time(str(candidate_record["computed_at"]))
+            expected_authorization = candidate_module.authorization_id(
+                str(object_format), tree_oid
+            )
+        except (ValueError, candidate_module.CandidateError) as exc:
+            raise FrozenError(
+                "chain v2 candidate record is malformed", chain_id=actual_id
+            ) from exc
+        if candidate != expected_authorization:
+            raise FrozenError(
+                "chain v2 candidate authorization identity is malformed",
+                chain_id=actual_id,
+            )
+        staged_paths = state["staging"].get("staged_paths")
+        try:
+            bytewise_paths = sorted(
+                state["paths"], key=lambda value: value.encode("utf-8")
+            )
+        except UnicodeEncodeError as exc:
+            raise FrozenError(
+                "chain v2 candidate path/evidence record is malformed",
+                chain_id=actual_id,
+            ) from exc
+        if (
+            int(candidate_record["review_diff_byte_count"])
+            > candidate_module.REVIEW_DIFF_MAX_BYTES
+            or any(not path for path in state["paths"])
+            or len(state["paths"]) != len(set(state["paths"]))
+            or state["paths"] != bytewise_paths
+            or staged_paths != state["paths"]
+        ):
+            raise FrozenError(
+                "chain v2 candidate path/evidence record is malformed",
+                chain_id=actual_id,
+            )
+
+        commit_result = state["commit_result"]
+        allowed_result_keys = {
+            "intent",
+            "identity",
+            "mismatch_latched",
+            "commit_sha",
+            "head_at_commit",
+            "committed_at",
+            "closed_at",
+            "recovered_at",
+            "recovery",
+            "aborted_at",
+            "reason",
+            "old_head",
+            "new_head",
+        }
+        if not set(commit_result) <= allowed_result_keys:
+            raise FrozenError(
+                "chain v2 produced-commit record is malformed", chain_id=actual_id
+            )
+        intent = commit_result.get("intent")
+        if intent is not None:
+            intent_keys = {
+                "candidate",
+                "authorization_id",
+                "object_format",
+                "expected_tree_oid",
+                "pre_head",
+                "message_digest",
+                "written_at",
+                "lock_session_pid",
+            }
+            if (
+                not isinstance(intent, dict)
+                or set(intent) != intent_keys
+                or intent.get("candidate") != candidate
+                or intent.get("authorization_id") != candidate
+                or intent.get("object_format") != object_format
+                or intent.get("expected_tree_oid") != tree_oid
+                or not isinstance(intent.get("pre_head"), str)
+                or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", intent["pre_head"])
+                is None
+                or not isinstance(intent.get("message_digest"), str)
+                or SHA256_RE.fullmatch(intent["message_digest"]) is None
+                or not isinstance(intent.get("written_at"), str)
+                or not isinstance(intent.get("lock_session_pid"), str)
+                or re.fullmatch(r"[1-9][0-9]*", intent["lock_session_pid"]) is None
+            ):
+                raise FrozenError(
+                    "chain v2 commit intent is malformed", chain_id=actual_id
+                )
+            try:
+                parse_time(intent["written_at"])
+            except ValueError as exc:
+                raise FrozenError(
+                    "chain v2 commit intent is malformed", chain_id=actual_id
+                ) from exc
+        identity = commit_result.get("identity")
+        bound_base_commit = (
+            intent.get("pre_head") if isinstance(intent, dict) else state.get("repo_head")
+        )
+        if base_commit_oid != bound_base_commit:
+            raise FrozenError(
+                "chain v2 candidate base does not match its authorized parent",
+                chain_id=actual_id,
+            )
+        if state.get("state") == "committing" and intent is None:
+            raise FrozenError(
+                "chain v2 commit intent is malformed", chain_id=actual_id
+            )
+        if identity is not None:
+            expected_keys = {"parent", "tree", "message_digest"}
+            identity_keys = {
+                "result",
+                "produced_sha",
+                "expected",
+                "observed",
+                "checks",
+                "transcript",
+            }
+            expected_identity = identity.get("expected") if isinstance(identity, dict) else None
+            observed_identity = identity.get("observed") if isinstance(identity, dict) else None
+            identity_checks = identity.get("checks") if isinstance(identity, dict) else None
+            if (
+                intent is None
+                or not isinstance(identity, dict)
+                or set(identity) != identity_keys
+                or identity.get("result") not in {"passed", "failed"}
+                or not isinstance(identity.get("produced_sha"), str)
+                or re.fullmatch(
+                    rf"[0-9a-f]{{{oid_length}}}", str(identity["produced_sha"])
+                )
+                is None
+                or not isinstance(expected_identity, dict)
+                or set(expected_identity) != expected_keys
+                or expected_identity
+                != {
+                    "parent": intent["pre_head"],
+                    "tree": intent["expected_tree_oid"],
+                    "message_digest": intent["message_digest"],
+                }
+                or not isinstance(observed_identity, dict)
+                or not isinstance(identity_checks, dict)
+                or set(identity_checks)
+                != {
+                    "head-movement",
+                    "exact-single-parent",
+                    "exact-tree",
+                    "exact-message",
+                }
+                or any(type(value) is not bool for value in identity_checks.values())
+                or (identity.get("result") == "passed") != all(identity_checks.values())
+                or not isinstance(identity.get("transcript"), str)
+            ):
+                raise FrozenError(
+                    "chain v2 produced-commit identity is malformed",
+                    chain_id=actual_id,
+                )
+            mismatch_latched = commit_result.get("mismatch_latched")
+            if identity["result"] == "failed":
+                if mismatch_latched is not True:
+                    raise FrozenError(
+                        "chain v2 produced-commit mismatch latch is malformed",
+                        chain_id=actual_id,
+                    )
+            elif "mismatch_latched" in commit_result:
+                raise FrozenError(
+                    "chain v2 produced-commit mismatch latch is malformed",
+                    chain_id=actual_id,
+                )
+        elif "mismatch_latched" in commit_result:
+            raise FrozenError(
+                "chain v2 produced-commit mismatch latch is malformed",
+                chain_id=actual_id,
+            )
+        commit_sha = commit_result.get("commit_sha")
+        if commit_sha is not None and (
+            identity is None
+            or identity.get("result") != "passed"
+            or commit_sha != identity.get("produced_sha")
+            or commit_result.get("head_at_commit") != commit_sha
+            or state.get("repo_head") != commit_sha
+        ):
+            raise FrozenError(
+                "chain v2 produced-commit landing is malformed", chain_id=actual_id
+            )
+        if state.get("state") == "closed" and commit_sha is None:
+            raise FrozenError(
+                "chain v2 produced-commit landing is malformed", chain_id=actual_id
+            )
+        authorization = state["authorization"]
+        if authorization.get("consumed") is True and (
+            identity is None or identity.get("result") != "passed"
+        ):
+            raise FrozenError(
+                "chain v2 authorization consumption lacks identity proof",
+                chain_id=actual_id,
+            )
+        for oid_key in ("old_head", "new_head"):
+            oid_value = commit_result.get(oid_key)
+            if oid_value is not None and (
+                not isinstance(oid_value, str)
+                or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", oid_value) is None
+            ):
+                raise FrozenError(
+                    "chain v2 produced-commit landing is malformed", chain_id=actual_id
+                )
+        for timestamp_key in ("committed_at", "closed_at", "recovered_at", "aborted_at"):
+            value = commit_result.get(timestamp_key)
+            if value is not None:
+                try:
+                    parse_time(value)
+                except (TypeError, ValueError) as exc:
+                    raise FrozenError(
+                        "chain v2 produced-commit timestamps are malformed",
+                        chain_id=actual_id,
+                    ) from exc
+    elif set(candidate_record) != {"sha256", "computed_at"}:
+        raise FrozenError("chain legacy candidate record is malformed", chain_id=actual_id)
+    elif candidate is not None:
+        try:
+            parse_time(str(candidate_record.get("computed_at")))
+        except (TypeError, ValueError) as exc:
+            raise FrozenError(
+                "chain legacy candidate record is malformed", chain_id=actual_id
+            ) from exc
     archive = state["staging"].get("archive")
     if archive is not None:
         archive_keys = {
@@ -10051,12 +10513,12 @@ class ChainStore(_ChainStoragePrimitives):
                 if not isinstance(payload, dict):
                     raise ValueError("event payload is malformed")
                 current = payload.get("state")
-                if not isinstance(current, dict) or not builders._commit_transition_valid(
-                    event, replayed, current
+                if not isinstance(current, dict) or not _commit_transition_valid_with_candidate_v2(
+                    builders, event, replayed, current
                 ):
                     raise ValueError("commit transition is invalid")
-                records, event_outbox, source_digest = builders._event_batch_records(
-                    event, "commit"
+                records, event_outbox, source_digest = _event_batch_records_with_candidate_v2(
+                    builders, journal, event, "commit"
                 )
                 event_name = payload.get("event")
                 is_receipt = event_name == "journal_receipted"
@@ -10101,7 +10563,9 @@ class ChainStore(_ChainStoragePrimitives):
                     record_binding = record.get("binding")
                     if (
                         not isinstance(record_binding, dict)
-                        or not builders._binding_matches_source_fact(
+                        or not _binding_matches_source_fact_with_candidate_v2(
+                            builders,
+                            journal,
                             record_binding,
                             record,
                             event,
@@ -10149,7 +10613,9 @@ class ChainStore(_ChainStoragePrimitives):
                     record_binding = record.get("binding")
                     current_fact = bool(
                         isinstance(record_binding, dict)
-                        and builders._binding_is_current(
+                        and _binding_is_current_with_candidate_v2(
+                            builders,
+                            journal,
                             current,
                             record_binding,
                             record,
@@ -10160,12 +10626,9 @@ class ChainStore(_ChainStoragePrimitives):
                             chain_family="commit",
                         )
                     )
-                    # ``commit_produced`` is the authoritative landing fact,
-                    # while the following ``chain_closed`` projection is a
-                    # separate non-consequential event.  A crash after the
-                    # landing batch was receipted therefore leaves one valid
-                    # in-flight landing in ``committing``.  Admit only that
-                    # exact recovery window; every other stale fact freezes.
+                    # A receipted v2 landing remains current in the narrow
+                    # committing crash window only after the durable produced
+                    # identity PASS that authorized the landing projection.
                     if not current_fact and isinstance(record_binding, dict):
                         final_result = current.get("commit_result")
                         final_candidate = current.get("candidate")
@@ -10176,6 +10639,41 @@ class ChainStore(_ChainStoragePrimitives):
                             else None
                         )
                         bound_candidate = record_binding.get("candidate")
+                        legacy_binding = bool(
+                            isinstance(bound_candidate, dict)
+                            and bound_candidate.get("kind")
+                            == "staged-diff-sha256"
+                            and bound_candidate.get("value")
+                            == final_candidate.get("sha256")
+                        )
+                        v2_value = (
+                            bound_candidate.get("value")
+                            if isinstance(bound_candidate, dict)
+                            and bound_candidate.get("kind")
+                            == "git-tree-candidate-v2"
+                            else None
+                        )
+                        identity = (
+                            final_result.get("identity")
+                            if isinstance(final_result, dict)
+                            else None
+                        )
+                        v2_binding = bool(
+                            candidate_is_v2(current)
+                            and isinstance(v2_value, dict)
+                            and v2_value
+                            == {
+                                "authorization_id": final_candidate.get(
+                                    "authorization_id"
+                                ),
+                                "object_format": final_candidate.get("object_format"),
+                                "tree_oid": final_candidate.get("tree_oid"),
+                            }
+                            and isinstance(identity, dict)
+                            and identity.get("result") == "passed"
+                            and identity.get("produced_sha")
+                            == final_result.get("commit_sha")
+                        )
                         current_fact = bool(
                             record.get("outcome") == "chain-landing"
                             and current.get("state") == "committing"
@@ -10184,11 +10682,7 @@ class ChainStore(_ChainStoragePrimitives):
                             and isinstance(source_payload, dict)
                             and source_payload.get("event") == "commit_produced"
                             and isinstance(source_details, dict)
-                            and isinstance(bound_candidate, dict)
-                            and bound_candidate.get("kind")
-                            == "staged-diff-sha256"
-                            and bound_candidate.get("value")
-                            == final_candidate.get("sha256")
+                            and (legacy_binding or v2_binding)
                             and isinstance(final_result.get("intent"), dict)
                             and final_result["intent"].get("candidate")
                             == final_candidate.get("sha256")
@@ -18168,6 +18662,12 @@ __all__ = [
     'RUN_ID_RE',
     'RecoveryReservation',
     'Repository',
+    'candidate_is_v2',
+    '_binding_is_current_with_candidate_v2',
+    '_binding_matches_source_fact_with_candidate_v2',
+    '_binding_shape_valid_with_candidate_v2',
+    '_candidate_binding_for_state_with_candidate_v2',
+    '_event_batch_records_with_candidate_v2',
     'SCHEMA',
     'SHA256_RE',
     'STATES',

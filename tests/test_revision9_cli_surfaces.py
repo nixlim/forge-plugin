@@ -44,6 +44,7 @@ CLI = load_script("forge_revision9_cli_surface_tests", CLI_PATH)
 CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
+CANDIDATE = package_module("candidate")
 CLI_FIXTURE_SUPPORT = load_script(
     "forge_revision9_cli_fixture_support", ROOT / "tests" / "test_cli_chain.py"
 )
@@ -476,6 +477,85 @@ class Revision9CoordinationSeamTests(unittest.TestCase):
             CLI._authorize_chain_batch,
         ):
             self.assertIs(getattr(callback, "_forge_cli_revision9_seam", None), True)
+
+    def test_gate3_record_names_v2_authorization_and_review_evidence(self) -> None:
+        tree_oid = "3" * 40
+        authorization_id = CANDIDATE.authorization_id("sha1", tree_oid)
+        review_diff_sha256 = key("reviewed-v2-patch")
+        state = {
+            "chain_id": "c-2026-08-28T120000Z-cafe",
+            "candidate": {
+                "schema": "forge-commit-candidate/2",
+                "sha256": authorization_id,
+                "authorization_id": authorization_id,
+                "object_format": "sha1",
+                "tree_oid": tree_oid,
+                "base_commit_oid": "4" * 40,
+                "review_diff_sha256": review_diff_sha256,
+                "review_diff_byte_count": 123,
+                "computed_at": "2026-08-28T12:00:00Z",
+            },
+            "run_binding": {
+                "run_id": "run-20260828-review-binding",
+                "task_id": "task-01",
+                "repository": "/fixture/revision9/repository",
+                "policy_digest": key("policy"),
+            },
+            "review": {
+                "iteration": 2,
+                "request": {"reviewer": "review-final"},
+                "verdict": {
+                    "verdict": "PASS",
+                    "package_digest": key("review-package"),
+                    "verdict_path": "execution-01/review/verdict.txt",
+                },
+            },
+        }
+        run_state = SimpleNamespace(
+            records=[{"type": "task", "id": "task-01", "status": "active"}]
+        )
+        fake_builders = SimpleNamespace(
+            _allocate_id=lambda _records, _kind: "check-01",
+            _with_derived=lambda record, run_id: {**record, "run_id": run_id},
+        )
+        fake_journal = SimpleNamespace(
+            GATE_3_CRITERION="gate-3: review-final verdict",
+            _resolve_repository=lambda repository, _operation: (
+                Path(repository),
+                Path(repository),
+            ),
+            _scan_run=lambda _run_dir: run_state,
+        )
+        with mock.patch.object(
+            RUNTIME,
+            "_coordination_modules",
+            return_value=(SimpleNamespace(), fake_builders, fake_journal),
+        ):
+            records = CLI._build_chain_journal_records(
+                Path("/fixture/revision9/repository"),
+                state,
+                "review_passed",
+                {},
+                key("review-source-event"),
+            )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(
+            records[0]["check"],
+            "forge-commit-candidate/2 "
+            f"authorization_id={authorization_id} "
+            f"review_diff_sha256={review_diff_sha256}",
+        )
+        self.assertEqual(
+            records[0]["binding"]["candidate"],
+            {
+                "kind": "git-tree-candidate-v2",
+                "value": {
+                    "authorization_id": authorization_id,
+                    "object_format": "sha1",
+                    "tree_oid": tree_oid,
+                },
+            },
+        )
 
     def test_merge_reducer_uses_explicit_delta_and_refuses_payload_state(self) -> None:
         recorded_at = "2026-08-28T12:00:00Z"
@@ -1075,7 +1155,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
         self.assertEqual(exit_code, 0, changed)
         self.assertEqual(
-            self.state(chain_id)["paths"], ["src/app.py", "CHANGELOG.md"]
+            self.state(chain_id)["paths"], ["CHANGELOG.md", "src/app.py"]
         )
         self.assertTrue(changed["ok"])
 
@@ -1163,6 +1243,12 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                     isinstance(gate_id, str)
                     and CLI._user_skip(materialized, gate_id)
                     == CLI._user_skip(event_state, gate_id)
+                )
+            elif event_name == "commit_identity_checked":
+                active = bool(
+                    event_state.get("commit_result", {}).get("identity")
+                    == materialized.get("commit_result", {}).get("identity")
+                    and details.get("result") == "passed"
                 )
             elif event_name in {"commit_produced", "commit_close_recovered"}:
                 active = (
@@ -1287,6 +1373,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                     "assertion-sensor",
                     "invariant:1",
                     "secret_scan_recorded",
+                    "commit_identity_checked",
                     "commit_produced",
                 ),
             )
@@ -1428,7 +1515,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             normalized_after[: len(normalized_before)], normalized_before
         )
         appended = normalized_after[len(normalized_before) :]
-        self.assertEqual(len(appended), 8)
+        self.assertEqual(len(appended), 9)
         terminal = appended[-1]
         self.assertEqual(
             {name: terminal[name] for name in ("type", "id", "status")},
@@ -1447,7 +1534,15 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertTrue(
             all(record["result"] == "passed" for record in verifications)
         )
-        self.assertEqual(len(verifications), 6)
+        self.assertEqual(len(verifications), 7)
+        self.assertEqual(
+            sum(
+                record.get("criterion")
+                == "gate-2: produced commit identity"
+                for record in verifications
+            ),
+            1,
+        )
         self.assertEqual(len(landings), 1)
         self.assertEqual(landings[0]["basis"], expected_citations)
         self.assertEqual(
@@ -1465,8 +1560,16 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             self.assertEqual(
                 record["binding"]["candidate"],
                 {
-                    "kind": "staged-diff-sha256",
-                    "value": prepared.materialized["candidate"]["sha256"],
+                    "kind": "git-tree-candidate-v2",
+                    "value": {
+                        "authorization_id": prepared.materialized["candidate"][
+                            "authorization_id"
+                        ],
+                        "object_format": prepared.materialized["candidate"][
+                            "object_format"
+                        ],
+                        "tree_oid": prepared.materialized["candidate"]["tree_oid"],
+                    },
                 },
             )
 
@@ -2207,7 +2310,15 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(len(aborts), 1)
         abort_binding = aborts[0]["binding"]
         self.assertEqual(abort_binding["source_record"]["chain_id"], chain_id)
-        self.assertEqual(abort_binding["candidate"]["value"], state["candidate"]["sha256"])
+        self.assertEqual(abort_binding["candidate"]["kind"], "git-tree-candidate-v2")
+        self.assertEqual(
+            abort_binding["candidate"]["value"],
+            {
+                "authorization_id": state["candidate"]["authorization_id"],
+                "object_format": state["candidate"]["object_format"],
+                "tree_oid": state["candidate"]["tree_oid"],
+            },
+        )
         self.assertIsNone(abort_binding["review"])
         self.assertTrue(aborts[0]["resolution"].startswith("Forge commit chain abort recorded: "))
         events = self.events(chain_id)
@@ -3364,6 +3475,130 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 "receipt_digest": hashlib.sha256(receipt_line).hexdigest(),
             },
         )
+
+    def assert_commit_identity_drain_crash_replays_once(
+        self, boundary: str
+    ) -> None:
+        run_id = f"run-20260907-identity-{boundary}"
+        chain_id = self.start_bound_fast_chain(run_id)
+        batch, _builders, journal = CLI._coordination_modules()
+        repository = CLI.Repository(self.repo)
+        context = CLI.CommandContext(
+            repo=repository,
+            store=CLI.ChainStore(repository.common_root()),
+            options=CLI.CLIOptions(
+                repo=str(self.repo),
+                chain_id=chain_id,
+                revision9_face=True,
+                original_argv=(
+                    "commit",
+                    "finalize",
+                    "--message",
+                    "Revision-9 identity outbox",
+                ),
+            ),
+        )
+        original_drain = batch.drain_chain_batch
+        original_append = batch._append_missing_prefix
+        crashed = False
+
+        def crash_identity_drain(*args: object, **kwargs: object):
+            nonlocal crashed
+            records = kwargs.get("records")
+            if (
+                not crashed
+                and isinstance(records, (list, tuple))
+                and any(
+                    isinstance(record, dict)
+                    and record.get("type") == "verification"
+                    and record.get("criterion")
+                    == "gate-2: produced commit identity"
+                    for record in records
+                )
+                and boundary == "before-drain"
+            ):
+                crashed = True
+                raise RuntimeError(f"injected identity {boundary} crash")
+            return original_drain(*args, **kwargs)
+
+        def append_then_crash(*args: object, **kwargs: object):
+            nonlocal crashed
+            result = original_append(*args, **kwargs)
+            name = args[1] if len(args) > 1 else kwargs.get("name")
+            expected_name = {
+                "after-journal": "journal.jsonl",
+                "after-receipt": journal.BATCH_RECEIPTS_NAME,
+            }.get(boundary)
+            if not crashed and expected_name is not None and name == expected_name:
+                crashed = True
+                raise RuntimeError(f"injected identity {boundary} crash")
+            return result
+
+        with self.cli_process_context(), mock.patch.object(
+            batch, "drain_chain_batch", side_effect=crash_identity_drain
+        ), mock.patch.object(
+            batch, "_append_missing_prefix", side_effect=append_then_crash
+        ), self.assertRaisesRegex(RuntimeError, f"identity {boundary} crash"):
+            CLI.Engine(context).finalize("Revision-9 identity outbox")
+
+        crashed_state = self.state(chain_id)
+        pending = crashed_state["journal_outbox"]
+        self.assertIsInstance(pending, dict)
+        self.assertEqual(crashed_state["state"], "committing")
+        self.assertEqual(
+            crashed_state["commit_result"]["identity"]["result"], "passed"
+        )
+        carrier = self.events(chain_id)[-1]
+        self.assertEqual(carrier["payload"]["event"], "commit_identity_checked")
+        carried = carrier["payload"]["details"]["journal_batch"]["records"]
+        self.assertEqual(len(carried), 1)
+        self.assertEqual(carried[0]["type"], "verification")
+        self.assertEqual(
+            carried[0]["criterion"], "gate-2: produced commit identity"
+        )
+
+        with self.cli_process_context():
+            recovered = CLI.Engine(context).status()
+        self.assertTrue(recovered.ok)
+        self.assertEqual(recovered.state, "closed")
+        final_state = self.state(chain_id)
+        self.assertIsNone(final_state["journal_outbox"])
+        event_names = [
+            event["payload"]["event"] for event in self.events(chain_id)
+        ]
+        self.assertEqual(event_names.count("commit_identity_checked"), 1)
+        self.assertEqual(event_names.count("authorization_consumed"), 1)
+        self.assertEqual(event_names.count("commit_close_recovered"), 1)
+        self.assertEqual(event_names.count("chain_closed"), 1)
+        records, issues = journal.read_journal(
+            self.repo
+            / ".codex-orchestrator"
+            / "runs"
+            / run_id
+            / "journal.jsonl"
+        )
+        self.assertEqual(issues, [])
+        identity_records = [
+            record
+            for record in records
+            if record.get("type") == "verification"
+            and record.get("criterion") == "gate-2: produced commit identity"
+        ]
+        self.assertEqual(len(identity_records), 1)
+        self.assertEqual(identity_records[0]["result"], "passed")
+        self.assertEqual(
+            sum(record.get("outcome") == "chain-landing" for record in records),
+            1,
+        )
+
+    def test_commit_identity_carrier_pre_drain_crash_replays_once(self) -> None:
+        self.assert_commit_identity_drain_crash_replays_once("before-drain")
+
+    def test_commit_identity_journal_append_crash_replays_once(self) -> None:
+        self.assert_commit_identity_drain_crash_replays_once("after-journal")
+
+    def test_commit_identity_receipt_append_crash_replays_once(self) -> None:
+        self.assert_commit_identity_drain_crash_replays_once("after-receipt")
 
     def test_receipted_commit_produced_crash_recovers_one_landing(self) -> None:
         run_id = "run-20260828-cli-landing-replay"

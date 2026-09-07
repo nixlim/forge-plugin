@@ -1414,6 +1414,16 @@ def replay_captured_unbound_chain(
     if family == "merge":
         register_archive_merge_reducer()
 
+    commit_transition_valid = None
+    if family == "commit":
+        cli = _load_cli_ingest_authority()
+        chain_core = getattr(cli, "chain_core", None)
+        commit_transition_valid = getattr(
+            chain_core, "_commit_transition_valid_with_candidate_v2", None
+        )
+        if not callable(commit_transition_valid):
+            authoritative_discrepancy("structured_chain_mismatch")
+
     replayed: dict[str, object] | None = None
     entries: list[ReplayEntry] = []
     merge_context: dict[str, object] = {}
@@ -1436,8 +1446,8 @@ def replay_captured_unbound_chain(
                     )
                     or candidate.get("run_binding") is not None
                     or candidate.get("journal_outbox") is not None
-                    or not journal_builders._commit_transition_valid(
-                        event, replayed, candidate
+                    or not commit_transition_valid(
+                        journal_builders, event, replayed, candidate
                     )
                 ):
                     authoritative_discrepancy("structured_chain_mismatch")
@@ -1497,6 +1507,9 @@ def _load_cli_ingest_authority() -> object:
         "_required_steps",
         "_gate_one_complete",
         "_gate_satisfied",
+        "_binding_is_current_with_candidate_v2",
+        "_binding_matches_source_fact_with_candidate_v2",
+        "candidate_is_v2",
         "_merge_current_gate_facts",
         "_merge_ingest_record_templates",
         "_merge_ingest_binding",
@@ -1785,8 +1798,28 @@ def _commit_eligible_records(
                     "task": task,
                     "outcome": "chain-skip",
                 }
+        elif event_name == "commit_identity_checked":
+            identity = event_state.get("commit_result", {}).get("identity")
+            active = bool(
+                isinstance(identity, dict)
+                and identity == result.get("identity")
+                and details.get("result") == "passed"
+                and details.get("produced_sha") == commit_sha
+            )
+            if active:
+                expected = {
+                    "type": "verification",
+                    "task": task,
+                    "criterion": "gate-2: produced commit identity",
+                    "result": "passed",
+                }
         elif event_name in {"commit_produced", "commit_close_recovered"}:
-            active = details.get("commit_sha") == commit_sha
+            active = bool(
+                details.get("commit_sha") == commit_sha
+                and isinstance(result.get("identity"), dict)
+                and result["identity"].get("result") == "passed"
+                and result["identity"].get("produced_sha") == commit_sha
+            )
             if active:
                 expected = {
                     "type": "decision",
@@ -1804,14 +1837,18 @@ def _commit_eligible_records(
             event_state, digest, binding_review
         )
         bound = {**expected, "binding": binding}
-        if not journal_builders._binding_matches_source_fact(
+        if not cli._binding_matches_source_fact_with_candidate_v2(
+            journal_builders,
+            journal_engine,
             binding,
             bound,
             event,
             prior,
             event_state,
             family="commit",
-        ) or not journal_builders._binding_is_current(
+        ) or not cli._binding_is_current_with_candidate_v2(
+            journal_builders,
+            journal_engine,
             state,
             binding,
             bound,
@@ -1828,9 +1865,13 @@ def _commit_eligible_records(
     )
     approval_count = sum(item.outcome == "chain-approval" for item in eligible)
     landing_count = sum(item.outcome == "chain-landing" for item in eligible)
+    identity_count = sum(
+        item.criterion == "gate-2: produced commit identity" for item in eligible
+    )
     if (
         review_count != (1 if tier.get("effective") == "hard" else 0)
         or approval_count != (1 if approval_required else 0)
+        or identity_count != (1 if cli.candidate_is_v2(state) else 0)
         or landing_count != 1
     ):
         authoritative_discrepancy("structured_chain_mismatch")
@@ -2683,17 +2724,11 @@ def resolve_tombstone_bindings(
         expected_path = f".forge/chains/tombstones/{snapshot.chain_id}.json"
         binding = abort.get("binding")
         candidate = binding.get("candidate") if isinstance(binding, dict) else None
-        candidate_value = (
-            candidate.get("value") if isinstance(candidate, dict) else None
-        )
         if (
             "carried-record-equality" not in RENDERER_CONTROLS
             or abort.get("basis") != [expected_path]
             or not isinstance(binding, dict)
             or not isinstance(candidate, dict)
-            or candidate.get("kind") != "staged-diff-sha256"
-            or not isinstance(candidate_value, str)
-            or journal_engine.HEX_SHA256_PATTERN.fullmatch(candidate_value) is None
             or any(
                 not isinstance(record.get("binding"), dict)
                 or record["binding"].get("candidate") != candidate
@@ -2701,9 +2736,12 @@ def resolve_tombstone_bindings(
             )
         ):
             authoritative_discrepancy("structured_chain_mismatch")
-        expected_binding = journal_builders.tombstone_abort_binding(
-            snapshot.record, snapshot.chain_id, candidate_value
-        )
+        try:
+            expected_binding = journal_builders.tombstone_abort_binding(
+                snapshot.record, snapshot.chain_id, candidate
+            )
+        except journal_engine.CoordinationRefusal:
+            authoritative_discrepancy("structured_chain_mismatch")
         if journal_engine._canonical_json_bytes(
             binding
         ) != journal_engine._canonical_json_bytes(expected_binding):
@@ -2733,6 +2771,7 @@ def resolve_captured_ingest_bindings(
     task_status = snapshot.outcome_map.get("task_status")
     if not chain_records or not isinstance(task, str):
         authoritative_discrepancy("structured_chain_mismatch")
+    cli = _load_cli_ingest_authority() if snapshot.chain.family == "commit" else None
 
     landings = [
         record
@@ -2798,23 +2837,48 @@ def resolve_captured_ingest_bindings(
             authoritative_discrepancy("structured_chain_mismatch")
         event, prior, event_state, _carried, _source_digest = matches[0]
         try:
-            valid = journal_builders._binding_matches_source_fact(
-                binding,
-                record,
-                event,
-                prior,
-                event_state,
-                family=snapshot.chain.family,
-            ) and journal_builders._binding_is_current(
-                snapshot.chain.state,
-                binding,
-                record,
-                event,
-                prior,
-                event_state,
-                snapshot.replay_entries,
-                chain_family=snapshot.chain.family,
-            )
+            if snapshot.chain.family == "commit":
+                if cli is None:
+                    raise RuntimeError("commit binding authority is unavailable")
+                valid = cli._binding_matches_source_fact_with_candidate_v2(
+                    journal_builders,
+                    journal_engine,
+                    binding,
+                    record,
+                    event,
+                    prior,
+                    event_state,
+                    family="commit",
+                ) and cli._binding_is_current_with_candidate_v2(
+                    journal_builders,
+                    journal_engine,
+                    snapshot.chain.state,
+                    binding,
+                    record,
+                    event,
+                    prior,
+                    event_state,
+                    snapshot.replay_entries,
+                    chain_family="commit",
+                )
+            else:
+                valid = journal_builders._binding_matches_source_fact(
+                    binding,
+                    record,
+                    event,
+                    prior,
+                    event_state,
+                    family=snapshot.chain.family,
+                ) and journal_builders._binding_is_current(
+                    snapshot.chain.state,
+                    binding,
+                    record,
+                    event,
+                    prior,
+                    event_state,
+                    snapshot.replay_entries,
+                    chain_family=snapshot.chain.family,
+                )
         except (KeyError, TypeError, ValueError, RuntimeError):
             valid = False
         if not valid:

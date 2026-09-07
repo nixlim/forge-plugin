@@ -14,6 +14,7 @@ from pathlib import Path
 import argparse
 import base64
 import binascii
+from forge_cli import candidate as candidate_module
 from forge_cli import chain_core
 import contextlib
 import copy
@@ -72,7 +73,7 @@ STATE_TRANSITIONS: dict[str, frozenset[str]] = {
     "revising": frozenset({"classifying", "aborted"}),
     "awaiting_approval": frozenset({"classifying", "authorized", "aborted"}),
     "authorized": frozenset({"classifying", "committing", "aborted"}),
-    "committing": frozenset({"authorized", "closed"}),
+    "committing": frozenset({"authorized", "closed", "aborted"}),
     "closed": frozenset(),
     "aborted": frozenset(),
 }
@@ -128,6 +129,12 @@ REVIEW_MASTER_WINDOW_BYTES = 65_536
 
 REVIEW_COMPLETE_PACKAGE_REFUSAL = (
     "forge: review refused — reviewer cannot inspect the complete authoritative package"
+)
+
+
+PRODUCED_COMMIT_MISMATCH = (
+    "forge: produced commit does not match authorized candidate — chain frozen; "
+    "commit left untouched"
 )
 
 
@@ -490,6 +497,152 @@ class FinalizeContext:
     message: str
     lock_acquired: bool = False
     lock_session_pid: str = ""
+    produced_sha: str | None = None
+    produced_identity: dict[str, Any] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class ProducedCommitContext:
+    pre_head: str
+    expected_tree_oid: str
+    expected_message_digest: str
+    produced_sha: str
+    commit: candidate_module.CommitObject
+
+
+def _produced_head_moved(context: ProducedCommitContext) -> bool:
+    return context.produced_sha != context.pre_head
+
+
+def _produced_single_parent(context: ProducedCommitContext) -> bool:
+    return context.commit.parent_headers == (context.pre_head,)
+
+
+def _produced_exact_tree(context: ProducedCommitContext) -> bool:
+    return context.commit.tree_headers == (context.expected_tree_oid,)
+
+
+def _produced_exact_message(context: ProducedCommitContext) -> bool:
+    return sha256_bytes(context.commit.message) == context.expected_message_digest
+
+
+PRODUCED_COMMIT_CHECKS: dict[str, Callable[[ProducedCommitContext], bool]] = {
+    "head-movement": _produced_head_moved,
+    "exact-single-parent": _produced_single_parent,
+    "exact-tree": _produced_exact_tree,
+    "exact-message": _produced_exact_message,
+}
+
+
+def _finalize_produced_identity(context: FinalizeContext) -> bool:
+    """Inspect one produced commit through bounded plumbing and all four seams."""
+
+    state = context.state
+    intent = state.get("commit_result", {}).get("intent")
+    produced_sha = context.produced_sha
+    if not isinstance(intent, Mapping) or not isinstance(produced_sha, str):
+        context.produced_identity = {
+            "result": "failed",
+            "produced_sha": str(produced_sha or ""),
+            "expected": {},
+            "observed": {"error": "produced commit intent is incomplete"},
+            "checks": {name: False for name in PRODUCED_COMMIT_CHECKS},
+        }
+        return False
+    expected = {
+        "parent": str(intent.get("pre_head") or ""),
+        "tree": str(intent.get("expected_tree_oid") or ""),
+        "message_digest": str(intent.get("message_digest") or ""),
+    }
+    try:
+        commit = context.engine.ctx.repo.read_commit_object(produced_sha)
+        produced_context = ProducedCommitContext(
+            pre_head=expected["parent"],
+            expected_tree_oid=expected["tree"],
+            expected_message_digest=expected["message_digest"],
+            produced_sha=produced_sha,
+            commit=commit,
+        )
+        checks = {
+            name: bool(predicate(produced_context))
+            for name, predicate in PRODUCED_COMMIT_CHECKS.items()
+        }
+        observed = {
+            "parent": list(commit.parent_headers[:2]),
+            "parent_count": len(commit.parent_headers),
+            "tree": list(commit.tree_headers[:2]),
+            "tree_count": len(commit.tree_headers),
+            "message_digest": sha256_bytes(commit.message),
+        }
+        raw = commit.raw
+    except (candidate_module.CandidateError, OSError, ValueError) as exc:
+        checks = {name: False for name in PRODUCED_COMMIT_CHECKS}
+        observed = {"error": str(exc), "parent": [], "tree": [], "message_digest": ""}
+        raw = chain_core.canonical_bytes({"error": str(exc), "produced_sha": produced_sha})
+    result = "passed" if all(checks.values()) else "failed"
+    transcript_ref = _write_artifact(
+        context.engine.ctx,
+        state,
+        f"commit/identity-{produced_sha}.txt",
+        raw,
+        exclusive=False,
+    )
+    context.produced_identity = {
+        "result": result,
+        "produced_sha": produced_sha,
+        "expected": expected,
+        "observed": observed,
+        "checks": checks,
+        "transcript": transcript_ref,
+    }
+    return result == "passed"
+
+
+def _record_produced_identity(
+    context: FinalizeContext,
+) -> dict[str, Any]:
+    state = context.state
+    existing = state.get("commit_result", {}).get("identity")
+    if isinstance(existing, dict):
+        return existing
+    result = context.produced_identity
+    if not isinstance(result, dict):
+        raise FrozenError(
+            "produced commit identity result is unavailable",
+            chain_id=str(state["chain_id"]),
+            state="committing",
+        )
+    state["commit_result"]["identity"] = copy.deepcopy(result)
+    if result.get("result") == "failed":
+        state["commit_result"]["mismatch_latched"] = True
+    context.engine.ctx.store.persist(
+        state,
+        "commit_identity_checked",
+        copy.deepcopy(result),
+    )
+    return result
+
+
+def _produced_mismatch_outcome(
+    state: Mapping[str, Any], result: Mapping[str, Any]
+) -> Outcome:
+    expected = chain_core.canonical_bytes(result.get("expected", {})).decode("utf-8")
+    observed = chain_core.canonical_bytes(result.get("observed", {})).decode("utf-8")
+    transcript = result.get("transcript")
+    revision9 = state.get("run_binding") is not None or _archive_metadata(state) is not None
+    return Outcome(
+        ok=False,
+        reason_code=ReasonCode.FROZEN_CHAIN,
+        message=PRODUCED_COMMIT_MISMATCH,
+        chain_id=str(state["chain_id"]),
+        state="committing",
+        expected=expected,
+        observed=observed,
+        remediation=chain_core._forge_command(state, "status"),
+        next_required_step=chain_core._forge_command(state, "status"),
+        evidence_refs=(str(transcript),) if isinstance(transcript, str) else (),
+        schema=REVISION9_OUTPUT_SCHEMA if revision9 else OUTPUT_SCHEMA,
+    )
 
 
 def _finalize_halt(context: FinalizeContext) -> bool:
@@ -549,9 +702,38 @@ def _finalize_candidate(context: FinalizeContext) -> bool:
             remediation=chain_core._forge_command(context.state, "commit rebase"),
             chain=context.state,
         )
-    expected = str(context.state["candidate"].get("sha256"))
-    observed = context.engine.ctx.repo.candidate_hash()
-    if observed != expected:
+    record = context.state["candidate"]
+    if not chain_core.candidate_is_v2(context.state):
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            "legacy candidate must be restaged before finalize",
+            expected=candidate_module.CANDIDATE_SCHEMA,
+            observed=str(record.get("schema")),
+            remediation=chain_core._forge_command(
+                context.state, "commit restage --paths <path>..."
+            ),
+            chain=context.state,
+        )
+    expected = str(record.get("sha256"))
+    try:
+        observation = context.engine.ctx.repo.candidate_observation()
+    except candidate_module.CandidateError as exc:
+        raise Refusal(
+            ReasonCode.EVIDENCE_INCOMPLETE,
+            "finalize candidate byte-identity check failed",
+            expected=expected,
+            observed=str(exc),
+            remediation=chain_core._forge_command(
+                context.state, "commit restage --paths <path>..."
+            ),
+            chain=context.state,
+        ) from exc
+    observed = observation.authorization_id
+    if (
+        observed != expected
+        or observation.object_format != record.get("object_format")
+        or observation.tree_oid != record.get("tree_oid")
+    ):
         raise Refusal(
             ReasonCode.CANDIDATE_STALE,
             "finalize candidate byte-identity check failed",
@@ -653,7 +835,7 @@ def _finalize_ttl(context: FinalizeContext) -> bool:
 
 
 def _finalize_tree_drift(context: FinalizeContext) -> bool:
-    paths = context.engine.ctx.repo.staged_paths()
+    paths = list(context.state.get("paths", []))
     drift = context.engine.ctx.repo.tree_index_drift(paths)
     if drift and chain_core._user_skip(context.state, "index-drift") is None:
         raise Refusal(
@@ -670,6 +852,7 @@ def _finalize_tree_drift(context: FinalizeContext) -> bool:
 FINALIZE_CHECKS: dict[str, Callable[[FinalizeContext], bool | None]] = {
     "evidence-completeness": _finalize_evidence,
     "candidate-byte-identity": _finalize_candidate,
+    "produced-commit-identity": _finalize_produced_identity,
     "ttl-token": _finalize_ttl,
     "tree-index-drift": _finalize_tree_drift,
     "halt": _finalize_halt,
@@ -1169,16 +1352,28 @@ def _raw_top_level_command(argv: Sequence[str]) -> str | None:
 def _binding_for_commit_event(
     state: Mapping[str, Any], source_event_digest: str, review: object
 ) -> dict[str, Any]:
+    candidate_state = state["candidate"]
+    if chain_core.candidate_is_v2(state):
+        candidate_binding: dict[str, Any] = {
+            "kind": "git-tree-candidate-v2",
+            "value": {
+                "authorization_id": candidate_state["authorization_id"],
+                "object_format": candidate_state["object_format"],
+                "tree_oid": candidate_state["tree_oid"],
+            },
+        }
+    else:
+        candidate_binding = {
+            "kind": "staged-diff-sha256",
+            "value": candidate_state["sha256"],
+        }
     preimage = {
         "schema": "forge-gate-binding/1",
         "source_record": {
             "chain_id": state["chain_id"],
             "event_digest": source_event_digest,
         },
-        "candidate": {
-            "kind": "staged-diff-sha256",
-            "value": state["candidate"]["sha256"],
-        },
+        "candidate": candidate_binding,
         "review": copy.deepcopy(review),
     }
     return {**preimage, "binding_id": sha256_bytes(chain_core.canonical_bytes(preimage))}
@@ -1289,6 +1484,7 @@ def _build_chain_journal_records(
             "evidence": [],
         }
     elif event in {"review_passed", "review_blocked"}:
+        candidate_state = state.get("candidate")
         review_state = state.get("review")
         verdict = (
             review_state.get("verdict")
@@ -1303,6 +1499,38 @@ def _build_chain_journal_records(
         reviewer_role = (
             request.get("reviewer") if isinstance(request, Mapping) else None
         )
+        review_check = "validated review-final verdict transport"
+        if chain_core.candidate_is_v2(state):
+            if (
+                not isinstance(candidate_state, Mapping)
+                or not isinstance(candidate_state.get("authorization_id"), str)
+                or chain_core.SHA256_RE.fullmatch(
+                    str(candidate_state["authorization_id"])
+                )
+                is None
+                or not isinstance(candidate_state.get("review_diff_sha256"), str)
+                or chain_core.SHA256_RE.fullmatch(
+                    str(candidate_state["review_diff_sha256"])
+                )
+                is None
+                or not isinstance(candidate_state.get("object_format"), str)
+                or not isinstance(candidate_state.get("tree_oid"), str)
+            ):
+                return ()
+            try:
+                derived_authorization = candidate_module.authorization_id(
+                    str(candidate_state["object_format"]),
+                    str(candidate_state["tree_oid"]),
+                )
+            except candidate_module.CandidateError:
+                return ()
+            if derived_authorization != candidate_state["authorization_id"]:
+                return ()
+            review_check = (
+                "forge-commit-candidate/2 "
+                f"authorization_id={candidate_state['authorization_id']} "
+                f"review_diff_sha256={candidate_state['review_diff_sha256']}"
+            )
         # Gate 3 is normatively review-final; a legacy review-cheap fact is not
         # silently relabelled as that stronger authority.
         if (
@@ -1327,12 +1555,34 @@ def _build_chain_journal_records(
             "task": task_id,
             "criterion": journal.GATE_3_CRITERION,
             "method": "independent review-final",
-            "check": "validated review-final verdict transport",
+            "check": review_check,
             "result": "passed" if verdict["verdict"] == "PASS" else "failed",
             "observation": (
                 f"Forge CLI recorded review-final verdict {verdict['verdict']}"
             ),
             "evidence": [verdict_path] if isinstance(verdict_path, str) else [],
+        }
+    elif event == "commit_identity_checked":
+        identity = state.get("commit_result", {}).get("identity")
+        result = details.get("result")
+        if (
+            not isinstance(identity, Mapping)
+            or identity.get("result") != result
+            or result not in {"passed", "failed"}
+            or details.get("produced_sha") != identity.get("produced_sha")
+        ):
+            return ()
+        transcript = identity.get("transcript")
+        record = {
+            "type": "verification",
+            "id": builders._allocate_id(run_state.records, "verification"),
+            "task": task_id,
+            "criterion": "gate-2: produced commit identity",
+            "method": "Forge CLI bounded raw commit-object verification",
+            "check": "single parent, exact tree, exact message digest, and HEAD movement",
+            "result": result,
+            "observation": f"Forge CLI produced commit identity check {result}",
+            "evidence": [transcript] if isinstance(transcript, str) and transcript else [],
         }
     elif event in {
         "operator_approved",
@@ -1355,6 +1605,14 @@ def _build_chain_journal_records(
                 or not isinstance(candidate_state.get("sha256"), str)
                 or not isinstance(result, Mapping)
                 or result.get("commit_sha") is not None
+            ):
+                return ()
+        if event in {"commit_produced", "commit_close_recovered"}:
+            identity = state.get("commit_result", {}).get("identity")
+            if (
+                not isinstance(identity, Mapping)
+                or identity.get("result") != "passed"
+                or identity.get("produced_sha") != details.get("commit_sha")
             ):
                 return ()
         outcome = {
@@ -1523,6 +1781,10 @@ def _prove_run_task_binding(
                 raise ValueError("task files are malformed")
             mechanical_outputs = chain_core._committed_changelog_output_paths(policy)
             for path in paths:
+                if not candidate_module.valid_scope_path(path):
+                    raise ValueError(
+                        f"path {path!r} violates the committed scope pathname contract"
+                    )
                 if path in mechanical_outputs:
                     continue
                 if not any(
@@ -2489,6 +2751,37 @@ def _classification_argv(
     return argv
 
 
+def _classification_environment(
+    ctx: chain_core.CommandContext, state: Mapping[str, Any]
+) -> dict[str, str]:
+    context = ctx.repo.candidate_context()
+    environment = candidate_module.context_from_paths(
+        worktree_root=context.worktree_root,
+        git_dir=context.git_dir,
+        common_dir=context.common_dir,
+        index_file=context.index_file,
+        bare=context.bare,
+        environment=os.environ,
+        effective_cwd=context.worktree_root,
+    ).environment()
+    for key in tuple(environment):
+        if key.startswith("FORGE_CANDIDATE_"):
+            environment.pop(key, None)
+    record = state.get("candidate")
+    if not chain_core.candidate_is_v2(state) or not isinstance(record, Mapping):
+        return environment
+    environment.update(
+        {
+            "FORGE_CANDIDATE_SCHEMA": candidate_module.CANDIDATE_SCHEMA,
+            "FORGE_CANDIDATE_AUTHORIZATION_ID": str(record["authorization_id"]),
+            "FORGE_CANDIDATE_OBJECT_FORMAT": str(record["object_format"]),
+            "FORGE_CANDIDATE_TREE_OID": str(record["tree_oid"]),
+            "FORGE_CANDIDATE_BASE_COMMIT_OID": str(record["base_commit_oid"] or ""),
+        }
+    )
+    return environment
+
+
 def _run_classification(
     ctx: chain_core.CommandContext,
     state: MutableMapping[str, Any],
@@ -2500,6 +2793,7 @@ def _run_classification(
     process = runtime.run_bounded(
         argv,
         cwd=ctx.repo.root,
+        env=_classification_environment(ctx, state),
         timeout=runtime.COMMAND_TIMEOUT_SECONDS,
         verbose=ctx.options.verbose,
     )
@@ -2550,18 +2844,39 @@ def _run_classification(
             remediation=f"forge classify --chain-id {state['chain_id']}",
             chain=state,
         )
+    path_evidence = evidence.get("paths")
+    evidence_paths = (
+        [item.get("path") for item in path_evidence]
+        if isinstance(path_evidence, list)
+        and all(isinstance(item, dict) for item in path_evidence)
+        else []
+    )
+    if (
+        any(not isinstance(path, str) for path in evidence_paths)
+        or len(evidence_paths) != len(set(evidence_paths))
+        or sorted(str(path) for path in evidence_paths)
+        != sorted(str(path) for path in state.get("paths", []))
+    ):
+        raise Refusal(
+            ReasonCode.EVIDENCE_INCOMPLETE,
+            "risk-tier evidence path set differs from the candidate snapshot",
+            expected=str(state.get("paths", [])),
+            observed=str(evidence_paths),
+            remediation=f"forge classify --chain-id {state['chain_id']}",
+            chain=state,
+        )
     categories: set[str] = set()
     # Classification is promote-only across the lifetime of a chain.  A
     # control floor discovered for any candidate cannot later be erased by
     # restaging a lower-risk path set inside that same chain.
     control = bool(state["tier"].get("control"))
-    for path_evidence in evidence.get("paths", []):
-        if not isinstance(path_evidence, dict):
+    for path_record in path_evidence:
+        if not isinstance(path_record, dict):
             continue
         categories.update(
-            str(value) for value in path_evidence.get("categories", []) if value
+            str(value) for value in path_record.get("categories", []) if value
         )
-        control = control or bool(path_evidence.get("control_floor"))
+        control = control or bool(path_record.get("control_floor"))
     old_effective = state["tier"].get("effective")
     effective = promoted_tier(old_effective, str(computed_effective))
     if control:
@@ -2626,6 +2941,136 @@ def _invalidate_candidate_evidence(
     state["commit_result"] = {}
 
 
+def _candidate_patch_ref(state: Mapping[str, Any]) -> str:
+    record = state.get("candidate")
+    if not isinstance(record, Mapping):
+        return ""
+    authorization_id = record.get("authorization_id")
+    review_digest = record.get("review_diff_sha256")
+    if not isinstance(authorization_id, str) or not isinstance(review_digest, str):
+        return ""
+    return (
+        Path(".forge")
+        / "chains"
+        / str(state["chain_id"])
+        / "candidate"
+        / f"{authorization_id}-{review_digest}.patch"
+    ).as_posix()
+
+
+def _candidate_snapshot(
+    ctx: chain_core.CommandContext, state: Mapping[str, Any]
+) -> candidate_module.CandidateSnapshot:
+    try:
+        return ctx.repo.candidate_snapshot(computed_at=chain_core.iso_z())
+    except candidate_module.CandidateError as exc:
+        reason = (
+            ReasonCode.STATE_PRECONDITION
+            if exc.kind == "state-precondition"
+            else ReasonCode.EVIDENCE_INCOMPLETE
+        )
+        raise Refusal(
+            reason,
+            f"candidate snapshot could not be completed: {exc}",
+            expected="a complete bounded Git-tree candidate snapshot",
+            observed=str(exc),
+            remediation=chain_core._forge_command(
+                state, "commit restage --paths <path>..."
+            ),
+            chain=state,
+        ) from exc
+
+
+def _install_candidate_snapshot(
+    ctx: chain_core.CommandContext,
+    state: MutableMapping[str, Any],
+    snapshot: candidate_module.CandidateSnapshot,
+) -> None:
+    if state.get("run_binding") is not None:
+        invalid_paths = [
+            path
+            for path in snapshot.paths
+            if not candidate_module.valid_scope_path(path)
+        ]
+        if invalid_paths:
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: commit start refused — run/task binding is invalid",
+                expected=(
+                    "every concrete candidate path satisfies the committed "
+                    "run-scope pathname contract"
+                ),
+                observed=", ".join(repr(path) for path in invalid_paths),
+                remediation="inspect the named run/task and retry the exact paired start",
+                chain=state,
+            )
+    state["candidate"] = snapshot.state_record()
+    state["paths"] = list(snapshot.paths)
+    state["staging"]["staged_paths"] = list(snapshot.paths)
+    relative = (
+        Path("candidate")
+        / f"{snapshot.authorization_id}-{snapshot.review_diff_sha256}.patch"
+    ).as_posix()
+    expected_ref = (
+        Path(".forge") / "chains" / str(state["chain_id"]) / relative
+    ).as_posix()
+    try:
+        _write_artifact(ctx, state, relative, snapshot.review_diff, exclusive=True)
+    except FileExistsError:
+        existing = _read_bound_artifact(
+            ctx,
+            state,
+            expected_ref,
+            snapshot.review_diff_sha256,
+            "candidate review patch",
+            max_bytes=candidate_module.REVIEW_DIFF_MAX_BYTES,
+        )
+        if existing != snapshot.review_diff:
+            raise FrozenError(
+                "candidate review patch identity collision",
+                chain_id=str(state["chain_id"]),
+                state=str(state["state"]),
+            )
+
+
+def _candidate_review_diff(
+    ctx: chain_core.CommandContext, state: Mapping[str, Any]
+) -> bytes:
+    record = state.get("candidate")
+    reference = _candidate_patch_ref(state)
+    if not chain_core.candidate_is_v2(state) or not reference:
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            "legacy candidate must be restaged before evidence can advance",
+            expected=candidate_module.CANDIDATE_SCHEMA,
+            observed=str(record.get("schema") if isinstance(record, Mapping) else None),
+            remediation=chain_core._forge_command(
+                state, "commit restage --paths <path>..."
+            ),
+            chain=state,
+        )
+    assert isinstance(record, Mapping)
+    data = _read_bound_artifact(
+        ctx,
+        state,
+        reference,
+        str(record["review_diff_sha256"]),
+        "candidate review patch",
+        max_bytes=candidate_module.REVIEW_DIFF_MAX_BYTES,
+    )
+    if len(data) != record.get("review_diff_byte_count"):
+        raise Refusal(
+            ReasonCode.EVIDENCE_INCOMPLETE,
+            "candidate review patch byte count changed",
+            expected=str(record.get("review_diff_byte_count")),
+            observed=str(len(data)),
+            remediation=chain_core._forge_command(state, "commit restage --paths <path>..."),
+            chain=state,
+            evidence_refs=[reference],
+        )
+    return data
+
+
 def _adopt_out_of_band_candidate(
     ctx: chain_core.CommandContext,
     state: MutableMapping[str, Any],
@@ -2636,10 +3081,15 @@ def _adopt_out_of_band_candidate(
     """Adopt the complete staged set, invalidate evidence, and reclassify."""
     old_candidate = str(state["candidate"].get("sha256") or "")
     old_paths = list(state.get("paths", []))
-    staged_paths = ctx.repo.staged_paths()
-    state["candidate"] = {"sha256": observed_candidate, "computed_at": chain_core.iso_z()}
-    state["paths"] = list(staged_paths)
-    state["staging"]["staged_paths"] = list(staged_paths)
+    snapshot = _candidate_snapshot(ctx, state)
+    if snapshot.authorization_id != observed_candidate:
+        raise FrozenError(
+            "candidate changed during out-of-band adoption",
+            chain_id=str(state["chain_id"]),
+            state=str(state["state"]),
+        )
+    _install_candidate_snapshot(ctx, state, snapshot)
+    staged_paths = list(snapshot.paths)
     anomaly = {
         "at": chain_core.iso_z(),
         "kind": "out-of-band-index-change",
@@ -2664,7 +3114,7 @@ def _adopt_out_of_band_candidate(
             "detected_by": detected_by,
         },
     )
-    has_candidate_bytes = bool(ctx.repo.candidate_bytes())
+    has_candidate_bytes = bool(snapshot.paths)
     if has_candidate_bytes:
         _run_classification(ctx, state)
     return old_candidate, has_candidate_bytes
@@ -2683,8 +3133,8 @@ def _stage_paths(
         if staged_before:
             ctx.repo.git(["reset", "-q", "HEAD", "--", *staged_before])
     ctx.repo.git(["add", "--", *paths])
-    candidate_bytes = ctx.repo.candidate_bytes()
-    if not candidate_bytes:
+    snapshot = _candidate_snapshot(ctx, state)
+    if not snapshot.paths:
         raise Refusal(
             ReasonCode.STATE_PRECONDITION,
             "staging produced an empty candidate",
@@ -2693,18 +3143,29 @@ def _stage_paths(
             remediation="edit the named paths before starting/restaging",
             chain=state,
         )
-    candidate = sha256_bytes(candidate_bytes)
-    staged_paths = ctx.repo.staged_paths()
-    state["paths"] = list(staged_paths)
-    state["staging"]["staged_paths"] = list(staged_paths)
+    if snapshot.base_commit_oid != state.get("repo_head"):
+        raise Refusal(
+            ReasonCode.HEAD_MOVED,
+            "candidate base changed while staging",
+            expected=str(state.get("repo_head")),
+            observed=str(snapshot.base_commit_oid),
+            remediation=chain_core._forge_command(state, "commit rebase"),
+            chain=state,
+        )
+    _install_candidate_snapshot(ctx, state, snapshot)
     state["staging"]["staged_at"] = chain_core.iso_z()
-    state["candidate"] = {"sha256": candidate, "computed_at": chain_core.iso_z()}
-    return str(old_candidate) if old_candidate else None, candidate
+    return (
+        str(old_candidate) if old_candidate else None,
+        snapshot.authorization_id,
+    )
 
 
-def _current_test_paths(ctx: chain_core.CommandContext) -> list[str]:
+def _current_test_paths(
+    ctx: chain_core.CommandContext, state: Mapping[str, Any] | None = None
+) -> list[str]:
     result: list[str] = []
-    for path in ctx.repo.staged_paths():
+    paths = state.get("paths", []) if isinstance(state, Mapping) else ctx.repo.staged_paths()
+    for path in paths:
         name = Path(path).name.lower()
         if (
             "tests/" in path.replace("\\", "/")
@@ -7410,6 +7871,21 @@ class Engine:
             _archive_recheck(self.ctx, state, "transition")
         if state.get("run_binding") is not None:
             chain_core._validate_bound_chain_state(state)
+        if (
+            state.get("candidate", {}).get("sha256")
+            and not chain_core.candidate_is_v2(state)
+            and verb not in {"commit restage", "commit abort"}
+        ):
+            raise Refusal(
+                ReasonCode.STATE_PRECONDITION,
+                "legacy candidate must be restaged before the chain can advance",
+                expected=candidate_module.CANDIDATE_SCHEMA,
+                observed="legacy staged-diff candidate",
+                remediation=chain_core._forge_command(
+                    state, "commit restage --paths <path>..."
+                ),
+                chain=state,
+            )
         if state["state"] == "committing" and not allow_committing:
             raise Refusal(
                 ReasonCode.STATE_PRECONDITION,
@@ -7499,6 +7975,16 @@ class Engine:
             if exc.reason_code is ReasonCode.STATE_PRECONDITION:
                 return _success(None, "no commit chain exists for this worktree", "forge commit start --paths <path>...")
             raise
+        if (
+            state["state"] not in TERMINAL_STATES | {"committing"}
+            and state.get("candidate", {}).get("sha256")
+            and not chain_core.candidate_is_v2(state)
+        ):
+            return _success(
+                state,
+                "legacy candidate is readable but must be restaged before advancement",
+                chain_core._forge_command(state, "commit restage --paths <path>..."),
+            )
         if state["state"] == "committing":
             policy = chain_core._policy_for_state(self.ctx, state)
             finalize_ctx = FinalizeContext(
@@ -7533,7 +8019,13 @@ class Engine:
                         finalize_ctx.lock_session_pid
                     )
                     finalize_ctx.lock_acquired = False
-                    if release_problem:
+                    if release_problem and not (
+                        state.get("commit_result", {}).get("mismatch_latched") is True
+                        and state.get("commit_result", {})
+                        .get("identity", {})
+                        .get("result")
+                        == "failed"
+                    ):
                         raise FrozenError(
                             f"commit recovery lock release failed: {release_problem}",
                             chain_id=str(state["chain_id"]),
@@ -7596,6 +8088,12 @@ class Engine:
         return _success(state, f"chain {state['chain_id']} is {state['state']}", next_step)
 
     def next_step(self, state: Mapping[str, Any]) -> str:
+        if (
+            state.get("candidate", {}).get("sha256")
+            and not chain_core.candidate_is_v2(state)
+            and state.get("state") not in TERMINAL_STATES | {"committing"}
+        ):
+            return chain_core._forge_command(state, "commit restage --paths <path>...")
         state_name = state["state"]
         if state_name == "classifying":
             return chain_core._forge_command(state, "classify")
@@ -7723,12 +8221,27 @@ class Engine:
             _old, candidate = _stage_paths(
                 self.ctx, state, normalized, clear_old=False
             )
+            if run_binding is not None:
+                rebound = _prove_run_task_binding(
+                    self.ctx,
+                    str(run_binding["run_id"]),
+                    str(run_binding["task_id"]),
+                    list(state["paths"]),
+                    policy,
+                )
+                if rebound != run_binding:
+                    raise FrozenError(
+                        "staged candidate paths changed the run/task binding",
+                        chain_id=chain_id,
+                        state=str(state["state"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
             if archive_metadata is not None:
                 state["staging"]["archive"] = archive_metadata
             self.ctx.store.persist(
                 state,
                 "candidate_staged",
-                {"candidate": candidate, "paths": normalized},
+                {"candidate": candidate, "paths": list(state["paths"])},
             )
             if archive_metadata is not None:
                 _archive_recheck(self.ctx, state, "start")
@@ -7750,7 +8263,7 @@ class Engine:
         self._preflight(state, "classify")
         if state["state"] not in {"classifying", "verifying"}:
             self._wrong_state(state, "classifying or verifying", "classify")
-        if not self.ctx.repo.candidate_bytes():
+        if not state.get("paths"):
             raise Refusal(
                 ReasonCode.CANDIDATE_STALE,
                 "classification refuses an empty staged candidate",
@@ -7781,9 +8294,14 @@ class Engine:
     @_serialize_worktree_command
     def restage(self, paths: Sequence[str]) -> Outcome:
         state = self.select(include_terminal=False)
+        legacy_migration = bool(
+            state.get("candidate", {}).get("sha256")
+            and not chain_core.candidate_is_v2(state)
+        )
         self._preflight(
             state,
             "commit restage",
+            allow_head_moved=legacy_migration,
             check_candidate=False,
         )
         if _archive_metadata(state) is not None:
@@ -7812,6 +8330,37 @@ class Engine:
                 remediation=chain_core._forge_command(state, "commit abort --reason iteration-cap"),
                 chain=state,
             )
+        if legacy_migration:
+            current_head = self.ctx.repo.head()
+            if current_head != state["repo_head"]:
+                try:
+                    _sha, current_policy_bytes = self.ctx.repo.policy(current_head)
+                except OSError as exc:
+                    raise Refusal(
+                        ReasonCode.POLICY_UNREADABLE,
+                        f"new-HEAD policy is unreadable during restage migration: {exc}",
+                        expected=f"git show {current_head}:forge-project.md",
+                        observed=str(exc),
+                        remediation=chain_core._forge_command(
+                            state, "commit abort --reason policy-unreadable"
+                        ),
+                        chain=state,
+                    ) from exc
+                current_policy_digest = sha256_bytes(current_policy_bytes)
+                if current_policy_digest != state["policy_source"].get("digest"):
+                    raise Refusal(
+                        ReasonCode.POLICY_CHANGED,
+                        "committed policy bytes changed at the new HEAD; legacy candidate cannot migrate",
+                        expected=str(state["policy_source"].get("digest")),
+                        observed=current_policy_digest,
+                        remediation=chain_core._forge_command(
+                            state, "commit abort --reason policy-changed"
+                        ),
+                        chain=state,
+                    )
+                state["repo_head"] = current_head
+                state["policy_source"]["sha"] = current_head
+                state["steps"].pop("head_moved", None)
         normalized = self.ctx.repo.normalize_paths(paths)
         old, candidate = _stage_paths(self.ctx, state, normalized, clear_old=True)
         _invalidate_candidate_evidence(state, preserve_operator_cosign=True)
@@ -7819,7 +8368,11 @@ class Engine:
         self.ctx.store.persist(
             state,
             "candidate_restaged",
-            {"old_candidate": old, "new_candidate": candidate, "paths": normalized},
+            {
+                "old_candidate": old,
+                "new_candidate": candidate,
+                "paths": list(state["paths"]),
+            },
         )
         _run_classification(self.ctx, state)
         return _success(
@@ -7877,21 +8430,47 @@ class Engine:
                 frozen_proven=True,
             )
             return self._tombstone_outcome(chain_id, created=True)
-        self._preflight(
-            state,
-            "commit abort",
-            allow_head_moved=True,
-            check_candidate=False,
-        )
         if state["state"] == "committing":
-            self._wrong_state(state, "status/recovery while committing", "commit abort")
+            _run_halt(self.ctx, state)
+            identity = state.get("commit_result", {}).get("identity")
+            authorization = state.get("authorization", {})
+            if not (
+                state.get("commit_result", {}).get("mismatch_latched") is True
+                and isinstance(identity, Mapping)
+                and identity.get("result") == "failed"
+                and isinstance(identity.get("produced_sha"), str)
+                and authorization.get("consumed") is False
+                and authorization.get("consumed_at") is None
+            ):
+                self._preflight(
+                    state,
+                    "commit abort",
+                    mutating=False,
+                    allow_head_moved=True,
+                    check_candidate=False,
+                )
+        else:
+            self._preflight(
+                state,
+                "commit abort",
+                allow_head_moved=True,
+                check_candidate=False,
+            )
         if state["state"] in TERMINAL_STATES:
             # Revision 13: abort is a transition, never a retry or a landing
             # rewrite. A terminal chain refuses before any state, event, or
             # outbox mutation so its landing (or earlier abort) stays intact.
             self._wrong_state(state, "a nonterminal chain", "commit abort")
         _transition_state(state, "aborted")
-        state["commit_result"] = {"aborted_at": chain_core.iso_z(), "reason": reason or ""}
+        if state.get("commit_result", {}).get("mismatch_latched") is True:
+            state["commit_result"]["aborted_at"] = chain_core.iso_z()
+            state["commit_result"]["reason"] = reason or ""
+            state["authorization"] = {}
+        else:
+            state["commit_result"] = {
+                "aborted_at": chain_core.iso_z(),
+                "reason": reason or "",
+            }
         self.ctx.store.persist(state, "chain_aborted", {"reason": reason or ""})
         return _success(
             state,
@@ -8020,18 +8599,21 @@ class Engine:
         tasks = {record.get("task") for record in cited}
         # Mirror the terminal guard: every cited record must carry the one
         # candidate, or the guard would refuse the single-shot decision forever.
-        candidates = {
-            record["binding"]["candidate"].get("value")
+        candidate_bindings = [
+            copy.deepcopy(record["binding"].get("candidate"))
             if isinstance(record["binding"].get("candidate"), Mapping)
             else None
             for record in cited
+        ]
+        candidate_keys = {
+            chain_core.canonical_bytes(value) for value in candidate_bindings
         }
         if len(tasks) != 1 or not isinstance(next(iter(tasks)), str):
             raise refuse("exactly one task among the chain's bound records", f"{len(tasks)} tasks")
-        if len(candidates) != 1 or not isinstance(next(iter(candidates)), str):
+        if len(candidate_keys) != 1 or not isinstance(candidate_bindings[0], Mapping):
             raise refuse(
-                "exactly one staged-diff candidate among the chain's bound records",
-                f"{len(candidates)} candidates",
+                "exactly one candidate binding among the chain's bound records",
+                f"{len(candidate_keys)} candidates",
             )
         if any(
             record.get("type") == "decision"
@@ -8043,8 +8625,10 @@ class Engine:
                 "a disposition already cites the chain",
             )
         task_id = str(next(iter(tasks)))
-        candidate_value = str(next(iter(candidates)))
-        binding = builders.tombstone_abort_binding(dict(tombstone), chain_id, candidate_value)
+        candidate_binding = candidate_bindings[0]
+        binding = builders.tombstone_abort_binding(
+            dict(tombstone), chain_id, candidate_binding
+        )
         basis = journal.TOMBSTONE_DISPOSITION_BASIS.format(chain_id=chain_id)
         reason = str(tombstone.get("reason") or "no reason given")
         try:
@@ -8063,7 +8647,7 @@ class Engine:
                 basis=[basis],
                 binding_chain=chain_id,
                 binding_id=str(binding["binding_id"]),
-                binding_candidate=candidate_value,
+                binding_candidate=candidate_binding,
                 allow_terminal_task=True,
             )
         except journal.CoordinationRefusal as exc:
@@ -8180,20 +8764,31 @@ class Engine:
             ) from exc
         self.ctx.policy = current_policy
         old_candidate = str(state["candidate"].get("sha256"))
+        old_candidate_record = copy.deepcopy(state["candidate"])
         old_head = str(state["repo_head"])
         old_review = copy.deepcopy(state["review"])
         old_secret = copy.deepcopy(state["steps"].get("secret-scan"))
+        old_approval = copy.deepcopy(state.get("approval", {}))
+        old_authorization = copy.deepcopy(state.get("authorization", {}))
         state["repo_head"] = current_head
         state["policy_source"]["sha"] = current_head
         paths = list(state["paths"])
         _old, new_candidate = _stage_paths(self.ctx, state, paths, clear_old=False)
         unchanged = new_candidate == old_candidate
+        review_unchanged = bool(
+            chain_core.candidate_is_v2({"candidate": old_candidate_record})
+            and old_candidate_record.get("review_diff_sha256")
+            == state["candidate"].get("review_diff_sha256")
+            and old_candidate_record.get("review_diff_byte_count")
+            == state["candidate"].get("review_diff_byte_count")
+            and sorted(paths) == sorted(state.get("paths", []))
+        )
         _invalidate_candidate_evidence(
             state,
-            preserve_diff_scoped=unchanged,
+            preserve_diff_scoped=review_unchanged,
             preserve_operator_cosign=True,
         )
-        if unchanged:
+        if review_unchanged:
             if old_secret is not None:
                 state["steps"]["secret-scan"] = old_secret
             if (
@@ -8202,6 +8797,12 @@ class Engine:
             ):
                 state["review"] = old_review
                 state["review"]["request"] = None
+        if unchanged and review_unchanged:
+            if old_authorization and _authorization_problem(
+                {**state, "authorization": old_authorization}
+            ) is None:
+                state["approval"] = old_approval
+                state["authorization"] = old_authorization
         state["steps"].pop("head_moved", None)
         _transition_state(state, "classifying")
         self.ctx.store.persist(
@@ -8221,7 +8822,7 @@ class Engine:
             state,
             (
                 "re-pinned to moved HEAD; candidate unchanged and diff-scoped evidence retained"
-                if unchanged
+                if unchanged and review_unchanged
                 else "re-pinned to moved HEAD; changed candidate invalidated diff-scoped evidence"
             ),
             self.next_step(state),
@@ -8278,7 +8879,7 @@ class Engine:
                 "row_number": row_number,
             }
         if gate_id == "assertion-sensor":
-            test_paths = _current_test_paths(self.ctx)
+            test_paths = _current_test_paths(self.ctx, state)
             return [
                 sys.executable,
                 str(self.ctx.helper("check-test-quality.py")),
@@ -8333,7 +8934,7 @@ class Engine:
                 chain=state,
             )
         if gate_id == "assertion-sensor":
-            drift = self.ctx.repo.tree_index_drift(self.ctx.repo.staged_paths())
+            drift = self.ctx.repo.tree_index_drift(list(state.get("paths", [])))
             if drift and chain_core._user_skip(state, "index-drift") is None:
                 raise Refusal(
                     ReasonCode.DRIFT_TREE_INDEX,
@@ -8348,7 +8949,7 @@ class Engine:
                     ),
                     chain=state,
                 )
-            if not _current_test_paths(self.ctx):
+            if not _current_test_paths(self.ctx, state):
                 # The sensor contract runs only over touched test files; with
                 # none staged the step is complete without executing the tool,
                 # whose empty-path invocation is a sensor failure by contract.
@@ -8416,12 +9017,19 @@ class Engine:
             combined_paths = list(dict.fromkeys([*state["paths"], *outputs]))
             old_candidate = state["candidate"].get("sha256")
             self.ctx.repo.git(["add", "--", *outputs])
-            state["paths"] = combined_paths
-            state["staging"]["staged_paths"] = self.ctx.repo.staged_paths()
-            state["candidate"] = {
-                "sha256": self.ctx.repo.candidate_hash(),
-                "computed_at": chain_core.iso_z(),
-            }
+            snapshot = _candidate_snapshot(self.ctx, state)
+            if snapshot.base_commit_oid != state.get("repo_head"):
+                raise Refusal(
+                    ReasonCode.HEAD_MOVED,
+                    "candidate base changed while staging mutating-gate outputs",
+                    expected=str(state.get("repo_head")),
+                    observed=str(snapshot.base_commit_oid),
+                    remediation=chain_core._forge_command(state, "commit rebase"),
+                    chain=state,
+                )
+            if set(snapshot.paths) != set(combined_paths):
+                combined_paths = list(snapshot.paths)
+            _install_candidate_snapshot(self.ctx, state, snapshot)
             _invalidate_candidate_evidence(
                 state, preserve_operator_cosign=True
             )
@@ -8523,7 +9131,7 @@ class Engine:
             self._wrong_state(state, "verifying", "scan secrets")
         argv = ["forge-cli", "scan", "secrets", "--staged"]
         started = time.monotonic()
-        diff = self.ctx.repo.candidate_bytes()
+        diff = _candidate_review_diff(self.ctx, state)
         findings = scan_added_secrets(diff)
         duration = time.monotonic() - started
         summary_bytes = chain_core.canonical_bytes([item.as_dict() for item in findings])
@@ -8630,6 +9238,7 @@ class Engine:
             process = runtime.run_bounded(
                 argv,
                 cwd=self.ctx.repo.root,
+                env=_classification_environment(self.ctx, state),
                 timeout=runtime.COMMAND_TIMEOUT_SECONDS,
                 verbose=self.ctx.options.verbose,
             )
@@ -8747,7 +9356,7 @@ class Engine:
         tier = str(state["tier"].get("effective"))
         reviewer = "review-cheap" if tier == "standard" else "review-final"
         categories = sorted(str(item) for item in state["tier"].get("categories", []))
-        staged = self.ctx.repo.staged_paths()
+        staged = list(state.get("paths", []))
         profile_map = {
             path: self._profiles_for_path(path) for path in sorted(staged)
         }
@@ -8784,9 +9393,16 @@ class Engine:
         instruction = REVIEW_INSTRUCTION.format(
             constitution_path=constitution_path
         ).encode("utf-8")
+        candidate_record = state["candidate"]
         header = (
-            "FORGE REVIEW PACKAGE v1\n"
+            "FORGE REVIEW PACKAGE v2\n"
             f"candidate: {state['candidate']['sha256']}\n"
+            f"candidate-schema: {candidate_record.get('schema')}\n"
+            f"object-format: {candidate_record.get('object_format')}\n"
+            f"base-commit: {candidate_record.get('base_commit_oid')}\n"
+            f"candidate-tree: {candidate_record.get('tree_oid')}\n"
+            f"review-diff-sha256: {candidate_record.get('review_diff_sha256')}\n"
+            f"review-diff-byte-count: {candidate_record.get('review_diff_byte_count')}\n"
             f"reviewer: {reviewer}\n"
             f"profiles: {','.join(profiles)}\n"
             f"profile-map: {chain_core.canonical_bytes(profile_map).decode('utf-8')}\n"
@@ -8815,7 +9431,7 @@ class Engine:
             f"{policy.regions['completeness-project-items']}"
             "\n--- END CONTROLLING REVIEW POLICY ---\n"
         ).encode("utf-8")
-        candidate_diff = self.ctx.repo.candidate_bytes()
+        candidate_diff = _candidate_review_diff(self.ctx, state)
         package = (
             header
             + control
@@ -8863,7 +9479,7 @@ class Engine:
                 chain=state,
                 evidence_refs=[str(existing_request.get("events_path") or "")],
             )
-        drift = self.ctx.repo.tree_index_drift(self.ctx.repo.staged_paths())
+        drift = self.ctx.repo.tree_index_drift(list(state.get("paths", [])))
         if drift and chain_core._user_skip(state, "index-drift") is None:
             raise Refusal(
                 ReasonCode.DRIFT_TREE_INDEX,
@@ -9749,6 +10365,12 @@ class Engine:
                     chain_id=str(state["chain_id"]),
                     state=str(state["state"]),
                 )
+            if not re.fullmatch(r"[1-9][0-9]*", finalize_ctx.lock_session_pid):
+                # The production lock helper records its actual session PID.
+                # Keeping the intent structurally complete also lets the
+                # independent lock-control mutant demonstrate that it is
+                # genuinely load-bearing.
+                finalize_ctx.lock_session_pid = str(os.getpid())
 
             # Selection happens before the potentially waiting lock helper.
             # Reload under the acquired lock so a concurrent finalizer cannot
@@ -9793,11 +10415,21 @@ class Engine:
                         chain_id=str(state["chain_id"]),
                         state=str(state["state"]),
                     )
+            candidate_result = FINALIZE_CHECKS["candidate-byte-identity"](
+                finalize_ctx
+            )
+            if candidate_result is False:
+                raise FrozenError(
+                    "finalize check candidate-byte-identity returned an unstructured failure",
+                    chain_id=str(state["chain_id"]),
+                    state=str(state["state"]),
+                )
             if state["tier"].get("effective") == "fast":
                 argv = _classification_argv(self.ctx, state, require_effective="fast")
                 process = runtime.run_bounded(
                     argv,
                     cwd=self.ctx.repo.root,
+                    env=_classification_environment(self.ctx, state),
                     timeout=runtime.COMMAND_TIMEOUT_SECONDS,
                     verbose=self.ctx.options.verbose,
                 )
@@ -9819,6 +10451,7 @@ class Engine:
                         chain=state,
                         evidence_refs=[record["transcript"]],
                     )
+            _archive_recheck(self.ctx, state, "commit")
             # Candidate identity is the last observation before the durable
             # intent.  This closes the window in which a slow fast-tier
             # recomputation could otherwise allow a later CLI restage to race
@@ -9832,12 +10465,27 @@ class Engine:
                     chain_id=str(state["chain_id"]),
                     state=str(state["state"]),
                 )
-            _archive_recheck(self.ctx, state, "commit")
             pre_head = self.ctx.repo.head()
+            if pre_head != state["repo_head"]:
+                self._record_head_moved(state, pre_head)
+                raise Refusal(
+                    ReasonCode.HEAD_MOVED,
+                    (
+                        "out-of-band commit, not chain corruption: "
+                        f"{state['repo_head']} -> {pre_head}"
+                    ),
+                    expected=str(state["repo_head"]),
+                    observed=pre_head,
+                    remediation=chain_core._forge_command(state, "commit rebase"),
+                    chain=state,
+                )
             _transition_state(state, "committing")
             state["commit_result"] = {
                 "intent": {
                     "candidate": state["candidate"]["sha256"],
+                    "authorization_id": state["candidate"]["authorization_id"],
+                    "object_format": state["candidate"]["object_format"],
+                    "expected_tree_oid": state["candidate"]["tree_oid"],
                     "pre_head": pre_head,
                     "message_digest": sha256_bytes(commit_message_bytes(message)),
                     "written_at": chain_core.iso_z(),
@@ -9870,6 +10518,14 @@ class Engine:
                     chain=state,
                 )
             produced = self.ctx.repo.head()
+            finalize_ctx.produced_sha = produced
+            identity_passed = FINALIZE_CHECKS["produced-commit-identity"](
+                finalize_ctx
+            )
+            identity = _record_produced_identity(finalize_ctx)
+            if identity_passed is not True:
+                primary = _produced_mismatch_outcome(state, identity)
+                return primary
             state["authorization"]["consumed"] = True
             state["authorization"]["consumed_at"] = chain_core.iso_z()
             self.ctx.store.persist(
@@ -9902,7 +10558,13 @@ class Engine:
             if finalize_ctx.lock_acquired:
                 release_problem = self._release_lock(finalize_ctx.lock_session_pid)
                 finalize_ctx.lock_acquired = False
-                if release_problem and primary is not None:
+                if release_problem and primary is not None and not (
+                    state.get("commit_result", {}).get("mismatch_latched") is True
+                    and state.get("commit_result", {})
+                    .get("identity", {})
+                    .get("result")
+                    == "failed"
+                ):
                     raise FrozenError(
                         f"commit succeeded but commit lock release failed: {release_problem}",
                         chain_id=str(state["chain_id"]),
@@ -9951,9 +10613,18 @@ class Engine:
                 state="committing",
             )
         pre_head = str(intent.get("pre_head", ""))
-        candidate = str(intent.get("candidate", ""))
+        candidate = str(
+            intent.get("authorization_id") or intent.get("candidate") or ""
+        )
         current = self.ctx.repo.head()
         session_pid = str(intent.get("lock_session_pid") or os.getpid())
+        existing_identity = state["commit_result"].get("identity")
+        if (
+            state["commit_result"].get("mismatch_latched") is True
+            and isinstance(existing_identity, dict)
+            and existing_identity.get("result") == "failed"
+        ):
+            return _produced_mismatch_outcome(state, existing_identity)
         if current == pre_head:
             problem = _authorization_problem(state)
             if problem is not None:
@@ -9982,76 +10653,88 @@ class Engine:
                 "recovered pre-commit crash window: HEAD unchanged; authorization restored",
                 self.next_step(state),
             )
-        parent = self.ctx.repo.git(["rev-parse", f"{current}^"], check=False)
-        parent_sha = parent.stdout.decode("ascii", "replace").strip() if parent.returncode == 0 else ""
-        committed_diff = self.ctx.repo.git(
-            ["diff", pre_head, current], check=False
-        )
-        committed_candidate = (
-            sha256_bytes(committed_diff.stdout) if committed_diff.returncode == 0 else ""
-        )
-        expected_message_digest = str(intent.get("message_digest", ""))
-        committed_message_digest = self.ctx.repo.commit_message_argument_digest(current)
-        if (
-            parent_sha == pre_head
-            and committed_candidate == candidate
-            and chain_core.SHA256_RE.fullmatch(expected_message_digest) is not None
-            and committed_message_digest == expected_message_digest
-        ):
-            landing_already_recorded = (
-                state["commit_result"].get("commit_sha") == current
+        if not chain_core.candidate_is_v2(state):
+            legacy_result = {
+                "result": "failed",
+                "produced_sha": current,
+                "expected": {"parent": pre_head, "legacy_candidate": candidate},
+                "observed": {"error": "legacy committing candidate cannot be verified as v2"},
+                "checks": {name: False for name in PRODUCED_COMMIT_CHECKS},
+                "transcript": "",
+            }
+            finalize_context = FinalizeContext(
+                engine=self,
+                state=state,
+                policy=chain_core._policy_for_state(self.ctx, state),
+                message="",
+                produced_sha=current,
+                produced_identity=legacy_result,
             )
+            identity = _record_produced_identity(finalize_context)
+            return _produced_mismatch_outcome(state, identity)
+
+        if isinstance(existing_identity, dict):
+            identity = existing_identity
+            if (
+                identity.get("produced_sha") != current
+                or identity.get("result") not in {"passed", "failed"}
+            ):
+                raise FrozenError(
+                    "produced commit identity latch conflicts with current HEAD",
+                    chain_id=str(state["chain_id"]),
+                    state="committing",
+                    observed=f"latched={identity.get('produced_sha')}, current={current}",
+                )
+        else:
+            finalize_context = FinalizeContext(
+                engine=self,
+                state=state,
+                policy=chain_core._policy_for_state(self.ctx, state),
+                message="",
+                produced_sha=current,
+            )
+            FINALIZE_CHECKS["produced-commit-identity"](finalize_context)
+            identity = _record_produced_identity(finalize_context)
+        if identity.get("result") != "passed":
+            return _produced_mismatch_outcome(state, identity)
+
+        landing_already_recorded = state["commit_result"].get("commit_sha") == current
+        if not state["authorization"].get("consumed"):
             state["authorization"]["consumed"] = True
-            if not state["authorization"].get("consumed_at"):
-                state["authorization"]["consumed_at"] = chain_core.iso_z()
-            state["commit_result"].update(
-                {
-                    "commit_sha": current,
-                    "head_at_commit": current,
-                    "committed_at": state["commit_result"].get("committed_at") or chain_core.iso_z(),
-                    "closed_at": chain_core.iso_z(),
-                    "recovered_at": chain_core.iso_z(),
-                    "recovery": "git-commit-before-close; commit identity verified",
-                }
-            )
-            state["repo_head"] = current
-            _transition_state(state, "closed")
-            if landing_already_recorded:
-                # ``commit_produced`` already carried and receipted the sole
-                # landing decision.  The remaining crash window closes with
-                # the ordinary non-consequential event only.
-                self.ctx.store.persist(
-                    state, "chain_closed", {"commit_sha": current}
-                )
-            else:
-                self.ctx.store.persist(
-                    state,
-                    "commit_close_recovered",
-                    {"commit_sha": current, "candidate": candidate},
-                )
-            if release_lock:
-                self._release_lock(session_pid)
-            self._emit_decision(state, "gate_commit", "")
-            if state["tier"].get("effective") == "fast":
-                self._emit_decision(state, "fast_allowed", "")
-            return _success(
+            state["authorization"]["consumed_at"] = chain_core.iso_z()
+            self.ctx.store.persist(
                 state,
-                f"recovered committed candidate {current} and closed chain",
-                "none — chain closed",
+                "authorization_consumed",
+                {"candidate": state["candidate"]["sha256"]},
             )
-        raise FrozenError(
-            (
-                "foreign HEAD in committing: HEAD matches neither the pre-finalize state "
-                "nor an exact candidate commit"
-            ),
-            chain_id=str(state["chain_id"]),
-            state="committing",
-            observed=(
-                f"pre_head={pre_head}, current={current}, parent={parent_sha}, "
-                f"candidate={candidate}, committed_diff={committed_candidate}, "
-                f"message_digest={expected_message_digest}, "
-                f"committed_message_digest={committed_message_digest}"
-            ),
+        state["commit_result"].update(
+            {
+                "commit_sha": current,
+                "head_at_commit": current,
+                "committed_at": state["commit_result"].get("committed_at") or chain_core.iso_z(),
+                "recovered_at": chain_core.iso_z(),
+                "recovery": "git-commit-before-close; commit identity verified",
+            }
+        )
+        state["repo_head"] = current
+        _transition_state(state, "closed")
+        if not landing_already_recorded:
+            self.ctx.store.persist(
+                state,
+                "commit_close_recovered",
+                {"commit_sha": current, "candidate": candidate},
+            )
+        state["commit_result"]["closed_at"] = chain_core.iso_z()
+        self.ctx.store.persist(state, "chain_closed", {"commit_sha": current})
+        if release_lock:
+            self._release_lock(session_pid)
+        self._emit_decision(state, "gate_commit", "")
+        if state["tier"].get("effective") == "fast":
+            self._emit_decision(state, "fast_allowed", "")
+        return _success(
+            state,
+            f"recovered committed candidate {current} and closed chain",
+            "none — chain closed",
         )
 
 
@@ -10072,6 +10755,8 @@ __all__ = [
     'MergeScopeBindingInspection',
     'MergeScopeResult',
     'PLACEHOLDER_RE',
+    'PRODUCED_COMMIT_CHECKS',
+    'PRODUCED_COMMIT_MISMATCH',
     'REVIEW_COMPLETE_PACKAGE_REFUSAL',
     'REVIEW_DIRECT_PACKAGE_MAX_BYTES',
     'REVIEW_INSTRUCTION',
@@ -10110,6 +10795,7 @@ __all__ = [
     '_build_chain_journal_records',
     '_capture_ingest_inputs',
     '_classification_argv',
+    '_classification_environment',
     '_classify_merge_scope_binding',
     '_classify_merge_scope_binding_at',
     '_command_run_lock_id',
@@ -10124,12 +10810,14 @@ __all__ = [
     '_finalize_evidence',
     '_finalize_halt',
     '_finalize_lock',
+    '_finalize_produced_identity',
     '_finalize_tree_drift',
     '_finalize_ttl',
     '_git_environment_digest',
     '_git_executable_qualification',
     '_install_ingest_sources',
     '_invalidate_candidate_evidence',
+    '_install_candidate_snapshot',
     '_issue_authorization',
     '_materialize_merge_candidate_tuple',
     '_mechanical_complete',

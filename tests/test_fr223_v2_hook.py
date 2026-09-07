@@ -20,6 +20,8 @@ from pathlib import Path
 from types import ModuleType
 from unittest import mock
 
+from tests._cli_loader import package_module
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = Path("docs/specs/forge-plugin-spec.md")
@@ -33,6 +35,7 @@ V1_REASON_SHA256 = "3646227d8437789e0407117dc09e00d6116edccb63e89354c746d4b9059c
 V1_HOOK_SHA256 = "1850257d7899a4c7199e9bcbe12ffd39b0905bb44e49d16348c10e438ea05db7"
 V1_MANIFEST_SHA256 = "7741b877b1ed45047d680a077c5303b2314cd1f3ef0339821bd7105ac9acd5c9"
 V1_MANIFEST = ROOT / ".forge/evals/tasks/fr223-phase0-v1.manifest.json"
+CANDIDATE = package_module("candidate")
 ACTIVATION_CONTEXTS = {
     "non-forge",
     "upstream",
@@ -872,21 +875,14 @@ class V2HookExecutionTests(HookHarnessMixin, unittest.TestCase):
         staged = repo / "bundled.txt"
         staged.write_text("bundled\n", encoding="utf-8")
         self.git(repo, "add", staged.name)
-        diff = subprocess.run(
-            ["git", "diff", "--cached"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        ).stdout
-        candidate = hashlib.sha256(diff).hexdigest()
-        marker = repo / ".forge/tmp/authorized" / candidate
+        observation = CANDIDATE.observe_index(CANDIDATE.discover_context(repo))
+        marker = repo / ".forge/tmp/authorized" / observation.authorization_id
         marker.parent.mkdir(parents=True)
-        marker.write_text(
-            candidate
-            + "\n"
-            + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            + "\n",
-            encoding="utf-8",
+        marker.write_bytes(
+            CANDIDATE.render_marker(
+                observation,
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
         )
         command = f"cd {shlex.quote(str(repo))} && git commit -m reviewed"
         result = self.invoke(self.scratch, command)

@@ -7,11 +7,12 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence, TypeVar
+
+from forge_cli import candidate as candidate_module
 
 
 TIERS = {"fast": 0, "standard": 1, "hard": 2}
@@ -43,6 +44,11 @@ FORMATTING_EXCLUSIONS = {
     "python", "yaml", "make", "shell", "bash", "haskell", "nim"
 }
 GENERIC_CATEGORIES = {"bash", "docs", "config", "control"}
+GIT_OBJECT_ID_MAX_BYTES = 80
+POLICY_MAX_BYTES = 16 * 1024 * 1024
+
+
+T = TypeVar("T")
 
 
 class PolicyError(ValueError):
@@ -68,31 +74,198 @@ class Policy:
     risk_malformed: bool
 
 
-def run_git(repo: Path, *args: str, input_bytes: bytes | None = None) -> bytes:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        input=input_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+@dataclass(frozen=True)
+class TreeSource:
+    context: candidate_module.GitContext
+    base_tree_oid: str
+    candidate_tree_oid: str
+
+
+_TREE_SOURCE: TreeSource | None = None
+_GIT_CONTEXT: candidate_module.GitContext | None = None
+
+
+def policy_candidate(action: Callable[[], T]) -> T:
+    """Translate shared candidate-plumbing failures into classifier failures."""
+
+    try:
+        return action()
+    except candidate_module.CandidateError as exc:
+        raise PolicyError(str(exc)) from exc
+
+
+def git_context(repo: Path) -> candidate_module.GitContext:
+    """Discover one Git context, then reuse its sanitized environment."""
+
+    global _GIT_CONTEXT
+    if _GIT_CONTEXT is None:
+        _GIT_CONTEXT = policy_candidate(
+            lambda: candidate_module.discover_context(repo)
+        )
+    return _GIT_CONTEXT
+
+
+def run_git(
+    repo: Path,
+    *args: str,
+    input_bytes: bytes | None = None,
+    stdout_limit: int = POLICY_MAX_BYTES,
+) -> bytes:
+    """Run bounded, sanitized Git plumbing in the pinned repository context."""
+
+    return policy_candidate(
+        lambda: candidate_module.git_output(
+            git_context(repo),
+            ["--no-pager", "--no-replace-objects", *args],
+            stdout_limit=stdout_limit,
+            input_bytes=input_bytes,
+        )
     )
-    if result.returncode:
-        diagnostic = result.stderr.decode("utf-8", "replace").strip()
-        raise PolicyError(diagnostic or f"git {' '.join(args)} failed")
-    return result.stdout
+
+
+def single_ascii_line(raw: bytes, label: str) -> str:
+    if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+        raise PolicyError(f"Git returned malformed {label}")
+    try:
+        return raw[:-1].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise PolicyError(f"Git returned malformed {label}") from exc
+
+
+def supplied_candidate_matches(
+    observation: candidate_module.CandidateObservation,
+    base_commit_oid: str | None,
+    supplied: dict[str, str | None],
+) -> bool:
+    supplied_base = str(supplied["base_commit_oid"]) or None
+    return (
+        observation.authorization_id == supplied["authorization_id"]
+        and observation.object_format == supplied["object_format"]
+        and observation.tree_oid == supplied["tree_oid"]
+        and base_commit_oid == supplied_base
+    )
+
+
+def staged_tree_source(repo: Path) -> TreeSource:
+    """Bind staged classification to one immutable candidate tree pair."""
+
+    global _TREE_SOURCE
+    if _TREE_SOURCE is not None:
+        return _TREE_SOURCE
+    context = git_context(repo)
+    supplied = {
+        "schema": os.environ.get("FORGE_CANDIDATE_SCHEMA"),
+        "authorization_id": os.environ.get("FORGE_CANDIDATE_AUTHORIZATION_ID"),
+        "object_format": os.environ.get("FORGE_CANDIDATE_OBJECT_FORMAT"),
+        "tree_oid": os.environ.get("FORGE_CANDIDATE_TREE_OID"),
+        "base_commit_oid": os.environ.get("FORGE_CANDIDATE_BASE_COMMIT_OID"),
+    }
+    has_supplied_candidate = any(value is not None for value in supplied.values())
+    if has_supplied_candidate:
+        if (
+            supplied["schema"] != candidate_module.CANDIDATE_SCHEMA
+            or not all(
+                isinstance(supplied[key], str) and supplied[key]
+                for key in ("authorization_id", "object_format", "tree_oid")
+            )
+            or not isinstance(supplied["base_commit_oid"], str)
+        ):
+            raise PolicyError("candidate tree environment is incomplete")
+    base_commit_oid, base_tree_oid = policy_candidate(
+        lambda: candidate_module.base_identity(context)
+    )
+    observation = policy_candidate(lambda: candidate_module.observe_index(context))
+    repeated_base = policy_candidate(lambda: candidate_module.base_identity(context))
+    if repeated_base != (base_commit_oid, base_tree_oid):
+        raise PolicyError("Git HEAD changed during risk-tier classification")
+    if has_supplied_candidate and not supplied_candidate_matches(
+        observation, base_commit_oid, supplied
+    ):
+        raise PolicyError("live index tree differs from supplied candidate")
+    _TREE_SOURCE = TreeSource(
+        context=context,
+        base_tree_oid=base_tree_oid,
+        candidate_tree_oid=observation.tree_oid,
+    )
+    return _TREE_SOURCE
+
+
+def range_tree_source(repo: Path, range_spec: str) -> TreeSource:
+    """Resolve one three-dot commit range to its immutable compared trees."""
+
+    global _TREE_SOURCE
+    if _TREE_SOURCE is not None:
+        return _TREE_SOURCE
+    base, head = range_spec.split("...", 1)
+    base = full_commit(repo, base)
+    head = full_commit(repo, head)
+    merge_base = single_ascii_line(
+        run_git(
+            repo,
+            "merge-base",
+            base,
+            head,
+            stdout_limit=GIT_OBJECT_ID_MAX_BYTES,
+        ),
+        "merge-base OID",
+    )
+    merge_base = full_commit(repo, merge_base)
+    context = git_context(repo)
+    base_tree_oid = policy_candidate(
+        lambda: candidate_module.resolve_base_tree(context, merge_base)
+    )
+    candidate_tree_oid = policy_candidate(
+        lambda: candidate_module.resolve_base_tree(context, head)
+    )
+    _TREE_SOURCE = TreeSource(
+        context=context,
+        base_tree_oid=base_tree_oid,
+        candidate_tree_oid=candidate_tree_oid,
+    )
+    return _TREE_SOURCE
+
+
+def diff_tree_source(
+    repo: Path, *, staged: bool, range_spec: str | None
+) -> TreeSource:
+    if staged:
+        return staged_tree_source(repo)
+    if range_spec is not None:
+        return range_tree_source(repo, range_spec)
+    raise PolicyError("exactly one diff source is required")
 
 
 def full_commit(repo: Path, revision: str) -> str:
     if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision):
         raise PolicyError("policy SHA must be a full lowercase commit SHA")
-    value = run_git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}").decode().strip()
+    value = single_ascii_line(
+        run_git(
+            repo,
+            "rev-parse",
+            "--verify",
+            f"{revision}^{{commit}}",
+            stdout_limit=GIT_OBJECT_ID_MAX_BYTES,
+        ),
+        "commit OID",
+    )
     if value != revision:
         raise PolicyError("policy SHA did not resolve exactly")
     return value
 
 
 def committed_policy(repo: Path, sha: str) -> str:
-    return run_git(repo, "show", f"{sha}:forge-project.md").decode("utf-8", "strict")
+    context = git_context(repo)
+    tree_oid = policy_candidate(
+        lambda: candidate_module.resolve_base_tree(context, sha)
+    )
+    raw = policy_candidate(
+        lambda: candidate_module.tree_blob(context, tree_oid, "forge-project.md")
+    )
+    if raw is None:
+        raise PolicyError("committed forge-project.md is unavailable")
+    if len(raw) > POLICY_MAX_BYTES:
+        raise PolicyError("committed forge-project.md exceeded its byte ceiling")
+    return raw.decode("utf-8", "strict")
 
 
 def regions(text: str) -> dict[str, str]:
@@ -286,19 +459,69 @@ def parse_policy(text: str, sha: str) -> Policy:
 def matched_paths(
     repo: Path, pattern: str, *, staged: bool, range_spec: str | None
 ) -> frozenset[str]:
-    args = ["diff", "--name-only", "-z", "--no-renames"]
-    if staged:
-        args.append("--cached")
-    elif range_spec:
-        args.append(range_spec)
-    else:
-        raise PolicyError("exactly one diff source is required")
-    args.extend(("--", pattern))
+    source = diff_tree_source(repo, staged=staged, range_spec=range_spec)
     return frozenset(
-        item.decode("utf-8", "surrogateescape")
-        for item in run_git(repo, *args).split(b"\0")
-        if item
+        policy_candidate(
+            lambda: candidate_module.paths_matching_pattern(
+                source.context,
+                source.base_tree_oid,
+                source.candidate_tree_oid,
+                pattern,
+            )
+        )
     )
+
+
+def valid_tree_diff_status(status: str) -> bool:
+    """Accept only statuses possible from the pinned no-renames tree diff."""
+
+    return re.fullmatch(r"[ADMT]", status) is not None
+
+
+def parse_diff_entries(raw: bytes) -> list[DiffEntry]:
+    """Parse exact ``--name-status -z`` output without recovery or guessing."""
+
+    if not raw:
+        return []
+    if not raw.endswith(b"\0"):
+        raise PolicyError("malformed Git diff status")
+    fields = raw[:-1].split(b"\0")
+    if any(not field for field in fields):
+        raise PolicyError("malformed Git diff status")
+
+    entries: list[DiffEntry] = []
+    seen_paths: set[str] = set()
+    index = 0
+    while index < len(fields):
+        try:
+            status = fields[index].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise PolicyError("malformed Git diff status") from exc
+        index += 1
+        if not valid_tree_diff_status(status):
+            raise PolicyError("malformed Git diff status")
+        if index >= len(fields):
+            raise PolicyError("malformed Git diff status")
+        try:
+            path = fields[index].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PolicyError("malformed Git diff status") from exc
+        index += 1
+        if path in seen_paths:
+            raise PolicyError("malformed Git diff status")
+        seen_paths.add(path)
+        entries.append(DiffEntry(status, path))
+    return sorted(entries, key=lambda entry: entry.path.encode("utf-8"))
+
+
+def diff_entries(repo: Path, *, staged: bool, range_spec: str | None) -> list[DiffEntry]:
+    source = diff_tree_source(repo, staged=staged, range_spec=range_spec)
+    raw = policy_candidate(
+        lambda: candidate_module.name_status_tree_pair(
+            source.context, source.base_tree_oid, source.candidate_tree_oid
+        )
+    )
+    return parse_diff_entries(raw)
 
 
 def matched_categories(
@@ -318,46 +541,6 @@ def category_covers_dependency(
     return not set(category_patterns).isdisjoint(dependency_patterns)
 
 
-def diff_entries(repo: Path, *, staged: bool, range_spec: str | None) -> list[DiffEntry]:
-    args = ["diff", "--name-status", "-z", "--no-renames"]
-    if staged:
-        args.append("--cached")
-    elif range_spec:
-        args.append(range_spec)
-    else:
-        raise PolicyError("exactly one diff source is required")
-    fields = run_git(repo, *args).split(b"\x00")
-    entries: list[DiffEntry] = []
-    index = 0
-    while index < len(fields) and fields[index]:
-        status = fields[index].decode("ascii", "replace")
-        index += 1
-        if status.startswith(("R", "C")):
-            if index + 1 >= len(fields):
-                raise PolicyError("malformed Git diff status")
-            old_path = fields[index].decode("utf-8", "surrogateescape")
-            path = fields[index + 1].decode("utf-8", "surrogateescape")
-            index += 2
-            entries.append(DiffEntry(status[0], path, old_path))
-        else:
-            if index >= len(fields):
-                raise PolicyError("malformed Git diff status")
-            path = fields[index].decode("utf-8", "surrogateescape")
-            index += 1
-            entries.append(DiffEntry(status[0], path))
-    return entries
-
-
-def blob(repo: Path, spec: str) -> bytes | None:
-    result = subprocess.run(
-        ["git", "-C", str(repo), "show", spec],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return result.stdout if result.returncode == 0 else None
-
-
 def text_lines(value: bytes) -> list[tuple[bytes, bool]] | None:
     if b"\x00" in value:
         return None
@@ -373,6 +556,12 @@ def leading_prefix(line: bytes) -> bytes:
     match = re.match(br"[ \t]*", line)
     assert match is not None
     return match.group(0)
+
+
+def file_modes_match(old_mode: bytes, new_mode: bytes) -> bool:
+    """Keep file-mode equality independently disableable for mutation checks."""
+
+    return old_mode == new_mode
 
 
 def formatting_only(
@@ -392,33 +581,39 @@ def formatting_only(
         return False, "excluded-category"
     if not set(categories).intersection(opt_ins):
         return False, "category-not-opted-in"
-    if staged:
-        old_revision = "HEAD"
-        new_revision = None
-        old = blob(repo, f"HEAD:{entry.path}")
-        new = blob(repo, f":{entry.path}")
-    else:
-        assert range_spec is not None
-        base, head = range_spec.split("...", 1)
-        old_revision = run_git(repo, "merge-base", base, head).decode().strip()
-        new_revision = head
-        old = blob(repo, f"{old_revision}:{entry.path}")
-        new = blob(repo, f"{head}:{entry.path}")
+    source = diff_tree_source(repo, staged=staged, range_spec=range_spec)
+    old = policy_candidate(
+        lambda: candidate_module.tree_blob(
+            source.context, source.base_tree_oid, entry.path
+        )
+    )
+    new = policy_candidate(
+        lambda: candidate_module.tree_blob(
+            source.context, source.candidate_tree_oid, entry.path
+        )
+    )
     if old is None or new is None:
         return False, "missing-blob"
-    if staged:
-        old_mode_fields = run_git(repo, "ls-tree", old_revision, "--", entry.path).split()
-        new_mode_fields = run_git(repo, "ls-files", "--stage", "--", entry.path).split()
-    else:
-        assert new_revision is not None
-        old_mode_fields = run_git(repo, "ls-tree", old_revision, "--", entry.path).split()
-        new_mode_fields = run_git(repo, "ls-tree", new_revision, "--", entry.path).split()
+    old_entry = policy_candidate(
+        lambda: candidate_module.tree_entry(
+            source.context, source.base_tree_oid, entry.path
+        )
+    )
+    new_entry = policy_candidate(
+        lambda: candidate_module.tree_entry(
+            source.context, source.candidate_tree_oid, entry.path
+        )
+    )
+    old_mode_fields = [old_entry.mode.encode("ascii")] if old_entry else []
+    new_mode_fields = [new_entry.mode.encode("ascii")] if new_entry else []
     if (
         not old_mode_fields or not new_mode_fields
         or not re.fullmatch(rb"100[0-7]{3}", old_mode_fields[0])
         or not re.fullmatch(rb"100[0-7]{3}", new_mode_fields[0])
     ):
         return False, "non-regular-file"
+    if not file_modes_match(old_mode_fields[0], new_mode_fields[0]):
+        return False, "file-mode-changed"
     old_lines = text_lines(old)
     new_lines = text_lines(new)
     if old_lines is None or new_lines is None:
@@ -573,6 +768,9 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    global _GIT_CONTEXT, _TREE_SOURCE
+    _GIT_CONTEXT = None
+    _TREE_SOURCE = None
     args = parser().parse_args(argv)
     try:
         if args.range_spec is not None and not re.fullmatch(
@@ -590,7 +788,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             repo, policy, entries, staged=args.staged, range_spec=args.range_spec,
             declared_tier=args.declared_tier,
         )
-    except (OSError, UnicodeError, PolicyError, ValueError) as exc:
+    except (
+        OSError,
+        UnicodeError,
+        PolicyError,
+        ValueError,
+    ) as exc:
         print(f"forge: risk-tier classification failed: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))

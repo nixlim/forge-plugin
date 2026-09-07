@@ -143,6 +143,7 @@ scripts/**
 RISK_TIER_HELPER = r"""
 import argparse
 import json
+import os
 import subprocess
 
 
@@ -154,8 +155,20 @@ parser.add_argument("--declared-tier", choices=("fast", "standard", "hard"))
 parser.add_argument("--require-effective", choices=("fast", "standard", "hard"))
 args = parser.parse_args()
 
+base_commit = os.environ["FORGE_CANDIDATE_BASE_COMMIT_OID"]
+candidate_tree = os.environ["FORGE_CANDIDATE_TREE_OID"]
+base_tree = subprocess.run(
+    ["git", "rev-parse", "--verify", f"{base_commit}^{{tree}}"],
+    cwd=args.repo,
+    check=True,
+    capture_output=True,
+).stdout.decode("ascii").strip()
 result = subprocess.run(
-    ["git", "diff", "--cached", "--name-only", "-z"],
+    [
+        "git", "diff-tree", "-r", "--no-commit-id", "--name-only", "-z",
+        "--no-renames", "--no-ext-diff", "--no-textconv",
+        "--ignore-submodules=none", base_tree, candidate_tree, "--",
+    ],
     cwd=args.repo,
     check=True,
     capture_output=True,
@@ -893,6 +906,14 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         chain_id = str(envelope["chain_id"])
         state = self.state(chain_id)
         candidate_bytes = self.git_bytes("diff", "--cached")
+        candidate_record = state["candidate"]
+        authorization_preimage = (
+            b"forge-commit-candidate/2\0"
+            + candidate_record["object_format"].encode("ascii")
+            + b"\0"
+            + candidate_record["tree_oid"].encode("ascii")
+            + b"\n"
+        )
 
         self.assertEqual(envelope["state"], "verifying")
         self.assertEqual(state["state"], "verifying")
@@ -903,8 +924,15 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         )
         self.assertEqual(self.git("diff", "--name-only"), "docs/guide.md")
         self.assertNotIn(b"Unrelated working-tree edit", candidate_bytes)
+        self.assertEqual(candidate_record["schema"], "forge-commit-candidate/2")
         self.assertEqual(
-            state["candidate"]["sha256"], hashlib.sha256(candidate_bytes).hexdigest()
+            candidate_record["sha256"], hashlib.sha256(authorization_preimage).hexdigest()
+        )
+        self.assertEqual(
+            candidate_record["authorization_id"], candidate_record["sha256"]
+        )
+        self.assertNotEqual(
+            candidate_record["review_diff_sha256"], candidate_record["sha256"]
         )
         self.assertEqual(state["tier"]["derived"], "standard")
         self.assertEqual(state["tier"]["effective"], "standard")
@@ -916,20 +944,26 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.assertEqual(classification["result"], "passed")
         self.assertEqual(classification["evidence"]["policy_sha"], state["repo_head"])
 
-    def test_binary_candidate_hashes_default_diff_bytes_not_binary_patch(self) -> None:
+    def test_binary_candidate_authorizes_tree_and_retains_binary_review_patch(self) -> None:
         (self.repo / "assets" / "blob.bin").write_bytes(b"changed\x00binary\x01payload\n")
         envelope = self.start("assets/blob.bin")
         state = self.state(str(envelope["chain_id"]))
-        default_diff = self.git_bytes("diff", "--cached")
-        binary_patch = self.git_bytes("diff", "--cached", "--binary")
+        record = state["candidate"]
+        artifact = (
+            self.repo
+            / ".forge"
+            / "chains"
+            / str(envelope["chain_id"])
+            / "candidate"
+            / f"{record['authorization_id']}-{record['review_diff_sha256']}.patch"
+        ).read_bytes()
 
-        self.assertNotEqual(default_diff, binary_patch)
+        self.assertIn(b"GIT binary patch", artifact)
+        self.assertEqual(record["review_diff_byte_count"], len(artifact))
         self.assertEqual(
-            state["candidate"]["sha256"], hashlib.sha256(default_diff).hexdigest()
+            record["review_diff_sha256"], hashlib.sha256(artifact).hexdigest()
         )
-        self.assertNotEqual(
-            state["candidate"]["sha256"], hashlib.sha256(binary_patch).hexdigest()
-        )
+        self.assertNotEqual(record["authorization_id"], record["review_diff_sha256"])
 
     def test_event_log_digest_chain_replays_over_corrupt_materialized_state(self) -> None:
         self.change("src/app.py", "VALUE = 2\n")
@@ -1441,14 +1475,28 @@ class ForgeCLIChainTests(ForgeCLIFixture):
                 "approval-required",
             ),
             ("authorized", ("review", "request"), "state-precondition"),
-            ("committing", ("commit", "abort"), "state-precondition"),
+            ("committing", ("review", "request"), "state-precondition"),
             ("closed", ("classify",), "state-precondition"),
             ("aborted", ("verify",), "state-precondition"),
         )
 
         for state_name, argv, reason in cases:
             with self.subTest(state=state_name, argv=argv):
-                self.force_state(chain_id, state_name)
+                def retain_historical_shape(state: dict[str, object]) -> None:
+                    record = state["candidate"]
+                    if isinstance(record, dict) and record.get("schema") is not None:
+                        state["candidate"] = {
+                            "sha256": record["sha256"],
+                            "computed_at": record["computed_at"],
+                        }
+
+                self.force_state(
+                    chain_id,
+                    state_name,
+                    retain_historical_shape
+                    if state_name in {"committing", "closed", "aborted"}
+                    else None,
+                )
                 _result, refusal = self.cli(
                     *argv, "--chain-id", chain_id, expected=1
                 )
@@ -1476,7 +1524,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
                 "candidate": old_candidate,
                 "token": "stale",
             }
-            state["commit_result"] = {"candidate": old_candidate}
+            state["commit_result"] = {"recovery": "stale candidate-bound result"}
 
         self.force_state(chain_id, "verifying", add_stale_evidence)
         self.change("src/app.py", "VALUE = 3\n")
@@ -1876,8 +1924,8 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.assertEqual(rebased["review"]["verdict"], retained_verdict)
         self.assertEqual(rebased["steps"]["secret-scan"], retained_secret)
         self.assertEqual(set(rebased["steps"]), {"classification", "secret-scan"})
-        self.assertEqual(rebased["approval"], {})
-        self.assertEqual(rebased["authorization"], {})
+        self.assertEqual(rebased["approval"], before["approval"])
+        self.assertEqual(rebased["authorization"], before["authorization"])
         self.assertEqual(rebased["state"], "verifying")
 
         self.cli("verify", "--chain-id", chain_id, expected=0)
@@ -1911,10 +1959,16 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.git("commit", "--quiet", "-m", "move policy")
         moved_head = self.git("rev-parse", "HEAD")
         self.git("add", "--", "src/app.py")
-        self.assertEqual(
-            hashlib.sha256(self.git_bytes("diff", "--cached")).hexdigest(),
-            old_candidate,
-        )
+        object_format = self.git("rev-parse", "--show-object-format")
+        tree_oid = self.git("write-tree")
+        live_candidate = hashlib.sha256(
+            b"forge-commit-candidate/2\0"
+            + object_format.encode("ascii")
+            + b"\0"
+            + tree_oid.encode("ascii")
+            + b"\n"
+        ).hexdigest()
+        self.assertNotEqual(live_candidate, old_candidate)
 
         _result, moved = self.cli("verify", "--chain-id", chain_id, expected=1)
         self.assert_refusal_contract(moved, "head-moved")
@@ -1971,9 +2025,18 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.change("src/app.py", "VALUE = 2\n")
         chain_id = str(self.start("src/app.py")["chain_id"])
         self.move_head_same_tree()
+
+        def retain_historical_shape(state: dict[str, object]) -> None:
+            record = state["candidate"]
+            if isinstance(record, dict) and record.get("schema") is not None:
+                state["candidate"] = {
+                    "sha256": record["sha256"],
+                    "computed_at": record["computed_at"],
+                }
+
         for terminal in ("closed", "aborted"):
             with self.subTest(state=terminal):
-                self.force_state(chain_id, terminal)
+                self.force_state(chain_id, terminal, retain_historical_shape)
                 before = self.state(chain_id)
                 event_count = len(self.events(chain_id))
                 _result, refusal = self.cli(
@@ -2017,7 +2080,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.cli("gate", "run", "changelog", "--chain-id", chain_id, expected=0)
         state = self.state(chain_id)
         self.assertEqual(state["state"], "verifying")
-        self.assertEqual(state["paths"], ["src/app.py", "CHANGELOG.md"])
+        self.assertEqual(state["paths"], ["CHANGELOG.md", "src/app.py"])
         self.assertNotEqual(state["candidate"]["sha256"], old_candidate)
         self.assertEqual(state["staging"]["classification_runs"], 2)
         self.assertEqual(set(state["steps"]), {"classification", "changelog"})

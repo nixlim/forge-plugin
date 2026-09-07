@@ -85,8 +85,15 @@ LEGACY_EXECUTION_STATUS_MAP = {
 WRITER_CONTRACT = "forge-journal-binding/1"
 BINDING_SCHEMA = "forge-gate-binding/1"
 BINDING_CANDIDATE_KINDS = frozenset(
-    {"staged-diff-sha256", "git-commit", "git-range"}
+    {
+        "git-tree-candidate-v2",
+        "staged-diff-sha256",
+        "git-commit",
+        "git-range",
+    }
 )
+BINDING_GIT_TREE_CANDIDATE_DOMAIN = b"forge-commit-candidate/2\0"
+BINDING_GIT_OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
 BINDING_REVIEW_VERDICTS = frozenset({"PASS", "BLOCK"})
 BINDING_REVIEW_ROLES = frozenset({"review-cheap", "review-final"})
 CHAIN_DECISION_OUTCOMES = frozenset(
@@ -715,6 +722,31 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _git_tree_candidate_authorization_id(
+    object_format: object, tree_oid: object
+) -> str | None:
+    """Derive a DM-001 v2 tree authority, or reject a malformed preimage."""
+
+    if (
+        not isinstance(object_format, str)
+        or object_format not in BINDING_GIT_OBJECT_FORMAT_LENGTHS
+        or not isinstance(tree_oid, str)
+        or re.fullmatch(
+            rf"[0-9a-f]{{{BINDING_GIT_OBJECT_FORMAT_LENGTHS[object_format]}}}",
+            tree_oid,
+        )
+        is None
+    ):
+        return None
+    return _sha256(
+        BINDING_GIT_TREE_CANDIDATE_DOMAIN
+        + object_format.encode("ascii")
+        + b"\0"
+        + tree_oid.encode("ascii")
+        + b"\n"
+    )
+
+
 def _writer_contract_active(records: tuple[dict[str, object], ...] | list[dict[str, object]]) -> bool:
     return bool(
         records
@@ -763,6 +795,23 @@ def _binding_shape_valid(
         if (
             not isinstance(candidate_value, str)
             or HEX_SHA256_PATTERN.fullmatch(candidate_value) is None
+        ):
+            return False
+    elif candidate_kind == "git-tree-candidate-v2":
+        if (
+            not isinstance(candidate_value, dict)
+            or set(candidate_value)
+            != {"authorization_id", "object_format", "tree_oid"}
+            or not isinstance(candidate_value.get("authorization_id"), str)
+            or HEX_SHA256_PATTERN.fullmatch(
+                str(candidate_value["authorization_id"])
+            )
+            is None
+            or _git_tree_candidate_authorization_id(
+                candidate_value.get("object_format"),
+                candidate_value.get("tree_oid"),
+            )
+            != candidate_value.get("authorization_id")
         ):
             return False
     elif candidate_kind == "git-commit":

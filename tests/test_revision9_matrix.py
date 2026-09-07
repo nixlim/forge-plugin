@@ -49,6 +49,7 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
     @contextlib.contextmanager
     def cli_context(self):
         environment = self.environment(FORGE_SESSION_PID=str(os.getpid()))
+        environment.update(getattr(self, "cli_environment_overrides", {}))
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
             RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT), mock.patch.object(
@@ -950,17 +951,46 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
     def test_real_commit_ingest_closes_and_renders_deterministically(self) -> None:
         CLI.register_coordination_seams()
         ARCHIVE._CLI_INGEST_AUTHORITY = CLI
+        vendor = self.repo / "vendor"
+        vendor.mkdir()
+        self.git_at(vendor, "init", "-q")
+        self.git_at(vendor, "config", "user.name", "Forge Fixture")
+        self.git_at(vendor, "config", "user.email", "forge-fixture@example.invalid")
+        (vendor / "dependency.txt").write_text("first\n", encoding="utf-8")
+        self.git_at(vendor, "add", "dependency.txt")
+        self.git_at(vendor, "commit", "-qm", "first gitlink target")
+        first_gitlink = self.git_at(vendor, "rev-parse", "HEAD")
+        (vendor / "dependency.txt").write_text("second\n", encoding="utf-8")
+        self.git_at(vendor, "commit", "-qam", "second gitlink target")
+        second_gitlink = self.git_at(vendor, "rev-parse", "HEAD")
+        self.git_at(vendor, "checkout", "-q", first_gitlink)
+        self.git("add", "vendor")
+        self.git("commit", "-qm", "establish pre-existing gitlink")
+        self.git_at(vendor, "checkout", "-q", second_gitlink)
+        self.git("config", "diff.ignoreSubmodules", "all")
+        self.git("config", "submodule.vendor.ignore", "all")
+        self.cli_environment_overrides = {
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "diff.ignoreSubmodules",
+            "GIT_CONFIG_VALUE_0": "all",
+            "GIT_CONFIG_KEY_1": "submodule.vendor.ignore",
+            "GIT_CONFIG_VALUE_1": "all",
+        }
+        self.addCleanup(delattr, self, "cli_environment_overrides")
         self.change("src/app.py", "VALUE = 2\n")
         started = self.invoke_cli(
             "commit",
             "start",
             "--paths",
             "src/app.py",
+            "vendor",
             "--declare-tier",
             "hard",
         )
         chain_id = str(started["chain_id"])
-        self.assertEqual(self.state(chain_id)["tier"]["effective"], "hard")
+        started_state = self.state(chain_id)
+        self.assertEqual(started_state["tier"]["effective"], "hard")
+        self.assertEqual(started_state["paths"], ["src/app.py", "vendor"])
         verified = self.invoke_cli("--chain-id", chain_id, "verify")
         self.assertEqual(verified["state"], "reviewing")
         requested = self.invoke_cli(
@@ -1018,6 +1048,13 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
             sum(descriptor.outcome == "chain-landing" for descriptor in eligible),
             1,
         )
+        self.assertEqual(
+            sum(
+                descriptor.criterion == "gate-2: produced commit identity"
+                for descriptor in eligible
+            ),
+            1,
+        )
         selected: list[str] = []
         for descriptor in eligible:
             if descriptor.event_digest not in selected:
@@ -1032,7 +1069,7 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
                 run_id,
                 idempotency_key=hashlib.sha256(b"commit-matrix-open").hexdigest(),
                 goal="Ingest one produced commit chain",
-                scope=["src/**"],
+                scope=["src/**", "vendor"],
                 plugin_ref="forge-revision9-matrix",
             )
             builders.task_start(
@@ -1042,7 +1079,7 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
                 task=self.task_id,
                 goal="Prove commit ingest and archive parity",
                 acceptance=["Replay, ingest, close, and rerender are exact"],
-                files=["src/app.py"],
+                files=["src/app.py", "vendor"],
             )
 
         external = self.repo / "external-commit"
@@ -1100,11 +1137,18 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
             and isinstance(record.get("binding"), dict)
         ]
         self.assertEqual(len(bound), len(eligible))
-        candidate_digest = state["candidate"]["sha256"]
+        candidate = state["candidate"]
         self.assertTrue(
             all(
                 record["binding"]["candidate"]
-                == {"kind": "staged-diff-sha256", "value": candidate_digest}
+                == {
+                    "kind": "git-tree-candidate-v2",
+                    "value": {
+                        "authorization_id": candidate["authorization_id"],
+                        "object_format": candidate["object_format"],
+                        "tree_oid": candidate["tree_oid"],
+                    },
+                }
                 for record in bound
             )
         )

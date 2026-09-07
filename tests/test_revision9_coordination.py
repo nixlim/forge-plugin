@@ -5083,8 +5083,32 @@ class Revision9BindingTests(unittest.TestCase):
                         )
 
     def test_dm001_exact_shape_candidate_and_review_vectors(self) -> None:
+        tree_sha1 = "1" * 40
+        tree_sha256 = "2" * 64
+        candidate_v2_sha1 = {
+            "kind": "git-tree-candidate-v2",
+            "value": {
+                "authorization_id": journal._git_tree_candidate_authorization_id(
+                    "sha1", tree_sha1
+                ),
+                "object_format": "sha1",
+                "tree_oid": tree_sha1,
+            },
+        }
+        candidate_v2_sha256 = {
+            "kind": "git-tree-candidate-v2",
+            "value": {
+                "authorization_id": journal._git_tree_candidate_authorization_id(
+                    "sha256", tree_sha256
+                ),
+                "object_format": "sha256",
+                "tree_oid": tree_sha256,
+            },
+        }
         vectors = (
             self.binding("staged"),
+            self.binding("tree-sha1", candidate=candidate_v2_sha1),
+            self.binding("tree-sha256", candidate=candidate_v2_sha256),
             self.binding("commit", candidate={"kind": "git-commit", "value": "a" * 40}),
             self.binding(
                 "range",
@@ -5110,6 +5134,231 @@ class Revision9BindingTests(unittest.TestCase):
             else:
                 value["review"] = {"verdict": "PASS"}
             self.assertFalse(journal._binding_shape_valid(value), mutation)
+
+        malformed_v2 = copy.deepcopy(vectors[1])
+        malformed_v2["candidate"]["value"]["authorization_id"] = key("wrong-tree")
+        malformed_preimage = {
+            name: malformed_v2[name]
+            for name in ("schema", "source_record", "candidate", "review")
+        }
+        malformed_v2["binding_id"] = journal._sha256(
+            journal._canonical_json_bytes(malformed_preimage)
+        )
+        self.assertFalse(journal._binding_shape_valid(malformed_v2))
+
+        wrong_length = copy.deepcopy(vectors[1])
+        wrong_length["candidate"]["value"]["tree_oid"] = "9" * 64
+        wrong_length_preimage = {
+            name: wrong_length[name]
+            for name in ("schema", "source_record", "candidate", "review")
+        }
+        wrong_length["binding_id"] = journal._sha256(
+            journal._canonical_json_bytes(wrong_length_preimage)
+        )
+        self.assertFalse(journal._binding_shape_valid(wrong_length))
+
+        structured_v1 = self.binding(
+            "structured-v1",
+            candidate={
+                "kind": "staged-diff-sha256",
+                "value": copy.deepcopy(candidate_v2_sha1["value"]),
+            },
+        )
+        self.assertFalse(journal._binding_shape_valid(structured_v1))
+
+        with mock.patch.object(
+            journal,
+            "BINDING_CANDIDATE_KINDS",
+            journal.BINDING_CANDIDATE_KINDS - {"git-tree-candidate-v2"},
+        ):
+            self.assertFalse(journal._binding_shape_valid(vectors[1]))
+
+    def test_commit_candidate_binding_reconstructs_v2_without_relabeling_history(self) -> None:
+        for object_format, tree_oid in (("sha1", "3" * 40), ("sha256", "4" * 64)):
+            with self.subTest(object_format=object_format):
+                authorization_id = journal._git_tree_candidate_authorization_id(
+                    object_format, tree_oid
+                )
+                candidate = {
+                    "schema": "forge-commit-candidate/2",
+                    "sha256": authorization_id,
+                    "authorization_id": authorization_id,
+                    "object_format": object_format,
+                    "tree_oid": tree_oid,
+                    "base_commit_oid": "5" * len(tree_oid),
+                    "review_diff_sha256": key(f"review-{object_format}"),
+                    "review_diff_byte_count": 17,
+                    "computed_at": "2026-09-07T12:00:00Z",
+                }
+                self.assertEqual(
+                    builders._candidate_binding_for_state(
+                        "commit", {"candidate": candidate}
+                    ),
+                    {
+                        "kind": "git-tree-candidate-v2",
+                        "value": {
+                            "authorization_id": authorization_id,
+                            "object_format": object_format,
+                            "tree_oid": tree_oid,
+                        },
+                    },
+                )
+
+                malformed = copy.deepcopy(candidate)
+                malformed["review_diff_byte_count"] = -1
+                self.assertIsNone(
+                    builders._candidate_binding_for_state(
+                        "commit", {"candidate": malformed}
+                    )
+                )
+
+        historical = key("historical-staged-diff")
+        self.assertEqual(
+            builders._candidate_binding_for_state(
+                "commit",
+                {
+                    "candidate": {
+                        "sha256": historical,
+                        "computed_at": "2026-08-28T12:00:00Z",
+                    }
+                },
+            ),
+            {"kind": "staged-diff-sha256", "value": historical},
+        )
+
+        tombstone = {"fixture": "canonical-source"}
+        historical_tombstone = builders.tombstone_abort_binding(
+            tombstone,
+            "c-2026-08-28T120000Z-abcd",
+            historical,
+        )
+        self.assertEqual(
+            historical_tombstone["candidate"],
+            {"kind": "staged-diff-sha256", "value": historical},
+        )
+        v2_value = builders._candidate_binding_for_state(
+            "commit", {"candidate": candidate}
+        )["value"]
+        v2_tombstone = builders.tombstone_abort_binding(
+            tombstone,
+            "c-2026-08-28T120000Z-abcd",
+            v2_value,
+        )
+        self.assertEqual(
+            v2_tombstone["candidate"],
+            {"kind": "git-tree-candidate-v2", "value": v2_value},
+        )
+
+    def test_commit_identity_binding_projects_existing_verification_type(self) -> None:
+        tree_oid = "6" * 40
+        authorization_id = journal._git_tree_candidate_authorization_id(
+            "sha1", tree_oid
+        )
+        candidate_state = {
+            "schema": "forge-commit-candidate/2",
+            "sha256": authorization_id,
+            "authorization_id": authorization_id,
+            "object_format": "sha1",
+            "tree_oid": tree_oid,
+            "base_commit_oid": "7" * 40,
+            "review_diff_sha256": key("identity-review"),
+            "review_diff_byte_count": 23,
+            "computed_at": "2026-09-07T12:00:00Z",
+        }
+        candidate_binding = builders._candidate_binding_for_state(
+            "commit", {"candidate": candidate_state}
+        )
+        self.assertIsNotNone(candidate_binding)
+        produced_sha = "8" * 40
+        identity = {
+            "result": "passed",
+            "produced_sha": produced_sha,
+            "expected": {
+                "parent": "7" * 40,
+                "tree": tree_oid,
+                "message_digest": key("message"),
+            },
+            "observed": {
+                "parent": ["7" * 40],
+                "tree": [tree_oid],
+                "message_digest": key("message"),
+            },
+            "checks": {
+                "head-movement": True,
+                "exact-single-parent": True,
+                "exact-tree": True,
+                "exact-message": True,
+            },
+            "transcript": ".forge/chains/candidate/identity.txt",
+        }
+        intent = {
+            "candidate": authorization_id,
+            "authorization_id": authorization_id,
+            "object_format": "sha1",
+            "expected_tree_oid": tree_oid,
+            "pre_head": "7" * 40,
+        }
+        prior = {
+            "candidate": copy.deepcopy(candidate_state),
+            "commit_result": {"intent": copy.deepcopy(intent)},
+            "authorization": {"consumed": False, "consumed_at": None},
+        }
+        current = copy.deepcopy(prior)
+        current["commit_result"]["identity"] = copy.deepcopy(identity)
+        source_digest = key("identity-source")
+        source_event = {
+            "digest": source_digest,
+            "payload": {
+                "at": "2026-09-07T12:01:00Z",
+                "details": copy.deepcopy(identity),
+                "event": "commit_identity_checked",
+                "state": copy.deepcopy(current),
+            },
+        }
+        binding = self.binding("identity", candidate=candidate_binding)
+        binding["source_record"]["event_digest"] = source_digest
+        binding_preimage = {
+            name: binding[name]
+            for name in ("schema", "source_record", "candidate", "review")
+        }
+        binding["binding_id"] = journal._sha256(
+            journal._canonical_json_bytes(binding_preimage)
+        )
+        record = {
+            "type": "verification",
+            "criterion": "gate-2: produced commit identity",
+            "result": "passed",
+        }
+        self.assertTrue(
+            builders._binding_matches_source_fact(
+                binding,
+                record,
+                source_event,
+                prior,
+                current,
+                family="commit",
+            )
+        )
+        self.assertTrue(
+            builders._binding_is_current(
+                current,
+                binding,
+                record,
+                source_event,
+                prior,
+                current,
+                ((source_event, prior, current, (), None),),
+                chain_family="commit",
+            )
+        )
+
+        landing = copy.deepcopy(current)
+        landing["state"] = "closed"
+        landing["authorization"] = {"consumed": True, "consumed_at": "now"}
+        landing["commit_result"]["commit_sha"] = produced_sha
+        self.assertTrue(builders._commit_v2_landing_identity_valid(landing))
+        landing["commit_result"]["identity"]["result"] = "failed"
+        self.assertFalse(builders._commit_v2_landing_identity_valid(landing))
 
     def test_binding_currentness_rejects_superseded_gate_facts(self) -> None:
         candidate = key("candidate")

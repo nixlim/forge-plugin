@@ -546,9 +546,11 @@ and candidate-inclusion check. Any failure invalidates approval and leaves the m
 For a first-policy bootstrap, the matching explicit approval authorizes only FR-083's first commit
 of that unchanged hard-tier snapshot. Stage exactly its install paths, prove `git diff --cached` is
 byte-identical to the reviewed snapshot, repeat the fixed staged-diff secret scan, write the ordinary
-two-line reviewed marker over its exact SHA-256, then run the halt check, commit lock, in-lock hash
-recheck, and commit from FR-050's fixed bootstrap path. Do not import policy commands or prompts from
-the candidate while doing so. A mismatch or any failed fixed check stops without a commit.
+four-line v2 reviewed marker, using the shared candidate helper, over the staged tree's authorization
+ID, then run the halt check, commit lock, in-lock tree/authorization re-observation, and commit from
+FR-050's fixed bootstrap path. The reviewed snapshot digest remains separate review evidence; it is
+never substituted for the tree authorization ID. Do not import policy commands or prompts from the
+candidate while doing so. A mismatch or any failed fixed check stops without a commit.
 
 After that first commit, require a clean tree and load policy only with
 `git show HEAD:forge-project.md`. Run FR-082's Gate 1 and stack calibration in an isolated clean

@@ -159,6 +159,12 @@ class Revision9IngestPredicateNegativeTests(
                     and CLI._user_skip(materialized, gate_id)
                     == CLI._user_skip(event_state, gate_id)
                 )
+            elif event_name == "commit_identity_checked":
+                active = bool(
+                    event_state.get("commit_result", {}).get("identity")
+                    == materialized.get("commit_result", {}).get("identity")
+                    and details.get("result") == "passed"
+                )
             elif event_name in {
                 "commit_produced",
                 "commit_close_recovered",
@@ -754,6 +760,9 @@ class Revision9IngestPredicateNegativeTests(
                         state["commit_result"]["intent"][
                             "message_digest"
                         ] = "0" * 64
+                        identity = state["commit_result"].get("identity")
+                        if isinstance(identity, dict):
+                            identity["expected"]["message_digest"] = "0" * 64
 
                     state, events = self.carry_state_change(
                         prepared, "commit_intent", stale_message_digest

@@ -216,16 +216,22 @@ def assert_revision8_commit_skill_contract(documents: dict[str, str]) -> None:
     blocks = re.findall(r"```bash\n(.*?)\n```", step5, flags=re.DOTALL)
     if len(blocks) != 3:
         raise AssertionError("Step 5 must contain exactly three Bash cells")
-    if blocks[1].strip() != "git commit -m <safely shell-quoted literal>":
+    if blocks[1].strip() != (
+        "git commit --cleanup=verbatim -m <safely shell-quoted literal>"
+    ):
         raise AssertionError("standalone commit cell")
     for marker in (
         "failure-only",
         "disarm it only after every preparation check passes",
         'check-halt.sh" commit',
         'acquire-commit-lock.sh" || exit 1',
-        "if len(lines) not in (2, 3, 4):",
-        "total_seconds() > 1800",
-        "git diff --cached | shasum -a 256",
+        "from forge_cli import candidate",
+        "candidate.observe_index(context)",
+        "candidate.parse_marker(",
+        "expected_authorization_id=",
+        "expected_tree_oid=",
+        "expected_base_commit_oid=",
+        'if [ "$pre_commit_head" != "$expected_base_commit_oid" ]; then',
         'for name in ("risk-tiers", "trigger-paths", "file-categories"):',
         "--declared-tier fast --require-effective fast",
         "forge: commit not authorized — run /forge:commit (fast-path policy drift)",
@@ -238,13 +244,52 @@ def assert_revision8_commit_skill_contract(documents: dict[str, str]) -> None:
         'release-commit-lock.sh" || release_status=$?',
         'rm -f "$commit_marker" || {',
         'observed_head="$(git rev-parse HEAD',
-        'observed_parent="$(git rev-parse "$observed_head^"',
-        'observed_hash="$(git diff "$pre_commit_head" "$observed_head"',
+        "candidate.authorization_id(object_format, expected_tree)",
+        "candidate.read_commit_object(context, observed_head)",
+        "produced.tree_headers != (expected_tree,)",
+        "produced.parent_headers != (reviewed_base,)",
+        "hashlib.sha256(produced.message).hexdigest()",
+        "produced_mismatch=1",
         "commit_succeeded=1",
         "forge: commit outcome ambiguous — inspect HEAD before retrying",
+        "forge: produced commit does not match authorized candidate — chain frozen; commit left untouched",
     ):
         if marker not in blocks[2] and marker not in step5[positions[2] :]:
             raise AssertionError(marker)
+    for marker in (
+        "candidate.snapshot(",
+        "candidate.render_marker(",
+        "candidate.marker_timestamp_for_cleanup(raw)",
+        "FORGE_CANDIDATE_BASE_COMMIT_OID=",
+        "observed_paths != expected_paths",
+        'quarantine_latch="${commit_marker}.quarantine"',
+        "format: forge-commit-candidate-quarantine/1",
+        "reason: produced-commit-mismatch",
+        "retained marker is not a\nreusable capability",
+        "format: forge-commit-candidate/2",
+        "standard/hard marker is exactly four LF-terminated lines",
+        "skip marker is exactly five LF-terminated lines",
+        "eligible-fast marker is exactly six LF-terminated lines",
+        "Bare legacy two-, three-,\nor four-line markers are cleanup-only",
+    ):
+        if marker not in commit:
+            raise AssertionError(marker)
+    for forbidden in (
+        "git diff --cached",
+        "git diff \"$pre_commit_head\" \"$observed_head\"",
+        "shasum -a 256",
+    ):
+        if forbidden in commit:
+            raise AssertionError(f"duplicated candidate identity: {forbidden}")
+    quarantine = blocks[2].index('python3 - "$quarantine_latch"')
+    release = blocks[2].index('release-commit-lock.sh" || release_status=$?')
+    if blocks[2].count('if [ "$produced_mismatch" -eq 1 ]; then') != 2:
+        raise AssertionError("produced mismatch branches")
+    mismatch = blocks[2].index('if [ "$produced_mismatch" -eq 1 ]; then', release)
+    marker_delete = blocks[2].index('rm -f "$commit_marker" || {')
+    events = blocks[2].index("--event gate_commit")
+    if not quarantine < release < mismatch < marker_delete < events:
+        raise AssertionError("produced verification/retention/event order")
     for marker in ("hook allow or denial", "Git success or failure", "must never be retried"):
         if marker not in step5:
             raise AssertionError(marker)
@@ -288,7 +333,7 @@ def assert_revision8_spec_harmonization(spec: str) -> None:
         raise AssertionError("ambiguous fixup/squash bucket")
 
     step5_inventory = spec.split(
-        "- Revision-8 legacy commit Step 5:", maxsplit=1
+        "- Revision-8 legacy commit Step 5 with candidate-v2 amendment:", maxsplit=1
     )[1].split("\n- `run-evals.sh`", maxsplit=1)[0]
     for false_negative in ("`cd &&`", "variable-carried message"):
         if false_negative in step5_inventory:
@@ -301,6 +346,72 @@ def assert_revision8_spec_harmonization(spec: str) -> None:
     ):
         if true_negative not in step5_inventory:
             raise AssertionError(true_negative)
+
+
+def assert_candidate_v2_spec_contract(spec: str) -> None:
+    normalized = _flat(spec)
+    exact_markers = (
+        "format: forge-commit-candidate/2\n"
+        "candidate: <64-lowercase-hex authorization-id>\n"
+        "tree: <sha1|sha256>:<full matching tree OID>\n"
+        "authorized-at: <UTC ISO-8601>",
+        "format: forge-commit-candidate/2\n"
+        "candidate: <64-lowercase-hex authorization-id>\n"
+        "tree: <sha1|sha256>:<full matching tree OID>\n"
+        "authorized-at: <UTC ISO-8601>\n"
+        "skip: user-directed",
+        "format: forge-commit-candidate/2\n"
+        "candidate: <64-lowercase-hex authorization-id>\n"
+        "tree: <sha1|sha256>:<full matching tree OID>\n"
+        "authorized-at: <UTC ISO-8601>\n"
+        "tier: fast\n"
+        "policy: <full commit OID>",
+    )
+    dm006 = spec.split("**DM-006**", maxsplit=1)[1].split(
+        "**DM-007**", maxsplit=1
+    )[0]
+    marker_blocks = tuple(
+        block
+        for block in re.findall(r"```text\n(.*?)\n```", dm006, flags=re.DOTALL)
+        if block.startswith("format: forge-commit-candidate/")
+    )
+    if marker_blocks != exact_markers:
+        raise AssertionError("DM-006 exact v2 marker forms")
+    required = (
+        "**Commit candidate identity.**",
+        "that evidence digest is never commit authorization",
+        "`candidate.kind` is exactly `git-tree-candidate-v2`, `staged-diff-sha256`, `git-commit`, or `git-range`",
+        "`authorization_id`, `object_format`, and `tree_oid`",
+        "An accepted historical v1 candidate has exactly the two keys `sha256` and `computed_at`",
+        "a mixed, partial, extra-key, unknown-schema, or otherwise malformed candidate is neither v1 nor v2",
+        "A v2 `candidate` has exactly `schema`, `sha256`, `authorization_id`, `object_format`, `tree_oid`, `base_commit_oid`, `review_diff_sha256`, `review_diff_byte_count`, and `computed_at`",
+        "The candidate-bound finalize amendment adds the commit-family literal `commit_identity_checked`",
+        "`gate-2: produced commit identity`",
+        "forge: produced commit does not match authorized candidate — chain frozen; commit left untouched",
+        "If HEAD still equals the recorded pre-commit HEAD, recovery revokes rather than revives the ambiguous v1 authorization",
+        "If HEAD changed, the chain cannot be auto-closed",
+        "Old diff-hash markers and v1/nonterminal chain candidates are never an authorization fallback",
+        "registered model-tool paths it actually observes",
+        "instruction-bounded, execution-capable Claude reviewer",
+        "not an OS-level read-only sandbox",
+        "The hook is the last registered model-tool-path control",
+        "not an OS-wide or repository-native last line of defense",
+        "`.forge/tmp/authorized/<authorization-id>.quarantine`",
+        "format: forge-commit-candidate-quarantine/1",
+        "before either marker or chain fallback can authorize",
+        "removes the marker first and its sibling second",
+    )
+    for marker in required:
+        if marker not in spec and marker not in normalized:
+            raise AssertionError(marker)
+    for number in range(210, 224):
+        if f"- **FR-{number}**" not in spec:
+            raise AssertionError(f"FR-{number}")
+    fr223 = spec.split("- **FR-223**", maxsplit=1)[1].split(
+        "- **FR-224**", maxsplit=1
+    )[0]
+    if "hook's status as last line of defense" in fr223:
+        raise AssertionError("FR-223 overclaims hook breadth")
 
 
 class DocumentationContractTests(unittest.TestCase):
@@ -351,7 +462,7 @@ class DocumentationContractTests(unittest.TestCase):
 
         mutated = dict(documents)
         mutated["commit"] = mutated["commit"].replace(
-            "git commit -m <safely shell-quoted literal>",
+            "git commit --cleanup=verbatim -m <safely shell-quoted literal>",
             'git commit -m "$commit_message"',
             1,
         )
@@ -365,7 +476,28 @@ class DocumentationContractTests(unittest.TestCase):
             with self.subTest(disabled=control):
                 mutated = dict(documents)
                 mutated["commit"] = mutated["commit"].replace(
-                    control, "DISABLED_CONTROL", 1
+                    control, "DISABLED_CONTROL"
+                )
+                with self.assertRaises(AssertionError):
+                    assert_revision8_commit_skill_contract(mutated)
+
+        for control in (
+            "candidate.snapshot(",
+            "candidate.render_marker(",
+            "candidate.parse_marker(",
+            "candidate.marker_timestamp_for_cleanup(raw)",
+            "candidate.read_commit_object(context, observed_head)",
+            "FORGE_CANDIDATE_BASE_COMMIT_OID=",
+            'if [ "$pre_commit_head" != "$expected_base_commit_oid" ]; then',
+            'quarantine_latch="${commit_marker}.quarantine"',
+            "format: forge-commit-candidate-quarantine/1",
+            "format: forge-commit-candidate/2",
+            "if [ \"$produced_mismatch\" -eq 1 ]; then",
+        ):
+            with self.subTest(disabled=control):
+                mutated = dict(documents)
+                mutated["commit"] = mutated["commit"].replace(
+                    control, "DISABLED_CONTROL"
                 )
                 with self.assertRaises(AssertionError):
                     assert_revision8_commit_skill_contract(mutated)
@@ -401,6 +533,30 @@ class DocumentationContractTests(unittest.TestCase):
         )
         with self.assertRaises(AssertionError):
             assert_revision8_spec_harmonization(false_negatives)
+
+    def test_candidate_v2_spec_contract_survives_mutation(self) -> None:
+        spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+        assert_candidate_v2_spec_contract(spec)
+
+        for control in (
+            "**Commit candidate identity.**",
+            "git-tree-candidate-v2",
+            "commit_identity_checked",
+            "format: forge-commit-candidate/2",
+            "An accepted historical v1 candidate has exactly the two keys",
+            "If HEAD still equals\nthe recorded pre-commit HEAD",
+            "registered model-tool paths it actually observes",
+            "instruction-bounded, execution-capable Claude reviewer",
+            "not an OS-level read-only sandbox",
+            "The hook is the last registered model-tool-path control",
+            "`.forge/tmp/authorized/<authorization-id>.quarantine`",
+            "before either marker or chain fallback can authorize",
+            "forge: produced commit does not match authorized candidate — chain frozen; commit left untouched",
+        ):
+            with self.subTest(disabled=control):
+                mutated = spec.replace(control, "DISABLED_CONTROL")
+                with self.assertRaises(AssertionError):
+                    assert_candidate_v2_spec_contract(mutated)
 
     def test_workflow_refuses_drift_block_before_registry_admission(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")

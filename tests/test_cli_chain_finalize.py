@@ -28,6 +28,7 @@ from tests._cli_loader import load_script, package_module  # cli split phase 0: 
 CLI = load_script("forge_cli_chain_finalize_tests", CLI_PATH)
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
+CANDIDATE = package_module("candidate")
 
 
 POLICY = """\
@@ -132,7 +133,8 @@ class FinalizeFixture(unittest.TestCase):
         self.repo = CLI.Repository(self.root)
         policy_sha, policy_raw = self.repo.policy()
         self.policy = CLI.parse_policy(policy_sha, policy_raw)
-        self.candidate = self.repo.candidate_hash()
+        self.snapshot = self.repo.candidate_snapshot(computed_at=CLI.iso_z())
+        self.candidate = self.snapshot.authorization_id
         self.state = CLI._new_state(
             CHAIN_ID,
             self.repo,
@@ -141,16 +143,14 @@ class FinalizeFixture(unittest.TestCase):
             ["tracked.txt"],
             "standard",
         )
+        self.state["paths"] = list(self.snapshot.paths)
         self.state["staging"].update(
             {
-                "staged_paths": ["tracked.txt"],
+                "staged_paths": list(self.snapshot.paths),
                 "staged_at": CLI.iso_z(),
             }
         )
-        self.state["candidate"] = {
-            "sha256": self.candidate,
-            "computed_at": CLI.iso_z(),
-        }
+        self.state["candidate"] = self.snapshot.state_record()
         self.state["tier"].update(
             {
                 "derived": "standard",
@@ -262,6 +262,7 @@ class FinalizeFixture(unittest.TestCase):
         check_name: str,
         *,
         fail_helper: str | None = None,
+        expected_calls: int = 1,
     ) -> None:
         replacement = mock.Mock(return_value=True)
         with mock.patch.dict(CLI.FINALIZE_CHECKS, {check_name: replacement}):
@@ -269,7 +270,7 @@ class FinalizeFixture(unittest.TestCase):
                 outcome = self.engine.finalize("fixture commit")
         self.assertTrue(outcome.ok)
         self.assertEqual(outcome.state, "closed")
-        replacement.assert_called_once()
+        self.assertEqual(replacement.call_count, expected_calls)
 
     def enter_committing(
         self, *, consumed: bool = False, message: str = "fixture commit"
@@ -283,6 +284,9 @@ class FinalizeFixture(unittest.TestCase):
         self.state["commit_result"] = {
             "intent": {
                 "candidate": self.candidate,
+                "authorization_id": self.candidate,
+                "object_format": self.snapshot.object_format,
+                "expected_tree_oid": self.snapshot.tree_oid,
                 "pre_head": pre_head,
                 "message_digest": CLI.sha256_bytes(
                     CLI.commit_message_bytes(message)
@@ -291,8 +295,25 @@ class FinalizeFixture(unittest.TestCase):
                 "lock_session_pid": "4242",
             }
         }
-        self.persist("fixture_commit_intent")
+        self.store.persist(
+            self.state,
+            "commit_intent",
+            {"candidate": self.candidate, "pre_head": pre_head},
+        )
         return pre_head
+
+    def install_restaging_pre_commit_hook(self) -> None:
+        hook_dir = self.root / "active-hooks"
+        hook_dir.mkdir()
+        hook = hook_dir / "pre-commit"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' 'hook rewrite' > tracked.txt\n"
+            "git add -- tracked.txt\n",
+            encoding="utf-8",
+        )
+        hook.chmod(0o700)
+        self.git("config", "core.hooksPath", str(hook_dir))
 
 
 class ChainStoreConcurrencyTests(FinalizeFixture):
@@ -428,6 +449,7 @@ class FinalizeCheckTests(FinalizeFixture):
             {
                 "evidence-completeness": CLI._finalize_evidence,
                 "candidate-byte-identity": CLI._finalize_candidate,
+                "produced-commit-identity": CLI._finalize_produced_identity,
                 "ttl-token": CLI._finalize_ttl,
                 "tree-index-drift": CLI._finalize_tree_drift,
                 "halt": CLI._finalize_halt,
@@ -494,7 +516,11 @@ class FinalizeCheckTests(FinalizeFixture):
             refusal.remediation,
             f"forge commit restage --paths <path>... --chain-id {CHAIN_ID}",
         )
-        self.assert_check_can_be_replaced("candidate-byte-identity")
+        (self.root / "tracked.txt").write_text("candidate one\n", encoding="utf-8")
+        self.git("add", "tracked.txt")
+        self.assert_check_can_be_replaced(
+            "candidate-byte-identity", expected_calls=2
+        )
 
     def test_evidence_check_is_load_bearing_and_has_an_independent_seam(self) -> None:
         del self.state["steps"]["assertion-sensor"]
@@ -600,6 +626,84 @@ class FinalizeCheckTests(FinalizeFixture):
             "candidate one\nnew unstaged work\n",
         )
 
+    def test_each_produced_commit_subcheck_is_independently_load_bearing(self) -> None:
+        pre_head = self.enter_committing(consumed=False)
+        self.git("commit", "-q", "--cleanup=verbatim", "-m", "fixture commit")
+        produced = self.repo.head()
+        valid = self.repo.read_commit_object(produced)
+        oid_zero = "0" * len(produced)
+        variants = {
+            "head-movement": (
+                pre_head,
+                valid,
+            ),
+            "exact-single-parent": (
+                produced,
+                CANDIDATE.CommitObject(
+                    sha=produced,
+                    tree_headers=valid.tree_headers,
+                    parent_headers=(oid_zero,),
+                    message=valid.message,
+                    raw=valid.raw,
+                ),
+            ),
+            "exact-tree": (
+                produced,
+                CANDIDATE.CommitObject(
+                    sha=produced,
+                    tree_headers=(oid_zero,),
+                    parent_headers=valid.parent_headers,
+                    message=valid.message,
+                    raw=valid.raw,
+                ),
+            ),
+            "exact-message": (
+                produced,
+                CANDIDATE.CommitObject(
+                    sha=produced,
+                    tree_headers=valid.tree_headers,
+                    parent_headers=valid.parent_headers,
+                    message=b"different message\n",
+                    raw=valid.raw,
+                ),
+            ),
+        }
+        self.assertEqual(set(CLI.PRODUCED_COMMIT_CHECKS), set(variants))
+
+        for name, (observed_head, commit_object) in variants.items():
+            with self.subTest(name=name), mock.patch.object(
+                self.repo, "read_commit_object", return_value=commit_object
+            ):
+                control = CLI.FinalizeContext(
+                    engine=self.engine,
+                    state=self.state,
+                    policy=self.policy,
+                    message="fixture commit",
+                    produced_sha=observed_head,
+                )
+                self.assertFalse(CLI._finalize_produced_identity(control))
+                self.assertFalse(control.produced_identity["checks"][name])
+                self.assertEqual(
+                    [
+                        key
+                        for key, value in control.produced_identity["checks"].items()
+                        if not value
+                    ],
+                    [name],
+                )
+
+                mutant = mock.Mock(return_value=True)
+                replaced = CLI.FinalizeContext(
+                    engine=self.engine,
+                    state=self.state,
+                    policy=self.policy,
+                    message="fixture commit",
+                    produced_sha=observed_head,
+                )
+                with mock.patch.dict(CLI.PRODUCED_COMMIT_CHECKS, {name: mutant}):
+                    self.assertTrue(CLI._finalize_produced_identity(replaced))
+                mutant.assert_called_once()
+
 
 class FinalizeSuccessTests(FinalizeFixture):
     def test_successful_finalize_records_two_phase_order_and_closes(self) -> None:
@@ -621,6 +725,8 @@ class FinalizeSuccessTests(FinalizeFixture):
             result = original_persist(state, event, details, **kwargs)
             labels = {
                 "commit_intent": "intent-persisted",
+                "commit_identity_checked": "identity-persisted",
+                "authorization_consumed": "authorization-persisted",
                 "commit_produced": "sha-persisted",
                 "chain_closed": "closed-persisted",
             }
@@ -647,6 +753,7 @@ class FinalizeSuccessTests(FinalizeFixture):
             "halt": traced_check("halt"),
             "lock": traced_check("lock"),
             "candidate-byte-identity": traced_check("candidate-byte-identity"),
+            "produced-commit-identity": traced_check("produced-commit-identity"),
         }
         with self.patched_helpers() as helper_calls, mock.patch.dict(
             CLI.FINALIZE_CHECKS, replacements
@@ -677,8 +784,12 @@ class FinalizeSuccessTests(FinalizeFixture):
                 "halt",
                 "lock",
                 "candidate-byte-identity",
+                "candidate-byte-identity",
                 "intent-persisted",
                 "git-commit",
+                "produced-commit-identity",
+                "identity-persisted",
+                "authorization-persisted",
                 "sha-persisted",
                 "closed-persisted",
                 "lock-released",
@@ -702,9 +813,10 @@ class FinalizeSuccessTests(FinalizeFixture):
             record["payload"]["event"] for record in self.store._events(CHAIN_ID)
         ]
         self.assertEqual(
-            events[-4:],
+            events[-5:],
             [
                 "commit_intent",
+                "commit_identity_checked",
                 "authorization_consumed",
                 "commit_produced",
                 "chain_closed",
@@ -766,11 +878,12 @@ class FinalizeSuccessTests(FinalizeFixture):
 
         def candidate_then_contend(context) -> bool:
             result = original_candidate_check(context)
-            worker = threading.Thread(target=run_restage, daemon=True)
-            restage_thread.append(worker)
-            worker.start()
-            self.assertTrue(attempted.wait(2.0))
-            self.assertTrue(worker.is_alive())
+            if not restage_thread:
+                worker = threading.Thread(target=run_restage, daemon=True)
+                restage_thread.append(worker)
+                worker.start()
+                self.assertTrue(attempted.wait(2.0))
+                self.assertTrue(worker.is_alive())
             return result
 
         with self.patched_helpers(), mock.patch.dict(
@@ -793,14 +906,203 @@ class FinalizeSuccessTests(FinalizeFixture):
             "candidate one\n",
         )
 
+    def test_hook_restaging_after_intent_freezes_without_consuming_or_landing(self) -> None:
+        self.install_restaging_pre_commit_hook()
+        pre_head = self.repo.head()
+
+        with self.patched_helpers():
+            outcome = self.engine.finalize("hook race fixture")
+
+        produced = self.repo.head()
+        self.assertNotEqual(produced, pre_head)
+        self.assertFalse(outcome.ok)
+        self.assertIs(outcome.reason_code, CLI.ReasonCode.FROZEN_CHAIN)
+        self.assertEqual(
+            outcome.message,
+            "forge: produced commit does not match authorized candidate — "
+            "chain frozen; commit left untouched",
+        )
+        self.assertEqual(self.git("show", "HEAD:tracked.txt").stdout, "hook rewrite\n")
+        raw_before_status = self.git("cat-file", "commit", produced).stdout
+        durable = self.store.load(CHAIN_ID)
+        self.assertEqual(durable["state"], "committing")
+        self.assertFalse(durable["authorization"]["consumed"])
+        self.assertIsNone(durable["authorization"]["consumed_at"])
+        self.assertTrue(durable["commit_result"]["mismatch_latched"])
+        self.assertEqual(durable["commit_result"]["identity"]["result"], "failed")
+        events = [entry["payload"]["event"] for entry in self.store._events(CHAIN_ID)]
+        self.assertEqual(events.count("commit_identity_checked"), 1)
+        for forbidden in (
+            "authorization_consumed",
+            "commit_produced",
+            "chain-landing",
+            "chain_closed",
+            "gate_commit",
+            "fast_allowed",
+        ):
+            self.assertNotIn(forbidden, events)
+
+        with self.patched_helpers():
+            repeated = self.engine.status()
+        self.assertFalse(repeated.ok)
+        self.assertEqual(self.repo.head(), produced)
+        self.assertEqual(self.git("cat-file", "commit", produced).stdout, raw_before_status)
+        repeated_events = [
+            entry["payload"]["event"] for entry in self.store._events(CHAIN_ID)
+        ]
+        self.assertEqual(repeated_events.count("commit_identity_checked"), 1)
+
+        with self.patched_helpers():
+            aborted = self.engine.abort("operator accepts divergent commit")
+        self.assertTrue(aborted.ok)
+        self.assertEqual(aborted.state, "aborted")
+        self.assertEqual(self.repo.head(), produced)
+        self.assertEqual(self.git("cat-file", "commit", produced).stdout, raw_before_status)
+
+    def test_replaced_produced_identity_control_cannot_manufacture_pass_evidence(self) -> None:
+        self.install_restaging_pre_commit_hook()
+        pre_head = self.repo.head()
+
+        with self.patched_helpers(), mock.patch.dict(
+            CLI.FINALIZE_CHECKS,
+            {"produced-commit-identity": lambda _context: True},
+        ):
+            with self.assertRaisesRegex(
+                CLI.FrozenError, "produced commit identity result is unavailable"
+            ):
+                self.engine.finalize("real hook top-level mutant")
+
+        produced = self.repo.head()
+        self.assertNotEqual(produced, pre_head)
+        durable = self.store.load(CHAIN_ID)
+        self.assertEqual(durable["state"], "committing")
+        self.assertFalse(durable["authorization"]["consumed"])
+        self.assertNotIn("identity", durable["commit_result"])
+        events = [entry["payload"]["event"] for entry in self.store._events(CHAIN_ID)]
+        self.assertNotIn("commit_identity_checked", events)
+        self.assertNotIn("authorization_consumed", events)
+        self.assertNotIn("commit_produced", events)
+
+        with self.patched_helpers():
+            recovered = self.engine.status()
+        self.assertFalse(recovered.ok)
+        self.assertEqual(
+            self.store.load(CHAIN_ID)["commit_result"]["identity"]["result"],
+            "failed",
+        )
+
+    def test_real_hook_tree_mutant_is_killed_by_freeze_assertion(self) -> None:
+        self.install_restaging_pre_commit_hook()
+
+        with self.patched_helpers(), mock.patch.dict(
+            CLI.PRODUCED_COMMIT_CHECKS,
+            {"exact-tree": lambda _context: True},
+        ):
+            with self.assertRaises(AssertionError):
+                outcome = self.engine.finalize("real hook exact-tree mutant")
+                self.assertFalse(outcome.ok)
+                self.assertFalse(
+                    self.store.load(CHAIN_ID)["authorization"]["consumed"]
+                )
+
+
+class FinalizeCrashBoundaryTests(FinalizeFixture):
+    def assert_recovery_after_persist_boundary(self, crash_event: str) -> None:
+        original_persist = self.store.persist
+        crashed = False
+
+        def persist_then_crash(state, event, details, **kwargs):
+            nonlocal crashed
+            result = original_persist(state, event, details, **kwargs)
+            if event == crash_event and not crashed:
+                crashed = True
+                raise RuntimeError(f"crash after {crash_event}")
+            return result
+
+        with self.patched_helpers(), mock.patch.object(
+            self.store, "persist", side_effect=persist_then_crash
+        ):
+            with self.assertRaisesRegex(RuntimeError, f"crash after {crash_event}"):
+                self.engine.finalize("post-identity crash fixture")
+
+        produced = self.repo.head()
+        with self.patched_helpers():
+            recovered = self.engine.status()
+        self.assertTrue(recovered.ok)
+        self.assertEqual(recovered.state, "closed")
+        durable = self.store.load(CHAIN_ID)
+        self.assertEqual(durable["commit_result"]["commit_sha"], produced)
+        self.assertEqual(durable["commit_result"]["identity"]["result"], "passed")
+        self.assertTrue(durable["authorization"]["consumed"])
+        events = [entry["payload"]["event"] for entry in self.store._events(CHAIN_ID)]
+        self.assertEqual(events.count("commit_identity_checked"), 1)
+        self.assertEqual(events.count("authorization_consumed"), 1)
+        self.assertEqual(
+            events.count("commit_produced") + events.count("commit_close_recovered"),
+            1,
+        )
+        self.assertEqual(events.count("chain_closed"), 1)
+
+    def test_crash_after_raw_identity_before_identity_event_recovers(self) -> None:
+        original_record = ENGINE._record_produced_identity
+        crashed = False
+
+        def crash_before_record(context):
+            nonlocal crashed
+            if not crashed:
+                crashed = True
+                self.assertIsInstance(context.produced_identity, dict)
+                self.assertEqual(context.produced_identity["result"], "passed")
+                transcript = context.produced_identity["transcript"]
+                self.assertIsInstance(transcript, str)
+                self.assertTrue((self.root / transcript).is_file())
+                raise RuntimeError("crash before commit_identity_checked")
+            return original_record(context)
+
+        with self.patched_helpers(), mock.patch.object(
+            ENGINE, "_record_produced_identity", side_effect=crash_before_record
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "crash before commit_identity_checked"
+            ):
+                self.engine.finalize("pre-identity-event crash fixture")
+
+        produced = self.repo.head()
+        before_recovery = self.store.load(CHAIN_ID)
+        self.assertNotIn("identity", before_recovery["commit_result"])
+        self.assertFalse(before_recovery["authorization"]["consumed"])
+        with self.patched_helpers():
+            recovered = self.engine.status()
+        self.assertTrue(recovered.ok)
+        durable = self.store.load(CHAIN_ID)
+        self.assertEqual(durable["state"], "closed")
+        self.assertEqual(durable["commit_result"]["commit_sha"], produced)
+        events = [entry["payload"]["event"] for entry in self.store._events(CHAIN_ID)]
+        self.assertEqual(events.count("commit_identity_checked"), 1)
+        self.assertEqual(events.count("authorization_consumed"), 1)
+        self.assertEqual(events.count("commit_close_recovered"), 1)
+        self.assertEqual(events.count("chain_closed"), 1)
+
+    def test_crash_after_identity_event_recovers(self) -> None:
+        self.assert_recovery_after_persist_boundary("commit_identity_checked")
+
+    def test_crash_after_authorization_consumption_recovers(self) -> None:
+        self.assert_recovery_after_persist_boundary("authorization_consumed")
+
+    def test_crash_after_commit_landing_recovers(self) -> None:
+        self.assert_recovery_after_persist_boundary("commit_produced")
+
+    def test_crash_after_chain_close_is_idempotent(self) -> None:
+        self.assert_recovery_after_persist_boundary("chain_closed")
+
 
 class FinalizeRecoveryTests(FinalizeFixture):
     def assert_recovery_uses_current_lock(
         self, invoke, *, post_commit: bool
     ) -> None:
-        pre_head = self.enter_committing(consumed=post_commit)
+        pre_head = self.enter_committing(consumed=False)
         if post_commit:
-            self.git("commit", "-q", "-m", "fixture commit")
+            self.git("commit", "-q", "--cleanup=verbatim", "-m", "fixture commit")
             self.assertNotEqual(self.repo.head(), pre_head)
         trace: list[str] = []
         lock_sessions: list[str | None] = []
@@ -967,25 +1269,19 @@ class FinalizeRecoveryTests(FinalizeFixture):
             "intent-before-git-commit; HEAD unchanged",
         )
 
-    def test_pre_commit_crash_refuses_consumed_or_expired_fallback_with_facts(self) -> None:
-        pre_head = self.enter_committing(consumed=True)
-        with self.patched_helpers():
-            with self.assertRaises(CLI.Refusal) as consumed_raised:
-                self.engine.status()
-        consumed = consumed_raised.exception
-        self.assertIs(consumed.reason_code, CLI.ReasonCode.TOKEN_CONSUMED)
-        self.assertEqual(
-            consumed.message,
-            "pre-commit crash window cannot fall back: "
-            f"HEAD unchanged=True; token consumed=True; "
-            f"token expires_at={self.state['authorization']['expires_at']}",
-        )
-        self.assertIn(f"HEAD unchanged={self.repo.head() == pre_head}", consumed.observed)
-        self.assertIn("token consumed=True", consumed.observed)
+    def test_v2_state_rejects_consumption_before_produced_identity_pass(self) -> None:
+        self.enter_committing(consumed=False)
+        self.state["authorization"]["consumed"] = True
+        self.state["authorization"]["consumed_at"] = CLI.iso_z()
 
-        self.state = self.store.load(CHAIN_ID)
-        self.state["authorization"]["consumed"] = False
-        self.state["authorization"]["consumed_at"] = None
+        with self.assertRaisesRegex(
+            CLI.FrozenError,
+            "authorization consumption lacks identity proof",
+        ):
+            self.persist("fixture_invalid_early_consumption")
+
+    def test_pre_commit_crash_refuses_expired_fallback_with_facts(self) -> None:
+        pre_head = self.enter_committing(consumed=False)
         self.state["authorization"].update(
             {
                 "issued_at": "1999-12-31T23:30:00Z",
@@ -1003,8 +1299,8 @@ class FinalizeRecoveryTests(FinalizeFixture):
         self.assertIn("token expires_at=2000-01-01T00:00:00Z", expired.message)
 
     def test_post_commit_crash_verifies_candidate_and_closes_idempotently(self) -> None:
-        pre_head = self.enter_committing(consumed=True)
-        self.git("commit", "-q", "-m", "fixture commit")
+        pre_head = self.enter_committing(consumed=False)
+        self.git("commit", "-q", "--cleanup=verbatim", "-m", "fixture commit")
         committed = self.repo.head()
         self.assertNotEqual(committed, pre_head)
 
@@ -1036,8 +1332,8 @@ class FinalizeRecoveryTests(FinalizeFixture):
 
     def test_post_commit_recovery_preserves_trailing_newline_message_bytes(self) -> None:
         message = "subject\n\nbody ending with newline\n"
-        pre_head = self.enter_committing(consumed=True, message=message)
-        self.git("commit", "-q", "-m", message)
+        pre_head = self.enter_committing(consumed=False, message=message)
+        self.git("commit", "-q", "--cleanup=verbatim", "-m", message)
         committed = self.repo.head()
         self.assertNotEqual(committed, pre_head)
         commit_object = self.repo.git(["cat-file", "commit", committed]).stdout
@@ -1063,48 +1359,51 @@ class FinalizeRecoveryTests(FinalizeFixture):
         self.assertEqual(closed["commit_result"]["commit_sha"], committed)
 
     def test_post_commit_crash_with_different_message_freezes_as_foreign(self) -> None:
-        pre_head = self.enter_committing(consumed=True)
-        self.git("commit", "-q", "-m", "different message")
+        pre_head = self.enter_committing(consumed=False)
+        self.git("commit", "-q", "--cleanup=verbatim", "-m", "different message")
         self.assertNotEqual(self.repo.head(), pre_head)
 
         with self.patched_helpers():
-            with self.assertRaises(CLI.FrozenError) as raised:
-                self.engine.status()
+            frozen = self.engine.status()
 
-        frozen = raised.exception
+        self.assertFalse(frozen.ok)
+        self.assertIs(frozen.reason_code, CLI.ReasonCode.FROZEN_CHAIN)
         self.assertEqual(
             frozen.message,
-            "foreign HEAD in committing: HEAD matches neither the pre-finalize state "
-            "nor an exact candidate commit",
+            "forge: produced commit does not match authorized candidate — "
+            "chain frozen; commit left untouched",
         )
         self.assertEqual(frozen.chain_id, CHAIN_ID)
         self.assertEqual(frozen.state, "committing")
-        self.assertIn("message", frozen.observed)
-        self.assertEqual(self.store.load(CHAIN_ID)["state"], "committing")
+        self.assertIn("message_digest", frozen.observed)
+        durable = self.store.load(CHAIN_ID)
+        self.assertEqual(durable["state"], "committing")
+        self.assertFalse(durable["authorization"]["consumed"])
+        self.assertEqual(durable["commit_result"]["identity"]["result"], "failed")
 
     def test_foreign_head_in_commit_window_freezes_chain(self) -> None:
-        pre_head = self.enter_committing(consumed=True)
+        pre_head = self.enter_committing(consumed=False)
         self.git("reset", "-q", "HEAD", "--", "tracked.txt")
         (self.root / "other.txt").write_text("foreign change\n", encoding="utf-8")
         self.git("add", "other.txt")
         self.git("commit", "-q", "-m", "foreign commit")
 
         with self.patched_helpers():
-            with self.assertRaises(CLI.FrozenError) as raised:
-                self.engine.status()
+            frozen = self.engine.status()
 
-        frozen = raised.exception
+        self.assertFalse(frozen.ok)
+        self.assertIs(frozen.reason_code, CLI.ReasonCode.FROZEN_CHAIN)
         self.assertEqual(
             frozen.message,
-            "foreign HEAD in committing: HEAD matches neither the pre-finalize state "
-            "nor an exact candidate commit",
+            "forge: produced commit does not match authorized candidate — "
+            "chain frozen; commit left untouched",
         )
         self.assertEqual(frozen.chain_id, CHAIN_ID)
         self.assertEqual(frozen.state, "committing")
-        self.assertIn(f"pre_head={pre_head}", frozen.observed)
-        self.assertIn(f"current={self.repo.head()}", frozen.observed)
-        self.assertIn(f"candidate={self.candidate}", frozen.observed)
-        self.assertEqual(self.store.load(CHAIN_ID)["state"], "committing")
+        self.assertIn("tree", frozen.observed)
+        durable = self.store.load(CHAIN_ID)
+        self.assertEqual(durable["state"], "committing")
+        self.assertFalse(durable["authorization"]["consumed"])
 
 
 class CommittingStateTests(FinalizeFixture):
@@ -1227,9 +1526,14 @@ class OutputContractTests(FinalizeFixture):
         )
 
     def test_main_finalize_refusal_obeys_json_contract_and_exit_class(self) -> None:
-        self.state["authorization"]["consumed"] = True
-        self.state["authorization"]["consumed_at"] = CLI.iso_z()
-        self.persist()
+        refusal = CLI.Refusal(
+            CLI.ReasonCode.TOKEN_CONSUMED,
+            "authorization token was already consumed",
+            expected="consumed=false",
+            observed="consumed=true",
+            remediation=f"forge status --chain-id {CHAIN_ID}",
+            chain=self.state,
+        )
         stream = io.StringIO()
         argv = [
             "--json",
@@ -1243,7 +1547,9 @@ class OutputContractTests(FinalizeFixture):
             "must refuse",
         ]
 
-        with self.patched_helpers(), contextlib.redirect_stdout(stream):
+        with mock.patch.object(
+            CLI.Engine, "finalize", side_effect=refusal
+        ), contextlib.redirect_stdout(stream):
             exit_code = CLI.main(argv)
 
         self.assertEqual(exit_code, 1)

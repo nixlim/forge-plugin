@@ -226,10 +226,34 @@ def _guard(worktree: Path, env: dict[str, str], guard: Path = COMMIT_GUARD) -> s
     return _run(["bash", str(guard)], cwd=worktree, env=env, input_bytes=payload)
 
 
-def _write_marker(main_root: Path, candidate: str) -> Path:
+def _candidate_identity(worktree: Path) -> tuple[str, str, str]:
+    object_format = _git(worktree, "rev-parse", "--show-object-format").decode().strip()
+    tree_oid = _git(worktree, "write-tree").decode().strip()
+    candidate = hashlib.sha256(
+        b"forge-commit-candidate/2\0"
+        + object_format.encode("ascii")
+        + b"\0"
+        + tree_oid.encode("ascii")
+        + b"\n"
+    ).hexdigest()
+    return candidate, object_format, tree_oid
+
+
+def _write_marker(
+    main_root: Path,
+    candidate: str,
+    object_format: str,
+    tree_oid: str,
+) -> Path:
     marker = main_root / ".forge/tmp/authorized" / candidate
     marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(f"{candidate}\n{_utc_now()}\n", encoding="utf-8")
+    marker.write_text(
+        "format: forge-commit-candidate/2\n"
+        f"candidate: {candidate}\n"
+        f"tree: {object_format}:{tree_oid}\n"
+        f"authorized-at: {_utc_now()}\n",
+        encoding="utf-8",
+    )
     return marker
 
 
@@ -509,7 +533,12 @@ def _concurrent_marker_phase(
         barrier.wait(timeout=30)
         if active:
             assert candidate is not None
-            _write_marker(main_root, candidate)
+            _write_marker(
+                main_root,
+                candidate,
+                str(config["candidate_object_format"]),
+                str(config["candidate_tree_oid"]),
+            )
         barrier.wait(timeout=30)
 
     if candidate is not None:
@@ -539,11 +568,12 @@ def _commit_chain(
     main_root = Path(str(config["main_root"]))
     relative_path = str(config["scope"])
     _checked(["git", "add", "--", relative_path], cwd=worktree, env=env)
-    staged = _git(worktree, "diff", "--cached")
-    candidate = hashlib.sha256(staged).hexdigest()
+    candidate, object_format, tree_oid = _candidate_identity(worktree)
     if candidate != config["candidate"]:
         raise AssertionError("commit candidate changed before authorization")
-    marker = _write_marker(main_root, candidate)
+    if object_format != config["candidate_object_format"] or tree_oid != config["candidate_tree_oid"]:
+        raise AssertionError("commit candidate tree changed before authorization")
+    marker = _write_marker(main_root, candidate, object_format, tree_oid)
     _concurrent_marker_phase(config, env, barrier, result, candidate)
     acquired = _run(
         ["bash", str(ACQUIRE_LOCK)], cwd=worktree, env=env, timeout=20
@@ -551,7 +581,7 @@ def _commit_chain(
     _require_ok(acquired, "commit-lock acquire")
     result["commit_lock_stderr"] = acquired.stderr.decode("utf-8", "replace")
     try:
-        under_lock = hashlib.sha256(_git(worktree, "diff", "--cached")).hexdigest()
+        under_lock = _candidate_identity(worktree)[0]
         if under_lock != candidate:
             raise AssertionError("staged bytes changed under commit lock")
         time.sleep(0.35)
@@ -771,11 +801,13 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"{worker_id}\n", encoding="utf-8")
             _git(worktree, "add", "--", relative)
-            candidate = hashlib.sha256(_git(worktree, "diff", "--cached")).hexdigest()
+            candidate, object_format, tree_oid = _candidate_identity(worktree)
             configs.append(
                 {
                     "base": self.base,
                     "candidate": candidate,
+                    "candidate_object_format": object_format,
+                    "candidate_tree_oid": tree_oid,
                     "kind": "commit",
                     "main_root": str(self.repo),
                     "overlap_probe": suffix == "a",
@@ -1237,7 +1269,12 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         """FR-190/FR-194 and DM-006: prove marker cross-admission is detected."""
         configs = self._prepare_configs()
         commits = [config for config in configs if config["kind"] == "commit"]
-        marker = _write_marker(self.repo, str(commits[0]["candidate"]))
+        marker = _write_marker(
+            self.repo,
+            str(commits[0]["candidate"]),
+            str(commits[0]["candidate_object_format"]),
+            str(commits[0]["candidate_tree_oid"]),
+        )
         self.addCleanup(marker.unlink, missing_ok=True)
         env = os.environ.copy()
         env["FORGE_SESSION_PID"] = str(os.getpid())
@@ -1249,8 +1286,8 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         mutant = mutant_root / "scripts" / "forge" / "commit-guard.sh"
         source = mutant.read_text(encoding="utf-8")
         needle = '''marker_state = (
-            marker_failure(context, classifier, candidate)
-            if candidate
+            marker_failure(context, classifier, observation)
+            if observation is not None
             else "marker hash mismatch"
         )'''
         self.assertEqual(source.count(needle), 1)

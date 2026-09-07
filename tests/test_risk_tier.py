@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from tests._cli_loader import load_script, package_module
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASSIFIER = ROOT / "scripts/forge/risk_tier.py"
+package_module("candidate")
+RISK_TIER = load_script("forge_risk_tier_tests", CLASSIFIER)
 DEPENDENCIES = """package.json
 package-lock.json
 yarn.lock
@@ -73,6 +79,8 @@ def policy(
 
 class RiskTierTests(unittest.TestCase):
     def setUp(self) -> None:
+        RISK_TIER._GIT_CONTEXT = None
+        RISK_TIER._TREE_SOURCE = None
         self.tempdir = tempfile.TemporaryDirectory()
         self.repo = Path(self.tempdir.name)
         self.git("init", "-q")
@@ -81,6 +89,8 @@ class RiskTierTests(unittest.TestCase):
         self.commit_policy(policy())
 
     def tearDown(self) -> None:
+        RISK_TIER._GIT_CONTEXT = None
+        RISK_TIER._TREE_SOURCE = None
         self.tempdir.cleanup()
 
     def git(self, *args: str) -> str:
@@ -118,6 +128,7 @@ class RiskTierTests(unittest.TestCase):
         declared: str | None = None,
         require: str | None = None,
         sha: str | None = None,
+        environment: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, object] | None]:
         command = [
             "python3", str(classifier), "--repo", str(self.repo), "--policy-sha",
@@ -127,12 +138,38 @@ class RiskTierTests(unittest.TestCase):
             command.extend(("--declared-tier", declared))
         if require:
             command.extend(("--require-effective", require))
-        result = subprocess.run(command, cwd=self.repo, capture_output=True, text=True)
+        invocation_environment = os.environ.copy()
+        invocation_environment["PYTHONPATH"] = os.pathsep.join(
+            filter(
+                None,
+                (
+                    str(ROOT / "scripts" / "forge"),
+                    invocation_environment.get("PYTHONPATH", ""),
+                ),
+            )
+        )
+        if environment is not None:
+            invocation_environment.update(environment)
+        result = subprocess.run(
+            command,
+            cwd=self.repo,
+            env=invocation_environment,
+            capture_output=True,
+            text=True,
+        )
         return result, json.loads(result.stdout) if result.stdout else None
 
     def classify_range(
-        self, base: str, head: str, *, declared: str = "standard"
+        self,
+        base: str,
+        head: str,
+        *,
+        declared: str = "standard",
+        environment: dict[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, object] | None]:
+        invocation_environment = os.environ.copy()
+        if environment is not None:
+            invocation_environment.update(environment)
         result = subprocess.run(
             [
                 "python3", str(CLASSIFIER), "--repo", str(self.repo),
@@ -140,6 +177,7 @@ class RiskTierTests(unittest.TestCase):
                 "--range", f"{base}...{head}",
             ],
             cwd=self.repo,
+            env=invocation_environment,
             capture_output=True,
             text=True,
         )
@@ -157,6 +195,185 @@ class RiskTierTests(unittest.TestCase):
         self.assertEqual(evidence["derived_tier"], "fast")
         self.assertEqual(evidence["effective_tier"], "fast")
         self.assertEqual([item["path"] for item in evidence["paths"]], ["docs/guide.md"])
+
+    def test_committed_policy_lookup_ignores_replace_refs(self) -> None:
+        policy_sha = self.git("rev-parse", "HEAD")
+        replacement = self.commit_policy(
+            policy(tiers="""| tier | path patterns |
+|---|---|
+| fast | misc/** |
+| hard | docs/** |""")
+        )
+        self.git("reset", "--hard", "-q", policy_sha)
+        self.git("replace", policy_sha, replacement)
+        self.stage("docs/guide.md", b"guide\n")
+
+        result, evidence = self.classify(sha=policy_sha, declared="fast")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(evidence["policy_sha"], policy_sha)
+        self.assertEqual(evidence["derived_tier"], "fast")
+
+    def test_supplied_candidate_base_must_match_live_head(self) -> None:
+        policy_sha = self.git("rev-parse", "HEAD")
+        base_tree = self.git("rev-parse", f"{policy_sha}^{{tree}}")
+        unrelated_base = self.git("commit-tree", base_tree, "-m", "unrelated base")
+        self.stage("docs/guide.md", b"guide\n")
+        object_format = self.git("rev-parse", "--show-object-format")
+        candidate_tree = self.git("write-tree")
+        authorization_id = RISK_TIER.candidate_module.authorization_id(
+            object_format, candidate_tree
+        )
+        candidate_environment = {
+            "FORGE_CANDIDATE_SCHEMA": RISK_TIER.candidate_module.CANDIDATE_SCHEMA,
+            "FORGE_CANDIDATE_AUTHORIZATION_ID": authorization_id,
+            "FORGE_CANDIDATE_OBJECT_FORMAT": object_format,
+            "FORGE_CANDIDATE_TREE_OID": candidate_tree,
+            "FORGE_CANDIDATE_BASE_COMMIT_OID": unrelated_base,
+        }
+
+        result, evidence = self.classify(
+            sha=policy_sha,
+            declared="fast",
+            environment=candidate_environment,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNone(evidence)
+        self.assertIn("live index tree differs from supplied candidate", result.stderr)
+
+        def assert_mismatched_base_is_refused() -> None:
+            RISK_TIER._GIT_CONTEXT = None
+            RISK_TIER._TREE_SOURCE = None
+            with mock.patch.dict(os.environ, candidate_environment, clear=False):
+                with self.assertRaisesRegex(
+                    RISK_TIER.PolicyError,
+                    "live index tree differs from supplied candidate",
+                ):
+                    RISK_TIER.staged_tree_source(self.repo)
+
+        assert_mismatched_base_is_refused()
+        with mock.patch.object(
+            RISK_TIER, "supplied_candidate_matches", return_value=True
+        ), self.assertRaises(AssertionError):
+            assert_mismatched_base_is_refused()
+
+    def test_range_pathspec_globals_and_injected_config_are_ignored(self) -> None:
+        base = self.commit_policy(
+            policy(tiers="""| tier | path patterns |
+|---|---|
+| fast | docs/** |
+| hard | DOCS/** |""")
+        )
+        self.commit_file("docs/guide.md", b"guide\n")
+        head = self.git("rev-parse", "HEAD")
+        hostile_environment = {
+            "GIT_LITERAL_PATHSPECS": "1",
+            "GIT_GLOB_PATHSPECS": "1",
+            "GIT_NOGLOB_PATHSPECS": "1",
+            "GIT_ICASE_PATHSPECS": "1",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "diff.ignoreSubmodules",
+            "GIT_CONFIG_VALUE_0": "all",
+        }
+
+        result, evidence = self.classify_range(
+            base,
+            head,
+            declared="fast",
+            environment=hostile_environment,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(evidence["derived_tier"], "fast")
+        self.assertEqual([item["path"] for item in evidence["paths"]], ["docs/guide.md"])
+
+    def test_range_gitlink_ignores_submodule_suppression_config(self) -> None:
+        policy_sha = self.commit_policy(fast_patterns="vendor")
+        seed_tree = self.git("rev-parse", f"{policy_sha}^{{tree}}")
+        first_gitlink = self.git("commit-tree", seed_tree, "-m", "first gitlink")
+        second_gitlink = self.git(
+            "commit-tree",
+            seed_tree,
+            "-p",
+            first_gitlink,
+            "-m",
+            "second gitlink",
+        )
+        self.git(
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{first_gitlink},vendor",
+        )
+        base_tree = self.git("write-tree")
+        base = self.git("commit-tree", base_tree, "-p", policy_sha, "-m", "gitlink base")
+        self.git("update-ref", "HEAD", base)
+        self.git("config", "diff.ignoreSubmodules", "all")
+        self.git("config", "submodule.vendor.ignore", "all")
+        self.git(
+            "update-index",
+            "--cacheinfo",
+            f"160000,{second_gitlink},vendor",
+        )
+        head_tree = self.git("write-tree")
+        head = self.git("commit-tree", head_tree, "-p", base, "-m", "gitlink changed")
+        self.git("update-ref", "HEAD", head)
+
+        result, evidence = self.classify_range(base, head, declared="fast")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(evidence["derived_tier"], "fast")
+        self.assertEqual([item["path"] for item in evidence["paths"]], ["vendor"])
+
+    def test_malformed_name_status_output_fails_closed(self) -> None:
+        source = RISK_TIER.TreeSource(
+            context=mock.sentinel.context,
+            base_tree_oid="a" * 40,
+            candidate_tree_oid="b" * 40,
+        )
+        malformed = (
+            b"Q\0docs/guide.md\0",
+            b"M100\0docs/guide.md\0",
+            b"U\0docs/guide.md\0",
+            b"X\0docs/guide.md\0",
+            b"B\0docs/guide.md\0",
+            b"R1\0old.md\0new.md\0",
+            b"C01\0old.md\0new.md\0",
+            b"R101\0old.md\0new.md\0",
+            b"R100\0old.md\0",
+            b"M\0docs/guide.md",
+            b"M\0docs/guide.md\0\0",
+            b"M\0docs/guide.md\0A\0docs/guide.md\0",
+            b"M\0bad-\xff.md\0",
+        )
+        for raw in malformed:
+            with self.subTest(raw=raw), mock.patch.object(
+                RISK_TIER, "diff_tree_source", return_value=source
+            ), mock.patch.object(
+                RISK_TIER.candidate_module,
+                "name_status_tree_pair",
+                return_value=raw,
+            ), self.assertRaisesRegex(RISK_TIER.PolicyError, "malformed Git diff status"):
+                RISK_TIER.diff_entries(self.repo, staged=False, range_spec="unused")
+
+        def assert_unknown_status_is_refused() -> None:
+            with mock.patch.object(
+                RISK_TIER, "diff_tree_source", return_value=source
+            ), mock.patch.object(
+                RISK_TIER.candidate_module,
+                "name_status_tree_pair",
+                return_value=b"Q\0docs/guide.md\0",
+            ), self.assertRaisesRegex(
+                RISK_TIER.PolicyError, "malformed Git diff status"
+            ):
+                RISK_TIER.diff_entries(self.repo, staged=False, range_spec="unused")
+
+        assert_unknown_status_is_refused()
+        with mock.patch.object(
+            RISK_TIER, "valid_tree_diff_status", return_value=True
+        ), self.assertRaises(AssertionError):
+            assert_unknown_status_is_refused()
 
     def test_sha256_git_repository_uses_full_policy_object_id(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -453,6 +670,39 @@ class RiskTierTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(evidence["derived_tier"], "fast")
         self.assertTrue(evidence["formatting_decisions"][0]["eligible"])
+
+    def test_formatting_only_rejects_mode_only_change(self) -> None:
+        self.commit_file("notes.md", b"unchanged\n")
+        policy_sha = self.git("rev-parse", "HEAD")
+        (self.repo / "notes.md").chmod(0o755)
+        self.git("add", "notes.md")
+
+        result, evidence = self.classify(sha=policy_sha, declared="fast")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(evidence["derived_tier"], "standard")
+        self.assertEqual(
+            evidence["formatting_decisions"],
+            [{"path": "notes.md", "eligible": False, "reason": "file-mode-changed"}],
+        )
+
+        def assert_mode_change_is_rejected() -> None:
+            eligible, reason = RISK_TIER.formatting_only(
+                self.repo,
+                RISK_TIER.DiffEntry("M", "notes.md"),
+                ["docs"],
+                frozenset({"docs"}),
+                staged=True,
+                range_spec=None,
+            )
+            self.assertFalse(eligible)
+            self.assertEqual(reason, "file-mode-changed")
+
+        assert_mode_change_is_rejected()
+        with mock.patch.object(
+            RISK_TIER, "file_modes_match", return_value=True
+        ), self.assertRaises(AssertionError):
+            assert_mode_change_is_rejected()
 
     def test_formatting_only_rejects_python_yaml_leading_interior_and_add(self) -> None:
         fixtures = (

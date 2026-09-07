@@ -263,14 +263,58 @@ class CommitGuardTests(unittest.TestCase):
         target.write_text("reviewed change\n", encoding="utf-8")
         self.git("add", name, cwd=repo)
 
-    def staged_hash(self, *, cwd: Path | None = None) -> str:
-        result = subprocess.run(
-            ["git", "diff", "--cached"],
-            cwd=cwd or self.repo,
+    def candidate_identity(
+        self,
+        *,
+        cwd: Path | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> tuple[str, str, str]:
+        repo = cwd or self.repo
+        object_format = subprocess.run(
+            ["git", "rev-parse", "--show-object-format"],
+            cwd=repo,
+            env=environment,
             check=True,
             capture_output=True,
+            text=True,
+        ).stdout.strip()
+        tree_oid = subprocess.run(
+            ["git", "write-tree"],
+            cwd=repo,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        preimage = (
+            b"forge-commit-candidate/2\0"
+            + object_format.encode("ascii")
+            + b"\0"
+            + tree_oid.encode("ascii")
+            + b"\n"
         )
-        return hashlib.sha256(result.stdout).hexdigest()
+        return hashlib.sha256(preimage).hexdigest(), object_format, tree_oid
+
+    def staged_hash(self, *, cwd: Path | None = None) -> str:
+        return self.candidate_identity(cwd=cwd)[0]
+
+    @staticmethod
+    def marker_payload(
+        candidate: str,
+        object_format: str,
+        tree_oid: str,
+        timestamp: str,
+        *annotations: str,
+    ) -> str:
+        return "\n".join(
+            (
+                "format: forge-commit-candidate/2",
+                f"candidate: {candidate}",
+                f"tree: {object_format}:{tree_oid}",
+                f"authorized-at: {timestamp}",
+                *annotations,
+            )
+        ) + "\n"
 
     def write_marker(
         self,
@@ -281,21 +325,46 @@ class CommitGuardTests(unittest.TestCase):
         timestamp: str | None = None,
         third_line: str | None = None,
         fourth_line: str | None = None,
+        environment: dict[str, str] | None = None,
     ) -> Path:
         root = marker_root or self.repo
-        marker_digest = digest or self.staged_hash(cwd=cwd)
+        observed_digest, object_format, tree_oid = self.candidate_identity(
+            cwd=cwd, environment=environment
+        )
+        marker_digest = digest or observed_digest
         marker = root / ".forge" / "tmp" / "authorized" / marker_digest
         marker.parent.mkdir(parents=True, exist_ok=True)
         reviewed_at = timestamp or datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-        lines = [marker_digest, reviewed_at]
+        annotations: list[str] = []
         if third_line is not None:
-            lines.append(third_line)
+            annotations.append(third_line)
         if fourth_line is not None:
-            lines.append(fourth_line)
-        marker.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            annotations.append(fourth_line)
+        marker.write_text(
+            self.marker_payload(
+                marker_digest,
+                object_format,
+                tree_oid,
+                reviewed_at,
+                *annotations,
+            ),
+            encoding="utf-8",
+        )
         return marker
+
+    def write_quarantine(self, marker: Path, *, produced: str | None = None) -> Path:
+        quarantine = marker.with_name(f"{marker.name}.quarantine")
+        produced_oid = produced or self.git("rev-parse", "HEAD").stdout.strip()
+        quarantine.write_text(
+            "format: forge-commit-candidate-quarantine/1\n"
+            f"candidate: {marker.name}\n"
+            f"produced: {produced_oid}\n"
+            "reason: produced-commit-mismatch\n",
+            encoding="ascii",
+        )
+        return quarantine
 
     def test_non_bash_and_irrelevant_bash_allow_silently(self) -> None:
         self.assert_allowed(self.invoke("git commit -m nope", tool_name="Read"))
@@ -307,8 +376,9 @@ class CommitGuardTests(unittest.TestCase):
             "forge_version: 1\n", encoding="utf-8"
         )
         self.stage_change()
-        candidate = self.staged_hash()
+        candidate, object_format, tree_oid = self.candidate_identity()
         marker = self.repo / ".forge" / "tmp" / "authorized" / candidate
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         stale_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=31)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
@@ -318,11 +388,15 @@ class CommitGuardTests(unittest.TestCase):
             ("malformed", "not-a-marker\n"),
             (
                 "stale",
-                f"{candidate}\n{stale_timestamp}\n",
+                self.marker_payload(
+                    candidate, object_format, tree_oid, stale_timestamp
+                ),
             ),
             (
                 "hash mismatch",
-                f"{'0' * 64}\n{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n",
+                self.marker_payload(
+                    "0" * 64, object_format, tree_oid, now
+                ),
             ),
         ]
         for failure, contents in cases:
@@ -344,20 +418,24 @@ class CommitGuardTests(unittest.TestCase):
     def test_content_addressed_lookup_isolates_candidates_and_sweeps_only_after_validation(self) -> None:
         self.track_manifest()
         self.stage_change(name="docs/guide.md")
-        candidate = self.staged_hash()
+        candidate, object_format, tree_oid = self.candidate_identity()
         authorized = self.repo / ".forge/tmp/authorized"
         authorized.mkdir(parents=True)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         other = "1" * 64
         other_marker = authorized / other
-        other_marker.write_text(f"{other}\n{now}\n", encoding="utf-8")
+        other_marker.write_text(
+            self.marker_payload(other, object_format, tree_oid, now),
+            encoding="utf-8",
+        )
         stale_other = "2" * 64
         stale_other_marker = authorized / stale_other
         stale_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
         stale_other_marker.write_text(
-            f"{stale_other}\n{stale_at}\n", encoding="utf-8"
+            self.marker_payload(stale_other, object_format, tree_oid, stale_at),
+            encoding="utf-8",
         )
 
         # Another candidate can coexist, but it cannot authorize this index.
@@ -370,7 +448,10 @@ class CommitGuardTests(unittest.TestCase):
 
         # A current stale marker must be diagnosed before the age sweep removes it.
         current_marker = authorized / candidate
-        current_marker.write_text(f"{candidate}\n{stale_at}\n", encoding="utf-8")
+        current_marker.write_text(
+            self.marker_payload(candidate, object_format, tree_oid, stale_at),
+            encoding="utf-8",
+        )
         self.assert_denied(
             self.invoke("git commit"),
             f"{MARKER_REASON} (marker stale)",
@@ -379,7 +460,10 @@ class CommitGuardTests(unittest.TestCase):
         self.assertTrue(other_marker.is_file())
 
         # Exact same staged bytes select the same path and are admitted.
-        current_marker.write_text(f"{candidate}\n{now}\n", encoding="utf-8")
+        current_marker.write_text(
+            self.marker_payload(candidate, object_format, tree_oid, now),
+            encoding="utf-8",
+        )
         self.assert_allowed(self.invoke("git commit"))
         self.assertTrue(current_marker.is_file())
         self.assertTrue(other_marker.is_file())
@@ -387,10 +471,15 @@ class CommitGuardTests(unittest.TestCase):
     def test_candidate_filename_and_record_hash_must_agree(self) -> None:
         self.track_manifest()
         self.stage_change(name="docs/guide.md")
-        candidate = self.staged_hash()
+        candidate, object_format, tree_oid = self.candidate_identity()
         marker = self.write_marker(digest=candidate)
         marker.write_text(
-            f"{'0' * 64}\n{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n",
+            self.marker_payload(
+                "0" * 64,
+                object_format,
+                tree_oid,
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
             encoding="utf-8",
         )
 
@@ -398,6 +487,93 @@ class CommitGuardTests(unittest.TestCase):
             self.invoke("git commit"),
             f"{MARKER_REASON} (marker hash mismatch)",
         )
+
+    def test_marker_tree_must_recompute_to_candidate_and_match_live_index(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        candidate, object_format, tree_oid = self.candidate_identity()
+        wrong_tree = ("0" if tree_oid[0] != "0" else "1") + tree_oid[1:]
+        marker = self.repo / ".forge/tmp/authorized" / candidate
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            self.marker_payload(
+                candidate,
+                object_format,
+                wrong_tree,
+                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
+            encoding="utf-8",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker hash mismatch)",
+        )
+
+    def test_quarantine_latch_denies_valid_marker_and_expires_with_it(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        marker = self.write_marker()
+        quarantine = self.write_quarantine(marker)
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker malformed)",
+        )
+        self.assertTrue(marker.is_file())
+        self.assertTrue(quarantine.is_file())
+
+        stale_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        marker.unlink()
+        marker = self.write_marker(timestamp=stale_at)
+        self.assertEqual(quarantine, marker.with_name(f"{marker.name}.quarantine"))
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker malformed)",
+        )
+        self.assertFalse(marker.exists())
+        self.assertFalse(quarantine.exists())
+
+    def test_quarantine_latch_control_is_load_bearing(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        marker = self.write_marker()
+        self.write_quarantine(marker, produced="none")
+
+        intact = self.invoke("git commit")
+        self.assert_denied(intact, f"{MARKER_REASON} (marker malformed)")
+        mutant = self.mutant_guard(
+            "quarantine-disabled-mutant",
+            "        os.lstat(quarantine)",
+            "        raise FileNotFoundError",
+        )
+        self.assert_allowed(self.invoke("git commit", guard=mutant))
+
+    def test_retained_standard_marker_cannot_reauthorize_tree_already_at_head(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        marker = self.write_marker()
+        authorized_tree = self.git("write-tree").stdout.strip()
+        self.git("commit", "--quiet", "-m", "mismatching produced message")
+        self.assertEqual(
+            self.git("rev-parse", "HEAD^{tree}").stdout.strip(),
+            authorized_tree,
+        )
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker hash mismatch)",
+        )
+        self.assertTrue(marker.is_file())
+
+        mutant = self.mutant_guard(
+            "empty-tree-delta-disabled-mutant",
+            "    return bool(path_bytes) and bool(paths)",
+            "    return True",
+        )
+        self.assert_allowed(self.invoke("git commit", guard=mutant))
 
     def test_content_addressed_lookup_mutant_cannot_admit_another_candidate(self) -> None:
         self.track_manifest()
@@ -426,8 +602,8 @@ class CommitGuardTests(unittest.TestCase):
         self.write_marker(timestamp=stale_at)
         mutant = self.mutant_guard(
             "sweep-before-validation-mutant",
-            "        candidate = staged_candidate(context)\n        marker_state = (",
-            "        candidate = staged_candidate(context)\n        sweep_stale_markers(context)\n        marker_state = (",
+            "        marker_state = (\n            marker_failure(context, classifier, observation)",
+            "        sweep_stale_markers(context)\n        marker_state = (\n            marker_failure(context, classifier, observation)",
         )
 
         self.assert_denied(
@@ -435,7 +611,7 @@ class CommitGuardTests(unittest.TestCase):
             f"{MARKER_REASON} (marker missing)",
         )
 
-    def test_only_exact_two_and_three_line_legacy_marker_shapes_are_accepted(self) -> None:
+    def test_only_exact_four_five_and_six_line_v2_marker_shapes_are_accepted(self) -> None:
         (self.repo / ".forge-manifest").write_text("forge_version: 1\n")
         self.stage_change()
 
@@ -445,12 +621,23 @@ class CommitGuardTests(unittest.TestCase):
         self.write_marker(third_line="skip: user-directed")
         self.assert_allowed(self.invoke("git commit -m user-directed"))
 
+        candidate, object_format, tree_oid = self.candidate_identity()
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for contents in (
-            f"{self.staged_hash()}\n",
-            f"{self.staged_hash()}\n2026-08-08T00:00:00Z\nunexpected\n",
-            f"{self.staged_hash()}\n2026-08-08T00:00:00Z\nskip: user-directed\nextra\n",
-            f"{'A' * 64}\n2026-08-08T00:00:00Z\n",
-            f"{self.staged_hash()}\nnot-a-timestamp\n",
+            self.marker_payload(candidate, object_format, tree_oid, timestamp).rstrip("\n"),
+            self.marker_payload(candidate, object_format, tree_oid, timestamp) + "extra\n",
+            self.marker_payload(candidate, object_format, tree_oid, timestamp).replace(
+                "format: forge-commit-candidate/2", "format: forge-commit-candidate/1"
+            ),
+            self.marker_payload(candidate, object_format, tree_oid, timestamp).replace(
+                "authorized-at: ", ""
+            ),
+            self.marker_payload(candidate, object_format, tree_oid, timestamp).replace(
+                tree_oid, tree_oid[:-1]
+            ),
+            self.marker_payload(candidate, object_format, tree_oid, timestamp).replace(
+                "\n", "\r\n"
+            ),
         ):
             with self.subTest(contents=contents):
                 marker = (
@@ -458,13 +645,135 @@ class CommitGuardTests(unittest.TestCase):
                     / ".forge"
                     / "tmp"
                     / "authorized"
-                    / self.staged_hash()
+                    / candidate
                 )
                 marker.write_text(contents, encoding="utf-8")
                 self.assert_denied(
                     self.invoke("git commit"),
                     f"{MARKER_REASON} (marker malformed)",
                 )
+
+    def test_legacy_markers_never_admit_and_are_only_swept_after_expiry(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        candidate = self.staged_hash()
+        marker_dir = self.repo / ".forge/tmp/authorized"
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        current_legacy = marker_dir / candidate
+        current_legacy.write_text(f"{candidate}\n{now}\n", encoding="utf-8")
+
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker malformed)",
+        )
+        self.assertTrue(current_legacy.is_file())
+
+        current_legacy.unlink()
+        stale_legacy_id = "3" * 64
+        stale_at = (datetime.now(timezone.utc) - timedelta(minutes=31)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        stale_legacy = marker_dir / stale_legacy_id
+        stale_legacy.write_text(
+            f"{stale_legacy_id}\n{stale_at}\nskip: user-directed\n",
+            encoding="utf-8",
+        )
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+        self.assertFalse(stale_legacy.exists())
+
+    def test_gitlink_transition_matrix_ignores_configuration_and_invalidates_old_marker(self) -> None:
+        self.track_manifest()
+        empty_tree = self.git("mktree", input_text="").stdout.strip()
+        first_gitlink = self.git(
+            "commit-tree", empty_tree, input_text="first gitlink\n"
+        ).stdout.strip()
+        second_gitlink = self.git(
+            "commit-tree", empty_tree, "-p", first_gitlink,
+            input_text="second gitlink\n",
+        ).stdout.strip()
+        self.git("config", "diff.ignoreSubmodules", "all")
+        self.git("config", "submodule.vendor.ignore", "all")
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GIT_CONFIG_COUNT": "2",
+                "GIT_CONFIG_KEY_0": "diff.ignoreSubmodules",
+                "GIT_CONFIG_VALUE_0": "all",
+                "GIT_CONFIG_KEY_1": "submodule.vendor.ignore",
+                "GIT_CONFIG_VALUE_1": "all",
+            }
+        )
+
+        old_candidate = self.staged_hash()
+        self.write_marker(environment=environment)
+        self.git(
+            "update-index", "--add", "--cacheinfo", f"160000,{first_gitlink},vendor"
+        )
+        added_candidate = self.staged_hash()
+
+        self.assertNotEqual(old_candidate, added_candidate)
+        self.assertNotIn(
+            "vendor", self.git("diff", "--cached", "--name-only").stdout.splitlines()
+        )
+        self.assert_denied(
+            self.invoke("git commit", environment=environment),
+            f"{MARKER_REASON} (marker missing)",
+        )
+        self.write_marker(environment=environment)
+        self.assert_allowed(self.invoke("git commit", environment=environment))
+        self.git("commit", "--quiet", "-m", "add gitlink")
+
+        self.stage_change(name="docs/pre-existing.md")
+        self.write_marker(environment=environment)
+        self.assert_allowed(self.invoke("git commit", environment=environment))
+        self.git("commit", "--quiet", "-m", "pre-existing gitlink")
+
+        old_candidate = self.staged_hash()
+        self.write_marker(environment=environment)
+        self.git("update-index", "--cacheinfo", f"160000,{second_gitlink},vendor")
+        changed_candidate = self.staged_hash()
+
+        self.assertNotEqual(old_candidate, changed_candidate)
+        self.assert_denied(
+            self.invoke("git commit", environment=environment),
+            f"{MARKER_REASON} (marker missing)",
+        )
+        self.write_marker(environment=environment)
+        self.assert_allowed(self.invoke("git commit", environment=environment))
+        self.git("commit", "--quiet", "-m", "change gitlink")
+
+        old_candidate = self.staged_hash()
+        self.write_marker(environment=environment)
+        self.git("update-index", "--force-remove", "vendor")
+        deleted_candidate = self.staged_hash()
+
+        self.assertNotEqual(old_candidate, deleted_candidate)
+        self.assert_denied(
+            self.invoke("git commit", environment=environment),
+            f"{MARKER_REASON} (marker missing)",
+        )
+        self.write_marker(environment=environment)
+        self.assert_allowed(self.invoke("git commit", environment=environment))
+
+    def test_guard_shared_candidate_observation_is_load_bearing(self) -> None:
+        self.track_manifest()
+        self.stage_change(name="docs/guide.md")
+        self.write_marker()
+        self.assert_allowed(self.invoke("git commit"))
+
+        mutant = self.mutant_guard(
+            "candidate-helper-disabled-mutant",
+            "        return candidate_module.observe_index(candidate_context)",
+            '        raise RuntimeError("candidate observation disabled")',
+        )
+        self.assert_denied(
+            self.invoke("git commit", guard=mutant),
+            f"{MARKER_REASON} (marker hash mismatch)",
+        )
 
     def test_fast_marker_is_admitted_only_for_independently_eligible_diff(self) -> None:
         policy_sha = self.commit_policy()
@@ -480,13 +789,29 @@ class CommitGuardTests(unittest.TestCase):
         policy_sha = self.commit_policy()
         self.stage_change(name="docs/guide.md")
         digest = self.staged_hash()
+        _, object_format, tree_oid = self.candidate_identity()
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         malformed = (
-            f"{digest}\n{timestamp}\npolicy: {policy_sha}\ntier: fast\n",
-            f"{digest}\n{timestamp}\ntier: fast\npolicy: {policy_sha[:12]}\n",
-            f"{digest}\n{timestamp}\ntier: fast\npolicy:{policy_sha}\n",
-            f"{digest}\n{timestamp}\nskip: user-directed\ntier: fast\n",
-            f"{digest}\n{timestamp}\ntier: fast\npolicy: {policy_sha}\nextra\n",
+            self.marker_payload(
+                digest, object_format, tree_oid, timestamp,
+                f"policy: {policy_sha}", "tier: fast",
+            ),
+            self.marker_payload(
+                digest, object_format, tree_oid, timestamp,
+                "tier: fast", f"policy: {policy_sha[:12]}",
+            ),
+            self.marker_payload(
+                digest, object_format, tree_oid, timestamp,
+                "tier: fast", f"policy:{policy_sha}",
+            ),
+            self.marker_payload(
+                digest, object_format, tree_oid, timestamp,
+                "skip: user-directed", "tier: fast",
+            ),
+            self.marker_payload(
+                digest, object_format, tree_oid, timestamp,
+                "tier: fast", f"policy: {policy_sha}", "extra",
+            ),
         )
         marker = self.repo / ".forge/tmp/authorized" / digest
         marker.parent.mkdir(parents=True, exist_ok=True)
@@ -581,6 +906,49 @@ class CommitGuardTests(unittest.TestCase):
 
         self.assert_denied(
             self.invoke("git commit"),
+            f"{MARKER_REASON} (fast-path policy drift)",
+        )
+
+    def test_fast_policy_reads_ignore_replace_refs(self) -> None:
+        policy_sha = self.commit_policy()
+        policy_parent = self.git("rev-parse", f"{policy_sha}^").stdout.strip()
+        (self.repo / "forge-project.md").write_text(
+            self.policy_text(fast_patterns="docs/private/**"), encoding="utf-8"
+        )
+        self.git("add", "forge-project.md")
+        replacement_tree = self.git("write-tree").stdout.strip()
+        replacement = self.git(
+            "commit-tree",
+            replacement_tree,
+            "-p",
+            policy_parent,
+            input_text="replacement policy\n",
+        ).stdout.strip()
+        self.git("reset", "--hard", policy_sha)
+        (self.repo / "docs/base.md").parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / "docs/base.md").write_text("base\n", encoding="utf-8")
+        self.git("add", "docs/base.md")
+        self.git("commit", "--quiet", "-m", "descendant")
+        self.stage_change(name="docs/guide.md")
+        self.git("replace", policy_sha, replacement)
+        self.write_marker(
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+
+        self.assert_allowed(self.invoke("git commit"))
+        mutant = self.mutant_guard(
+            "replace-enabled-policy-read-mutant",
+            '''        result = run_context_git(
+            context,
+            "--no-replace-objects",
+            "show",''',
+            '''        result = run_context_git(
+            context,
+            "show",''',
+        )
+        self.assert_denied(
+            self.invoke("git commit", guard=mutant),
             f"{MARKER_REASON} (fast-path policy drift)",
         )
 
@@ -1483,17 +1851,10 @@ class CommitGuardTests(unittest.TestCase):
             check=True,
             capture_output=True,
         )
-        alternate_diff = subprocess.run(
-            ["git", "diff", "--cached"],
-            cwd=self.repo,
-            env=environment,
-            check=True,
-            capture_output=True,
-        ).stdout
         self.write_marker(
-            digest=hashlib.sha256(alternate_diff).hexdigest(),
             third_line="tier: fast",
             fourth_line=f"policy: {policy_sha}",
+            environment=environment,
         )
 
         self.assert_allowed(self.invoke("git commit", environment=environment))
@@ -1521,17 +1882,10 @@ class CommitGuardTests(unittest.TestCase):
             check=True,
             capture_output=True,
         )
-        alternate_diff = subprocess.run(
-            ["git", "diff", "--cached"],
-            cwd=self.repo,
-            env=environment,
-            check=True,
-            capture_output=True,
-        ).stdout
         self.write_marker(
-            digest=hashlib.sha256(alternate_diff).hexdigest(),
             third_line="tier: fast",
             fourth_line=f"policy: {policy_sha}",
+            environment=environment,
         )
 
         real_git = shutil.which("git")

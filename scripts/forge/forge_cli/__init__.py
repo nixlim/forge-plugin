@@ -2,8 +2,9 @@
 
 Nothing in this package is executable; `cli.py` remains the sole invoked entry point
 (FR-221 matcher and FR-223 corpora pin that path). Modules: `envelope` (reason codes,
-Refusal, FrozenError, Outcome), `policy` (the committed-policy parser), `runtime` (the one
-canonical module for the patchable controls and the late-bound journal-record seam), and
+Refusal, FrozenError, Outcome), `policy` (the committed-policy parser), `candidate`
+(pinned Git-tree identity and bounded review evidence), `runtime` (the one canonical
+module for the patchable controls and the late-bound journal-record seam), and
 `chain_core` (process runner, common-lock arbiter, chain storage, merge state, ingest
 verifiers), `engine` (commit-chain engine, parser construction, and shared helpers), and
 `app` (merge engine, routing, argument parsing, dispatch, and main). The shim re-imports

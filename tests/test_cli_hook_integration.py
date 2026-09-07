@@ -125,13 +125,16 @@ class HookChainIntegrationTests(unittest.TestCase):
         self.git("commit", "--quiet", "-m", "baseline")
         (self.repo / "change.txt").write_text("candidate\n", encoding="utf-8")
         self.git("add", "change.txt")
+        self.object_format = self.git(
+            "rev-parse", "--show-object-format"
+        ).stdout.strip()
+        self.tree_oid = self.git("write-tree").stdout.strip()
         self.candidate = hashlib.sha256(
-            subprocess.run(
-                ["git", "diff", "--cached"],
-                cwd=self.repo,
-                check=True,
-                capture_output=True,
-            ).stdout
+            b"forge-commit-candidate/2\0"
+            + self.object_format.encode("ascii")
+            + b"\0"
+            + self.tree_oid.encode("ascii")
+            + b"\n"
         ).hexdigest()
         (self.repo / "nested").mkdir()
 
@@ -258,7 +261,14 @@ class HookChainIntegrationTests(unittest.TestCase):
                 "anomalies": [],
             },
             "candidate": {
+                "schema": "forge-commit-candidate/2",
                 "sha256": candidate_sha,
+                "authorization_id": candidate_sha,
+                "object_format": self.object_format,
+                "tree_oid": self.tree_oid,
+                "base_commit_oid": head,
+                "review_diff_sha256": "3" * 64,
+                "review_diff_byte_count": 1,
                 "computed_at": self.iso_z(now),
             },
             "tier": {
@@ -281,6 +291,8 @@ class HookChainIntegrationTests(unittest.TestCase):
             "approval": {},
             "authorization": authorization,
             "commit_result": {},
+            "run_binding": None,
+            "journal_outbox": None,
         }
         path = self.repo / ".forge" / "chains" / f"{CHAIN_ID}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -306,12 +318,32 @@ class HookChainIntegrationTests(unittest.TestCase):
             contents
             if contents is not None
             else (
-                f"{self.candidate}\n"
+                "format: forge-commit-candidate/2\n"
+                f"candidate: {self.candidate}\n"
+                f"tree: {self.object_format}:{self.tree_oid}\n"
+                "authorized-at: "
                 f"{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
             ),
             encoding="utf-8",
         )
         return marker
+
+    def write_quarantine(self) -> Path:
+        quarantine = (
+            self.repo
+            / ".forge"
+            / "tmp"
+            / "authorized"
+            / f"{self.candidate}.quarantine"
+        )
+        quarantine.write_text(
+            "format: forge-commit-candidate-quarantine/1\n"
+            f"candidate: {self.candidate}\n"
+            f"produced: {self.git('rev-parse', 'HEAD').stdout.strip()}\n"
+            "reason: produced-commit-mismatch\n",
+            encoding="ascii",
+        )
+        return quarantine
 
     def test_chain_and_marker_each_authorize_independently(self) -> None:
         chain_path = self.write_chain()
@@ -324,6 +356,106 @@ class HookChainIntegrationTests(unittest.TestCase):
         chain_path.write_text("{corrupt\n", encoding="utf-8")
         self.write_marker()
         self.assert_allowed(self.invoke("git commit -m marker-over-corrupt-chain"))
+
+    def test_quarantine_latch_overrides_both_marker_and_chain_authorization(self) -> None:
+        self.write_chain()
+        marker = self.write_marker()
+        quarantine = self.write_quarantine()
+
+        self.assert_denied(
+            self.invoke("git commit -m quarantined"),
+            f"{MARKER_REASON} (marker malformed)",
+        )
+        self.assertTrue(marker.is_file())
+        self.assertTrue(quarantine.is_file())
+
+    def test_legacy_candidate_chain_cannot_authorize_v2_observation(self) -> None:
+        chain_path = self.write_chain()
+        state = json.loads(chain_path.read_text(encoding="utf-8"))
+        state["candidate"] = {
+            "sha256": self.candidate,
+            "computed_at": state["candidate"]["computed_at"],
+        }
+        chain_path.write_text(
+            json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+        self.assert_denied(
+            self.invoke("git commit -m legacy-chain"),
+            f"{MARKER_REASON} (marker missing)",
+        )
+
+    def test_partial_extra_and_malformed_v2_candidates_cannot_authorize(self) -> None:
+        mutations = {
+            "missing-base": lambda record: record.pop("base_commit_oid"),
+            "extra-key": lambda record: record.__setitem__("unexpected", True),
+            "bad-base": lambda record: record.__setitem__("base_commit_oid", "1" * 12),
+            "wrong-full-base": lambda record: record.__setitem__(
+                "base_commit_oid", "0" * len(self.tree_oid)
+            ),
+            "bad-review-digest": lambda record: record.__setitem__(
+                "review_diff_sha256", "A" * 64
+            ),
+            "boolean-byte-count": lambda record: record.__setitem__(
+                "review_diff_byte_count", True
+            ),
+            "negative-byte-count": lambda record: record.__setitem__(
+                "review_diff_byte_count", -1
+            ),
+            "bad-computed-at": lambda record: record.__setitem__(
+                "computed_at", "not-a-timestamp"
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(case=name):
+                chain_path = self.write_chain()
+                state = json.loads(chain_path.read_text(encoding="utf-8"))
+                mutate(state["candidate"])
+                chain_path.write_text(
+                    json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                self.assert_denied(
+                    self.invoke(f"git commit -m {name}"),
+                    f"{MARKER_REASON} (marker missing)",
+                )
+
+    def test_only_canonical_current_top_level_chain_shape_can_authorize_v2(self) -> None:
+        def legacy_shape(state: dict[str, object]) -> None:
+            state.pop("run_binding")
+            state.pop("journal_outbox")
+
+        mutations = {
+            "partial-current-shape": lambda state: state.pop("journal_outbox"),
+            "legacy-top-level-shape": legacy_shape,
+            "extra-top-level-key": lambda state: state.__setitem__("unexpected", None),
+            "malformed-run-binding": lambda state: state.__setitem__(
+                "run_binding", {"run_id": "run-only"}
+            ),
+            "malformed-journal-outbox": lambda state: state.__setitem__(
+                "journal_outbox",
+                {
+                    "idempotency_key": "4" * 64,
+                    "batch_digest": "5" * 64,
+                    "record_count": True,
+                    "source_event_digest": "4" * 64,
+                },
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(case=name):
+                chain_path = self.write_chain()
+                state = json.loads(chain_path.read_text(encoding="utf-8"))
+                mutate(state)
+                chain_path.write_text(
+                    json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                self.assert_denied(
+                    self.invoke(f"git commit -m {name}"),
+                    f"{MARKER_REASON} (marker missing)",
+                )
 
     def test_operator_denial_emits_one_guard_event_after_exact_decision(self) -> None:
         result = self.invoke(

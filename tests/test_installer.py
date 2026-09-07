@@ -946,7 +946,8 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "git show HEAD:forge-project.md",
             "isolated clean checkout",
             "first-policy bootstrap",
-            "two-line reviewed marker",
+            "four-line v2 reviewed marker",
+            "tree authorization ID",
             "second explicit approval",
         ):
             self.assertIn(required, skill)

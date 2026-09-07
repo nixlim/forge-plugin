@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ast
+from datetime import datetime, timezone
 import re
 import unittest
 from pathlib import Path
+
+from tests._cli_loader import package_module
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = (ROOT / "system" / "template" / "forge-project.md").read_text(
@@ -345,31 +348,35 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("1200-second timeout", step_two)
 
     def test_review_loop_and_candidate_marker_contract(self) -> None:
-        self.assertIn("git diff --cached", COMMIT_SKILL)
-        self.assertIn("shasum -a 256", COMMIT_SKILL)
+        self.assertNotIn("git diff --cached", COMMIT_SKILL)
+        self.assertNotIn("shasum -a 256", COMMIT_SKILL)
+        self.assertIn("from forge_cli import candidate", COMMIT_SKILL)
+        self.assertIn("candidate.snapshot(", COMMIT_SKILL)
+        self.assertIn("candidate.observe_index(context)", COMMIT_SKILL)
+        self.assertIn("candidate.render_marker(", COMMIT_SKILL)
+        self.assertIn("candidate.marker_timestamp_for_cleanup(raw)", COMMIT_SKILL)
         self.assertIn("at most 8 review", COMMIT_SKILL)
         self.assertIn("requires explicit user approval", COMMIT_SKILL)
         self.assertIn("skip: user-directed", COMMIT_SKILL)
         self.assertIn(
-            'commit_marker="$forge_main_root/.forge/tmp/authorized/$reviewed_diff_sha256"',
+            '`commit_marker="$forge_main_root/.forge/tmp/authorized/$authorization_id"`',
             COMMIT_SKILL,
         )
-        self.assertIn("reviewed_diff_sha256", COMMIT_SKILL)
-        self.assertGreaterEqual(COMMIT_SKILL.count("set -o pipefail"), 3)
-        self.assertIn("could not hash staged diff — review blocked", COMMIT_SKILL)
-        self.assertIn("could not hash staged diff — review skip blocked", COMMIT_SKILL)
+        self.assertIn("review_diff_sha256", COMMIT_SKILL)
+        self.assertIn("review digest remains evidence", COMMIT_SKILL)
+        self.assertIn("owner-controlled mode-0600 artifact", COMMIT_SKILL)
         self.assertIn("re-run the affected Step 2 validations", COMMIT_SKILL)
         self.assertIn("restart Step 4", COMMIT_SKILL)
-        invalidation = "reviewed_diff_sha256=''\ncommit_marker=''"
+        invalidation = "authorization_id=''\ncandidate_object_format=''\ncandidate_tree_oid=''"
         self.assertLess(COMMIT_SKILL.index(invalidation), COMMIT_SKILL.index("## Step 1 —"))
-        control_wait = "then wait for explicit approval naming the reviewed candidate"
-        pass_write = (
-            "printf '%s\\n%s\\n' \"$reviewed_diff_sha256\" \"$reviewed_at\" "
-            '> "$commit_marker"'
-        )
+        control_wait = "then wait for explicit\napproval naming that authorization ID"
+        pass_write = "raw = candidate.render_marker("
         self.assertLess(COMMIT_SKILL.index(invalidation), COMMIT_SKILL.index(control_wait))
         self.assertLess(COMMIT_SKILL.index(control_wait), COMMIT_SKILL.index(pass_write))
         self.assertIn("leaves no authorization marker behind", COMMIT_SKILL)
+        self.assertIn("later Step 4 attempts refuse to consume them while fresh", COMMIT_SKILL)
+        self.assertIn('quarantine_latch="${commit_marker}.quarantine"', COMMIT_SKILL)
+        self.assertIn("retained marker is not a\nreusable capability", COMMIT_SKILL)
 
     def test_assertion_and_reviewer_measurement_events_are_exact_and_advisory(self) -> None:
         sensor = COMMIT_SKILL.split(
@@ -382,7 +389,7 @@ class CommitSkillTests(unittest.TestCase):
         ):
             with self.subTest(event=event):
                 self.assertIn(event, sensor)
-        self.assertIn("exact `reviewed_diff_sha256`", sensor)
+        self.assertIn("exact `authorization_id`", sensor)
         self.assertIn("surface `/forge:commit`", sensor)
         self.assertIn("clean sensor result", sensor)
         self.assertIn("emits no assertion event", sensor)
@@ -394,7 +401,7 @@ class CommitSkillTests(unittest.TestCase):
         )[1].split("Give the reviewer", 1)[0]
         self.assertIn("`review_cheap_finding`", reviewer)
         self.assertIn("`review_final_finding`", reviewer)
-        self.assertIn("exact\n`$reviewed_diff_sha256`", reviewer)
+        self.assertIn("exact\n`$authorization_id`", reviewer)
         self.assertIn("surface `/forge:commit`", reviewer)
         for severity in ("`CRITICAL`", "`MAJOR`", "`MINOR`"):
             self.assertIn(severity, reviewer)
@@ -403,24 +410,29 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("never changes the verdict, iteration, or exit\nstatus", reviewer)
 
     def test_gate_time_tiering_is_exact_promote_only_and_non_narrowable(self) -> None:
-        invocation = (
-            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py" \\\n'
-            '  --repo "$PWD" --policy-sha "$policy_sha" --staged \\\n'
-            '  "${declared_args[@]}"'
-        )
-        self.assertIn(invocation, COMMIT_SKILL)
+        for binding in (
+            "FORGE_CANDIDATE_SCHEMA=forge-commit-candidate/2",
+            'FORGE_CANDIDATE_AUTHORIZATION_ID="$authorization_id"',
+            'FORGE_CANDIDATE_OBJECT_FORMAT="$candidate_object_format"',
+            'FORGE_CANDIDATE_TREE_OID="$candidate_tree_oid"',
+            'FORGE_CANDIDATE_BASE_COMMIT_OID="$candidate_base_commit_oid"',
+        ):
+            self.assertIn(binding, COMMIT_SKILL)
+        self.assertIn('python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/risk_tier.py"', COMMIT_SKILL)
+        self.assertIn('--repo "$PWD" --policy-sha "$policy_sha" --staged', COMMIT_SKILL)
         self.assertIn('declared_tier="${declared_tier:-}"', COMMIT_SKILL)
         self.assertIn('declared_args=()', COMMIT_SKILL)
         self.assertIn('"${declared_args[@]}"', COMMIT_SKILL)
         self.assertIn('fast|standard|hard)', COMMIT_SKILL)
-        self.assertIn('effective_tier="$(python3 -c', COMMIT_SKILL)
-        self.assertIn('json.load(sys.stdin).get("effective_tier")', COMMIT_SKILL)
+        self.assertIn("metadata, evidence = map(json.loads, lines)", COMMIT_SKILL)
+        self.assertIn("observed_paths != expected_paths", COMMIT_SKILL)
+        self.assertIn('evidence.get("policy_sha") != sys.argv[1]', COMMIT_SKILL)
         self.assertIn('echo "forge: invalid risk-tier evidence"', COMMIT_SKILL)
         classifier = COMMIT_SKILL.split("Before selecting a reviewer", 1)[1].split(
             "Route the review as follows:", 1
         )[0]
         for evidence in (
-            "exact staged\npath list",
+            "exact snapshot\npath list",
             "every matched tier/trigger/category row",
             "every formatting-category decision",
             "dependency-floor decision",
@@ -436,7 +448,90 @@ class CommitSkillTests(unittest.TestCase):
         self.assertIn("matching no tier row defaults to standard", classifier)
         self.assertIn("unknown\nmanifest membership impose at least standard", classifier)
 
-    def test_fast_skips_only_review_and_writes_exact_four_line_marker(self) -> None:
+    def test_shared_marker_renderer_and_parser_pin_exact_v2_bytes(self) -> None:
+        candidate = package_module("candidate")
+        tree_oid = "1" * 40
+        authorization_id = candidate.authorization_id("sha1", tree_oid)
+        observation = candidate.CandidateObservation(
+            object_format="sha1",
+            tree_oid=tree_oid,
+            authorization_id=authorization_id,
+        )
+        authorized_at = "2026-09-07T12:00:00Z"
+        now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+        prefix = (
+            b"format: forge-commit-candidate/2\n"
+            + f"candidate: {authorization_id}\n".encode("ascii")
+            + f"tree: sha1:{tree_oid}\n".encode("ascii")
+            + b"authorized-at: 2026-09-07T12:00:00Z\n"
+        )
+        vectors = (
+            (candidate.render_marker(observation, authorized_at), prefix),
+            (
+                candidate.render_marker(observation, authorized_at, skip=True),
+                prefix + b"skip: user-directed\n",
+            ),
+            (
+                candidate.render_marker(
+                    observation, authorized_at, fast_policy="2" * 40
+                ),
+                prefix + b"tier: fast\npolicy: " + b"2" * 40 + b"\n",
+            ),
+        )
+        for rendered, expected in vectors:
+            with self.subTest(lines=rendered.count(b"\n")):
+                self.assertEqual(rendered, expected)
+                parsed, reason = candidate.parse_marker(
+                    rendered,
+                    filename=authorization_id,
+                    observation=observation,
+                    now=now,
+                )
+                self.assertIsNotNone(parsed)
+                self.assertIsNone(reason)
+        for malformed in (
+            prefix[:-1],
+            prefix + b"\n",
+            prefix.replace(b"\n", b"\r\n"),
+            prefix + b"skip: user-directed\ntier: fast\n",
+        ):
+            with self.subTest(malformed=malformed):
+                parsed, reason = candidate.parse_marker(
+                    malformed,
+                    filename=authorization_id,
+                    observation=observation,
+                    now=now,
+                )
+                self.assertIsNone(parsed)
+                self.assertEqual(reason, "marker malformed")
+
+    def test_skill_contains_only_the_three_exact_v2_marker_fences(self) -> None:
+        standard = (
+            "format: forge-commit-candidate/2\n"
+            "candidate: <64-lowercase-hex authorization-id>\n"
+            "tree: <sha1|sha256>:<full matching tree OID>\n"
+            "authorized-at: <UTC ISO-8601>"
+        )
+        expected = (
+            standard,
+            standard + "\ntier: fast\npolicy: <full commit OID>",
+            standard + "\nskip: user-directed",
+        )
+        observed = tuple(
+            block
+            for block in re.findall(r"```text\n(.*?)\n```", COMMIT_SKILL, re.DOTALL)
+            if block.startswith("format: forge-commit-candidate/")
+        )
+        self.assertEqual(observed, expected)
+        quarantine = (
+            "format: forge-commit-candidate-quarantine/1\n"
+            "candidate: <64-lowercase-hex authorization-id>\n"
+            "produced: <full matching Git OID|none>\n"
+            "reason: produced-commit-mismatch"
+        )
+        self.assertEqual(COMMIT_SKILL.count(f"```text\n{quarantine}\n```"), 1)
+
+    def test_fast_skips_only_review_and_writes_exact_six_line_marker(self) -> None:
         routing = COMMIT_SKILL.split("Route the review as follows:", 1)[1].split(
             "Give the reviewer", 1
         )[0]
@@ -450,20 +545,26 @@ class CommitSkillTests(unittest.TestCase):
             "secret scan",
             "halt",
             "lock",
-            "staged-diff re-verification",
+            "index-tree re-observation",
             "guard recomputation",
+            "produced-commit\n  verification",
             "marker",
         ):
             with self.subTest(retained=retained):
                 self.assertIn(retained, routing)
-        marker_write = (
-            "printf '%s\\n%s\\n%s\\n%s\\n' \"$reviewed_diff_sha256\" \"$reviewed_at\" \\\n"
-            "  'tier: fast' \"policy: $policy_sha\" > \"$commit_marker\""
+        marker = (
+            "format: forge-commit-candidate/2\n"
+            "candidate: <64-lowercase-hex authorization-id>\n"
+            "tree: <sha1|sha256>:<full matching tree OID>\n"
+            "authorized-at: <UTC ISO-8601>\n"
+            "tier: fast\n"
+            "policy: <full commit OID>"
         )
-        self.assertIn(marker_write, COMMIT_SKILL)
-        self.assertIn("if len(lines) not in (2, 3, 4):", COMMIT_SKILL)
-        self.assertIn('lines[2] != "tier: fast"', COMMIT_SKILL)
-        self.assertIn(r'r"policy: (?:[0-9a-f]{40}|[0-9a-f]{64})"', COMMIT_SKILL)
+        self.assertIn(marker, COMMIT_SKILL)
+        self.assertIn("candidate.render_marker(", COMMIT_SKILL)
+        self.assertIn("candidate.parse_marker(", COMMIT_SKILL)
+        self.assertIn('fast_policy=sys.argv[7] if sys.argv[6] == "fast" else None', COMMIT_SKILL)
+        self.assertIn("exact six-line fast marker", COMMIT_SKILL)
         self.assertIn("duplicated/combined/reordered annotation", COMMIT_SKILL)
 
     def test_skip_mapping_is_exact(self) -> None:
@@ -480,13 +581,13 @@ class CommitSkillTests(unittest.TestCase):
             "including a Step 2-only or Step 3-only skip",
             " ".join(COMMIT_SKILL.split()),
         )
-        self.assertIn("A skip directive never supplies that approval", COMMIT_SKILL)
-        self.assertIn("control-class commits are never autonomous", COMMIT_SKILL)
-        skip_approval = "Wait for explicit user approval naming that candidate SHA-256"
-        skip_write = (
-            "printf '%s\\n%s\\n%s\\n' \"$reviewed_diff_sha256\" \"$reviewed_at\" "
-            "'skip: user-directed' > \"$commit_marker\""
+        self.assertIn(
+            "A skip directive never supplies that approval",
+            " ".join(COMMIT_SKILL.split()),
         )
+        self.assertIn("control-class commits are never autonomous", COMMIT_SKILL)
+        skip_approval = "Wait for explicit\nuser approval naming that authorization ID"
+        skip_write = "candidate.render_marker(observation, sys.argv[5], skip=True)"
         self.assertLess(COMMIT_SKILL.index(skip_approval), COMMIT_SKILL.index(skip_write))
 
     def test_step5_script_sequence_and_journal_rules_are_explicit(self) -> None:
@@ -502,15 +603,29 @@ class CommitSkillTests(unittest.TestCase):
         cleanup = step5.split("### Tool call 3 — Cleanup", 1)[1]
         halt = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh" commit'
         acquire = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/acquire-commit-lock.sh" || exit 1'
-        in_lock_hash = 'if ! current_hash="$(git diff --cached | shasum -a 256'
+        in_lock_observation = "observed = candidate.observe_index(context)"
         standalone = commit.split("```bash", 1)[1].split("```", 1)[0].strip()
-        positions = [prepare.index(value) for value in (halt, acquire, in_lock_hash)]
+        positions = [prepare.index(value) for value in (halt, acquire, in_lock_observation)]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(standalone, "git commit -m <safely shell-quoted literal>")
+        self.assertEqual(
+            standalone,
+            "git commit --cleanup=verbatim -m <safely shell-quoted literal>",
+        )
         self.assertNotIn('git commit -m "$commit_message"', COMMIT_SKILL)
         self.assertLess(prepare.index("trap 'cleanup_prepare_failure"), positions[0])
         self.assertGreater(prepare.index("prepare_cleanup_armed=0"), positions[-1])
         self.assertIn("disarm it only after every preparation check passes", prepare)
+        self.assertIn("from forge_cli import candidate", prepare)
+        self.assertIn("candidate.parse_marker(", prepare)
+        self.assertIn("expected_base_commit_oid=", prepare)
+        self.assertIn(
+            'if [ "$pre_commit_head" != "$expected_base_commit_oid" ]; then',
+            prepare,
+        )
+        self.assertIn(
+            'FORGE_CANDIDATE_BASE_COMMIT_OID="$expected_base_commit_oid"',
+            prepare,
+        )
         self.assertIn(
             'for name in ("risk-tiers", "trigger-paths", "file-categories"):',
             prepare,
@@ -525,27 +640,43 @@ class CommitSkillTests(unittest.TestCase):
             cleanup,
         )
         self.assertIn('rm -f "$commit_marker" || {', cleanup)
+        self.assertIn('if [ "$produced_mismatch" -eq 1 ]; then', cleanup)
+        quarantine = cleanup.index('python3 - "$quarantine_latch"')
+        release = cleanup.index("release-commit-lock.sh")
+        self.assertLess(quarantine, release)
+        self.assertIn("format: forge-commit-candidate-quarantine/1", cleanup)
+        self.assertIn("reason: produced-commit-mismatch", cleanup)
+        self.assertIn("os.O_WRONLY | os.O_CREAT | os.O_EXCL", cleanup)
+        self.assertLess(
+            cleanup.index('if [ "$produced_mismatch" -eq 1 ]; then', release),
+            cleanup.index('rm -f "$commit_marker" || {'),
+        )
         self.assertIn("hook allow or denial", step5)
         self.assertIn("Git success or failure", step5)
         self.assertIn("must never be retried", step5)
         self.assertIn('observed_head="$(git rev-parse HEAD', cleanup)
-        self.assertIn('observed_parent="$(git rev-parse "$observed_head^"', cleanup)
-        self.assertIn('observed_hash="$(git diff "$pre_commit_head" "$observed_head"', cleanup)
+        self.assertIn("candidate.read_commit_object(context, observed_head)", cleanup)
+        self.assertIn("produced.tree_headers != (expected_tree,)", cleanup)
+        self.assertIn("produced.parent_headers != (reviewed_base,)", cleanup)
+        self.assertIn("hashlib.sha256(produced.message).hexdigest()", cleanup)
         self.assertIn("commit_succeeded=1", cleanup)
         self.assertIn("commit outcome ambiguous — inspect HEAD before retrying", cleanup)
+        self.assertIn(
+            "forge: produced commit does not match authorized candidate — chain frozen; commit left untouched",
+            cleanup,
+        )
         self.assertIn("Never hold the lock across Step 4", COMMIT_SKILL)
         self.assertIn("Never infer the latest run", COMMIT_SKILL)
         self.assertIn("beginning exactly `gate-1: ` for project-test", COMMIT_SKILL)
         self.assertIn("beginning exactly `gate-2: ` for", COMMIT_SKILL)
         self.assertIn("criterion must be exactly `gate-3: review-final verdict`", COMMIT_SKILL)
         self.assertIn('`result: "failed"`', COMMIT_SKILL)
-        self.assertIn("exact two-line standard/hard PASS marker", COMMIT_SKILL)
-        self.assertIn("exact three-line user-skip marker", COMMIT_SKILL)
-        self.assertIn("exact four-line fast marker", COMMIT_SKILL)
-        self.assertIn("exact four-line fast marker younger than 30 minutes", COMMIT_SKILL)
-        self.assertIn("set -o pipefail", COMMIT_SKILL)
-        self.assertIn('if ! current_hash="$(git diff --cached | shasum -a 256', COMMIT_SKILL)
-        self.assertIn("forge: could not hash staged diff — commit blocked", COMMIT_SKILL)
+        self.assertIn("exact four-line standard/hard PASS marker", COMMIT_SKILL)
+        self.assertIn("exact five-line user-skip marker", COMMIT_SKILL)
+        self.assertIn("exact six-line fast marker younger than 30 minutes", COMMIT_SKILL)
+        self.assertIn("candidate.parse_marker(", COMMIT_SKILL)
+        self.assertNotIn("git diff --cached", COMMIT_SKILL)
+        self.assertNotIn("shasum -a 256", COMMIT_SKILL)
         self.assertIn("failed to consume commit authorization marker", COMMIT_SKILL)
         self.assertIn('rm -f "$commit_marker" || {', COMMIT_SKILL)
         self.assertNotIn(".forge/tmp/commit-authorized", COMMIT_SKILL)
@@ -561,7 +692,9 @@ class CommitSkillTests(unittest.TestCase):
         step5 = COMMIT_SKILL.split("## Step 5 — Prepare, Commit, Cleanup", 1)[1].split(
             "## User-Directed Skips", 1
         )[0]
-        commit = step5.index("git commit -m <safely shell-quoted literal>")
+        commit = step5.index(
+            "git commit --cleanup=verbatim -m <safely shell-quoted literal>"
+        )
         cleanup_heading = step5.index("### Tool call 3 — Cleanup")
         release = step5.index("release-commit-lock.sh", cleanup_heading)
         marker_cleanup = step5.index('rm -f "$commit_marker"', cleanup_heading)

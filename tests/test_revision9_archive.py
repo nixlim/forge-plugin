@@ -509,21 +509,30 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
     @staticmethod
     def binding(
         chain_id: str,
-        candidate: str,
+        candidate: object,
         source_digest: str,
         *,
         review: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        if isinstance(candidate, str):
+            candidate_binding: object = {
+                "kind": "staged-diff-sha256",
+                "value": candidate,
+            }
+        elif isinstance(candidate, dict) and set(candidate) == {"kind", "value"}:
+            candidate_binding = copy.deepcopy(candidate)
+        else:
+            candidate_binding = {
+                "kind": "git-tree-candidate-v2",
+                "value": copy.deepcopy(candidate),
+            }
         preimage: dict[str, object] = {
             "schema": "forge-gate-binding/1",
             "source_record": {
                 "chain_id": chain_id,
                 "event_digest": source_digest,
             },
-            "candidate": {
-                "kind": "staged-diff-sha256",
-                "value": candidate,
-            },
+            "candidate": candidate_binding,
             "review": review,
         }
         return {
@@ -536,7 +545,7 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
         chain_id: str,
         tombstone: dict[str, object],
         *,
-        candidate: str = "a" * 64,
+        candidate: object = "a" * 64,
     ) -> list[dict[str, object]]:
         gate = {
             "_line": 3,
@@ -870,6 +879,110 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
             f".forge/chains/tombstones/{chain_id}.json -->",
             first,
         )
+
+    def test_v2_tombstone_binding_round_trip_and_mixed_dialects_refuse(self) -> None:
+        chain_id = "c-2026-08-28T000016Z-abcd"
+        _path, tombstone, _raw = self.write_absent_tombstone(chain_id)
+        tree_oid = "1" * 40
+        authorization_id = hashlib.sha256(
+            b"forge-commit-candidate/2\0sha1\0"
+            + tree_oid.encode("ascii")
+            + b"\n"
+        ).hexdigest()
+        candidate_value = {
+            "authorization_id": authorization_id,
+            "object_format": "sha1",
+            "tree_oid": tree_oid,
+        }
+        bound = self.tombstone_bound_records(
+            chain_id, tombstone, candidate=candidate_value
+        )
+        package = archive.capture_archive_chain_package(
+            self.repo, self.run_dir, bound, {chain_id}, activated=True
+        )
+        snapshot = package.tombstones[0]
+        resolved = archive.resolve_archive_bindings(
+            self.repo, self.run_dir, bound, package, True
+        )
+        self.assertEqual(
+            resolved[5]["candidate"],
+            {"kind": "git-tree-candidate-v2", "value": candidate_value},
+        )
+        records, head, validation = self.full_tombstone_archive_records(bound)
+        discrepancies = archive.tombstone_discrepancies(package, bound)
+        rendered = [
+            archive.render_archive(
+                repo=self.repo,
+                run_dir=self.run_dir,
+                records=records,
+                closing_head=head,
+                post_close=validation,
+                audit_fragment="## Commitment audit\n\nPASS\n",
+                package=package,
+                bindings=resolved,
+                discrepancies=discrepancies,
+            )
+            for _ in range(2)
+        ]
+        self.assertEqual(rendered[0], rendered[1])
+        self.assertIn(bound[1]["binding"]["binding_id"], rendered[0])
+
+        def replace_candidates(
+            source: list[dict[str, object]],
+            gate_candidate: object,
+            abort_candidate: object | None = None,
+        ) -> list[dict[str, object]]:
+            hostile = copy.deepcopy(source)
+            selected = gate_candidate if abort_candidate is None else abort_candidate
+            for index, candidate in ((0, gate_candidate), (1, selected)):
+                binding = hostile[index]["binding"]
+                assert isinstance(binding, dict)
+                binding["candidate"] = copy.deepcopy(candidate)
+                preimage = {
+                    name: copy.deepcopy(value)
+                    for name, value in binding.items()
+                    if name != "binding_id"
+                }
+                binding["binding_id"] = hashlib.sha256(canonical(preimage)).hexdigest()
+            return hostile
+
+        v2_binding = {"kind": "git-tree-candidate-v2", "value": candidate_value}
+        staged_binding = {
+            "kind": "staged-diff-sha256",
+            "value": authorization_id,
+        }
+        malformed_candidates = {
+            "wrong-formula": {
+                "kind": "git-tree-candidate-v2",
+                "value": {**candidate_value, "authorization_id": "2" * 64},
+            },
+            "wrong-oid-length": {
+                "kind": "git-tree-candidate-v2",
+                "value": {**candidate_value, "tree_oid": tree_oid[:-1]},
+            },
+            "scalar-v2": {
+                "kind": "git-tree-candidate-v2",
+                "value": authorization_id,
+            },
+            "structured-v1": {
+                "kind": "staged-diff-sha256",
+                "value": candidate_value,
+            },
+        }
+        for label, malformed_candidate in malformed_candidates.items():
+            with self.subTest(label=label), self.assertRaisesRegex(
+                archive.ArchiveRefusal, "structured_chain_mismatch$"
+            ):
+                archive.resolve_tombstone_bindings(
+                    snapshot, replace_candidates(bound, malformed_candidate)
+                )
+        with self.assertRaisesRegex(
+            archive.ArchiveRefusal, "structured_chain_mismatch$"
+        ):
+            archive.resolve_tombstone_bindings(
+                snapshot,
+                replace_candidates(bound, staged_binding, v2_binding),
+            )
 
     def test_tombstone_abort_binding_requires_exact_captured_source_fact(self) -> None:
         chain_id = "c-2026-08-28T000012Z-abcd"
@@ -1765,6 +1878,13 @@ class Revision9RealIngestArchiveTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         )
         eligible = archive.derive_captured_ingest_eligible_records(
             self.repo, state, replay_entries, family, "task-01"
+        )
+        self.assertEqual(
+            sum(
+                item.criterion == "gate-2: produced commit identity"
+                for item in eligible
+            ),
+            1,
         )
         selected: list[str] = []
         for item in eligible:

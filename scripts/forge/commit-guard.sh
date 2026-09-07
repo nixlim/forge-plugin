@@ -3,7 +3,7 @@
 #
 # The hook never executes the submitted command. It parses enough of the shell
 # command to identify direct Git invocations, delegates halt enforcement to
-# check-halt.sh, and validates the reviewed staged-diff marker for Forge repos.
+# check-halt.sh, and validates the reviewed tree-candidate marker for Forge repos.
 # forge: new for plugin — enforce halt and reviewed-commit authorization at tool use
 set -uo pipefail
 umask 077
@@ -29,9 +29,30 @@ import subprocess
 import sys
 
 
+_script_dir_value = os.environ.get("FORGE_COMMIT_GUARD_SCRIPT_DIR")
+if _script_dir_value is None:
+    _script_dir_value = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _script_dir_value)
+
+
+_candidate_module_cache: object | None = None
+
+
+def shared_candidate_module() -> object:
+    """Import the shared helper only after the shell-pinned path is installed."""
+
+    global _candidate_module_cache
+    if _candidate_module_cache is None:
+        from forge_cli import candidate as candidate_module
+
+        _candidate_module_cache = candidate_module
+    return _candidate_module_cache
+
+
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
 HASH = re.compile(r"[0-9a-f]{64}")
 COMMIT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+QUARANTINE_SUFFIX = ".quarantine"
 HALT_MESSAGE = re.compile(r"forge: operator halt engaged \(([^)]+)\)")
 HEAD_PLUGIN_REF_LINE = re.compile(br"^plugin_ref: ", re.MULTILINE)
 UPSTREAM_COMMIT_LINE = re.compile(br"^upstream_commit:(?: [^\r\n]*)?\r?$", re.MULTILINE)
@@ -344,6 +365,7 @@ CHAIN_SCHEMA = "forge-chain/1"
 CHAIN_KIND = "commit"
 CHAIN_ID = re.compile(r"c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}")
 CHAIN_TOKEN = re.compile(r"[0-9a-f]{32}")
+RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 CHAIN_STATES = frozenset(
     {
         "classifying",
@@ -378,8 +400,11 @@ CHAIN_STATE_KEYS = frozenset(
         "approval",
         "authorization",
         "commit_result",
+        "run_binding",
+        "journal_outbox",
     }
 )
+LEGACY_CHAIN_STATE_KEYS = CHAIN_STATE_KEYS - {"run_binding", "journal_outbox"}
 CHAIN_OBJECT_KEYS = (
     "policy_source",
     "staging",
@@ -393,6 +418,25 @@ CHAIN_OBJECT_KEYS = (
 )
 AUTHORIZATION_KEYS = frozenset(
     {"token", "candidate", "issued_at", "expires_at", "consumed", "consumed_at"}
+)
+CANDIDATE_V2_KEYS = frozenset(
+    {
+        "schema",
+        "sha256",
+        "authorization_id",
+        "object_format",
+        "tree_oid",
+        "base_commit_oid",
+        "review_diff_sha256",
+        "review_diff_byte_count",
+        "computed_at",
+    }
+)
+RUN_BINDING_KEYS = frozenset(
+    {"run_id", "task_id", "repository", "policy_digest"}
+)
+JOURNAL_OUTBOX_KEYS = frozenset(
+    {"idempotency_key", "batch_digest", "record_count", "source_event_digest"}
 )
 CHAIN_STATE_MAX_BYTES = 1024 * 1024
 
@@ -2650,19 +2694,45 @@ def emit_decision_event(
         os.close(marker_descriptor)
 
 
-def staged_candidate(context: RepoContext) -> str:
+def shared_candidate_context(context: RepoContext) -> object:
+    candidate_module = shared_candidate_module()
+    return candidate_module.context_from_paths(
+        worktree_root=context.worktree_root,
+        git_dir=context.git_dir,
+        common_dir=context.common_dir,
+        index_file=context.index_file,
+        bare=context.bare,
+        environment=context.git_env,
+        effective_cwd=effective_git_cwd(context.action),
+    )
+
+
+def candidate_observation(context: RepoContext) -> object | None:
+    """Observe the selected index through the shared, sanitized v2 helper."""
+
     try:
-        result = run_context_git(context, "diff", "--cached")
-    except OSError:
-        return ""
-    if result.returncode != 0:
-        return ""
-    return hashlib.sha256(result.stdout).hexdigest()
+        candidate_module = shared_candidate_module()
+        candidate_context = shared_candidate_context(context)
+        return candidate_module.observe_index(candidate_context)
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return None
+
+
+def staged_candidate(context: RepoContext) -> str:
+    observation = candidate_observation(context)
+    return observation.authorization_id if observation is not None else ""
 
 
 def head_policy_sha(context: RepoContext) -> str:
     try:
-        result = run_context_git(context, "rev-parse", "HEAD", text=True)
+        result = run_context_git(
+            context,
+            "--no-replace-objects",
+            "rev-parse",
+            "--verify",
+            "HEAD^{commit}",
+            text=True,
+        )
     except OSError:
         return ""
     value = result.stdout.strip() if result.returncode == 0 else ""
@@ -2817,7 +2887,12 @@ def policy_region(policy: bytes, name: str) -> bytes | None:
 
 def committed_policy(context: RepoContext, revision: str) -> bytes | None:
     try:
-        result = run_context_git(context, "show", f"{revision}:forge-project.md")
+        result = run_context_git(
+            context,
+            "--no-replace-objects",
+            "show",
+            f"{revision}:forge-project.md",
+        )
     except OSError:
         return None
     return result.stdout if result.returncode == 0 else None
@@ -2830,6 +2905,7 @@ def policy_drift(context: RepoContext, revision: str) -> bool:
     try:
         resolved = run_context_git(
             context,
+            "--no-replace-objects",
             "rev-parse",
             "--verify",
             f"{revision}^{{commit}}",
@@ -2837,6 +2913,7 @@ def policy_drift(context: RepoContext, revision: str) -> bool:
         )
         ancestor = run_context_git(
             context,
+            "--no-replace-objects",
             "merge-base",
             "--is-ancestor",
             revision,
@@ -2866,9 +2943,26 @@ def policy_drift(context: RepoContext, revision: str) -> bool:
     return False
 
 
-def classifier_eligible(context: RepoContext, revision: str, classifier: Path) -> bool:
-    """Independently derive fast eligibility for the exact staged diff."""
+def classifier_eligible(
+    context: RepoContext,
+    revision: str,
+    classifier: Path,
+    observation: object,
+) -> bool:
+    """Independently derive fast eligibility for the exact candidate tree."""
     environment = context_environment(context)
+    base_commit_oid = head_policy_sha(context)
+    if COMMIT_SHA.fullmatch(base_commit_oid) is None:
+        return False
+    environment.update(
+        {
+            "FORGE_CANDIDATE_SCHEMA": shared_candidate_module().CANDIDATE_SCHEMA,
+            "FORGE_CANDIDATE_AUTHORIZATION_ID": observation.authorization_id,
+            "FORGE_CANDIDATE_OBJECT_FORMAT": observation.object_format,
+            "FORGE_CANDIDATE_TREE_OID": observation.tree_oid,
+            "FORGE_CANDIDATE_BASE_COMMIT_OID": base_commit_oid,
+        }
+    )
     try:
         result = subprocess.run(
             [
@@ -2899,55 +2993,75 @@ def classifier_eligible(context: RepoContext, revision: str, classifier: Path) -
 def marker_failure(
     context: RepoContext,
     classifier: Path,
-    candidate: str,
+    observation: object,
 ) -> str | None:
+    candidate = observation.authorization_id
     marker = context.main_root / ".forge" / "tmp" / "authorized" / candidate
     try:
-        lines = marker.read_text(encoding="utf-8").splitlines()
+        contents = marker.read_bytes()
     except FileNotFoundError:
         return "marker missing"
-    except (OSError, UnicodeError):
+    except OSError:
         return "marker malformed"
 
-    if len(lines) not in (2, 3, 4):
-        return "marker malformed"
-    if HASH.fullmatch(lines[0]) is None:
-        return "marker malformed"
-    if len(lines) == 3 and lines[2] != "skip: user-directed":
-        return "marker malformed"
-    policy_sha: str | None = None
-    if len(lines) == 4:
-        if lines[2] != "tier: fast" or not lines[3].startswith("policy: "):
-            return "marker malformed"
-        policy_sha = lines[3][len("policy: ") :]
-        if COMMIT_SHA.fullmatch(policy_sha) is None:
-            return "marker malformed"
-    try:
-        reviewed_at = datetime.strptime(lines[1], "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        )
-    except ValueError:
-        return "marker malformed"
-    age_seconds = (datetime.now(timezone.utc) - reviewed_at).total_seconds()
-    # More than two minutes ahead is malformed; smaller skew remains acceptable.
-    if age_seconds < -120:
-        return "marker malformed"
-    if age_seconds > 1800:
-        return "marker stale"
-
-    if candidate != lines[0]:
-        return "marker hash mismatch"
+    record, failure = shared_candidate_module().parse_marker(
+        contents,
+        filename=marker.name,
+        observation=observation,
+        now=datetime.now(timezone.utc),
+    )
+    if failure is not None or record is None:
+        return failure or "marker malformed"
+    policy_sha = record.fast_policy
     if policy_sha is None:
         return None
     if policy_drift(context, policy_sha):
         return "fast-path policy drift"
-    if not classifier_eligible(context, policy_sha, classifier):
+    if not classifier_eligible(context, policy_sha, classifier, observation):
         return "fast-path eligibility drift"
     return None
 
 
+def marker_is_quarantined(context: RepoContext, candidate: str) -> bool:
+    """Treat every entry at the deterministic mismatch latch as a denial."""
+
+    quarantine = (
+        context.main_root
+        / ".forge"
+        / "tmp"
+        / "authorized"
+        / f"{candidate}{QUARANTINE_SUFFIX}"
+    )
+    try:
+        os.lstat(quarantine)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def marker_candidate_has_paths(context: RepoContext, observation: object) -> bool:
+    """Require a direct marker to name a nonempty current-HEAD tree delta."""
+
+    try:
+        candidate_module = shared_candidate_module()
+        candidate_context = shared_candidate_context(context)
+        _base_commit_oid, base_tree_oid = candidate_module.base_identity(
+            candidate_context
+        )
+        path_bytes, paths = candidate_module.enumerate_tree_pair(
+            candidate_context,
+            base_tree_oid,
+            observation.tree_oid,
+        )
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return False
+    return bool(path_bytes) and bool(paths)
+
+
 def sweep_stale_markers(context: RepoContext) -> None:
-    """Best-effort cleanup after the invoking candidate has been validated."""
+    """Best-effort expiry cleanup, including non-admissible legacy markers."""
     marker_dir = context.main_root / ".forge" / "tmp" / "authorized"
     try:
         markers = list(marker_dir.iterdir())
@@ -2959,17 +3073,28 @@ def sweep_stale_markers(context: RepoContext) -> None:
         if HASH.fullmatch(marker.name) is None:
             continue
         try:
-            lines = marker.read_text(encoding="utf-8").splitlines()
-            reviewed_at = datetime.strptime(
-                lines[1], "%Y-%m-%dT%H:%M:%SZ"
-            ).replace(tzinfo=timezone.utc)
-        except (IndexError, OSError, UnicodeError, ValueError):
+            contents = marker.read_bytes()
+        except OSError:
+            continue
+        try:
+            reviewed_at = shared_candidate_module().marker_timestamp_for_cleanup(contents)
+        except (ImportError, RuntimeError, ValueError):
+            return
+        if reviewed_at is None:
             continue
         if (now - reviewed_at).total_seconds() <= 1800:
             continue
         try:
             marker.unlink()
         except OSError:
+            continue
+        quarantine = marker.with_name(f"{marker.name}{QUARANTINE_SUFFIX}")
+        try:
+            quarantine.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # Leaving the latch behind is fail-closed for a future same-tree marker.
             pass
 
 
@@ -3021,7 +3146,10 @@ def _read_chain_state(directory: int, name: str) -> dict[str, object] | None:
             os.close(descriptor)
 
     chain_id = name[:-5]
-    if not isinstance(loaded, dict) or set(loaded) != CHAIN_STATE_KEYS:
+    if not isinstance(loaded, dict):
+        return None
+    state_keys = set(loaded)
+    if state_keys not in (CHAIN_STATE_KEYS, LEGACY_CHAIN_STATE_KEYS):
         return None
     if (
         loaded.get("schema") != CHAIN_SCHEMA
@@ -3037,6 +3165,37 @@ def _read_chain_state(directory: int, name: str) -> dict[str, object] | None:
         return None
     if any(not isinstance(loaded.get(key), dict) for key in CHAIN_OBJECT_KEYS):
         return None
+    if state_keys == CHAIN_STATE_KEYS:
+        run_binding = loaded.get("run_binding")
+        if run_binding is not None and (
+            not isinstance(run_binding, dict)
+            or set(run_binding) != RUN_BINDING_KEYS
+            or not isinstance(run_binding.get("run_id"), str)
+            or RUN_ID.fullmatch(run_binding["run_id"]) is None
+            or not isinstance(run_binding.get("task_id"), str)
+            or not run_binding["task_id"]
+            or not isinstance(run_binding.get("repository"), str)
+            or not Path(run_binding["repository"]).is_absolute()
+            or run_binding["repository"] != loaded["staging"].get("worktree_root")
+            or not isinstance(run_binding.get("policy_digest"), str)
+            or HASH.fullmatch(run_binding["policy_digest"]) is None
+            or run_binding["policy_digest"] != loaded["policy_source"].get("digest")
+        ):
+            return None
+        journal_outbox = loaded.get("journal_outbox")
+        if journal_outbox is not None and (
+            not isinstance(journal_outbox, dict)
+            or set(journal_outbox) != JOURNAL_OUTBOX_KEYS
+            or not isinstance(journal_outbox.get("idempotency_key"), str)
+            or HASH.fullmatch(journal_outbox["idempotency_key"]) is None
+            or not isinstance(journal_outbox.get("batch_digest"), str)
+            or HASH.fullmatch(journal_outbox["batch_digest"]) is None
+            or type(journal_outbox.get("record_count")) is not int
+            or journal_outbox["record_count"] <= 0
+            or journal_outbox.get("source_event_digest")
+            != journal_outbox.get("idempotency_key")
+        ):
+            return None
     if any(
         _chain_timestamp(loaded.get(key)) is None
         for key in ("created_at", "last_event_at", "inactive_after")
@@ -3105,15 +3264,67 @@ def _live_chain_states(context: RepoContext) -> list[dict[str, object]]:
     return states
 
 
-def chain_authorizes_commit(context: RepoContext, candidate: str) -> bool:
-    if HASH.fullmatch(candidate) is None:
+def chain_authorizes_commit(
+    context: RepoContext, observation: object | None
+) -> bool:
+    if observation is None:
+        return False
+    authorization_id = observation.authorization_id
+    if HASH.fullmatch(authorization_id) is None:
         return False
     now = datetime.now(timezone.utc)
+    current_head = head_policy_sha(context)
     for state in _live_chain_states(context):
         if state["state"] != "authorized":
             continue
+        if set(state) != CHAIN_STATE_KEYS:
+            continue
         candidate_record = state["candidate"]
-        if candidate_record.get("sha256") != candidate:
+        if set(candidate_record) != CANDIDATE_V2_KEYS:
+            continue
+        if candidate_record.get("schema") != shared_candidate_module().CANDIDATE_SCHEMA:
+            continue
+        if candidate_record.get("authorization_id") != authorization_id:
+            continue
+        if candidate_record.get("sha256") != authorization_id:
+            continue
+        if candidate_record.get("object_format") != observation.object_format:
+            continue
+        if candidate_record.get("tree_oid") != observation.tree_oid:
+            continue
+        object_format = candidate_record.get("object_format")
+        tree_oid = candidate_record.get("tree_oid")
+        oid_length = 40 if object_format == "sha1" else 64 if object_format == "sha256" else 0
+        if (
+            not isinstance(tree_oid, str)
+            or oid_length == 0
+            or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", tree_oid) is None
+        ):
+            continue
+        base_commit_oid = candidate_record.get("base_commit_oid")
+        if base_commit_oid is not None and (
+            not isinstance(base_commit_oid, str)
+            or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", base_commit_oid) is None
+        ):
+            continue
+        if base_commit_oid != state.get("repo_head") or state.get("repo_head") != current_head:
+            continue
+        review_diff_sha256 = candidate_record.get("review_diff_sha256")
+        if (
+            not isinstance(review_diff_sha256, str)
+            or HASH.fullmatch(review_diff_sha256) is None
+        ):
+            continue
+        review_diff_byte_count = candidate_record.get("review_diff_byte_count")
+        if (
+            isinstance(review_diff_byte_count, bool)
+            or not isinstance(review_diff_byte_count, int)
+            or review_diff_byte_count < 0
+            or review_diff_byte_count
+            > shared_candidate_module().REVIEW_DIFF_MAX_BYTES
+        ):
+            continue
+        if _chain_timestamp(candidate_record.get("computed_at")) is None:
             continue
         authorization = state["authorization"]
         if set(authorization) != AUTHORIZATION_KEYS:
@@ -3125,7 +3336,7 @@ def chain_authorizes_commit(context: RepoContext, candidate: str) -> bool:
             continue
         if authorization.get("consumed_at") is not None:
             continue
-        if authorization.get("candidate") != candidate:
+        if authorization.get("candidate") != authorization_id:
             continue
         issued_at = _chain_timestamp(authorization.get("issued_at"))
         expires_at = _chain_timestamp(authorization.get("expires_at"))
@@ -3435,18 +3646,32 @@ def main() -> int:
             continue
         if not manifest_requires_marker(context):
             continue
-        candidate = staged_candidate(context)
+        observation = candidate_observation(context)
+        candidate = observation.authorization_id if observation is not None else ""
+        quarantined = (
+            marker_is_quarantined(context, candidate)
+            if observation is not None
+            else False
+        )
         marker_state = (
-            marker_failure(context, classifier, candidate)
-            if candidate
+            marker_failure(context, classifier, observation)
+            if observation is not None
             else "marker hash mismatch"
         )
-        chain_authorized = chain_authorizes_commit(context, candidate)
+        if (
+            marker_state is None
+            and observation is not None
+            and not marker_candidate_has_paths(context, observation)
+        ):
+            marker_state = "marker hash mismatch"
+        chain_authorized = chain_authorizes_commit(context, observation)
         # FR-090 requires the current candidate's state to be determined before
         # the age sweep, so a present stale marker retains its exact denial.
         sweep_stale_markers(context)
         failure = (
-            marker_state
+            "marker malformed"
+            if quarantined
+            else marker_state
             if marker_state is not None and not chain_authorized
             else (None if commit_candidate_is_stable(action, command) else "marker hash mismatch")
         )
@@ -3492,7 +3717,7 @@ except Exception as exc:  # fail closed: never a bare traceback with exit 1
     raise SystemExit(2)
 PY
 
-exec python3 -c "$python_code" \
+FORGE_COMMIT_GUARD_SCRIPT_DIR="$script_dir" exec python3 -c "$python_code" \
     "$script_dir/check-halt.sh" \
     "$script_dir/risk_tier.py" \
     "$script_dir/emit-decision-event.py" \

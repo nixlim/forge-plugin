@@ -105,6 +105,21 @@ IngestProofVerifier = Callable[
 ]
 _INGEST_PROOF_VERIFIER: IngestProofVerifier | None = None
 
+_COMMIT_CANDIDATE_V2_SCHEMA = "forge-commit-candidate/2"
+_COMMIT_CANDIDATE_V2_KEYS = frozenset(
+    {
+        "schema",
+        "sha256",
+        "authorization_id",
+        "object_format",
+        "tree_oid",
+        "base_commit_oid",
+        "review_diff_sha256",
+        "review_diff_byte_count",
+        "computed_at",
+    }
+)
+
 
 def register_merge_transition_reducer(reducer: MergeTransitionReducer) -> None:
     """Install task-04's authoritative DM-014 delta reducer exactly once."""
@@ -142,6 +157,7 @@ _COMMIT_EVENT_NAMES = frozenset(
         "chain_started",
         "classified",
         "commit_close_recovered",
+        "commit_identity_checked",
         "commit_intent",
         "commit_intent_rolled_back",
         "commit_produced",
@@ -245,7 +261,7 @@ _COMMIT_STATE_TRANSITIONS = {
     "authorized": frozenset(
         {"authorized", "classifying", "committing", "aborted"}
     ),
-    "committing": frozenset({"committing", "authorized", "closed"}),
+    "committing": frozenset({"committing", "authorized", "closed", "aborted"}),
     # A receipted landing acknowledgement is the sole terminal self-event;
     # Revision 13 removes closed -> aborted (abort refuses terminal chains).
     "closed": frozenset({"closed"}),
@@ -539,6 +555,8 @@ _COMMIT_EVENT_TOP_LEVEL_CHANGES: dict[str, frozenset[str]] = {
     "candidate_restaged": frozenset(
         {
             "state",
+            "repo_head",
+            "policy_source",
             "paths",
             "staging",
             "candidate",
@@ -551,13 +569,14 @@ _COMMIT_EVENT_TOP_LEVEL_CHANGES: dict[str, frozenset[str]] = {
     ),
     "candidate_staged": frozenset({"paths", "staging", "candidate"}),
     "abort_disposition_recorded": frozenset(),
-    "chain_aborted": frozenset({"state", "commit_result"}),
+    "chain_aborted": frozenset({"state", "authorization", "commit_result"}),
     "chain_closed": frozenset({"state", "commit_result"}),
     "chain_started": frozenset(_COMMIT_STATE_KEYS),
     "classified": frozenset({"state", "staging", "tier", "steps"}),
     "commit_close_recovered": frozenset(
         {"state", "repo_head", "authorization", "commit_result"}
     ),
+    "commit_identity_checked": frozenset({"commit_result"}),
     "commit_intent": frozenset({"state", "commit_result"}),
     "commit_intent_rolled_back": frozenset({"state", "commit_result"}),
     "commit_produced": frozenset({"repo_head", "commit_result"}),
@@ -633,6 +652,9 @@ _COMMIT_DETAIL_KEYS: dict[str, frozenset[str]] = {
     "chain_started": frozenset({"paths"}),
     "classified": frozenset({"effective_tier", "control"}),
     "commit_close_recovered": frozenset({"commit_sha", "candidate"}),
+    "commit_identity_checked": frozenset(
+        {"result", "produced_sha", "expected", "observed", "checks", "transcript"}
+    ),
     "commit_intent": frozenset({"candidate", "pre_head"}),
     "commit_intent_rolled_back": frozenset({"pre_head", "candidate"}),
     "commit_produced": frozenset({"commit_sha", "candidate"}),
@@ -1860,6 +1882,116 @@ def _merge_complete_tuple_valid(
     return True
 
 
+def _commit_candidate_v2_binding_value(
+    candidate: object,
+) -> dict[str, str] | None:
+    """Return the exact DM-001 value for a valid DM-012 v2 candidate."""
+
+    if (
+        not isinstance(candidate, dict)
+        or set(candidate) != _COMMIT_CANDIDATE_V2_KEYS
+        or candidate.get("schema") != _COMMIT_CANDIDATE_V2_SCHEMA
+    ):
+        return None
+    authorization_id = candidate.get("authorization_id")
+    object_format = candidate.get("object_format")
+    tree_oid = candidate.get("tree_oid")
+    base_commit_oid = candidate.get("base_commit_oid")
+    review_diff_sha256 = candidate.get("review_diff_sha256")
+    review_diff_byte_count = candidate.get("review_diff_byte_count")
+    if (
+        not isinstance(authorization_id, str)
+        or journal.HEX_SHA256_PATTERN.fullmatch(authorization_id) is None
+        or candidate.get("sha256") != authorization_id
+        or journal._git_tree_candidate_authorization_id(object_format, tree_oid)
+        != authorization_id
+        or not isinstance(object_format, str)
+        or not isinstance(tree_oid, str)
+        or (
+            base_commit_oid is not None
+            and (
+                not isinstance(base_commit_oid, str)
+                or len(base_commit_oid)
+                != journal.BINDING_GIT_OBJECT_FORMAT_LENGTHS.get(object_format)
+                or journal.GIT_OBJECT_ID_PATTERN.fullmatch(base_commit_oid) is None
+            )
+        )
+        or not isinstance(review_diff_sha256, str)
+        or journal.HEX_SHA256_PATTERN.fullmatch(review_diff_sha256) is None
+        or type(review_diff_byte_count) is not int
+        or int(review_diff_byte_count) < 0
+        or _utc_value(candidate.get("computed_at")) is None
+    ):
+        return None
+    return {
+        "authorization_id": authorization_id,
+        "object_format": object_format,
+        "tree_oid": tree_oid,
+    }
+
+
+def _commit_candidate_is_v2(state: object) -> bool:
+    return bool(
+        isinstance(state, dict)
+        and _commit_candidate_v2_binding_value(state.get("candidate")) is not None
+    )
+
+
+def _commit_binding_authorization(candidate: object) -> str | None:
+    """Project the scalar authority stored by commit gate and approval facts."""
+
+    if not isinstance(candidate, dict):
+        return None
+    kind = candidate.get("kind")
+    value = candidate.get("value")
+    if kind == "staged-diff-sha256" and isinstance(value, str):
+        return value
+    if kind == "git-tree-candidate-v2" and isinstance(value, dict):
+        authorization_id = value.get("authorization_id")
+        return authorization_id if isinstance(authorization_id, str) else None
+    return None
+
+
+def _commit_identity(state: object) -> dict[str, object] | None:
+    if not isinstance(state, dict):
+        return None
+    result = state.get("commit_result")
+    identity = result.get("identity") if isinstance(result, dict) else None
+    return identity if isinstance(identity, dict) else None
+
+
+def _commit_v2_landing_identity_valid(state: object) -> bool:
+    """Require the durable produced-object PASS that authorizes a v2 landing."""
+
+    if not isinstance(state, dict) or not _commit_candidate_is_v2(state):
+        return False
+    result = state.get("commit_result")
+    identity = _commit_identity(state)
+    candidate = state.get("candidate")
+    intent = result.get("intent") if isinstance(result, dict) else None
+    commit_sha = result.get("commit_sha") if isinstance(result, dict) else None
+    authorization = state.get("authorization")
+    object_format = candidate.get("object_format") if isinstance(candidate, dict) else None
+    return bool(
+        isinstance(candidate, dict)
+        and isinstance(result, dict)
+        and isinstance(identity, dict)
+        and isinstance(intent, dict)
+        and isinstance(authorization, dict)
+        and identity.get("result") == "passed"
+        and identity.get("produced_sha") == commit_sha
+        and isinstance(commit_sha, str)
+        and journal.GIT_OBJECT_ID_PATTERN.fullmatch(commit_sha) is not None
+        and len(commit_sha)
+        == journal.BINDING_GIT_OBJECT_FORMAT_LENGTHS.get(object_format)
+        and intent.get("candidate") == candidate.get("authorization_id")
+        and intent.get("authorization_id") == candidate.get("authorization_id")
+        and intent.get("object_format") == candidate.get("object_format")
+        and intent.get("expected_tree_oid") == candidate.get("tree_oid")
+        and authorization.get("consumed") is True
+    )
+
+
 def _state_shape_valid(
     state: object,
     chain_id: str,
@@ -1905,8 +2037,12 @@ def _state_shape_valid(
             )
         ):
             return False
-        candidate = state["candidate"].get("sha256")
-        if candidate is not None and (
+        candidate_record = state["candidate"]
+        candidate = candidate_record.get("sha256")
+        if "schema" in candidate_record:
+            if _commit_candidate_v2_binding_value(candidate_record) is None:
+                return False
+        elif candidate is not None and (
             not isinstance(candidate, str)
             or journal.HEX_SHA256_PATTERN.fullmatch(candidate) is None
         ):
@@ -2356,6 +2492,19 @@ def _commit_transition_valid(
         or after_state not in _COMMIT_STATE_TRANSITIONS.get(before_state, frozenset())
     ):
         return False
+    prior_result = prior.get("commit_result")
+    prior_identity = (
+        prior_result.get("identity") if isinstance(prior_result, dict) else None
+    )
+    if (
+        isinstance(prior_result, dict)
+        and prior_result.get("mismatch_latched") is True
+        and isinstance(prior_identity, dict)
+        and prior_identity.get("result") == "failed"
+        and event_name
+        not in {"journal_receipted", "chain_aborted", "abort_disposition_recorded"}
+    ):
+        return False
 
     if event_name == "gate_recorded":
         prior_steps = prior.get("steps")
@@ -2441,12 +2590,85 @@ def _commit_transition_valid(
         and not _commit_candidate_authority_cleared(current)
     ):
         return False
+    v1_to_v2_head_restage = bool(
+        event_name == "candidate_restaged"
+        and not _commit_candidate_is_v2(prior)
+        and _commit_candidate_is_v2(current)
+        and prior.get("repo_head") != current.get("repo_head")
+    )
+    if event_name == "candidate_restaged" and (
+        prior.get("repo_head") != current.get("repo_head")
+        or prior.get("policy_source") != current.get("policy_source")
+    ):
+        prior_policy = prior.get("policy_source")
+        current_policy = current.get("policy_source")
+        if not (
+            v1_to_v2_head_restage
+            and isinstance(prior_policy, dict)
+            and isinstance(current_policy, dict)
+            and isinstance(current_candidate, dict)
+            and prior_policy.get("digest") == current_policy.get("digest")
+            and current_policy.get("sha") == current.get("repo_head")
+            and current_candidate.get("base_commit_oid") == current.get("repo_head")
+        ):
+            return False
+    if event_name == "commit_identity_checked":
+        result = current.get("commit_result")
+        identity = _commit_identity(current)
+        expected_result = copy.deepcopy(prior_result)
+        if not isinstance(expected_result, dict) or not isinstance(identity, dict):
+            return False
+        expected_result["identity"] = copy.deepcopy(identity)
+        if identity.get("result") == "failed":
+            expected_result["mismatch_latched"] = True
+        authorization = current.get("authorization")
+        produced_sha = identity.get("produced_sha")
+        legacy_failure = bool(
+            not _commit_candidate_is_v2(current)
+            and identity.get("result") == "failed"
+        )
+        produced_format_valid = bool(
+            legacy_failure
+            or (
+                isinstance(current_candidate, dict)
+                and len(str(produced_sha))
+                == journal.BINDING_GIT_OBJECT_FORMAT_LENGTHS.get(
+                    current_candidate.get("object_format")
+                )
+            )
+        )
+        return bool(
+            before_state == "committing"
+            and after_state == "committing"
+            and isinstance(prior_result, dict)
+            and "identity" not in prior_result
+            and result == expected_result
+            and details == identity
+            and identity.get("result") in {"passed", "failed"}
+            and (_commit_candidate_is_v2(current) or legacy_failure)
+            and isinstance(produced_sha, str)
+            and journal.GIT_OBJECT_ID_PATTERN.fullmatch(produced_sha) is not None
+            and produced_format_valid
+            and isinstance(identity.get("expected"), dict)
+            and isinstance(identity.get("observed"), dict)
+            and isinstance(identity.get("checks"), dict)
+            and isinstance(identity.get("transcript"), str)
+            and isinstance(authorization, dict)
+            and authorization.get("consumed") is False
+            and authorization.get("consumed_at") is None
+            and result.get("commit_sha") is None
+        )
     if event_name == "candidate_staged":
         staging = current.get("staging")
         return bool(
             prior_sha is None
             and details.get("candidate") == current_sha
-            and details.get("paths") == prior.get("paths")
+            and details.get("paths")
+            == (
+                current.get("paths")
+                if _commit_candidate_is_v2(current)
+                else prior.get("paths")
+            )
             and isinstance(staging, dict)
             and staging.get("staged_paths") == current.get("paths")
         )
@@ -2534,19 +2756,44 @@ def _commit_transition_valid(
     if event_name == "commit_intent":
         result = current.get("commit_result")
         intent = result.get("intent") if isinstance(result, dict) else None
-        return bool(
+        valid = bool(
             after_state == "committing"
             and isinstance(intent, dict)
             and intent.get("candidate") == current_sha == details.get("candidate")
             and intent.get("pre_head") == details.get("pre_head")
         )
+        if not valid or not _commit_candidate_is_v2(current):
+            return valid
+        return bool(
+            isinstance(current_candidate, dict)
+            and intent.get("authorization_id")
+            == current_candidate.get("authorization_id")
+            and intent.get("object_format") == current_candidate.get("object_format")
+            and intent.get("expected_tree_oid") == current_candidate.get("tree_oid")
+        )
     if event_name == "authorization_consumed":
         authorization = current.get("authorization")
-        return bool(
+        valid = bool(
             after_state == "committing"
             and isinstance(authorization, dict)
             and authorization.get("consumed") is True
             and details.get("candidate") == current_sha
+        )
+        if not valid or not _commit_candidate_is_v2(current):
+            return valid
+        identity = _commit_identity(current)
+        produced_sha = identity.get("produced_sha") if isinstance(identity, dict) else None
+        return bool(
+            isinstance(identity, dict)
+            and identity.get("result") == "passed"
+            and isinstance(produced_sha, str)
+            and journal.GIT_OBJECT_ID_PATTERN.fullmatch(produced_sha) is not None
+            and isinstance(current_candidate, dict)
+            and len(produced_sha)
+            == journal.BINDING_GIT_OBJECT_FORMAT_LENGTHS.get(
+                current_candidate.get("object_format")
+            )
+            and current.get("commit_result", {}).get("commit_sha") is None
         )
     if event_name == "commit_produced":
         result = current.get("commit_result")
@@ -2555,13 +2802,16 @@ def _commit_transition_valid(
         old_commit = (
             old_result.get("commit_sha") if isinstance(old_result, dict) else None
         )
-        return bool(
+        valid = bool(
             old_commit is None
             and isinstance(commit_sha, str)
             and journal.GIT_OBJECT_ID_PATTERN.fullmatch(commit_sha) is not None
             and details.get("commit_sha") == commit_sha
             and details.get("candidate") == current_sha
         )
+        if not valid or not _commit_candidate_is_v2(current):
+            return valid
+        return _commit_v2_landing_identity_valid(current)
     if event_name == "commit_close_recovered":
         result = current.get("commit_result")
         old_result = prior.get("commit_result")
@@ -2570,7 +2820,7 @@ def _commit_transition_valid(
             old_result.get("commit_sha") if isinstance(old_result, dict) else None
         )
         intent = old_result.get("intent") if isinstance(old_result, dict) else None
-        return bool(
+        valid = bool(
             after_state == "closed"
             and isinstance(commit_sha, str)
             and journal.GIT_OBJECT_ID_PATTERN.fullmatch(commit_sha) is not None
@@ -2585,17 +2835,52 @@ def _commit_transition_valid(
                 )
             )
         )
+        if not valid or not _commit_candidate_is_v2(current):
+            return valid
+        return _commit_v2_landing_identity_valid(current)
     if event_name == "chain_closed":
         result = current.get("commit_result")
         old_result = prior.get("commit_result")
-        return bool(
+        valid = bool(
             after_state == "closed"
             and isinstance(result, dict)
             and isinstance(old_result, dict)
             and result.get("commit_sha") == old_result.get("commit_sha")
             and result.get("commit_sha") == details.get("commit_sha")
         )
-    if event_name in {"chain_aborted", "policy_changed"}:
+        if not valid or not _commit_candidate_is_v2(current):
+            return valid
+        return _commit_v2_landing_identity_valid(current)
+    if event_name == "chain_aborted":
+        if before_state != "committing":
+            return bool(
+                after_state == "aborted"
+                and current.get("authorization") == prior.get("authorization")
+            )
+        old_result = prior.get("commit_result")
+        result = current.get("commit_result")
+        old_authorization = prior.get("authorization")
+        identity = _commit_identity(prior)
+        expected_result = copy.deepcopy(old_result)
+        if not isinstance(expected_result, dict) or not isinstance(result, dict):
+            return False
+        expected_result.update(
+            {"aborted_at": result.get("aborted_at"), "reason": details.get("reason")}
+        )
+        return bool(
+            after_state == "aborted"
+            and isinstance(identity, dict)
+            and identity.get("result") == "failed"
+            and isinstance(old_result, dict)
+            and old_result.get("mismatch_latched") is True
+            and isinstance(old_authorization, dict)
+            and old_authorization.get("consumed") is False
+            and old_authorization.get("consumed_at") is None
+            and current.get("authorization") == {}
+            and result == expected_result
+            and isinstance(result.get("aborted_at"), str)
+        )
+    if event_name == "policy_changed":
         return after_state == "aborted"
     if event_name == "abort_disposition_recorded":
         # Revision 13: the sole self-event admitted on an aborted chain; it
@@ -4785,6 +5070,11 @@ def _candidate_binding_for_state(
     if not isinstance(candidate, dict):
         return None
     if family == "commit":
+        if "schema" in candidate:
+            value = _commit_candidate_v2_binding_value(candidate)
+            if value is None:
+                return None
+            return {"kind": "git-tree-candidate-v2", "value": value}
         digest = candidate.get("sha256")
         if (
             not isinstance(digest, str)
@@ -4898,6 +5188,23 @@ def _binding_matches_source_fact(
         else None
     )
 
+    if criterion == "gate-2: produced commit identity":
+        if family != "commit" or binding.get("review") is not None:
+            return False
+        identity = _commit_identity(current)
+        prior_identity = _commit_identity(prior)
+        payload = event.get("payload")
+        details = payload.get("details") if isinstance(payload, dict) else None
+        ordinary = _ordinary_commit_details(event) if isinstance(details, dict) else None
+        return bool(
+            event_name == "commit_identity_checked"
+            and isinstance(identity, dict)
+            and prior_identity != identity
+            and ordinary == identity
+            and record.get("result") == identity.get("result")
+            and identity.get("result") in {"passed", "failed"}
+        )
+
     if isinstance(criterion, str) and criterion.startswith(("gate-1: ", "gate-2: ")):
         if binding.get("review") is not None:
             return False
@@ -4967,7 +5274,7 @@ def _binding_matches_source_fact(
         old_approval = prior.get("approval") if isinstance(prior, dict) else None
         approval = current.get("approval")
         expected_approved = (
-            candidate["value"]
+            _commit_binding_authorization(candidate)
             if family == "commit"
             else candidate["value"]["head"]
         )
@@ -4999,14 +5306,18 @@ def _binding_matches_source_fact(
             old_commit = (
                 old_result.get("commit_sha") if isinstance(old_result, dict) else None
             )
-            return bool(
+            valid = bool(
                 event_name in {"commit_produced", "commit_close_recovered"}
                 and old_commit is None
                 and isinstance(intent, dict)
-                and intent.get("candidate") == candidate.get("value")
+                and intent.get("candidate")
+                == _commit_binding_authorization(candidate)
                 and isinstance(commit_sha, str)
                 and journal.GIT_OBJECT_ID_PATTERN.fullmatch(commit_sha) is not None
             )
+            if not valid or candidate.get("kind") != "git-tree-candidate-v2":
+                return valid
+            return _commit_v2_landing_identity_valid(current)
         integration = current.get("integration")
         push = integration.get("push") if isinstance(integration, dict) else None
         landed = push.get("landed_head") if isinstance(push, dict) else None
@@ -5336,7 +5647,7 @@ def resolve_binding(
     expected_fields: dict[str, object] | None = None,
     expected_run_id: str | None = None,
     expected_task_id: str | None = None,
-    tombstone_candidate: str | None = None,
+    tombstone_candidate: object | None = None,
     _chains_descriptor: int | None = None,
     _chains_observation: journal.FileObservation | None = None,
 ) -> dict[str, object]:
@@ -5407,7 +5718,7 @@ def _resolve_tombstone_abort_binding(
     expected_type: str | None,
     expected_fields: dict[str, object] | None,
     replay_only: bool,
-    tombstone_candidate: str | None,
+    tombstone_candidate: object | None,
 ) -> dict[str, object] | None:
     """Authenticate a chain-abort binding against an operator tombstone.
 
@@ -5433,17 +5744,17 @@ def _resolve_tombstone_abort_binding(
     if "tombstone-binding" not in BUILDER_VALIDATION_CONTROLS:
         raise _binding_replay_refusal()
     _raw, value = record
+    normalized_candidate = _tombstone_candidate_binding(tombstone_candidate)
     if (
         replay_only
         or not _tombstone_artifacts_absent(value)
         or expected_type != "decision"
         or not isinstance(expected_fields, dict)
         or expected_fields.get("outcome") != "chain-abort"
-        or not isinstance(tombstone_candidate, str)
-        or journal.HEX_SHA256_PATTERN.fullmatch(tombstone_candidate) is None
+        or normalized_candidate is None
     ):
         raise _binding_replay_refusal()
-    binding = tombstone_abort_binding(value, chain_id, tombstone_candidate)
+    binding = tombstone_abort_binding(value, chain_id, normalized_candidate)
     if binding["binding_id"] != binding_id:
         raise _binding_replay_refusal()
     return binding
@@ -5463,7 +5774,7 @@ def _resolve_binding_from_descriptor(
     allow_pending: bool = False,
     validate_lineage: bool = True,
     ownership_summary: bool = False,
-    tombstone_candidate: str | None = None,
+    tombstone_candidate: object | None = None,
 ) -> dict[str, object]:
     tombstone = _resolve_tombstone_abort_binding(
         chains_descriptor,
@@ -5814,9 +6125,7 @@ def _commit_gate_fact_is_current(
             else None
         )
         candidate = binding.get("candidate")
-        candidate_value = (
-            candidate.get("value") if isinstance(candidate, dict) else None
-        )
+        candidate_value = _commit_binding_authorization(candidate)
         if (
             introduced is None
             or not isinstance(current_runs, list)
@@ -5884,9 +6193,7 @@ def _commit_gate_fact_is_current(
     ):
         return False
     candidate = binding.get("candidate")
-    candidate_value = (
-        candidate.get("value") if isinstance(candidate, dict) else None
-    )
+    candidate_value = _commit_binding_authorization(candidate)
     current_candidate_runs = [
         (index, value)
         for index, value in enumerate(current_runs)
@@ -6233,7 +6540,46 @@ def _binding_is_current(
     record_type = record.get("type")
     criterion = record.get("criterion")
     if record_type == "verification" and isinstance(criterion, str):
-        if criterion.startswith(("gate-1: ", "gate-2: ")):
+        if criterion == "gate-2: produced commit identity":
+            if chain_family != "commit":
+                return False
+            identity = _commit_identity(state)
+            source_identity = _commit_identity(source_state)
+            if (
+                not isinstance(identity, dict)
+                or source_identity != identity
+                or record.get("result") != identity.get("result")
+                or identity.get("result") not in {"passed", "failed"}
+            ):
+                return False
+            latest: dict[str, object] | None = None
+            last_identity: object = None
+            for event, _prior, event_state, _records, _digest in replay_entries:
+                event_candidate = _candidate_binding_for_state(
+                    "commit", event_state
+                )
+                event_identity = _commit_identity(event_state)
+                event_payload = event.get("payload")
+                event_name = (
+                    event_payload.get("event")
+                    if isinstance(event_payload, dict)
+                    else None
+                )
+                if event_candidate != candidate or event_identity != last_identity:
+                    latest = None
+                if (
+                    event_candidate == candidate
+                    and event_name == "commit_identity_checked"
+                    and event_identity == identity
+                ):
+                    latest = event
+                last_identity = copy.deepcopy(event_identity)
+            if not (
+                latest is not None
+                and latest.get("digest") == source_event.get("digest")
+            ):
+                return False
+        elif criterion.startswith(("gate-1: ", "gate-2: ")):
             if chain_family == "commit":
                 if not _commit_gate_fact_is_current(
                     state,
@@ -6269,8 +6615,8 @@ def _binding_is_current(
         if not isinstance(approval, dict):
             return False
         approved_candidate = (
-            value
-            if isinstance(value, str)
+            _commit_binding_authorization(candidate)
+            if chain_family == "commit"
             else value.get("head") if isinstance(value, dict) else None
         )
         if (
@@ -6307,12 +6653,20 @@ def _binding_is_current(
             if (
                 not isinstance(intent, dict)
                 or not isinstance(current, dict)
-                or intent.get("candidate") != current.get("sha256")
+                or intent.get("candidate")
+                != _commit_binding_authorization(candidate)
             ):
                 return False
             if journal.GIT_OBJECT_ID_PATTERN.fullmatch(
                 str(result.get("commit_sha", ""))
             ) is None:
+                return False
+            if candidate.get("kind") == "git-tree-candidate-v2" and not (
+                _commit_v2_landing_identity_valid(state)
+                and intent.get("authorization_id") == current.get("authorization_id")
+                and intent.get("object_format") == current.get("object_format")
+                and intent.get("expected_tree_oid") == current.get("tree_oid")
+            ):
                 return False
         else:
             integration = state.get("integration")
@@ -6866,14 +7220,15 @@ def _terminal_tombstone_disposition(
     abort = aborts[0]
     binding = abort["binding"]
     candidate = binding.get("candidate")
-    candidate_value = candidate.get("value") if isinstance(candidate, dict) else None
+    candidate_binding = _tombstone_candidate_binding(candidate)
     binding_id = binding.get("binding_id")
     if (
-        not isinstance(candidate_value, str)
+        candidate_binding is None
+        or candidate != candidate_binding
         or not isinstance(binding_id, str)
         or any(
             not isinstance(record["binding"].get("candidate"), dict)
-            or record["binding"]["candidate"].get("value") != candidate_value
+            or record["binding"]["candidate"] != candidate_binding
             for record in cited
         )
     ):
@@ -6888,7 +7243,7 @@ def _terminal_tombstone_disposition(
             expected_fields={"outcome": "chain-abort"},
             expected_run_id=None,
             expected_task_id=None,
-            tombstone_candidate=candidate_value,
+            tombstone_candidate=candidate_binding,
         )
     except journal.CoordinationRefusal as exc:
         raise journal.CoordinationRefusal(TERMINAL_CHAIN_INVALID) from exc
@@ -6905,17 +7260,63 @@ def _tombstone_artifacts_absent(value: dict[str, object]) -> bool:
     )
 
 
+def _tombstone_candidate_binding(candidate: object) -> dict[str, object] | None:
+    """Normalize one historical scalar or exact v2 tombstone candidate."""
+
+    if isinstance(candidate, str):
+        selected: object = {
+            "kind": "staged-diff-sha256",
+            "value": candidate,
+        }
+    elif isinstance(candidate, dict) and set(candidate) == {
+        "authorization_id",
+        "object_format",
+        "tree_oid",
+    }:
+        selected = {"kind": "git-tree-candidate-v2", "value": candidate}
+    else:
+        selected = candidate
+    if not isinstance(selected, dict) or set(selected) != {"kind", "value"}:
+        return None
+    kind = selected.get("kind")
+    candidate_value = selected.get("value")
+    if kind == "staged-diff-sha256":
+        if (
+            not isinstance(candidate_value, str)
+            or journal.HEX_SHA256_PATTERN.fullmatch(candidate_value) is None
+        ):
+            return None
+    elif kind == "git-tree-candidate-v2":
+        if (
+            not isinstance(candidate_value, dict)
+            or set(candidate_value)
+            != {"authorization_id", "object_format", "tree_oid"}
+            or journal._git_tree_candidate_authorization_id(
+                candidate_value.get("object_format"), candidate_value.get("tree_oid")
+            )
+            != candidate_value.get("authorization_id")
+        ):
+            return None
+    else:
+        return None
+    return copy.deepcopy(selected)
+
+
 def tombstone_abort_binding(
-    tombstone: dict[str, object], chain_id: str, candidate_value: str
+    tombstone: dict[str, object], chain_id: str, candidate: object
 ) -> dict[str, object]:
     """Reconstruct the one chain-abort binding a tombstoned chain can carry.
 
     Bead forge-plugin-11a: the tombstone record is the immutable source fact of
     a chain that froze and was sealed by the operator without ever landing. Its
     canonical digest stands where a chain event digest would, the candidate is
-    the single staged-diff candidate the journal's own records for that chain
-    carry, and the binding id follows the ordinary DM-001 preimage.
+    the one exact historical staged-diff or v2 tree candidate the journal's own
+    records for that chain carry, and the binding id follows DM-001.
     """
+
+    candidate_binding = _tombstone_candidate_binding(candidate)
+    if candidate_binding is None:
+        raise _binding_replay_refusal()
 
     preimage = {
         "schema": journal.BINDING_SCHEMA,
@@ -6923,13 +7324,14 @@ def tombstone_abort_binding(
             "chain_id": chain_id,
             "event_digest": journal._sha256(journal._canonical_json_bytes(tombstone)),
         },
-        "candidate": {"kind": "staged-diff-sha256", "value": candidate_value},
+        "candidate": candidate_binding,
         "review": None,
     }
     return {
         **preimage,
         "binding_id": journal._sha256(journal._canonical_json_bytes(preimage)),
     }
+
 
 def _terminal_chain_guard(
     repository: Path,
@@ -7917,7 +8319,7 @@ def decision_add(
     basis: Sequence[str],
     binding_chain: str | None,
     binding_id: str | None,
-    binding_candidate: str | None = None,
+    binding_candidate: object | None = None,
     allow_terminal_task: bool = False,
 ) -> batch.BatchOutcome:
     inputs = {

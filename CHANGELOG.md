@@ -10,6 +10,27 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Immutable commit-candidate boundary (beads forge-plugin-w86 and forge-plugin-kmj,
+  external-review findings 2 and 3): commit authorization now binds a
+  `forge-commit-candidate/2` identity — a domain-separated SHA-256 over the
+  repository object format and the `git write-tree` tree OID — with the intended
+  parent and an exact message digest carried in commit intent; finalize verifies
+  the produced commit's single parent, tree, and message BEFORE consuming
+  authorization or recording a landing, freezing the chain fail-closed under the
+  existing `frozen-chain` reason on mismatch, and crash recovery uses the same
+  raw-object verifier. Staged-path enumeration, the review patch, and the secret
+  scan render tree-to-tree from immutable objects under pinned, config-proof git
+  invocation (gitlinks always visible), with bounded 16 MiB artifacts; the
+  review-evidence diff keeps its own digest but is no longer authorization. The
+  DM-006 marker gains a versioned five-line grammar (legacy markers are stale
+  cleanup only, never authorization), all guard comparisons move to the
+  authorization id with every public denial literal preserved, the journal
+  accepts the `git-tree-candidate-v2` binding kind alongside readable historical
+  bindings, and the replay grammar admits `commit_identity_checked`. Both
+  external-review reproductions (pre-commit-hook index rewrite; ignoreSubmodules
+  plus staged gitlink) are pinned as regression tests with disable-in-memory
+  registries; spec amendment across DM-001/DM-006/DM-012/FR-210..223 including
+  the deferred guard-breadth and reviewer-posture honesty wordings.
 - Documentation honesty batch (external-review findings 1, 6, and 8; beads
   forge-plugin-x0h part 1, ryt, bfg, 9xb, x68): the README states the commit
   guard's real coverage (direct git invocations at the tool-use boundary,
