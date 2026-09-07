@@ -376,6 +376,120 @@ class AuditCommitmentsTests(unittest.TestCase):
             b"task-99 (decision decision-01 resolution)\n",
         )
 
+    def test_known_resolution_task_with_alphabetic_tail_resolves(self) -> None:
+        references = (
+            "task-09-bound",
+            "TASK-09.bound_chain",
+            "task-09_bound-chain",
+        )
+        for reference in references:
+            with self.subTest(reference=reference):
+                self.setUp_fixture_again()
+
+                def change(records: list[dict[str, object]]) -> None:
+                    for record in records:
+                        for field in ("id", "task"):
+                            if record.get(field) == "task-07":
+                                record[field] = "task-09"
+                    records[3]["id"] = "decision-25"
+                    records[3]["resolution"] = f"Preserve the {reference} outcome."
+
+                self.mutate(change)
+                result = self.invoke()
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(EXPECTED, result.stdout)
+
+    def test_longest_known_resolution_task_prefix_controls_tail(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            replacements = {
+                "task-07": "task-09",
+                "task-08": "task-09-bound2",
+            }
+            for record in records:
+                for field in ("id", "task"):
+                    value = record.get(field)
+                    if value in replacements:
+                        record[field] = replacements[value]
+            records[3]["resolution"] = "Preserve task-09-bound2-alpha."
+
+        self.mutate(change)
+        result = self.invoke()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(EXPECTED, result.stdout)
+
+    def test_unknown_resolution_task_with_alphabetic_tail_is_flagged(self) -> None:
+        self.mutate(
+            lambda records: records[3].__setitem__(
+                "resolution", "Defer task-99-bound."
+            )
+        )
+        self.assert_failure(
+            self.invoke(),
+            3,
+            b"forge: commitment audit failed \xe2\x80\x94 unknown task reference: "
+            b"task-99-bound (decision decision-01 resolution)\n",
+        )
+
+    def test_known_resolution_task_with_digit_bearing_tail_is_flagged(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            for record in records:
+                for field in ("id", "task"):
+                    if record.get(field) == "task-07":
+                        record[field] = "task-09"
+            records[3]["resolution"] = "Defer task-09-2x."
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            3,
+            b"forge: commitment audit failed \xe2\x80\x94 unknown task reference: "
+            b"task-09-2x (decision decision-01 resolution)\n",
+        )
+
+    def test_non_boundary_known_prefix_does_not_resolve_unknown_task(self) -> None:
+        def change(records: list[dict[str, object]]) -> None:
+            for record in records:
+                for field in ("id", "task"):
+                    if record.get(field) == "task-07":
+                        record[field] = "task-0"
+            records[3]["resolution"] = "Defer task-09-bound."
+
+        self.mutate(change)
+        self.assert_failure(
+            self.invoke(),
+            3,
+            b"forge: commitment audit failed \xe2\x80\x94 unknown task reference: "
+            b"task-09-bound (decision decision-01 resolution)\n",
+        )
+
+    def test_resolution_task_compound_decomposition_is_load_bearing_in_memory(
+        self,
+    ) -> None:
+        module = self.load_audit_module("resolution_task_compound")
+        records = self.records()
+        for record in records:
+            for field in ("id", "task"):
+                if record.get(field) == "task-07":
+                    record[field] = "task-09"
+        records[3]["id"] = "decision-25"
+        records[3]["resolution"] = "Preserve the task-09-bound outcome."
+        self.write_records(records)
+        self.assertEqual(EXPECTED.decode(), module.audit(self.run_dir))
+
+        with mock.patch.object(
+            module,
+            "resolves_as_known_task_compound",
+            return_value=False,
+        ):
+            with self.assertRaises(module.Failure) as caught:
+                module.audit(self.run_dir)
+            self.assertEqual(3, caught.exception.exit_code)
+            self.assertEqual(
+                "unknown task reference: task-09-bound "
+                "(decision decision-25 resolution)",
+                caught.exception.diagnostic,
+            )
+
     def test_alphabetic_resolution_task_compounds_are_ordinary_prose(self) -> None:
         resolutions = (
             "Recorded during task-binding diagnosis; superseded by the full-path chain.",

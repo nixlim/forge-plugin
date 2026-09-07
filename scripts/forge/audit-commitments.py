@@ -257,6 +257,27 @@ def resolution_task_pattern(known: set[str]) -> re.Pattern[str] | None:
     )
 
 
+def resolves_as_known_task_compound(reference: str, known: set[str]) -> bool:
+    """Accept a known task prefix followed only by alphabetic prose segments."""
+
+    folded = reference.casefold()
+    prefix = max(
+        (
+            task
+            for task in known
+            if folded.startswith(task.casefold())
+            and len(reference) > len(task)
+            and reference[len(task)] in "._-"
+        ),
+        key=len,
+        default=None,
+    )
+    if prefix is None:
+        return False
+    tail = reference[len(prefix) :]
+    return re.fullmatch(r"[._-][A-Za-z]+(?:[._-][A-Za-z]+)*", tail) is not None
+
+
 def without_recorded_branch_names(prose: str, branches: Iterable[str]) -> str:
     """Mask exact branch tokens without hiding longer task-shaped references."""
 
@@ -289,7 +310,10 @@ def audit_unknown_task_references(records: list[dict[str, object]]) -> list[str]
             continue
         prose = without_recorded_branch_names(resolution, branch_names)
         for task in task_pattern.findall(prose):
-            if task.casefold() not in known_folded:
+            if (
+                task.casefold() not in known_folded
+                and not resolves_as_known_task_compound(task, known)
+            ):
                 findings.append(f"{task} ({record_name(record)} resolution)")
     return findings
 

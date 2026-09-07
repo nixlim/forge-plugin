@@ -102,6 +102,12 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Commitment audit, second matcher refinement (task-04 of the archive-unblockers
+  run): a compound whose longest known-task-id prefix is a real task and whose
+  tail is purely alphabetic ("task-09-bound" with task-09 known) resolves to the
+  known id instead of failing the audit as an unresolved reference; unknown
+  prefixes, digit-bearing tails, and partial-prefix forms stay flagged, with a
+  disable-in-memory proof.
 - Archive rendering of an operator-tombstoned chain (bead forge-plugin-cyg):
   when a journal-bound chain's artifacts are absent but a valid
   forge-chain-tombstone/1 record exists, the archive captures the tombstone's
