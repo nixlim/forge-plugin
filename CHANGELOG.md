@@ -102,6 +102,13 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Bounded runner group termination (bead forge-plugin-8u4, external-review
+  finding 4): `_kill_process_group` now proves process-group death — after
+  SIGTERM and the full 0.25 s grace it probes the group and escalates SIGKILL
+  to the group regardless of leader state, so a TERM-resistant descendant can
+  no longer outlive a reported timeout; only ESRCH proves absence, existing
+  fallbacks are preserved, and the regression is pinned by a real
+  TERM-ignoring-descendant test with a disable-in-memory proof.
 - Commitment audit, second matcher refinement (task-04 of the archive-unblockers
   run): a compound whose longest known-task-id prefix is a real task and whose
   tail is purely alphabetic ("task-09-bound" with task-09 known) resolves to the

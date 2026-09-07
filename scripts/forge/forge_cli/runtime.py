@@ -87,6 +87,18 @@ class ProcessResult:
     output_limit: bool = False
 
 
+def _process_group_exists(process_group: int) -> bool:
+    """Return true unless process-group absence is proven by ``ESRCH``."""
+
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
@@ -97,11 +109,16 @@ def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
             process.terminate()
         except OSError:
             return
+    grace_deadline = time.monotonic() + 0.25
     try:
         process.wait(timeout=0.25)
-        return
     except subprocess.TimeoutExpired:
         pass
+    remaining_grace = grace_deadline - time.monotonic()
+    if remaining_grace > 0:
+        time.sleep(remaining_grace)
+    if not _process_group_exists(process.pid):
+        return
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -248,6 +265,7 @@ __all__ = [
     '_coordination_modules',
     '_fast_mechanical_skips',
     '_kill_process_group',
+    '_process_group_exists',
     'run_bounded',
     'utc_now',
 ]
