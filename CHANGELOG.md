@@ -10,6 +10,24 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Fresh-reviewer events ceiling (first live fresh-evals run, this chain): the
+  reviewer child's retained `events.jsonl` stream gets its own 8 MiB ceiling —
+  live reviewers' search-command output routinely exceeded the old 64 KiB cap,
+  killing judgments before the verdict was written — while `verdict.txt` and
+  `completion.json` stay at 65,536 bytes and breach of any ceiling still
+  terminates the process group fail-closed (spec FR-149 fresh-reviewer
+  amendment + `fresh_evals.py`, with live-shaped regression tests).
+- Guard denied-commands region (bead forge-plugin-x0h part 2, operator-requested):
+  a new committed `guard-denied-commands` policy region lets the operator list
+  additional command shapes the PreToolUse guard refuses outright — matched by
+  prefix tokens against the parsed direct invocation under FR-149 committed
+  sourcing, denying with `forge: operator-denied command — <reason>`; a
+  malformed region fails closed, an absent region changes nothing, and the
+  documented coverage is honestly the parser's direct-invocation scope
+  (mistake prevention for cooperative agents, not tamper-proofing). The
+  region-inventory sweep also fixed the drift checker and chain-test
+  inventories and added the manifest entries missed earlier, including the
+  reviewer-facing-eval-triggers line absent from `.forge-manifest`.
 - Targeted fresh-execution evals (bead forge-plugin-7p4, external-review
   finding 5, operator option c): the recorded eval runner is honestly relabeled
   recorded-baseline integrity, and a new fresh-reviewer-evals chain gate runs

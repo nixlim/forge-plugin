@@ -3,18 +3,30 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import ModuleType
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT_GUARD = ROOT / "scripts" / "forge" / "commit-guard.sh"
 MARKER_REASON = "forge: commit not authorized — run /forge:commit"
+GUARD_POLICY_MALFORMED = (
+    "forge: guard-denied-commands policy malformed — repair committed "
+    "forge-project.md"
+)
+GUARD_BOOTSTRAP_FAILURE = (
+    "forge: commit guard internal failure — command was not classified "
+    "(bootstrap); split the command"
+)
 DEPENDENCY_PATHS = (
     "package.json",
     "package-lock.json",
@@ -147,6 +159,49 @@ class CommitGuardTests(unittest.TestCase):
         guard.write_text(source.replace(needle, replacement), encoding="utf-8")
         return guard
 
+    def base_guard(self) -> Path:
+        base_root = self.scratch / "base-guard-tree"
+        shutil.copytree(ROOT / "scripts" / "forge", base_root / "scripts" / "forge")
+        shutil.copytree(ROOT / "system" / "fr223", base_root / "system" / "fr223")
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        }
+        source = subprocess.run(
+            ["git", "show", "HEAD:scripts/forge/commit-guard.sh"],
+            cwd=ROOT,
+            env=environment,
+            check=True,
+            capture_output=True,
+        ).stdout
+        guard = base_root / "scripts" / "forge" / "commit-guard.sh"
+        guard.write_bytes(source)
+        return guard
+
+    def fake_git_environment(self, name: str, body: str) -> dict[str, str]:
+        fake_bin = self.scratch / name
+        fake_bin.mkdir()
+        fake_git = fake_bin / "git"
+        fake_git.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        fake_git.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = (
+            f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}"
+        )
+        return environment
+
+    def load_guard_module(self, name: str) -> ModuleType:
+        source = COMMIT_GUARD.read_text(encoding="utf-8")
+        embedded = source.split("<<'PY' || true\n", 1)[1].split("\nPY\n", 1)[0]
+        definitions = embedded.split("\ntry:\n    raise SystemExit(main())", 1)[0]
+        self.addCleanup(sys.modules.pop, name, None)
+        module = ModuleType(name)
+        module.__file__ = str(COMMIT_GUARD)
+        sys.modules[name] = module
+        exec(compile(definitions, str(COMMIT_GUARD), "exec"), module.__dict__)
+        return module
+
     def assert_allowed(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
@@ -195,9 +250,10 @@ class CommitGuardTests(unittest.TestCase):
             "docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only"
         ),
         triggers: str = "No trigger paths configured.",
+        guard_denied_commands: str | None = None,
     ) -> str:
         dependencies = "\n".join(DEPENDENCY_PATHS)
-        return f"""# Forge policy
+        policy = f"""# Forge policy
 <!-- FORGE:REGION file-categories BEGIN -->
 | Category | File patterns |
 |---|---|
@@ -223,6 +279,31 @@ class CommitGuardTests(unittest.TestCase):
 {triggers}
 <!-- FORGE:REGION trigger-paths END -->
 """
+        if guard_denied_commands is not None:
+            policy += (
+                "<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+                f"{guard_denied_commands}\n"
+                "<!-- FORGE:REGION guard-denied-commands END -->\n"
+            )
+        return policy
+
+    @staticmethod
+    def guard_denied_body(*rows: tuple[str, str]) -> str:
+        return "\n".join(
+            (
+                "| pattern | reason |",
+                "|---|---|",
+                *(f"| {pattern} | {reason} |" for pattern, reason in rows),
+            )
+        )
+
+    @staticmethod
+    def guard_denied_policy_bytes(body: str) -> bytes:
+        return (
+            "<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+            f"{body}\n"
+            "<!-- FORGE:REGION guard-denied-commands END -->\n"
+        ).encode("utf-8")
 
     def commit_policy(
         self,
@@ -231,11 +312,16 @@ class CommitGuardTests(unittest.TestCase):
             "docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only"
         ),
         triggers: str = "No trigger paths configured.",
+        guard_denied_commands: str | None = None,
         cwd: Path | None = None,
     ) -> str:
         repo = cwd or self.repo
         (repo / "forge-project.md").write_text(
-            self.policy_text(fast_patterns=fast_patterns, triggers=triggers),
+            self.policy_text(
+                fast_patterns=fast_patterns,
+                triggers=triggers,
+                guard_denied_commands=guard_denied_commands,
+            ),
             encoding="utf-8",
         )
         (repo / ".forge-manifest").write_text(
@@ -370,6 +456,981 @@ class CommitGuardTests(unittest.TestCase):
         self.assert_allowed(self.invoke("git commit -m nope", tool_name="Read"))
         self.assert_allowed(self.invoke("printf '%s\\n' 'git commit'"))
         self.assert_allowed(self.invoke("bash -c 'git commit'"))
+
+    def test_committed_guard_denylist_matches_resolved_token_prefix(self) -> None:
+        reason = "force pushes require an operator-reviewed release path"
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("git push --force", reason),
+            )
+        )
+
+        for command in (
+            "git push --force origin main",
+            "/usr/bin/env FORGE_TEST=1 /usr/bin/git -C . --no-pager "
+            "push --force origin main",
+            "printf x; git push --force origin main",
+            "echo $(git push --force origin main)",
+        ):
+            with self.subTest(denied=command):
+                self.assert_denied(
+                    self.invoke(command),
+                    f"forge: operator-denied command — {reason}",
+                )
+
+        for command in (
+            "git push",
+            "git push origin --force",
+            "printf '%s\\n' 'git push --force origin main'",
+            "sudo git push --force origin main",
+            "command git push --force origin main",
+            "bash -c 'git push --force origin main'",
+        ):
+            with self.subTest(allowed=command):
+                self.assert_allowed(self.invoke(command))
+
+    def test_guard_denylist_normalizes_bash_argv_before_prefix_matching(self) -> None:
+        git_reason = "force pushes require an operator-reviewed release path"
+        argument_reason = "the marker argument is operator-routed"
+        octal_reason = "the decoded numeric argument is operator-routed"
+        utf8_reason = "the decoded UTF-8 argument is operator-routed"
+        control_reason = "the decoded control argument is operator-routed"
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("git push --force", git_reason),
+                ("printf --flag marker", argument_reason),
+                ("printf 777", octal_reason),
+                ("printf é", utf8_reason),
+                ("printf \x7f", control_reason),
+            )
+        )
+
+        cases = (
+            ("git>/dev/null push --force origin main", git_reason),
+            ("git push --force>/dev/null", git_reason),
+            ("printf --flag marker>/dev/null", argument_reason),
+            ("g\\\nit push --force origin main", git_reason),
+            ("git \\\npush \\\n--force origin main", git_reason),
+            ("printf --flag mar\\\nker", argument_reason),
+            ("$'git' push --force origin main", git_reason),
+            ("git push $'--force' origin main", git_reason),
+            ("printf --flag $'marker'", argument_reason),
+            (r"printf $'\06777'", octal_reason),
+            (r"printf $'\xc3\xa9'", utf8_reason),
+            (r"printf $'\303\251'", utf8_reason),
+            (r"printf $'\c?'", control_reason),
+        )
+        for command, reason in cases:
+            with self.subTest(command=command):
+                self.assert_denied(
+                    self.invoke(command),
+                    f"forge: operator-denied command — {reason}",
+                )
+
+        for command in (
+            "git push --force</dev/null",
+            "git push --force>>/dev/null",
+            "git push --force 2>/dev/null",
+            "git push --force&>/dev/null",
+            "git push --force>&2",
+            "git push --force<<<payload",
+            "git push --force 3<>/dev/null",
+            "git push --force 4<&0",
+            "git push --force 5>>/dev/null",
+            "git push --force {guard_fd}>/dev/null",
+        ):
+            with self.subTest(redirection=command):
+                self.assert_denied(
+                    self.invoke(command),
+                    f"forge: operator-denied command — {git_reason}",
+                )
+
+        module = self.load_guard_module("forge_guard_denylist_argv_normalization")
+        probes = (
+            (
+                "git push --force>/dev/null",
+                [("git", "push", "--force")],
+            ),
+            (
+                "git \\\npush \\\n--force origin main",
+                [("git", "push", "--force", "origin", "main")],
+            ),
+            (
+                "git push $'--force' origin main",
+                [("git", "push", "--force", "origin", "main")],
+            ),
+            (r"printf $'\06777'", [("printf", "777")]),
+            (r"printf $'\xc3\xa9'", [("printf", "é")]),
+            (r"printf $'\303\251'", [("printf", "é")]),
+            (r"printf $'\c?'", [("printf", "\x7f")]),
+        )
+        for command, expected in probes:
+            with self.subTest(probe=command):
+                self.assertEqual(module.find_direct_invocations(command), expected)
+
+    def test_guard_denylist_preserves_quoted_redirection_and_continuation_text(
+        self,
+    ) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("git commit -m a", "quoted comparison text"),
+                ("echo --force", "quoted redirection text"),
+                ("echo --forcemarker", "single-quoted continuation text"),
+            )
+        )
+        (self.repo / ".forge-manifest").unlink()
+        self.git("add", "-u", ".forge-manifest")
+        tree = self.git("write-tree").stdout.strip()
+        parent = self.git("rev-parse", "HEAD").stdout.strip()
+        commit = self.git(
+            "commit-tree",
+            tree,
+            "-p",
+            parent,
+            input_text="remove plugin activation manifest\n",
+        ).stdout.strip()
+        self.git("update-ref", "HEAD", commit)
+
+        single_quoted_continuation = "echo '--force\\\nmarker'"
+        commands = (
+            'git commit -m "a>b"',
+            "echo '--force>/dev/null'",
+            single_quoted_continuation,
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assert_allowed(self.invoke(command))
+
+        module = self.load_guard_module("forge_guard_denylist_quoted_text")
+        expected = (
+            ('git commit -m "a>b"', [("git", "commit", "-m", "a>b")]),
+            (
+                "echo '--force>/dev/null'",
+                [("echo", "--force>/dev/null")],
+            ),
+            (
+                single_quoted_continuation,
+                [("echo", "--force\\\nmarker")],
+            ),
+        )
+        for command, invocations in expected:
+            with self.subTest(tokens=command):
+                self.assertEqual(module.find_direct_invocations(command), invocations)
+
+    def test_guard_denylist_unlexable_command_fails_closed(self) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("echo guarded", "guarded echo"),
+            )
+        )
+        self.assert_denied(self.invoke("echo 'unterminated"), GUARD_POLICY_MALFORMED)
+
+    def test_guard_denylist_nonportable_ansi_c_quote_fails_closed(
+        self,
+    ) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("git push --force", "force push is operator-routed"),
+            )
+        )
+        environment = os.environ.copy()
+        environment.update({"LC_ALL": "C", "LANG": "C"})
+        commands = (
+            r"printf $'\u00e9'",
+            r"printf $'\u0061'",
+            r"printf $'\U00000061'",
+            (
+                r"cat <<$'\u00e9'"
+                "\nbody\n\\u00E9\ngit push --force origin main"
+            ),
+            (
+                r"cat <<$'\u0061'"
+                "\nbody\n\\u0061\ngit push --force origin main"
+            ),
+            (
+                r"cat <<$'\U00000061'"
+                "\nbody\n\\U00000061\ngit push --force origin main"
+            ),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assert_denied(
+                    self.invoke(command, environment=environment),
+                    GUARD_POLICY_MALFORMED,
+                )
+
+    def test_guard_denylist_first_matching_row_supplies_reason(self) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("git push", "all pushes are operator-routed"),
+                ("git push --force", "force push specific reason"),
+            )
+        )
+
+        self.assert_denied(
+            self.invoke("git push --force origin main"),
+            "forge: operator-denied command — all pushes are operator-routed",
+        )
+
+    def test_guard_denylist_excludes_heredoc_data_but_resumes_after_terminator(
+        self,
+    ) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("rm -rf", "destructive removal is operator-routed"),
+                ("git reset --hard", "hard reset is operator-routed"),
+                ("git push --force", "force push is operator-routed"),
+            )
+        )
+        data_only = (
+            "python3 - <<'PY'\n"
+            "rm -rf build\n"
+            "git reset --hard\n"
+            "PY\n"
+            "printf '%s\\n' done"
+        )
+        tab_stripped = "python3 - <<-EOF\n\trm -rf build\n\tEOF\nprintf done"
+        for command in (data_only, tab_stripped):
+            with self.subTest(command=command):
+                self.assert_allowed(self.invoke(command))
+        self.assert_denied(
+            self.invoke(data_only + "\nrm -rf build"),
+            "forge: operator-denied command — destructive removal is operator-routed",
+        )
+
+        module = self.load_guard_module("forge_guard_denylist_heredoc_test")
+        self.assertNotIn(("rm", "-rf", "build"), module.find_direct_invocations(data_only))
+        self.assertNotIn(
+            ("git", "reset", "--hard"), module.find_direct_invocations(data_only)
+        )
+        for opener in (
+            "<<EOF",
+            "<<'EOF'",
+            '<<"EOF"',
+            r"<<\EOF",
+            "<<$'EOF'",
+            r"<<$'E\x4fF'",
+            '<<$"EOF"',
+        ):
+            command = f"python3 - {opener}\nrm -rf build\nEOF\nprintf done"
+            with self.subTest(opener=opener):
+                self.assertNotIn(
+                    ("rm", "-rf", "build"),
+                    module.find_direct_invocations(command),
+                )
+                self.assertIn(("printf", "done"), module.find_direct_invocations(command))
+        empty_delimiter = "python3 - <<''\nrm -rf empty-data\n\nrm -rf real"
+        empty_invocations = module.find_direct_invocations(empty_delimiter)
+        self.assertNotIn(("rm", "-rf", "empty-data"), empty_invocations)
+        self.assertIn(("rm", "-rf", "real"), empty_invocations)
+        continued_delimiter = (
+            "python3 - <<E\\\n"
+            "OF\n"
+            "rm -rf continued-data\n"
+            "EOF\n"
+            "rm -rf continued-real"
+        )
+        continued_invocations = module.find_direct_invocations(continued_delimiter)
+        self.assertNotIn(("rm", "-rf", "continued-data"), continued_invocations)
+        self.assertIn(("rm", "-rf", "continued-real"), continued_invocations)
+        ansi_delimiter = (
+            r"cat <<$'\06777'"
+            "\nbody\n777\ngit push --force origin main"
+        )
+        self.assertIn(
+            ("git", "push", "--force", "origin", "main"),
+            module.find_direct_invocations(ansi_delimiter),
+        )
+        self.assert_denied(
+            self.invoke(ansi_delimiter),
+            "forge: operator-denied command — force push is operator-routed",
+        )
+        inexact_terminators = (
+            "python3 - <<EOF\nrm -rf one\n EOF\nrm -rf two\nEOF\nprintf done"
+        )
+        self.assertNotIn(
+            ("rm", "-rf", "two"),
+            module.find_direct_invocations(inexact_terminators),
+        )
+        multiple = (
+            "python3 - <<ONE 4<<TWO\n"
+            "rm -rf first\nONE\n"
+            "git reset --hard\nTWO\n"
+            "printf done"
+        )
+        self.assertEqual(
+            module.find_direct_invocations(multiple),
+            [("python3", "-"), ("printf", "done")],
+        )
+        arithmetic = "printf $((1 << 2))\nrm -rf real"
+        self.assertIn(("rm", "-rf", "real"), module.find_direct_invocations(arithmetic))
+        unquoted_expansion = "cat <<EOF\n$(rm -rf expanded)\nEOF"
+        multiline_expansion = "cat <<EOF\n$(\nrm -rf multiline\n)\nEOF"
+        legacy_expansion = "cat <<EOF\n`rm -rf legacy`\nEOF"
+        quoted_expansion = "cat <<'EOF'\n$(rm -rf quoted-data)\nEOF"
+        escaped_expansion = r"cat <<EOF" + "\n" + r"\$(rm -rf escaped-data)" + "\nEOF"
+        for command, expected in (
+            (unquoted_expansion, ("rm", "-rf", "expanded")),
+            (multiline_expansion, ("rm", "-rf", "multiline")),
+            (legacy_expansion, ("rm", "-rf", "legacy")),
+        ):
+            with self.subTest(expanding=command):
+                self.assertIn(expected, module.find_direct_invocations(command))
+        for command in (quoted_expansion, escaped_expansion):
+            with self.subTest(literal=command):
+                self.assertFalse(
+                    any(
+                        invocation[:2] == ("rm", "-rf")
+                        for invocation in module.find_direct_invocations(command)
+                    )
+                )
+        self.assert_denied(
+            self.invoke(unquoted_expansion),
+            "forge: operator-denied command — destructive removal is operator-routed",
+        )
+        self.assert_allowed(self.invoke(quoted_expansion))
+        with mock.patch.object(
+            module,
+            "_heredoc_expansion_view",
+            side_effect=lambda raw: "".join(
+                "\n" if char == "\n" else " " for char in raw
+            ),
+        ):
+            self.assertNotIn(
+                ("rm", "-rf", "expanded"),
+                module.find_direct_invocations(unquoted_expansion),
+            )
+        with mock.patch.object(module, "without_heredoc_bodies", side_effect=lambda raw: raw):
+            self.assertIn(
+                ("rm", "-rf", "build"),
+                module.find_direct_invocations(data_only),
+            )
+
+    def test_absent_guard_denylist_is_byte_identical_to_base_guard(self) -> None:
+        self.commit_policy()
+        base = self.base_guard()
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        }
+        environment.update(
+            {
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "LC_ALL": "C",
+                "LANG": "C",
+            }
+        )
+        matrix = (
+            ("printf '%s\\n' harmless", None),
+            ("git push origin main", None),
+            ("git commit -m guarded", f"{MARKER_REASON} (marker missing)"),
+            (
+                "python3 scripts/forge/cli.py commit approve",
+                "forge: operator verb denied — present the candidate and ask the "
+                "operator to run this via ! (commit approve)",
+            ),
+        )
+        for command, expected_reason in matrix:
+            with self.subTest(command=command):
+                intact = self.invoke(command, environment=environment)
+                baseline = self.invoke(
+                    command,
+                    environment=environment,
+                    guard=base,
+                )
+                if expected_reason is None:
+                    self.assert_allowed(intact)
+                else:
+                    self.assert_denied(intact, expected_reason)
+                self.assertEqual(
+                    (intact.returncode, intact.stdout, intact.stderr),
+                    (baseline.returncode, baseline.stdout, baseline.stderr),
+                )
+
+    def test_guard_denylist_malformed_policy_fails_closed_for_every_command(self) -> None:
+        malformed_bodies = {
+            "bad table": "| command | reason |\n|---|---|\n| git push | nope |",
+            "empty pattern": "| pattern | reason |\n|---|---|\n|  | operator note |",
+            "multiline reason": (
+                "| pattern | reason |\n|---|---|\n"
+                "| git push | first line\nsecond line |"
+            ),
+        }
+        for label, body in malformed_bodies.items():
+            with self.subTest(policy=label):
+                self.commit_policy(guard_denied_commands=body)
+                for command in (
+                    "printf '%s\\n' harmless",
+                    "git push --force origin main",
+                ):
+                    self.assert_denied(self.invoke(command), GUARD_POLICY_MALFORMED)
+
+    def test_guard_denylist_parser_enforces_exact_grammar_and_bounds(self) -> None:
+        module = self.load_guard_module("forge_guard_denylist_policy_bounds_test")
+
+        def parse(body: str) -> tuple[object, ...]:
+            return module.parse_guard_denied_policy(
+                self.guard_denied_policy_bytes(body)
+            )
+
+        exact_pattern = "é" * 2048
+        exact_reason = "r" * 4096
+        rules = parse(self.guard_denied_body((exact_pattern, exact_reason)))
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0].pattern, (exact_pattern,))
+        self.assertEqual(rules[0].reason, exact_reason)
+        sixty_four = " ".join(f"p{index}" for index in range(64))
+        self.assertEqual(
+            len(parse(self.guard_denied_body((sixty_four, "bounded")))[0].pattern),
+            64,
+        )
+
+        large_rows = tuple(
+            (
+                f"{index:03d}" + "x" * 4093,
+                "r" * 4096,
+            )
+            for index in range(256)
+        )
+        large_policy = self.guard_denied_body(*large_rows)
+        self.assertGreater(len(large_policy.encode("utf-8")), 2 * 1024 * 1024)
+        self.assertEqual(len(parse(large_policy)), 256)
+
+        invalid_bodies = (
+            "|pattern|reason|\n|---|---|\n| git push | note |",
+            "| pattern|reason |\n|---|---|\n| git push | note |",
+            "| pattern | reason |\n| --- | --- |\n| git push | note |",
+            self.guard_denied_body((" ".join("x" for _ in range(65)), "note")),
+            self.guard_denied_body((("é" * 2048) + "x", "note")),
+            self.guard_denied_body(("git push", "r" * 4097)),
+            self.guard_denied_body(*((f"cmd {index}", "note") for index in range(257))),
+            self.guard_denied_body(
+                ("git push", "first"),
+                ("git   push", "duplicate parsed tuple"),
+            ),
+            "| pattern | reason |\n|---|---|\n| 'git push | note |",
+            "| pattern | reason |\n|---|---|",
+        )
+        for body in invalid_bodies:
+            with self.subTest(body=body[:80]):
+                with self.assertRaises(module.GuardDeniedPolicyError):
+                    parse(body)
+
+        for bad_byte in (b"\r", b"\x00", b"\xff"):
+            policy = (
+                b"<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+                b"| pattern | reason |\n|---|---|\n| git push | note "
+                + bad_byte
+                + b" |\n<!-- FORGE:REGION guard-denied-commands END -->\n"
+            )
+            with self.subTest(bad_byte=bad_byte):
+                with self.assertRaises(module.GuardDeniedPolicyError):
+                    module.parse_guard_denied_policy(policy)
+
+        malformed_markers = (
+            b"<!-- FORGE:REGION guard-denied-commands BEGIN -->\n",
+            (
+                b"<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+                b"<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+                b"<!-- FORGE:REGION guard-denied-commands END -->\n"
+            ),
+            b"prefix FORGE:REGION guard-denied-commands suffix\n",
+        )
+        for policy in malformed_markers:
+            with self.subTest(policy=policy):
+                with self.assertRaises(module.GuardDeniedPolicyError):
+                    module.parse_guard_denied_policy(policy)
+
+    def test_guard_denylist_committed_policy_read_has_absent_error_tristate(self) -> None:
+        module = self.load_guard_module("forge_guard_denylist_source_state_test")
+        context = mock.sentinel.context
+        policy_sha = "a" * 40
+        body = self.guard_denied_body(("git push", "operator routed"))
+        policy = self.guard_denied_policy_bytes(body)
+
+        resolved_head = module.GuardDeniedHeadResolution(
+            state="resolved", policy_sha=policy_sha
+        )
+        with mock.patch.object(
+            module, "guard_denied_head_policy", return_value=resolved_head
+        ):
+            with mock.patch.object(
+                module,
+                "run_context_git",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, b"100644 blob " + (b"b" * 40) + b"\tforge-project.md\x00", b""
+                ),
+            ):
+                with mock.patch.object(
+                    module, "committed_policy", return_value=policy
+                ) as committed:
+                    resolved_sha, rules, error = module.committed_guard_denied_rules(
+                        context
+                    )
+        self.assertEqual(resolved_sha, policy_sha)
+        self.assertEqual(rules[0].pattern, ("git", "push"))
+        self.assertIsNone(error)
+        committed.assert_called_once_with(context, policy_sha)
+
+        with mock.patch.object(
+            module, "guard_denied_head_policy", return_value=resolved_head
+        ):
+            with mock.patch.object(
+                module,
+                "run_context_git",
+                return_value=subprocess.CompletedProcess([], 0, b"", b""),
+            ):
+                self.assertEqual(
+                    module.committed_guard_denied_rules(context),
+                    (policy_sha, (), None),
+                )
+            with mock.patch.object(
+                module,
+                "run_context_git",
+                return_value=subprocess.CompletedProcess([], 70, b"", b"failure"),
+            ):
+                self.assertEqual(
+                    module.committed_guard_denied_rules(context),
+                    (policy_sha, (), module.GUARD_DENIED_MALFORMED),
+                )
+            with mock.patch.object(module, "run_context_git", side_effect=OSError):
+                self.assertEqual(
+                    module.committed_guard_denied_rules(context),
+                    (policy_sha, (), module.GUARD_DENIED_MALFORMED),
+                )
+            for unexpected in (
+                b"040000 tree " + (b"b" * 40) + b"\tforge-project.md\x00",
+                b"100644 blob bad\tforge-project.md\x00",
+                b"100644 blob " + (b"b" * 40) + b"\tother.md\x00",
+            ):
+                with self.subTest(unexpected=unexpected):
+                    with mock.patch.object(
+                        module,
+                        "run_context_git",
+                        return_value=subprocess.CompletedProcess(
+                            [], 0, unexpected, b""
+                        ),
+                    ):
+                        self.assertEqual(
+                            module.committed_guard_denied_rules(context),
+                            (policy_sha, (), module.GUARD_DENIED_MALFORMED),
+                        )
+            exact_entry = b"100644 blob " + (b"b" * 40) + b"\tforge-project.md\x00"
+            with mock.patch.object(
+                module,
+                "run_context_git",
+                return_value=subprocess.CompletedProcess([], 0, exact_entry, b""),
+            ):
+                with mock.patch.object(module, "committed_policy", return_value=None):
+                    self.assertEqual(
+                        module.committed_guard_denied_rules(context),
+                        (policy_sha, (), module.GUARD_DENIED_MALFORMED),
+                    )
+        with mock.patch.object(
+            module,
+            "guard_denied_head_policy",
+            return_value=module.GuardDeniedHeadResolution(state="unborn"),
+        ):
+            self.assertEqual(
+                module.committed_guard_denied_rules(context),
+                ("", (), None),
+            )
+        with mock.patch.object(
+            module,
+            "guard_denied_head_policy",
+            return_value=module.GuardDeniedHeadResolution(state="operational"),
+        ):
+            self.assertEqual(
+                module.committed_guard_denied_rules(context),
+                ("", (), module.GUARD_DENIED_MALFORMED),
+            )
+
+    def test_guard_denylist_policy_read_failure_denies_but_missing_file_is_noop(
+        self,
+    ) -> None:
+        self.track_manifest()
+        self.assert_allowed(self.invoke("printf '%s\\n' harmless"))
+
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        fake_bin = self.scratch / "fake-bin"
+        fake_bin.mkdir()
+        fake_git = fake_bin / "git"
+        fake_git.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            "  *\" --no-replace-objects ls-tree \"*) exit 70 ;;\n"
+            "esac\n"
+            f"exec {shlex.quote(real_git or 'git')} \"$@\"\n",
+            encoding="utf-8",
+        )
+        fake_git.chmod(0o755)
+        environment = os.environ.copy()
+        environment["PATH"] = f"{fake_bin}{os.pathsep}{environment.get('PATH', '')}"
+        self.assert_denied(
+            self.invoke("printf '%s\\n' harmless", environment=environment),
+            GUARD_POLICY_MALFORMED,
+        )
+
+        unborn = self.scratch / "unborn"
+        self.git("init", "--quiet", str(unborn))
+        self.git("symbolic-ref", "HEAD", "refs/heads/main", cwd=unborn)
+        self.assert_allowed(
+            self.invoke("printf '%s\\n' harmless", cwd=unborn)
+        )
+
+    def test_guard_denylist_repository_context_launch_failure_fails_closed(
+        self,
+    ) -> None:
+        isolated_bin = self.scratch / "git-launch-failure-bin"
+        isolated_bin.mkdir()
+        for executable in ("bash", "dirname", "python3"):
+            resolved = shutil.which(executable)
+            self.assertIsNotNone(resolved)
+            (isolated_bin / executable).symlink_to(Path(resolved or executable).resolve())
+        environment = os.environ.copy()
+        environment["PATH"] = str(isolated_bin)
+
+        self.assert_denied(
+            self.invoke("printf harmless", environment=environment),
+            GUARD_POLICY_MALFORMED,
+        )
+
+    def test_guard_denylist_unclassified_repository_failure_fails_closed(
+        self,
+    ) -> None:
+        environment = self.fake_git_environment(
+            "unclassified-repository-failure-bin",
+            "case \" $* \" in\n"
+            "  *\" rev-parse --is-bare-repository \"*) printf '%s\\n' false ;;\n"
+            "  *\" rev-parse --show-toplevel \"*)\n"
+            "    printf '%s\\n' 'fatal: repository discovery failed' >&2\n"
+            "    exit 128\n"
+            "    ;;\n"
+            "  *) exit 70 ;;\n"
+            "esac\n",
+        )
+        self.assert_denied(
+            self.invoke("printf harmless", environment=environment),
+            GUARD_POLICY_MALFORMED,
+        )
+
+    def test_guard_denylist_git_config_read_failure_fails_closed(self) -> None:
+        environment = os.environ.copy()
+        environment["GIT_CONFIG_GLOBAL"] = os.sep
+        self.assert_denied(
+            self.invoke("printf harmless", environment=environment),
+            GUARD_POLICY_MALFORMED,
+        )
+
+    def test_guard_denylist_undecodable_git_failure_uses_malformed_denial(
+        self,
+    ) -> None:
+        environment = self.fake_git_environment(
+            "undecodable-git-failure-bin",
+            "printf '\\377' >&2\n"
+            "exit 128\n",
+        )
+        self.assert_denied(
+            self.invoke("printf harmless", environment=environment),
+            GUARD_POLICY_MALFORMED,
+        )
+
+    def test_guard_denylist_determinate_non_repository_is_compatibility_noop(
+        self,
+    ) -> None:
+        environment = self.fake_git_environment(
+            "determinate-non-repository-bin",
+            "if [ \"${LC_ALL-}:${LANG-}\" != C:C ]; then\n"
+            "  printf '%s\\n' 'fatal: locale was not pinned' >&2\n"
+            "  exit 70\n"
+            "fi\n"
+            "case \" $* \" in\n"
+            "  *\" rev-parse --is-bare-repository \"*|"
+            "*\" rev-parse --show-toplevel \"*)\n"
+            "    printf '%s\\n' 'fatal: not a git repository (or any of the parent directories): .git' >&2\n"
+            "    exit 128\n"
+            "    ;;\n"
+            "  *) exit 70 ;;\n"
+            "esac\n",
+        )
+        outside = self.scratch / "outside-repository"
+        outside.mkdir()
+        environment["GIT_CEILING_DIRECTORIES"] = str(self.scratch)
+        self.assert_allowed(
+            self.invoke(
+                "printf harmless",
+                cwd=outside,
+                environment=environment,
+            )
+        )
+
+    def test_guard_denylist_repository_ceiling_matches_git_discovery(
+        self,
+    ) -> None:
+        reason = "printf is operator-routed"
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(("printf", reason))
+        )
+        nested = self.repo / "nested"
+        nested.mkdir()
+
+        environment = os.environ.copy()
+        environment["GIT_CEILING_DIRECTORIES"] = str(self.repo)
+        probe = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=nested,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(probe.returncode, 0)
+        self.assertTrue(probe.stderr.startswith("fatal: not a git repository"))
+        self.assert_allowed(
+            self.invoke("printf harmless", cwd=nested, environment=environment)
+        )
+
+        # A ceiling equal to the starting cwd is ignored by Git; discovery may
+        # still reach parent metadata, so the committed rule remains active.
+        environment["GIT_CEILING_DIRECTORIES"] = str(nested)
+        self.assert_denied(
+            self.invoke("printf harmless", cwd=nested, environment=environment),
+            f"forge: operator-denied command — {reason}",
+        )
+
+    def test_guard_denylist_existing_unreadable_metadata_is_not_absence(
+        self,
+    ) -> None:
+        environment = self.fake_git_environment(
+            "unreadable-repository-metadata-bin",
+            "printf '%s\\n' 'fatal: not a git repository (or any of the parent directories): .git' >&2\n"
+            "exit 128\n",
+        )
+        git_dir = self.repo / ".git"
+        original_mode = stat.S_IMODE(git_dir.stat().st_mode)
+        git_dir.chmod(0)
+        try:
+            result = self.invoke("printf harmless", environment=environment)
+        finally:
+            git_dir.chmod(original_mode)
+        self.assert_denied(result, GUARD_POLICY_MALFORMED)
+
+    def test_guard_denylist_readable_invalid_metadata_confirms_absence(
+        self,
+    ) -> None:
+        outside = self.scratch / "readable-invalid-metadata"
+        outside.mkdir()
+        (outside / ".git").mkdir()
+        environment = os.environ.copy()
+        environment.update({"LC_ALL": "C", "LANG": "C"})
+        probe = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=outside,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(probe.returncode, 0)
+        self.assertTrue(probe.stderr.startswith("fatal: not a git repository"))
+        self.assert_allowed(
+            self.invoke("printf harmless", cwd=outside, environment=environment)
+        )
+
+    def test_guard_denylist_unreadable_required_metadata_is_not_absence(
+        self,
+    ) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("printf", "printf is operator-routed"),
+            )
+        )
+        head = self.repo / ".git" / "HEAD"
+        original_mode = stat.S_IMODE(head.stat().st_mode)
+        head.chmod(0)
+        environment = os.environ.copy()
+        environment.update({"LC_ALL": "C", "LANG": "C"})
+        try:
+            probe = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=self.repo,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            result = self.invoke(
+                "printf harmless", environment=environment
+            )
+        finally:
+            head.chmod(original_mode)
+        self.assertNotEqual(probe.returncode, 0)
+        self.assertTrue(probe.stderr.startswith("fatal: not a git repository"))
+        self.assert_denied(result, GUARD_POLICY_MALFORMED)
+
+    def test_guard_denylist_corrupt_required_metadata_is_not_absence(
+        self,
+    ) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("printf", "printf is operator-routed"),
+            )
+        )
+        head = self.repo / ".git" / "HEAD"
+        original_head = head.read_bytes()
+        head.write_bytes(b"ref: garbage\n")
+        environment = os.environ.copy()
+        environment.update({"LC_ALL": "C", "LANG": "C"})
+        try:
+            probe = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=self.repo,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            result = self.invoke(
+                "printf harmless", environment=environment
+            )
+        finally:
+            head.write_bytes(original_head)
+        self.assertNotEqual(probe.returncode, 0)
+        self.assertTrue(probe.stderr.startswith("fatal: not a git repository"))
+        self.assert_denied(result, GUARD_POLICY_MALFORMED)
+
+    def test_guard_denylist_unresolvable_repository_path_fails_closed(self) -> None:
+        missing = self.scratch / "does-not-exist"
+        environment = self.fake_git_environment(
+            "unresolvable-repository-path-bin",
+            "case \" $* \" in\n"
+            "  *\" rev-parse --is-bare-repository \"*) printf '%s\\n' false ;;\n"
+            "  *\" rev-parse --show-toplevel \"*) "
+            f"printf '%s\\n' {shlex.quote(str(missing))} ;;\n"
+            "  *) exit 70 ;;\n"
+            "esac\n",
+        )
+        self.assert_denied(
+            self.invoke("printf harmless", environment=environment),
+            GUARD_POLICY_MALFORMED,
+        )
+
+    def test_guard_denylist_operational_head_failure_is_not_unborn(self) -> None:
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(
+                ("printf", "all printf commands are operator-routed"),
+            )
+        )
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        environment = self.fake_git_environment(
+            "operational-head-failure-bin",
+            "case \" $* \" in\n"
+            "  *\" --no-replace-objects rev-parse --verify --quiet HEAD^{commit} \"*)\n"
+            "    printf '%s\\n' 'fatal: object database unavailable' >&2\n"
+            "    exit 128\n"
+            "    ;;\n"
+            "esac\n"
+            f"exec {shlex.quote(real_git or 'git')} \"$@\"\n",
+        )
+        self.assert_denied(
+            self.invoke("printf harmless", environment=environment),
+            GUARD_POLICY_MALFORMED,
+        )
+
+    def test_guard_launcher_is_utf8_explicit_and_fails_closed_before_bootstrap(
+        self,
+    ) -> None:
+        reason = "échec requires an operator"
+        self.commit_policy(
+            guard_denied_commands=self.guard_denied_body(("git push --force", reason))
+        )
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "LC_ALL": "C",
+                "LANG": "C",
+                "PYTHONCOERCECLOCALE": "0",
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "0",
+            }
+        )
+        self.assert_denied(
+            self.invoke(
+                "git push --force origin main",
+                environment=environment,
+            ),
+            f"forge: operator-denied command — {reason}",
+        )
+
+        fd_failure = self.mutant_guard(
+            "guard-bootstrap-fd-failure",
+            'if ! exec 3<<<"$python_code"; then',
+            'if ! exec 3<&-; then',
+        )
+        result = self.invoke("printf harmless", guard=fd_failure)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, GUARD_BOOTSTRAP_FAILURE + "\n")
+
+        setup_failure = self.mutant_guard(
+            "guard-bootstrap-setup-failure",
+            'if ! exec 3<<<"$python_code"; then',
+            "if ! false; then",
+        )
+        result = self.invoke("printf harmless", guard=setup_failure)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, GUARD_BOOTSTRAP_FAILURE + "\n")
+
+    def test_guard_denylist_uses_committed_policy_not_index_or_worktree(self) -> None:
+        reason = "committed operator policy"
+        denied = self.guard_denied_body(("git push --force", reason))
+        self.commit_policy(guard_denied_commands=denied)
+        (self.repo / "forge-project.md").write_text(
+            self.policy_text(
+                guard_denied_commands="No additional denied commands configured."
+            ),
+            encoding="utf-8",
+        )
+        self.git("add", "forge-project.md")
+        self.assert_denied(
+            self.invoke("git push --force origin main"),
+            f"forge: operator-denied command — {reason}",
+        )
+
+        self.commit_policy(
+            guard_denied_commands="No additional denied commands configured."
+        )
+        (self.repo / "forge-project.md").write_text(
+            self.policy_text(guard_denied_commands=denied),
+            encoding="utf-8",
+        )
+        self.git("add", "forge-project.md")
+        self.assert_allowed(self.invoke("git push --force origin main"))
+
+    def test_guard_denylist_prefix_match_control_is_load_bearing_in_memory(self) -> None:
+        module = self.load_guard_module("forge_guard_denylist_matcher_test")
+        rules = module.parse_guard_denied_policy(
+            (
+                "<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+                + self.guard_denied_body(
+                    ("git push --force", "operator-routed force push")
+                )
+                + "\n<!-- FORGE:REGION guard-denied-commands END -->\n"
+            ).encode("utf-8")
+        )
+        invocations = [("git", "push", "--force", "origin", "main")]
+        self.assertIsNotNone(module.guard_denied_match(invocations, rules))
+        with mock.patch.object(
+            module,
+            "guard_denied_prefix_matches",
+            return_value=False,
+        ):
+            self.assertIsNone(module.guard_denied_match(invocations, rules))
 
     def test_missing_stale_hash_mismatch_and_malformed_markers_are_denied(self) -> None:
         (self.repo / ".forge-manifest").write_text(
@@ -854,13 +1915,30 @@ class CommitGuardTests(unittest.TestCase):
             ("risk-tiers", {"fast_patterns": "docs/private/**"}),
             ("trigger-paths", {"triggers": "| src/** | security |"}),
             ("file-categories", {}),
+            (
+                "guard-denied-commands",
+                {
+                    "guard_denied_commands": self.guard_denied_body(
+                        ("git push --force", "operator-only")
+                    )
+                },
+            ),
         )
         for region, changes in mutations:
             with self.subTest(region=region):
                 repo = self.scratch / f"{region} checkout"
                 self.init_repo(repo)
-                policy_sha = self.commit_policy(cwd=repo)
-                updated = self.policy_text(**changes)
+                base = (
+                    {
+                        "guard_denied_commands": (
+                            "No additional denied commands configured."
+                        )
+                    }
+                    if region == "guard-denied-commands"
+                    else {}
+                )
+                policy_sha = self.commit_policy(cwd=repo, **base)
+                updated = self.policy_text(**{**base, **changes})
                 if region == "file-categories":
                     updated = updated.replace(
                         "| `docs` | `*.md`, `docs/**`, `.forge/evals/candidates/**` |",

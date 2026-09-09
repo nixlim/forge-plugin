@@ -69,6 +69,7 @@ def policy_text(
         or "cadence: 14d\nretention: forever\nevent-retention: 400d",
         "trigger-paths": "Fixture trigger paths.",
         "reviewer-facing-eval-triggers": REVIEWER_EVAL_TRIGGER_TABLE,
+        "guard-denied-commands": "No additional denied commands configured.",
     }
     return "\n\n".join(region(name, body) for name, body in bodies.items()) + "\n"
 
@@ -841,7 +842,11 @@ class DriftCheckTests(unittest.TestCase):
         self.assertEqual([item["check"] for item in summary["checks"]], ["worktree-clean"])
 
     def test_missing_region_is_reported_by_region_staleness_inventory(self) -> None:
-        for name in ("project-overview", "reviewer-facing-eval-triggers"):
+        for name in (
+            "project-overview",
+            "reviewer-facing-eval-triggers",
+            "guard-denied-commands",
+        ):
             with self.subTest(region=name):
                 fixture = DriftFixture(self.temp / name)
                 policy = (fixture.repo / "forge-project.md").read_text(encoding="utf-8")

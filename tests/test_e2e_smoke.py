@@ -289,6 +289,7 @@ retention: forever
 event-retention: 400d""",
             "trigger-paths": "No trigger paths configured.",
             "reviewer-facing-eval-triggers": POLICY.REVIEWER_EVAL_TRIGGER_TABLE,
+            "guard-denied-commands": "No additional denied commands configured.",
         }
         for name, body in regions.items():
             pattern = re.compile(

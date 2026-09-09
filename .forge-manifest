@@ -18,3 +18,5 @@ region: invariants
 region: risk-tiers
 region: drift-config
 region: trigger-paths
+region: reviewer-facing-eval-triggers
+region: guard-denied-commands

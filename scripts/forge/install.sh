@@ -254,7 +254,9 @@ validate_and_merge_regions() {
             drift-config
             trigger-paths
             reviewer-facing-eval-triggers
+            guard-denied-commands
         );
+        my @guard_predecessor_required = @required[0 .. 14];
         my @predecessor_required = @required[0 .. 13];
         my @legacy_required = @required[0 .. 8];
         my %required = map { $_ => 1 } @required;
@@ -292,10 +294,15 @@ validate_and_merge_regions() {
             }
             my $previous_inventory = join("\0", @previous_order);
             my $current_inventory = join("\0", @required);
+            my $guard_predecessor_inventory = join(
+                "\0",
+                @guard_predecessor_required,
+            );
             my $predecessor_inventory = join("\0", @predecessor_required);
             my $legacy_inventory = join("\0", @legacy_required);
             die "existing forge-project.md has missing or reordered regions\n"
                 unless $previous_inventory eq $current_inventory
+                    || $previous_inventory eq $guard_predecessor_inventory
                     || $previous_inventory eq $predecessor_inventory
                     || $previous_inventory eq $legacy_inventory;
             my %filled = map {

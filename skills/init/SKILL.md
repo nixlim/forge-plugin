@@ -127,7 +127,7 @@ Complete every precondition before running the installer.
    the existing `.forge-manifest` to be well formed before making any target-repository mutation:
    require exactly one nonempty value for each single-valued DM-005 key, exact
    `forge_version: 1`, exactly one completion line whose value is `true` or `false`, and unique
-   `region:` values drawn only from the fifteen defined regions. Cross-check its region lines against
+   `region:` values drawn only from the sixteen defined regions. Cross-check its region lines against
    the filled bodies reported in step 2; a malformed, duplicate, unknown, or inconsistent value
    stops init without changing the manifest.
 
@@ -282,7 +282,7 @@ candidate install artifact, not an executable policy source. Preserve every
 For each region still containing a `forge-init:` comment, replace its body and remove that comment.
 Do not rewrite a carried-forward filled body on re-init.
 
-End with all fifteen regions filled:
+End with all sixteen regions filled:
 
 1. `project-overview`
 2. `file-categories`
@@ -299,6 +299,7 @@ End with all fifteen regions filled:
 13. `drift-config`
 14. `trigger-paths`
 15. `reviewer-facing-eval-triggers`
+16. `guard-denied-commands`
 
 Make every configured validation executable in this repository. Include the confirmed targeted
 test and always-run blast-radius suite in `gate1-test-command`. Use 3–5 evidenced review-focus
@@ -344,6 +345,15 @@ correctly ordered pair and do not edit its contents. Fill `drift-config` with ex
 `retention`, and `event-retention` line. Fill `trigger-paths` with zero or more positive,
 repository-relative Git pathspec rows in `| Path pattern |` form; when none are evidenced, remove the
 sentinel and use exactly `No trigger paths configured.`
+
+Fill `guard-denied-commands` with either an operator-maintained `| pattern | reason |` table of
+additional parsed direct-invocation prefixes or, when no project-specific commands are denied,
+remove its `forge-init:` sentinel and use exactly `No additional denied commands configured.` Do
+not mine or invent deny rules. Treat any other present body as malformed and fail closed: the
+committed malformed-policy denial is exactly
+`forge: guard-denied-commands policy malformed — repair committed forge-project.md`. A configured
+prefix match denies exactly `forge: operator-denied command — <reason>`, where `<reason>` is the
+selected stripped reason cell.
 
 The `reviewer-facing-eval-triggers` region is plugin-owned. Install the exact table shipped by the
 current template, including its row order, without adding a `forge-init:` sentinel or adapting its
@@ -446,7 +456,7 @@ weakening their expectations.
 Treat the complete init output as a control-class change.
 
 1. Write or refresh `.forge-manifest` in this exact line-oriented shape, using the confirmed values
-   and one `region:` line for each of the fifteen filled regions, in DM-003 order:
+   and one `region:` line for each of the sixteen filled regions, in DM-003 order:
 
    ```text
    forge_version: 1

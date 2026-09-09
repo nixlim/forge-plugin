@@ -37,6 +37,7 @@ REGION_ORDER = (
     "drift-config",
     "trigger-paths",
     "reviewer-facing-eval-triggers",
+    "guard-denied-commands",
 )
 
 
@@ -289,6 +290,9 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertNotIn(
             "forge-init:", region_body(project, "reviewer-facing-eval-triggers")
         )
+        guard_body = region_body(project, "guard-denied-commands")
+        self.assertIn("forge-init:", guard_body)
+        self.assertIn("No additional denied commands configured.", guard_body)
         sentinel_search = subprocess.run(
             ["grep", "-rln", "forge-init:", "forge-project.md"],
             cwd=self.repo,
@@ -378,6 +382,16 @@ class InstallerIntegrationTests(unittest.TestCase):
         installed = replace_region(installed, "mutation-testing", mutation_absence)
         empty_triggers = "\nNo trigger paths configured.\n"
         installed = replace_region(installed, "trigger-paths", empty_triggers)
+        filled_guard_denylist = (
+            "\n| pattern | reason |\n"
+            "|---|---|\n"
+            "| git push --force | operator approval is required |\n"
+        )
+        installed = replace_region(
+            installed,
+            "guard-denied-commands",
+            filled_guard_denylist,
+        )
         (self.repo / "forge-project.md").write_text(installed, encoding="utf-8")
 
         fresh_path = self.plugin / "system/template/forge-project.md"
@@ -414,6 +428,10 @@ class InstallerIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(region_body(merged, "mutation-testing"), mutation_absence)
         self.assertEqual(region_body(merged, "trigger-paths"), empty_triggers)
+        self.assertEqual(
+            region_body(merged, "guard-denied-commands"),
+            filled_guard_denylist,
+        )
         self.assertEqual(fixture.read_bytes(), b"fixture bytes\x00stay\n")
         self.assertEqual(baseline.read_bytes(), b"PASS\nexisting baseline\n")
         self.assertEqual(self.read("AGENTS.md").count(BEGIN), 1)
@@ -547,16 +565,16 @@ class InstallerIntegrationTests(unittest.TestCase):
             REGION_ORDER,
         )
 
-    def test_reinstall_migrates_the_exact_predecessor_fourteen_region_inventory(self) -> None:
+    def test_reinstall_migrates_the_exact_predecessor_fifteen_region_inventory(self) -> None:
         first = self.install()
         self.assertEqual(first.returncode, 0, first.stderr)
 
         project = self.read("forge-project.md")
-        predecessor_body = "\npredecessor project overview stays byte-identical\n"
+        predecessor_body = "\nfifteen-region project overview stays byte-identical\n"
         project = replace_region(project, "project-overview", predecessor_body)
         project, replacements = re.subn(
-            r"\n?<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->.*?"
-            r"<!-- FORGE:REGION reviewer-facing-eval-triggers END -->\n?",
+            r"\n?<!-- FORGE:REGION guard-denied-commands BEGIN -->.*?"
+            r"<!-- FORGE:REGION guard-denied-commands END -->\n?",
             "\n",
             project,
             flags=re.DOTALL,
@@ -579,12 +597,79 @@ class InstallerIntegrationTests(unittest.TestCase):
         migrated = self.read("forge-project.md")
         self.assertEqual(region_body(migrated, "project-overview"), predecessor_body)
         self.assertEqual(
+            region_body(migrated, "guard-denied-commands"),
+            region_body(
+                (self.plugin / "system/template/forge-project.md").read_text(
+                    encoding="utf-8"
+                ),
+                "guard-denied-commands",
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                re.findall(
+                    r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
+                    migrated,
+                )
+            ),
+            REGION_ORDER,
+        )
+
+    def test_reinstall_migrates_the_exact_predecessor_fourteen_region_inventory(self) -> None:
+        first = self.install()
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        project = self.read("forge-project.md")
+        predecessor_body = "\npredecessor project overview stays byte-identical\n"
+        project = replace_region(project, "project-overview", predecessor_body)
+        project, replacements = re.subn(
+            r"\n?<!-- FORGE:REGION guard-denied-commands BEGIN -->.*?"
+            r"<!-- FORGE:REGION guard-denied-commands END -->\n?",
+            "\n",
+            project,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(replacements, 1)
+        project, replacements = re.subn(
+            r"\n?<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->.*?"
+            r"<!-- FORGE:REGION reviewer-facing-eval-triggers END -->\n?",
+            "\n",
+            project,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(replacements, 1)
+        self.assertEqual(
+            tuple(
+                re.findall(
+                    r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
+                    project,
+                )
+            ),
+            REGION_ORDER[:-2],
+        )
+        (self.repo / "forge-project.md").write_text(project, encoding="utf-8")
+
+        second = self.install()
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        migrated = self.read("forge-project.md")
+        self.assertEqual(region_body(migrated, "project-overview"), predecessor_body)
+        self.assertEqual(
             region_body(migrated, "reviewer-facing-eval-triggers"),
             region_body(
                 (self.plugin / "system/template/forge-project.md").read_text(
                     encoding="utf-8"
                 ),
                 "reviewer-facing-eval-triggers",
+            ),
+        )
+        self.assertEqual(
+            region_body(migrated, "guard-denied-commands"),
+            region_body(
+                (self.plugin / "system/template/forge-project.md").read_text(
+                    encoding="utf-8"
+                ),
+                "guard-denied-commands",
             ),
         )
         self.assertEqual(
@@ -971,7 +1056,15 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "my @predecessor_required = @required[0 .. 13];",
             installer,
         )
+        self.assertIn(
+            "my @guard_predecessor_required = @required[0 .. 14];",
+            installer,
+        )
         self.assertIn("my @legacy_required = @required[0 .. 8];", installer)
+        self.assertIn(
+            "$previous_inventory eq $guard_predecessor_inventory",
+            installer,
+        )
         self.assertIn(
             "$previous_inventory eq $predecessor_inventory",
             installer,
@@ -1118,7 +1211,7 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "CANDIDATE_ID",
             "sha256sum",
             "shasum -a 256",
-            "all fifteen regions filled",
+            "all sixteen regions filled",
             "reviewer-facing-eval-triggers",
             "sole maintained source",
             "Recorded-baseline integrity",
@@ -1164,6 +1257,23 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "second explicit approval",
         ):
             self.assertIn(required, skill)
+        phase3_region_inventory = re.search(
+            r"End with all sixteen regions filled:\n\n"
+            r"((?:[1-9][0-9]*\. \x60[a-z0-9-]+\x60\n)+)",
+            init_phase(skill, 3),
+        )
+        self.assertIsNotNone(phase3_region_inventory)
+        self.assertEqual(
+            tuple(
+                (int(position), name)
+                for position, name in re.findall(
+                    r"^([1-9][0-9]*)\. \x60([a-z0-9-]+)\x60$",
+                    phase3_region_inventory.group(1),
+                    flags=re.MULTILINE,
+                )
+            ),
+            tuple(enumerate(REGION_ORDER, start=1)),
+        )
         self.assertIn(
             "fixed-authority bootstrap coordinator is not implemented or authorized "
             "in this revision",

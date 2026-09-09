@@ -82,6 +82,9 @@ cadence: 14d
 | model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
+<!-- FORGE:REGION guard-denied-commands BEGIN -->
+No additional denied commands configured.
+<!-- FORGE:REGION guard-denied-commands END -->
 """
 
 FLAT_GATE1 = "```bash\n" + FLAT_CELL + "\n```"
@@ -195,6 +198,57 @@ class FencedShellCellTests(unittest.TestCase):
 
 
 class ParsePolicyTests(unittest.TestCase):
+    def test_current_inventory_appends_guard_denylist(self) -> None:
+        parsed = CLI.parse_policy("0" * 40, policy(FLAT_GATE1))
+        self.assertEqual(tuple(parsed.regions), POLICY.REGION_ORDER)
+        self.assertEqual(
+            parsed.regions["guard-denied-commands"].strip(),
+            "No additional denied commands configured.",
+        )
+
+    def test_both_predecessor_inventories_remain_readable(self) -> None:
+        current = policy(FLAT_GATE1)
+        guard = (
+            b"<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+            b"No additional denied commands configured.\n"
+            b"<!-- FORGE:REGION guard-denied-commands END -->\n"
+        )
+        reviewer = current.split(
+            b"<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->", 1
+        )[1].split(
+            b"<!-- FORGE:REGION reviewer-facing-eval-triggers END -->", 1
+        )[0]
+        reviewer_region = (
+            b"<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->"
+            + reviewer
+            + b"<!-- FORGE:REGION reviewer-facing-eval-triggers END -->\n"
+        )
+        previous = current.replace(guard, b"")
+        legacy = previous.replace(reviewer_region, b"")
+        reviewer_missing = current.replace(reviewer_region, b"")
+
+        self.assertEqual(tuple(POLICY._parse_regions(previous)), POLICY.PREVIOUS_REGION_ORDER)
+        self.assertEqual(tuple(POLICY._parse_regions(legacy)), POLICY.LEGACY_REGION_ORDER)
+        self.assertEqual(
+            tuple(POLICY._parse_regions(reviewer_missing)),
+            POLICY._REVIEWER_DEFECT_PROJECTED_ORDER,
+        )
+
+    def test_malformed_reviewer_projection_preserves_appended_guard_region(self) -> None:
+        malformed = policy(FLAT_GATE1).replace(
+            b"<!-- FORGE:REGION reviewer-facing-eval-triggers END -->",
+            b"<!-- FORGE:REGION wrong-name END -->",
+        )
+        parsed = CLI.parse_policy("1" * 40, malformed)
+        self.assertEqual(
+            parsed.reviewer_eval_trigger_error,
+            "reviewer-facing-eval-triggers is malformed",
+        )
+        self.assertEqual(
+            parsed.regions["guard-denied-commands"].strip(),
+            "No additional denied commands configured.",
+        )
+
     def test_nested_gate1_parses_identically_to_flat(self) -> None:
         flat = CLI.parse_policy("a" * 40, policy(FLAT_GATE1))
         nested = CLI.parse_policy("b" * 40, policy(NESTED_GATE1))

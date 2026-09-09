@@ -61,6 +61,7 @@ REGION_ORDER = (
     "drift-config",
     "trigger-paths",
     "reviewer-facing-eval-triggers",
+    "guard-denied-commands",
 )
 DEDUPE_EVENTS = {
     "gate_commit",

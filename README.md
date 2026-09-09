@@ -107,7 +107,7 @@ In the repository you want to govern:
 ```
 
 Init confirms the project name and default branch; installs `forge-project.md`
-(fourteen configuration regions, rendered into both CLAUDE.md and AGENTS.md), the
+(with its configuration regions rendered into both CLAUDE.md and AGENTS.md), the
 `.codex/` layer (agent routing plus an execpolicy deny-list), the gitignore block,
 and `.forge/` state directories; mines your CI configuration and git history to
 propose gate commands; seeds and baselines the eval suite; then presents the whole

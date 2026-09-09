@@ -352,3 +352,9 @@ event-retention: 400d
 | model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
+
+## Guard Denied Commands
+
+<!-- FORGE:REGION guard-denied-commands BEGIN -->
+No additional denied commands configured.
+<!-- FORGE:REGION guard-denied-commands END -->

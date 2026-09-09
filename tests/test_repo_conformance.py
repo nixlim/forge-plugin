@@ -265,6 +265,7 @@ def assert_dogfood_initialized_regions(
         "drift-config",
         "trigger-paths",
         "reviewer-facing-eval-triggers",
+        "guard-denied-commands",
     )
     begins = re.findall(r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->", policy)
 

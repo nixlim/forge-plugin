@@ -10,8 +10,9 @@ uses these files as source material to generate the per-project layer:
   and records the baseline in `tasks/<id>.result` without overwriting an existing
   fixture or result.
 - `brownfield-exploration.md` — the exploration protocol for repositories with
-  existing code, CI, and conventions. Its findings supply all nine regions in the
-  root-level `forge-project.md`.
+  existing code, CI, and conventions. Its findings supply the evidence-derived
+  region bodies in the root-level `forge-project.md`; plugin-owned and
+  operator-maintained regions follow their separate init rules.
 - `validation-snippets/` — per-stack file-category rows and validation commands for
   the `file-categories`, `stack-validations`, and `gate1-test-command` regions in
   `forge-project.md`. Init adapts them to the repository's actual scripts and CI.

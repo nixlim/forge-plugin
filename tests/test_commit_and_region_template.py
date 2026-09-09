@@ -43,6 +43,7 @@ REGIONS = [
     "drift-config",
     "trigger-paths",
     "reviewer-facing-eval-triggers",
+    "guard-denied-commands",
 ]
 
 DEPENDENCY_MANIFEST_PATHS = [
@@ -143,7 +144,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
                     "3d1be7b789a8ee5cc7b5f65ac7f77a5ce3622fe0214a09650c85424c91147d93",
                 )
 
-    def test_fifteen_regions_are_complete_and_in_contract_order(self) -> None:
+    def test_sixteen_regions_are_complete_and_in_contract_order(self) -> None:
         begins = re.findall(r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->", TEMPLATE)
         ends = re.findall(r"<!-- FORGE:REGION ([a-z0-9-]+) END -->", TEMPLATE)
         self.assertEqual(begins, REGIONS)
@@ -161,6 +162,16 @@ class ForgeProjectTemplateTests(unittest.TestCase):
                 ROOT_PROJECT, "reviewer-facing-eval-triggers"
             ).strip(),
             REVIEWER_EVAL_TRIGGER_TABLE,
+        )
+        self.assertEqual(
+            document_region_body(ROOT_PROJECT, "guard-denied-commands").strip(),
+            "No additional denied commands configured.",
+        )
+        guard_template = document_region_body(TEMPLATE, "guard-denied-commands")
+        self.assertIn("<!-- forge-init:", guard_template)
+        self.assertIn(
+            "No additional denied commands configured.",
+            guard_template,
         )
 
     def test_revision_two_region_defaults_are_conservative_and_complete(self) -> None:

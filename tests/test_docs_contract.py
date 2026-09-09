@@ -348,6 +348,41 @@ def assert_revision8_spec_harmonization(spec: str) -> None:
             raise AssertionError(true_negative)
 
 
+def assert_guard_denylist_spec_contract(spec: str) -> None:
+    fr095 = spec.split("- **FR-095**", maxsplit=1)[1].split(
+        "### Evaluation system", maxsplit=1
+    )[0]
+    required = (
+        "`guard-denied-commands`",
+        "`No additional denied commands configured.`",
+        "`| pattern | reason |`",
+        "`|---|---|`",
+        "POSIX `shlex`",
+        "prefix of the guard's parsed direct-invocation argv",
+        "never a raw-command substring",
+        "leading-assignment and complete supported `env`-prefix resolution",
+        "Aliases, functions, `sudo`, `command`, `bash -c`, and other wrappers",
+        "not tamper-proof",
+        "`git --no-replace-objects show <policy-sha>:forge-project.md`",
+        "staged and working-tree bytes are never policy",
+        "forge: guard-denied-commands policy malformed — repair committed forge-project.md",
+        "forge: operator-denied command — <reason>",
+        "add no FR-220 reason-code member",
+        "do not alter any FR-221 denial literal",
+        "Fast-marker policy-continuity comparison MUST include",
+    )
+    for marker in required:
+        if marker not in fr095:
+            raise AssertionError(marker)
+    if "exactly sixteen regions" not in spec:
+        raise AssertionError("sixteen-region inventory")
+    if not re.search(
+        r"`reviewer-facing-eval-triggers`, `guard-denied-commands`; no missing",
+        spec,
+    ):
+        raise AssertionError("guard denylist must be the last region")
+
+
 def assert_candidate_v2_spec_contract(spec: str) -> None:
     normalized = _flat(spec)
     exact_markers = (
@@ -574,6 +609,25 @@ class DocumentationContractTests(unittest.TestCase):
         )
         with self.assertRaises(AssertionError):
             assert_revision8_spec_harmonization(false_negatives)
+
+    def test_guard_denylist_spec_contract_survives_mutation(self) -> None:
+        spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+        assert_guard_denylist_spec_contract(spec)
+
+        for control in (
+            "prefix of the guard's parsed direct-invocation argv",
+            "never a raw-command substring",
+            "not tamper-proof",
+            "staged and working-tree bytes are never policy",
+            "forge: guard-denied-commands policy malformed — repair committed forge-project.md",
+            "forge: operator-denied command — <reason>",
+            "add no FR-220 reason-code member",
+            "Fast-marker policy-continuity comparison MUST include",
+        ):
+            with self.subTest(disabled=control):
+                mutated = spec.replace(control, "DISABLED_CONTROL", 1)
+                with self.assertRaises(AssertionError):
+                    assert_guard_denylist_spec_contract(mutated)
 
     def test_candidate_v2_spec_contract_survives_mutation(self) -> None:
         spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")

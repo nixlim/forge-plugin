@@ -1,12 +1,13 @@
 # Brownfield exploration protocol
 
-<!-- forge: modified from upstream — re-rooted distributed project sections to the nine regions in forge-project.md and repo-local .forge state. -->
+<!-- forge: modified from upstream — re-rooted distributed project sections to forge-project.md and repo-local .forge state. -->
 
 How `/forge:init` explores a repository that already has code, CI, and conventions
 before filling any region. **Mirror the repository's existing reality; never invent a
 parallel one.** A gate that runs different commands than CI, a changelog rule the
 project does not follow, or triggers for failure modes the project never has all
-erode trust. Every filled region must be traceable to evidence from this exploration.
+erode trust. Every evidence-derived region must be traceable to this exploration;
+plugin-owned and operator-maintained regions follow their separate init rules.
 
 For large repositories, fan the read-only steps out to exploration subagents and
 synthesize the results. For small repositories, do them inline. Record what was
@@ -104,7 +105,7 @@ Before region filling is accepted, prove the proposed customization against real
 2. Run the assembled `stack-validations` commands on the clean tree; they must pass.
 3. Run the assembled `gate1-test-command` on the clean tree; it must pass. Time it,
    and split targeted checks from the always-run blast-radius suite if needed.
-4. Trace each of the nine filled regions to CI, configuration, code, history,
+4. Trace each evidence-derived filled region to CI, configuration, code, history,
    documentation, or an explicit user decision.
 
 A gate that fails on untouched code is miscalibrated. Stop init and report the

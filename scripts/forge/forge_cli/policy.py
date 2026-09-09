@@ -51,7 +51,13 @@ LEGACY_REGION_ORDER = (
 )
 
 
-REGION_ORDER = (*LEGACY_REGION_ORDER, "reviewer-facing-eval-triggers")
+PREVIOUS_REGION_ORDER = (*LEGACY_REGION_ORDER, "reviewer-facing-eval-triggers")
+
+
+REGION_ORDER = (*PREVIOUS_REGION_ORDER, "guard-denied-commands")
+
+
+_REVIEWER_DEFECT_PROJECTED_ORDER = (*LEGACY_REGION_ORDER, "guard-denied-commands")
 
 
 REVIEWER_EVAL_TRIGGER_TABLE = (
@@ -75,7 +81,9 @@ class PolicyError(ValueError):
     pass
 
 
-def _parse_regions(raw: bytes) -> dict[str, str]:
+def _parse_regions_for_orders(
+    raw: bytes, accepted_orders: set[tuple[str, ...]]
+) -> dict[str, str]:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -110,14 +118,26 @@ def _parse_regions(raw: bytes) -> dict[str, str]:
             body.append(line)
     if active is not None:
         raise PolicyError(f"unterminated Forge region: {active}")
-    # The one-generation predecessor inventory remains readable solely so an
-    # authenticated fourteen-region installation can reach the migration
-    # candidate that appends reviewer-facing-eval-triggers.  Consumers treat
-    # its absent trigger source as malformed and fail closed for control-class
-    # chains; a legacy policy never obtains an implicit empty trigger list.
-    if tuple(seen_order) not in {REGION_ORDER, LEGACY_REGION_ORDER}:
+    if tuple(seen_order) not in accepted_orders:
         raise PolicyError("Forge region inventory/order does not match committed schema")
     return result
+
+
+def _parse_regions(raw: bytes) -> dict[str, str]:
+    # Both authenticated predecessor inventories remain readable so upgrades
+    # can append project-specific regions without making the existing policy
+    # unavailable.  Missing reviewer triggers still fail closed at their
+    # dedicated consumer; a missing guard denylist is the specified legacy
+    # no-op.
+    return _parse_regions_for_orders(
+        raw,
+        {
+            REGION_ORDER,
+            PREVIOUS_REGION_ORDER,
+            LEGACY_REGION_ORDER,
+            _REVIEWER_DEFECT_PROJECTED_ORDER,
+        },
+    )
 
 
 def _parse_regions_with_trigger_defect(
@@ -125,11 +145,10 @@ def _parse_regions_with_trigger_defect(
 ) -> tuple[dict[str, str], str | None]:
     """Carry only structural defects in the appended reviewer-trigger region.
 
-    The fourteen predecessor regions remain executable policy and therefore
-    retain the strict parser unchanged.  The fifteenth region is gate input:
-    when only its markers are malformed, project those bytes away, re-parse the
-    complete legacy inventory, and carry the defect to the dedicated fresh-eval
-    INVALID path.  The returned policy identity always remains bound to ``raw``.
+    The reviewer-trigger region is gate input: when only its markers are
+    malformed, project those bytes away, re-parse either complete surrounding
+    inventory, and carry the defect to the dedicated fresh-eval INVALID path.
+    The returned policy identity always remains bound to ``raw``.
     """
 
     try:
@@ -172,12 +191,18 @@ def _parse_regions_with_trigger_defect(
         if not saw_trigger_marker:
             raise original
         try:
-            legacy_regions = _parse_regions("".join(projected).encode("utf-8"))
+            legacy_regions = _parse_regions_for_orders(
+                "".join(projected).encode("utf-8"),
+                {LEGACY_REGION_ORDER, _REVIEWER_DEFECT_PROJECTED_ORDER},
+            )
         except PolicyError:
             # A defect remains after removing only trigger material, so this is
             # ordinary unreadable policy rather than a fresh-eval transport case.
             raise original
-        if tuple(legacy_regions) != LEGACY_REGION_ORDER:
+        if tuple(legacy_regions) not in {
+            LEGACY_REGION_ORDER,
+            _REVIEWER_DEFECT_PROJECTED_ORDER,
+        }:
             raise original
         return legacy_regions, "reviewer-facing-eval-triggers is malformed"
 

@@ -64,6 +64,20 @@ REDIRECTION = re.compile(
     r"(?:\d*(?:<<<|<<-?|>>|<>|>\||<&|>&|<|>)|&>>?)(.*)",
     re.DOTALL,
 )
+DIRECT_REDIRECTION_OPERATORS = (
+    "&>>",
+    "<<<",
+    "<<-",
+    ">>",
+    "<<",
+    "<>",
+    ">|",
+    "<&",
+    ">&",
+    "&>",
+    "<",
+    ">",
+)
 SHELL_VARIABLE = re.compile(
     r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))"
 )
@@ -240,6 +254,15 @@ GUARD_FAILSAFE_REASON_CODES = {
     "time": "guard-time-budget",
     "internal": "guard-internal-failure",
 }
+GUARD_DENIED_REGION = "guard-denied-commands"
+GUARD_DENIED_EMPTY = "No additional denied commands configured."
+GUARD_DENIED_MALFORMED = (
+    "forge: guard-denied-commands policy malformed — repair committed "
+    "forge-project.md"
+)
+GUARD_DENIED_MAX_RULES = 256
+GUARD_DENIED_MAX_PATTERN_TOKENS = 64
+GUARD_DENIED_MAX_CELL_BYTES = 4096
 
 
 # Post-parse resolution runs Git and check-halt per action; arguments never
@@ -453,6 +476,16 @@ class GitAction:
 
 
 @dataclass(frozen=True)
+class GuardDeniedRule:
+    pattern: tuple[str, ...]
+    reason: str
+
+
+class GuardDeniedCommandError(ValueError):
+    """A configured direct-command policy cannot safely inspect this shell text."""
+
+
+@dataclass(frozen=True)
 class RepoContext:
     action: GitAction
     worktree_root: Path
@@ -462,6 +495,18 @@ class RepoContext:
     main_root: Path
     git_env: dict[str, str]
     bare: bool
+
+
+@dataclass(frozen=True)
+class RepoContextResolution:
+    state: str
+    context: RepoContext | None
+
+
+@dataclass(frozen=True)
+class GuardDeniedHeadResolution:
+    state: str
+    policy_sha: str = ""
 
 
 def _matching_backtick(command: str, index: int) -> int | None:
@@ -1778,6 +1823,579 @@ def parse_action(tokens: list[str], cwd: Path) -> GitAction | None:
     )
 
 
+def parse_direct_invocation(
+    tokens: list[str], cwd: Path
+) -> tuple[str, ...] | None:
+    """Resolve one direct command segment to the argv used by policy matching.
+
+    Leading assignments and the complete supported ``env`` prefix grammar are
+    resolved exactly as they are for Git action parsing.  A direct Git command
+    is represented canonically as ``git``, its parsed subcommand, and the
+    subcommand argv, so an executable path or Git global options cannot hide a
+    configured prefix.  Other executables retain their parsed argv verbatim;
+    wrappers therefore remain wrappers and are deliberately outside this
+    cooperative mistake-prevention control.
+    """
+    if not tokens:
+        return None
+    tokens = list(tokens)
+    shell_cwd = cwd
+    index = 0
+    while index < len(tokens) and ASSIGNMENT.fullmatch(tokens[index]):
+        index += 1
+    if index < len(tokens) and is_env_token(tokens[index]):
+        parsed = skip_env_prefix(tokens, index, [], cwd)
+        if parsed is None:
+            return None
+        index, cwd = parsed
+    if index >= len(tokens):
+        return None
+
+    invocation = list(tokens[index:])
+    if is_git_token(invocation[0]):
+        action = parse_action(tokens, shell_cwd)
+        if action is not None:
+            return ("git", action.subcommand, *action.subcommand_args)
+        invocation[0] = "git"
+    return tuple(invocation)
+
+
+def _ansi_c_escape(value: str, index: int) -> tuple[bytes, int]:
+    """Decode one Bash ANSI-C escape to the bytes Bash places in argv."""
+    if index + 1 >= len(value):
+        return b"\\", index + 1
+    escaped = value[index + 1]
+    simple = {
+        "a": b"\a",
+        "b": b"\b",
+        "e": b"\x1b",
+        "E": b"\x1b",
+        "f": b"\f",
+        "n": b"\n",
+        "r": b"\r",
+        "t": b"\t",
+        "v": b"\v",
+        "\\": b"\\",
+        "'": b"'",
+        '"': b'"',
+        "?": b"?",
+    }
+    if escaped in simple:
+        return simple[escaped], index + 2
+    if escaped in "01234567":
+        end = index + 2
+        maximum = index + 4
+        while end < len(value) and end < maximum and value[end] in "01234567":
+            end += 1
+        return bytes((int(value[index + 1 : end], 8) & 0xFF,)), end
+    widths = {"x": 2, "u": 4, "U": 8}
+    if escaped in widths:
+        end = index + 2
+        maximum = min(len(value), end + widths[escaped])
+        while end < maximum and value[end] in "0123456789abcdefABCDEF":
+            end += 1
+        if end > index + 2:
+            codepoint = int(value[index + 2 : end], 16)
+            if escaped == "x":
+                return bytes((codepoint & 0xFF,)), end
+            # Bash 3.2 (the macOS system Bash) does not support \u/\U, while
+            # newer Bash releases decode them with locale-sensitive behavior.
+            # No such escape has one portable argv value, even for ASCII.
+            raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED)
+    if escaped == "c" and index + 2 < len(value):
+        control = value[index + 2]
+        if not control.isascii():
+            raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED)
+        return (
+            bytes((0x7F if control == "?" else ord(control.upper()) & 0x1F,)),
+            index + 3,
+        )
+    try:
+        return ("\\" + escaped).encode("utf-8"), index + 2
+    except UnicodeEncodeError as exc:
+        raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED) from exc
+
+
+def _decode_ansi_c_quote(value: str, index: int) -> tuple[str, int]:
+    """Decode one complete ``$'...'`` fragment as one valid UTF-8 shell word."""
+    decoded = bytearray()
+    cursor = index + 2
+    while cursor < len(value) and value[cursor] != "'":
+        if value[cursor] == "\\":
+            fragment, cursor = _ansi_c_escape(value, cursor)
+            decoded.extend(fragment)
+        else:
+            try:
+                decoded.extend(value[cursor].encode("utf-8"))
+            except UnicodeEncodeError as exc:
+                raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED) from exc
+            cursor += 1
+    if cursor >= len(value) or b"\x00" in decoded:
+        raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED)
+    try:
+        return bytes(decoded).decode("utf-8"), cursor + 1
+    except UnicodeDecodeError as exc:
+        raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED) from exc
+
+
+def _without_active_line_continuations(value: str) -> str:
+    """Remove only Bash-active backslash-newline pairs from shell source."""
+    normalized: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        if quote is None and value.startswith(("$'", '$"'), index):
+            quote = "ansi" if value[index + 1] == "'" else '"'
+            normalized.extend(value[index : index + 2])
+            index += 2
+            continue
+        char = value[index]
+        if quote == "ansi":
+            normalized.append(char)
+            if char == "'":
+                quote = None
+                index += 1
+            elif char == "\\" and index + 1 < len(value):
+                normalized.append(value[index + 1])
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote == "'":
+            normalized.append(char)
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            if index + 1 < len(value) and value[index + 1] == "\n":
+                index += 2
+                continue
+            normalized.append(char)
+            if index + 1 < len(value):
+                normalized.append(value[index + 1])
+                index += 2
+            else:
+                index += 1
+            continue
+        normalized.append(char)
+        if quote == '"':
+            if char == '"':
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        index += 1
+    return "".join(normalized)
+
+
+def _normalize_dollar_quotes(value: str) -> str:
+    """Translate Bash dollar quotes into forms POSIX shlex decodes faithfully."""
+    normalized: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        if quote is None and value.startswith("$'", index):
+            literal, index = _decode_ansi_c_quote(value, index)
+            normalized.append(shlex.quote(literal))
+            continue
+        if quote is None and value.startswith('$"', index):
+            normalized.append('"')
+            quote = '"'
+            index += 2
+            continue
+        char = value[index]
+        normalized.append(char)
+        if char == "\\" and quote != "'" and index + 1 < len(value):
+            normalized.append(value[index + 1])
+            index += 2
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = None
+        elif quote == '"':
+            if char == '"':
+                quote = None
+        elif char in {"'", '"'}:
+            quote = char
+        index += 1
+    return "".join(normalized)
+
+
+def _redirection_prefix_start(syntax: str, operator_start: int) -> int:
+    """Include an eligible numeric or named file descriptor in a redirect."""
+    start = operator_start
+    while start > 0 and syntax[start - 1].isdigit():
+        start -= 1
+    boundary = start == 0 or syntax[start - 1].isspace() or syntax[start - 1] in ";|&(){}"
+    if start < operator_start and boundary:
+        return start
+
+    named = re.search(r"\{[A-Za-z_][A-Za-z0-9_]*\}$", syntax[:operator_start])
+    if named is not None:
+        start = named.start()
+        if start == 0 or syntax[start - 1].isspace() or syntax[start - 1] in ";|&(){}":
+            return start
+    return operator_start
+
+
+def _mark_direct_redirections(value: str) -> tuple[str, str]:
+    """Replace Bash redirection syntax with an unambiguous private token."""
+    sentinel = "__FORGE_GUARD_REDIRECTION__"
+    while sentinel in value:
+        sentinel += "_"
+    syntax = _shell_syntax_view(value)
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(value):
+        operator = next(
+            (
+                candidate
+                for candidate in DIRECT_REDIRECTION_OPERATORS
+                if syntax.startswith(candidate, index)
+            ),
+            None,
+        )
+        if operator is None:
+            index += 1
+            continue
+        start = _redirection_prefix_start(syntax, index)
+        end = index + len(operator)
+        spans.append((start, end))
+        index = end
+    if not spans:
+        return value, sentinel
+
+    marked: list[str] = []
+    cursor = 0
+    for start, end in spans:
+        if start < cursor:
+            raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED)
+        marked.append(value[cursor:start])
+        marked.append(f" {sentinel} ")
+        cursor = end
+    marked.append(value[cursor:])
+    return "".join(marked), sentinel
+
+
+def _without_direct_redirections(tokens: list[str], sentinel: str) -> list[str]:
+    """Remove marked redirect operators and their one shell-word operand."""
+    command_tokens: list[str] = []
+    index = 0
+    while index < len(tokens):
+        if tokens[index] != sentinel:
+            command_tokens.append(tokens[index])
+            index += 1
+            continue
+        if index + 1 >= len(tokens) or tokens[index + 1] == sentinel:
+            raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED)
+        index += 2
+    return command_tokens
+
+
+def _heredoc_delimiters(line: str) -> list[tuple[str, bool, bool]]:
+    """Return here-document delimiters introduced by one shell source line.
+
+    This is deliberately a narrow lexical pass: it recognizes Bash ``<<`` and
+    ``<<-`` redirections outside quotes and comments, removes shell quoting from
+    the delimiter word, and leaves here-strings alone.  The body is data and
+    must never become a candidate direct invocation.
+    """
+    delimiters: list[tuple[str, bool, bool]] = []
+    syntax = _shell_syntax_view(line)
+    index = 0
+    while index < len(line):
+        if syntax.startswith("((", index):
+            closing = syntax.find("))", index + 2)
+            index = len(line) if closing < 0 else closing + 2
+            continue
+        if syntax.startswith("[[", index):
+            closing = syntax.find("]]", index + 2)
+            index = len(line) if closing < 0 else closing + 2
+            continue
+        if syntax[index] == "#" and (
+            index == 0 or syntax[index - 1] in " \t;|&(){}"
+        ):
+            break
+        if syntax.startswith("<<<", index):
+            index += 3
+            continue
+        if not syntax.startswith("<<", index):
+            index += 1
+            continue
+
+        strip_tabs = line.startswith("<<-", index)
+        cursor = index + (3 if strip_tabs else 2)
+        while cursor < len(line) and line[cursor] in " \t":
+            cursor += 1
+        delimiter: list[str] = []
+        word_quote: str | None = None
+        delimiter_quoted = False
+        saw_word = False
+        while cursor < len(line):
+            word_char = line[cursor]
+            if word_quote is None and word_char in " \t\r\n;|&()<>":
+                break
+            if word_quote is None and line.startswith("$'", cursor):
+                delimiter_quoted = True
+                saw_word = True
+                decoded, cursor = _decode_ansi_c_quote(line, cursor)
+                delimiter.append(decoded)
+                continue
+            if word_quote is None and line.startswith('$"', cursor):
+                delimiter_quoted = True
+                saw_word = True
+                word_quote = '"'
+                cursor += 2
+                continue
+            if word_char == "\\" and word_quote != "'":
+                delimiter_quoted = True
+                saw_word = True
+                if cursor + 1 < len(line) and (
+                    word_quote is None or line[cursor + 1] in '$`"\\\n'
+                ):
+                    delimiter.append(line[cursor + 1])
+                    cursor += 2
+                    continue
+                delimiter.append(word_char)
+                cursor += 1
+                continue
+            if word_quote is None and word_char in {"'", '"'}:
+                delimiter_quoted = True
+                saw_word = True
+                word_quote = word_char
+                cursor += 1
+                continue
+            if word_quote is not None and word_char == word_quote:
+                word_quote = None
+                cursor += 1
+                continue
+            delimiter.append(word_char)
+            saw_word = True
+            cursor += 1
+        if saw_word and word_quote is None:
+            delimiters.append(
+                ("".join(delimiter), strip_tabs, not delimiter_quoted)
+            )
+        index = max(cursor, index + 2)
+    return delimiters
+
+
+def _heredoc_expansion_view(line: str) -> str:
+    """Preserve executable substitutions from one expanding heredoc body line."""
+    masked = ["\n" if char == "\n" else " " for char in line]
+    index = 0
+    while index < len(line):
+        if line[index] == "\\" and index + 1 < len(line) and line[index + 1] in "\\$`":
+            index += 2
+            continue
+        if line.startswith("$(", index):
+            closing = _matching_executable_parenthesis(line, index)
+            if closing is not None:
+                masked[index : closing + 1] = line[index : closing + 1]
+                index = closing + 1
+                continue
+        if line[index] == "`":
+            closing = _matching_backtick(line, index)
+            if closing is not None:
+                masked[index : closing + 1] = line[index : closing + 1]
+                index = closing + 1
+                continue
+        index += 1
+    return "".join(masked)
+
+
+def _shell_line_continues(value: str) -> bool:
+    """Return whether the final byte is an active Bash backslash continuation."""
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        if quote is None and value.startswith(("$'", '$"'), index):
+            quote = "ansi" if value[index + 1] == "'" else '"'
+            index += 2
+            continue
+        char = value[index]
+        if quote == "ansi":
+            if char == "'":
+                quote = None
+                index += 1
+            elif char == "\\":
+                if index + 1 == len(value):
+                    return True
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            if index + 1 == len(value):
+                return True
+            if quote == '"' and value[index + 1] not in '$`"\\':
+                index += 1
+            else:
+                index += 2
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+        index += 1
+    return False
+
+
+def _logical_heredoc_header(
+    lines: list[str], index: int
+) -> tuple[str, int]:
+    """Join active backslash-newline pairs for delimiter-word discovery."""
+    logical = lines[index][:-1] if lines[index].endswith("\n") else lines[index]
+    final_index = index
+    while _shell_line_continues(logical) and final_index + 1 < len(lines):
+        final_index += 1
+        continuation = (
+            lines[final_index][:-1]
+            if lines[final_index].endswith("\n")
+            else lines[final_index]
+        )
+        logical = logical[:-1] + continuation
+    return logical, final_index
+
+
+def without_heredoc_bodies(command: str) -> str:
+    """Blank here-document body and terminator bytes while preserving offsets."""
+    pending: list[tuple[str, bool, bool]] = []
+    masked: list[str] = []
+    lines = command.splitlines(keepends=True)
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        content = line[:-1] if line.endswith("\n") else line
+        if pending:
+            delimiter, strip_tabs, body_expands = pending[0]
+            terminator = index
+            while terminator < len(lines):
+                candidate_line = lines[terminator]
+                candidate = (
+                    candidate_line[:-1]
+                    if candidate_line.endswith("\n")
+                    else candidate_line
+                )
+                if strip_tabs:
+                    candidate = candidate.lstrip("\t")
+                if candidate == delimiter:
+                    break
+                terminator += 1
+            body = "".join(lines[index:terminator])
+            masked.append(
+                _heredoc_expansion_view(body)
+                if body_expands
+                else "".join("\n" if char == "\n" else " " for char in body)
+            )
+            if terminator < len(lines):
+                terminator_line = lines[terminator]
+                masked.append(
+                    "".join(
+                        "\n" if char == "\n" else " " for char in terminator_line
+                    )
+                )
+                pending.pop(0)
+                index = terminator + 1
+            else:
+                index = terminator
+            continue
+        header, final_index = _logical_heredoc_header(lines, index)
+        masked.extend(lines[index : final_index + 1])
+        pending.extend(_heredoc_delimiters(header))
+        index = final_index + 1
+    return "".join(masked)
+
+
+def _find_direct_invocations_recursive(command: str, cwd: Path) -> list[tuple[str, ...]]:
+    _enter_nesting()
+    try:
+        command = without_heredoc_bodies(command)
+        command = _without_active_line_continuations(command)
+        command = _normalize_dollar_quotes(command)
+        command, redirection_sentinel = _mark_direct_redirections(command)
+        invocations: list[tuple[str, ...]] = []
+        for segment, _separator in split_segments(command):
+            for nested in _nested_executables(segment):
+                for invocation in _find_direct_invocations_recursive(nested, cwd):
+                    if invocation not in invocations:
+                        invocations.append(invocation)
+            normalized_segment, _openers, _closers = shell_group_structure(segment)
+            try:
+                tokens = shlex.split(
+                    normalized_segment, comments=False, posix=True
+                )
+            except ValueError as exc:
+                raise GuardDeniedCommandError(GUARD_DENIED_MALFORMED) from exc
+            command_tokens = _without_direct_redirections(
+                tokens, redirection_sentinel
+            )
+            # Control-flow reserved words introduce, but are not part of, the
+            # direct invocation in the remainder of this shell segment.
+            while command_tokens and command_tokens[0] in {
+                "if",
+                "then",
+                "elif",
+                "else",
+                "while",
+                "until",
+                "do",
+            }:
+                command_tokens.pop(0)
+            invocation = parse_direct_invocation(command_tokens, cwd)
+            if invocation is not None and invocation not in invocations:
+                invocations.append(invocation)
+        return invocations
+    finally:
+        _exit_nesting()
+
+
+def find_direct_invocations(command: str) -> list[tuple[str, ...]]:
+    """Return parsed direct invocations without interpreting shell text."""
+    try:
+        cwd = Path.cwd().resolve()
+    except (OSError, RuntimeError):
+        cwd = Path.cwd()
+    invocations = _find_direct_invocations_recursive(command, cwd)
+    if not RAW_SEGMENT_PASS_ENABLED:
+        return invocations
+    raw_invocations = _raw_segment_pass(
+        lambda: _find_direct_invocations_recursive(command, cwd)
+    )
+    for invocation in raw_invocations:
+        if invocation not in invocations:
+            invocations.append(invocation)
+    return invocations
+
+
+def guard_denied_prefix_matches(
+    invocation: tuple[str, ...], pattern: tuple[str, ...]
+) -> bool:
+    """Return whether ``pattern`` is an exact token prefix of ``invocation``."""
+    return len(pattern) <= len(invocation) and invocation[: len(pattern)] == pattern
+
+
+def guard_denied_match(
+    invocations: list[tuple[str, ...]], rules: tuple[GuardDeniedRule, ...]
+) -> GuardDeniedRule | None:
+    """Select the first configured row matching any parsed invocation."""
+    for rule in rules:
+        if any(
+            guard_denied_prefix_matches(invocation, rule.pattern)
+            for invocation in invocations
+        ):
+            return rule
+    return None
+
+
 def updated_cwd(tokens: list[str], cwd: Path, separator: str | None) -> Path:
     """Track a literal, successful shell cd for following non-pipe segments."""
     if separator in {"|", "&"} or not tokens or tokens[0] != "cd":
@@ -2093,51 +2711,299 @@ def effective_git_cwd(action: GitAction) -> Path:
     return current
 
 
-def repo_context(action: GitAction) -> RepoContext | None:
+def _guard_denied_bounded_metadata(path: Path) -> bytes | None:
+    """Read one small repository-discovery file, or report it unusable."""
     try:
-        bare_result = run_action_git(
-            action,
+        with path.open("rb") as handle:
+            value = handle.read(4097)
+    except OSError:
+        return None
+    return value if len(value) <= 4096 else None
+
+
+def _guard_denied_git_directory_operational(git_dir: Path) -> bool:
+    """Validate metadata Git must inspect after recognizing a git directory."""
+    try:
+        resolved = git_dir.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return True
+    if not resolved.is_dir() or not os.access(resolved, os.R_OK | os.X_OK):
+        return True
+
+    head = _guard_denied_bounded_metadata(resolved / "HEAD")
+    if head is None or re.fullmatch(
+        br"(?:ref: refs/[^\x00\r\n]+|[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\n?",
+        head,
+    ) is None:
+        return True
+
+    common_dir = resolved
+    commondir_path = resolved / "commondir"
+    try:
+        commondir_path.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return True
+    else:
+        commondir = _guard_denied_bounded_metadata(commondir_path)
+        if commondir is None or re.fullmatch(br"[^\x00\r\n]+\n?", commondir) is None:
+            return True
+        try:
+            common_text = os.fsdecode(commondir.rstrip(b"\n"))
+            common_candidate = Path(common_text)
+            if not common_candidate.is_absolute():
+                common_candidate = resolved / common_candidate
+            common_dir = common_candidate.resolve(strict=True)
+        except (OSError, RuntimeError, UnicodeError):
+            return True
+        if not common_dir.is_dir() or not os.access(
+            common_dir, os.R_OK | os.X_OK
+        ):
+            return True
+
+    for required_directory in (common_dir / "objects", common_dir / "refs"):
+        try:
+            required = required_directory.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return True
+        if not required.is_dir() or not os.access(required, os.R_OK | os.X_OK):
+            return True
+    return False
+
+
+def _repository_metadata_marker_present(
+    action: GitAction, environment: dict[str, str]
+) -> bool:
+    """Return whether failed discovery encountered an unusable repository hint."""
+    if any(
+        environment.get(key)
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")
+    ):
+        return True
+    try:
+        current = effective_git_cwd(action).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return True
+    ceilings: set[Path] = set()
+    canonicalize_ceiling = True
+    for raw_ceiling in environment.get("GIT_CEILING_DIRECTORIES", "").split(
+        os.pathsep
+    ):
+        if not raw_ceiling:
+            canonicalize_ceiling = False
+            continue
+        ceiling = Path(raw_ceiling)
+        if not ceiling.is_absolute():
+            continue
+        try:
+            ceilings.add(
+                ceiling.resolve(strict=False)
+                if canonicalize_ceiling
+                else Path(os.path.abspath(os.path.normpath(ceiling)))
+            )
+        except (OSError, RuntimeError):
+            return True
+
+    across_raw = environment.get("GIT_DISCOVERY_ACROSS_FILESYSTEM", "").strip()
+    across_normalized = across_raw.lower()
+    if across_normalized in {"", "0", "false", "no", "off"}:
+        across_filesystems = False
+    elif across_normalized in {"true", "yes", "on"}:
+        across_filesystems = True
+    else:
+        try:
+            across_filesystems = int(across_raw, 10) != 0
+        except ValueError:
+            # Git treats an invalid Boolean as operational failure.  Do not
+            # let an otherwise familiar stderr prefix turn that into absence.
+            return True
+
+    try:
+        current_device = current.stat().st_dev
+    except OSError:
+        return True
+    while True:
+        marker = current / ".git"
+        try:
+            marker.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return True
+        else:
+            try:
+                marker_stat = marker.stat()
+            except OSError:
+                return True
+            if stat.S_ISDIR(marker_stat.st_mode):
+                # Git can report its determinate not-a-repository result for a
+                # readable, empty metadata directory.  A directory containing
+                # any repository signature is instead operational unless all
+                # required discovery metadata is readable and coherent.
+                signatures = (marker / "HEAD", marker / "objects", marker / "refs")
+                signature_present = False
+                for signature in signatures:
+                    try:
+                        signature.lstat()
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        return True
+                    signature_present = True
+                if not signature_present:
+                    return not os.access(marker, os.R_OK | os.X_OK)
+                return _guard_denied_git_directory_operational(marker)
+            if not stat.S_ISREG(marker_stat.st_mode) or not os.access(
+                marker, os.R_OK
+            ):
+                return True
+            try:
+                with marker.open("rb") as handle:
+                    gitfile = handle.read(4097)
+            except OSError:
+                return True
+            if len(gitfile) > 4096:
+                return True
+            match = re.fullmatch(br"gitdir: ([^\x00\r\n]+)\n?", gitfile)
+            if match is None:
+                return False
+            try:
+                gitfile_target = Path(os.fsdecode(match.group(1)))
+                if not gitfile_target.is_absolute():
+                    gitfile_target = marker.parent / gitfile_target
+                resolved_target = gitfile_target.resolve(strict=True)
+            except (OSError, RuntimeError, UnicodeError):
+                return True
+            return _guard_denied_git_directory_operational(resolved_target)
+        parent = current.parent
+        if parent == current:
+            return False
+        # A ceiling never excludes the starting cwd, but Git stops before
+        # entering a ceiling reached while walking its ancestors.
+        if parent in ceilings:
+            return False
+        if not across_filesystems:
+            try:
+                parent_device = parent.stat().st_dev
+            except OSError:
+                return True
+            if parent_device != current_device:
+                return False
+            current_device = parent_device
+        current = parent
+
+
+def _repo_context_resolution(
+    action: GitAction, *, strict: bool
+) -> RepoContextResolution:
+    """Resolve one Git context while preserving absence versus failure."""
+    git_environment: dict[str, str] | None = None
+    if strict:
+        try:
+            git_environment = action_environment(action)
+        except (OSError, RuntimeError):
+            return RepoContextResolution(state="operational", context=None)
+        git_environment["LC_ALL"] = "C"
+        git_environment["LANG"] = "C"
+
+    def probe(
+        *arguments: str,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[bytes]:
+        if not strict:
+            return run_action_git(action, *arguments, text=text)
+        assert git_environment is not None
+        return subprocess.run(
+            ["git", *action.structural_globals, *arguments],
+            cwd=action.shell_cwd,
+            env=git_environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+            check=False,
+        )
+
+    def failure(state: str = "operational") -> RepoContextResolution:
+        return RepoContextResolution(state=state, context=None)
+
+    def determinate_absence(
+        result: subprocess.CompletedProcess[str]
+        | subprocess.CompletedProcess[bytes],
+    ) -> bool:
+        stderr = result.stderr
+        return (
+            result.returncode != 0
+            and isinstance(stderr, str)
+            and stderr.startswith("fatal: not a git repository")
+            and git_environment is not None
+            and not _repository_metadata_marker_present(action, git_environment)
+        )
+
+    try:
+        bare_result = probe(
             "rev-parse",
             "--is-bare-repository",
             text=True,
         )
     except OSError:
-        return None
+        return failure()
+    except UnicodeError:
+        if strict:
+            return failure()
+        raise
     is_bare = bare_result.returncode == 0 and bare_result.stdout.strip() == "true"
+    if strict and bare_result.returncode == 0 and bare_result.stdout.strip() not in {
+        "true",
+        "false",
+    }:
+        return failure()
+    if strict and bare_result.returncode != 0 and not determinate_absence(bare_result):
+        return failure()
 
     try:
-        top_result = run_action_git(action, "rev-parse", "--show-toplevel", text=True)
+        top_result = probe("rev-parse", "--show-toplevel", text=True)
     except OSError:
-        return None
+        return failure()
+    except UnicodeError:
+        if strict:
+            return failure()
+        raise
     if top_result.returncode == 0:
+        if strict and bare_result.returncode != 0:
+            return failure()
         try:
             worktree_root = Path(top_result.stdout.strip()).resolve(strict=True)
         except (OSError, RuntimeError):
-            return None
+            return failure()
+        if strict and not worktree_root.is_dir():
+            return failure()
     elif is_bare:
         try:
             worktree_root = effective_git_cwd(action).resolve(strict=True)
         except (OSError, RuntimeError):
-            return None
+            return failure()
+        if strict and not worktree_root.is_dir():
+            return failure()
+    elif strict and determinate_absence(top_result):
+        return failure("absent")
     else:
-        return None
+        return failure()
 
     try:
-        git_dir_result = run_action_git(
-            action,
+        git_dir_result = probe(
             "rev-parse",
             "--absolute-git-dir",
             text=True,
         )
         if git_dir_result.returncode != 0:
-            git_dir_result = run_action_git(
-                action,
+            git_dir_result = probe(
                 "rev-parse",
                 "--git-dir",
                 text=True,
             )
-        index_result = run_action_git(
-            action,
+        index_result = probe(
             "rev-parse",
             "--path-format=absolute",
             "--git-path",
@@ -2145,36 +3011,44 @@ def repo_context(action: GitAction) -> RepoContext | None:
             text=True,
         )
         if index_result.returncode != 0:
-            index_result = run_action_git(
-                action,
+            index_result = probe(
                 "rev-parse",
                 "--git-path",
                 "index",
                 text=True,
             )
     except OSError:
-        return None
+        return failure()
+    except UnicodeError:
+        if strict:
+            return failure()
+        raise
     if git_dir_result.returncode != 0 or index_result.returncode != 0:
-        return None
+        return failure()
+    raw_git_dir_text = git_dir_result.stdout.strip()
+    raw_index_text = index_result.stdout.strip()
+    if strict and (not raw_git_dir_text or not raw_index_text):
+        return failure()
     try:
-        raw_git_dir = Path(git_dir_result.stdout.strip())
+        raw_git_dir = Path(raw_git_dir_text)
         if not raw_git_dir.is_absolute():
             raw_git_dir = effective_git_cwd(action) / raw_git_dir
         git_dir = raw_git_dir.resolve(strict=True)
+        if strict and not git_dir.is_dir():
+            return failure()
         # An inherited alternate index need not exist yet (and its parent may
         # be created later), so canonicalize the selected pathname lexically.
         # Legacy `rev-parse --git-path index` already expresses a relative
         # result from Git's effective cwd (including any setup-time chdir).
-        raw_index = Path(index_result.stdout.strip())
+        raw_index = Path(raw_index_text)
         if not raw_index.is_absolute():
             raw_index = effective_git_cwd(action) / raw_index
         index_file = Path(os.path.abspath(os.path.normpath(raw_index)))
     except (OSError, RuntimeError):
-        return None
+        return failure()
 
     try:
-        common_result = run_action_git(
-            action,
+        common_result = probe(
             "rev-parse",
             "--path-format=absolute",
             "--git-common-dir",
@@ -2184,33 +3058,51 @@ def repo_context(action: GitAction) -> RepoContext | None:
         if not absolute_common_dir:
             # Git before 2.31 has no --path-format. Keep the guard portable by
             # resolving its traditional relative result against Git's -C cwd.
-            common_result = run_action_git(
-                action,
+            common_result = probe(
                 "rev-parse",
                 "--git-common-dir",
                 text=True,
             )
     except OSError:
-        return None
+        return failure()
+    except UnicodeError:
+        if strict:
+            return failure()
+        raise
     if common_result.returncode != 0:
-        return None
-    common_dir = Path(common_result.stdout.strip())
+        return failure()
+    raw_common_dir = common_result.stdout.strip()
+    if strict and not raw_common_dir:
+        return failure()
+    common_dir = Path(raw_common_dir)
     if not common_dir.is_absolute():
         common_dir = effective_git_cwd(action) / common_dir
     try:
         common_dir = common_dir.resolve(strict=True)
     except (OSError, RuntimeError):
-        return None
-    return RepoContext(
-        action=action,
-        worktree_root=worktree_root,
-        git_dir=git_dir,
-        index_file=index_file,
-        common_dir=common_dir,
-        main_root=common_dir.parent,
-        git_env=action_environment(action),
-        bare=is_bare,
+        return failure()
+    if strict and not common_dir.is_dir():
+        return failure()
+    return RepoContextResolution(
+        state="resolved",
+        context=RepoContext(
+            action=action,
+            worktree_root=worktree_root,
+            git_dir=git_dir,
+            index_file=index_file,
+            common_dir=common_dir,
+            main_root=common_dir.parent,
+            git_env=(
+                git_environment if git_environment is not None else action_environment(action)
+            ),
+            bare=is_bare,
+        ),
     )
+
+
+def repo_context(action: GitAction) -> RepoContext | None:
+    """Return the legacy optional context used by raw commit/push controls."""
+    return _repo_context_resolution(action, strict=False).context
 
 
 def invoking_repo_context() -> RepoContext | None:
@@ -2228,6 +3120,25 @@ def invoking_repo_context() -> RepoContext | None:
             assignments=(),
             subcommand_args=(),
         )
+    )
+
+
+def invoking_guard_denied_context() -> RepoContextResolution:
+    """Resolve the deny-list context with fail-closed operational semantics."""
+    try:
+        cwd = Path.cwd().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return RepoContextResolution(state="operational", context=None)
+    return _repo_context_resolution(
+        GitAction(
+            subcommand="commit",
+            executable="forge-cli",
+            shell_cwd=cwd,
+            structural_globals=(),
+            assignments=(),
+            subcommand_args=(),
+        ),
+        strict=True,
     )
 
 
@@ -2739,6 +3650,67 @@ def head_policy_sha(context: RepoContext) -> str:
     return value if COMMIT_SHA.fullmatch(value) is not None else ""
 
 
+def guard_denied_head_policy(context: RepoContext) -> GuardDeniedHeadResolution:
+    """Resolve committed HEAD without collapsing an operational failure to unborn."""
+    try:
+        result = run_context_git(
+            context,
+            "--no-replace-objects",
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "HEAD^{commit}",
+        )
+    except OSError:
+        return GuardDeniedHeadResolution(state="operational")
+    if result.returncode == 0 and isinstance(result.stdout, bytes):
+        match = re.fullmatch(rb"([0-9a-f]{40}|[0-9a-f]{64})\n?", result.stdout)
+        if match is not None:
+            return GuardDeniedHeadResolution(
+                state="resolved",
+                policy_sha=match.group(1).decode("ascii"),
+            )
+        return GuardDeniedHeadResolution(state="operational")
+    if result.returncode != 1 or result.stdout != b"" or result.stderr != b"":
+        return GuardDeniedHeadResolution(state="operational")
+
+    try:
+        symbolic = run_context_git(
+            context,
+            "--no-replace-objects",
+            "symbolic-ref",
+            "--quiet",
+            "HEAD",
+        )
+    except OSError:
+        return GuardDeniedHeadResolution(state="operational")
+    raw_ref = symbolic.stdout if isinstance(symbolic.stdout, bytes) else b""
+    if (
+        symbolic.returncode != 0
+        or symbolic.stderr != b""
+        or not raw_ref.startswith(b"refs/heads/")
+        or not raw_ref.endswith(b"\n")
+        or b"\n" in raw_ref[:-1]
+        or b"\x00" in raw_ref
+    ):
+        return GuardDeniedHeadResolution(state="operational")
+    try:
+        head_ref = os.fsdecode(raw_ref[:-1])
+        referenced = run_context_git(
+            context,
+            "--no-replace-objects",
+            "show-ref",
+            "--verify",
+            "--quiet",
+            head_ref,
+        )
+    except (OSError, UnicodeError):
+        return GuardDeniedHeadResolution(state="operational")
+    if referenced.returncode == 1 and referenced.stdout == b"" and referenced.stderr == b"":
+        return GuardDeniedHeadResolution(state="unborn")
+    return GuardDeniedHeadResolution(state="operational")
+
+
 def run_halt_check(
     context: RepoContext, check_halt: Path, *, probe_only: bool
 ) -> tuple[int, str]:
@@ -2898,6 +3870,140 @@ def committed_policy(context: RepoContext, revision: str) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+class GuardDeniedPolicyError(ValueError):
+    """The optional guard-denied-commands region is present but malformed."""
+
+
+def _guard_denied_table_row(line: str) -> tuple[str, str]:
+    if not line.startswith("|") or not line.endswith("|"):
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+    cells = tuple(cell.strip(" \t") for cell in line[1:-1].split("|"))
+    if len(cells) != 2:
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+    return cells
+
+
+def parse_guard_denied_policy(policy: bytes | None) -> tuple[GuardDeniedRule, ...]:
+    """Parse the optional committed deny table, preserving row precedence.
+
+    Absence is the sole compatibility no-op.  Once any marker for this region
+    is present, malformed markers or body bytes are a blocking policy error.
+    """
+    marker_fragment = f"FORGE:REGION {GUARD_DENIED_REGION}".encode("ascii")
+    if policy is None or marker_fragment not in policy:
+        return ()
+    begin = f"<!-- FORGE:REGION {GUARD_DENIED_REGION} BEGIN -->".encode("ascii")
+    end = f"<!-- FORGE:REGION {GUARD_DENIED_REGION} END -->".encode("ascii")
+    policy_lines = policy.split(b"\n")
+    named_lines = [line for line in policy_lines if marker_fragment in line]
+    if named_lines.count(begin) != 1 or named_lines.count(end) != 1:
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+    if any(line not in {begin, end} for line in named_lines):
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+    begin_index = policy_lines.index(begin)
+    end_index = policy_lines.index(end)
+    if end_index <= begin_index:
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+
+    try:
+        body_text = b"\n".join(policy_lines[begin_index + 1 : end_index]).decode(
+            "utf-8"
+        )
+    except UnicodeDecodeError as exc:
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED) from exc
+    if "\x00" in body_text or "\r" in body_text:
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+
+    body = body_text.split("\n")
+    while body and not body[0].strip(" \t"):
+        body.pop(0)
+    while body and not body[-1].strip(" \t"):
+        body.pop()
+    if body == [GUARD_DENIED_EMPTY]:
+        return ()
+    if len(body) < 3:
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+    if body[0] != "| pattern | reason |":
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+    if body[1] != "|---|---|":
+        raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+
+    rules: list[GuardDeniedRule] = []
+    seen_patterns: set[tuple[str, ...]] = set()
+    for line in body[2:]:
+        pattern_cell, reason = _guard_denied_table_row(line)
+        if not pattern_cell or not reason:
+            raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+        if (
+            len(pattern_cell.encode("utf-8")) > GUARD_DENIED_MAX_CELL_BYTES
+            or len(reason.encode("utf-8")) > GUARD_DENIED_MAX_CELL_BYTES
+        ):
+            raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+        try:
+            pattern = tuple(shlex.split(pattern_cell, comments=False, posix=True))
+        except ValueError as exc:
+            raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED) from exc
+        if (
+            not pattern
+            or len(pattern) > GUARD_DENIED_MAX_PATTERN_TOKENS
+            or any(not token or "\x00" in token or "\r" in token or "\n" in token for token in pattern)
+            or pattern in seen_patterns
+        ):
+            raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+        seen_patterns.add(pattern)
+        rules.append(GuardDeniedRule(pattern=pattern, reason=reason))
+        if len(rules) > GUARD_DENIED_MAX_RULES:
+            raise GuardDeniedPolicyError(GUARD_DENIED_MALFORMED)
+    return tuple(rules)
+
+
+def committed_guard_denied_rules(
+    context: RepoContext | None,
+) -> tuple[str, tuple[GuardDeniedRule, ...], str | None]:
+    """Load the optional control only from one resolved committed revision."""
+    if context is None:
+        return "", (), None
+    head_resolution = guard_denied_head_policy(context)
+    if head_resolution.state == "unborn":
+        return "", (), None
+    if head_resolution.state != "resolved":
+        return "", (), GUARD_DENIED_MALFORMED
+    policy_sha = head_resolution.policy_sha
+    try:
+        tree_entry = run_context_git(
+            context,
+            "--no-replace-objects",
+            "ls-tree",
+            "-z",
+            "--full-tree",
+            policy_sha,
+            "--",
+            "forge-project.md",
+        )
+    except OSError:
+        return policy_sha, (), GUARD_DENIED_MALFORMED
+    if tree_entry.returncode != 0:
+        return policy_sha, (), GUARD_DENIED_MALFORMED
+    if tree_entry.stdout == b"":
+        return policy_sha, (), None
+    if (
+        re.fullmatch(
+            rb"100(?:644|755) blob [0-9a-f]{40,64}\tforge-project[.]md\x00",
+            tree_entry.stdout,
+        )
+        is None
+    ):
+        return policy_sha, (), GUARD_DENIED_MALFORMED
+    policy = committed_policy(context, policy_sha)
+    if policy is None:
+        return policy_sha, (), GUARD_DENIED_MALFORMED
+    try:
+        rules = parse_guard_denied_policy(policy)
+    except GuardDeniedPolicyError:
+        return policy_sha, (), GUARD_DENIED_MALFORMED
+    return policy_sha, rules, None
+
+
 def policy_drift(context: RepoContext, revision: str) -> bool:
     """Authenticate a historical policy and compare its enforcement regions."""
     if COMMIT_SHA.fullmatch(revision) is None:
@@ -2931,10 +4037,19 @@ def policy_drift(context: RepoContext, revision: str) -> bool:
     historical = committed_policy(context, revision)
     if current is None or historical is None:
         return True
-    for name in ("risk-tiers", "trigger-paths", "file-categories"):
+    for name in (
+        "risk-tiers",
+        "trigger-paths",
+        "file-categories",
+        GUARD_DENIED_REGION,
+    ):
         current_region = policy_region(current, name)
         historical_region = policy_region(historical, name)
-        if name == "trigger-paths" and current_region is None and historical_region is None:
+        if (
+            name in {"trigger-paths", GUARD_DENIED_REGION}
+            and current_region is None
+            and historical_region is None
+        ):
             continue
         if current_region is None or historical_region is None:
             return True
@@ -3373,13 +4488,24 @@ ResolvedCommand = tuple[
     list[tuple[GitAction, "RepoContext | None"]],
     dict[tuple[object, ...], str],
     dict[tuple[object, ...], str | None],
+    list[tuple[str, ...]],
+    "RepoContext | None",
+    str,
+    tuple[GuardDeniedRule, ...],
+    str | None,
 ]
 
 
 def _resolve_command(command: str, check_halt: Path) -> ResolvedCommand:
-    """Parse, then resolve every action's context, mode, and halt probe once."""
+    """Parse, then resolve action and committed command-policy inputs once."""
     actions = find_actions(command)
     cli_class = classify_forge_cli_invocation(command)
+    direct_invocation_error = False
+    try:
+        direct_invocations = find_direct_invocations(command)
+    except GuardDeniedCommandError:
+        direct_invocations = []
+        direct_invocation_error = True
     contexts = [(action, resolve_repo_context(action)) for action in actions]
     modes: dict[tuple[object, ...], str] = {}
     sentinels: dict[tuple[object, ...], str | None] = {}
@@ -3391,7 +4517,37 @@ def _resolve_command(command: str, check_halt: Path) -> ResolvedCommand:
             sentinels[identity] = resolve_halt_sentinel(context, check_halt)
         if identity not in modes:
             modes[identity] = resolve_history_mutation_mode(context)
-    return actions, cli_class, contexts, modes, sentinels
+    policy_resolution = invoking_guard_denied_context()
+    policy_context = policy_resolution.context
+    if policy_resolution.state == "absent":
+        policy_sha, denied_rules, denied_policy_error = committed_guard_denied_rules(
+            None
+        )
+    elif policy_resolution.state == "resolved" and policy_context is not None:
+        policy_sha, denied_rules, denied_policy_error = committed_guard_denied_rules(
+            policy_context
+        )
+    else:
+        policy_sha, denied_rules, denied_policy_error = (
+            "",
+            (),
+            GUARD_DENIED_MALFORMED,
+        )
+    if direct_invocation_error and denied_rules:
+        denied_rules = ()
+        denied_policy_error = GUARD_DENIED_MALFORMED
+    return (
+        actions,
+        cli_class,
+        contexts,
+        modes,
+        sentinels,
+        direct_invocations,
+        policy_context,
+        policy_sha,
+        denied_rules,
+        denied_policy_error,
+    )
 
 
 def _classify_command_bounded(
@@ -3469,9 +4625,18 @@ def main() -> int:
     emitter = Path(sys.argv[3])
     v2_corpus = Path(sys.argv[4])
     try:
-        _actions, cli_class, contexts, modes, sentinels = _classify_command_bounded(
-            command, check_halt
-        )
+        (
+            _actions,
+            cli_class,
+            contexts,
+            modes,
+            sentinels,
+            direct_invocations,
+            policy_context,
+            guard_policy_sha,
+            denied_rules,
+            denied_policy_error,
+        ) = _classify_command_bounded(command, check_halt)
     except GuardInputBoundExceeded as exc:
         return _failsafe_deny(command, exc.kind, emitter, "")
     except Exception as exc:  # fail closed on any parser or resolution failure
@@ -3531,7 +4696,7 @@ def main() -> int:
 
     operator_context: RepoContext | None = None
     if cli_class.startswith("deny-"):
-        operator_context = invoking_repo_context()
+        operator_context = policy_context
         if operator_context is not None:
             sentinel = halt_sentinel(operator_context, check_halt)
             if sentinel is not None:
@@ -3548,6 +4713,24 @@ def main() -> int:
                 )
                 run_halt_check(operator_context, check_halt, probe_only=False)
                 return 0
+    if denied_policy_error is not None:
+        emit_deny(denied_policy_error)
+        if policy_context is not None:
+            audit_block(
+                policy_context,
+                "guard-policy",
+                "guard-denied-policy-malformed",
+                command,
+            )
+            emit_decision_event(
+                emitter,
+                policy_context,
+                event="guard_deny",
+                candidate=staged_candidate(policy_context),
+                policy_sha=guard_policy_sha,
+                reason="guard-denied-policy-malformed",
+            )
+        return 0
     if cli_class in FORGE_CLI_DENIALS:
         emit_deny(FORGE_CLI_DENIALS[cli_class])
         context = operator_context
@@ -3578,6 +4761,27 @@ def main() -> int:
                 reason="operator-verb-merge-approve",
             )
         return v2_status(reason)
+
+    denied_rule = guard_denied_match(direct_invocations, denied_rules)
+    if denied_rule is not None:
+        reason = f"forge: operator-denied command — {denied_rule.reason}"
+        emit_deny(reason)
+        if policy_context is not None:
+            audit_block(
+                policy_context,
+                denied_rule.pattern[0],
+                "configured-command-denied",
+                command,
+            )
+            emit_decision_event(
+                emitter,
+                policy_context,
+                event="guard_deny",
+                candidate=staged_candidate(policy_context),
+                policy_sha=guard_policy_sha,
+                reason="configured-command-denied",
+            )
+        return 0
 
     activation_contexts = [
         (action, context, modes[_context_identity(context)])
@@ -3717,8 +4921,24 @@ except Exception as exc:  # fail closed: never a bare traceback with exit 1
     raise SystemExit(2)
 PY
 
-FORGE_COMMIT_GUARD_SCRIPT_DIR="$script_dir" exec python3 -c "$python_code" \
+bootstrap_reason='forge: commit guard internal failure — command was not classified (bootstrap); split the command'
+if ! exec 3<<<"$python_code"; then
+    printf '%s\n' "$bootstrap_reason" >&2
+    exit 2
+fi
+FORGE_COMMIT_GUARD_SCRIPT_DIR="$script_dir" exec python3 -c \
+    'import os, sys
+try:
+    source = os.fdopen(3, "rb").read().decode("utf-8")
+    program = compile(source, "<forge-commit-guard>", "exec")
+except Exception:
+    sys.stderr.write("forge: commit guard internal failure \u2014 command was not classified (bootstrap); split the command\n")
+    raise SystemExit(2)
+exec(program)' \
     "$script_dir/check-halt.sh" \
     "$script_dir/risk_tier.py" \
     "$script_dir/emit-decision-event.py" \
-    "$script_dir/../../system/fr223/hook-argv-cases-v2.json"
+    "$script_dir/../../system/fr223/hook-argv-cases-v2.json" || {
+        printf '%s\n' "$bootstrap_reason" >&2
+        exit 2
+    }

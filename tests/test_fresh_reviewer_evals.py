@@ -1705,6 +1705,91 @@ The mechanically correct subject passes review.
 
 
 class FreshReviewerNativeLauncherTests(unittest.TestCase):
+    @staticmethod
+    def _write_sized_events_reviewer(
+        repository: FreshEvalRepo,
+        *,
+        mode: str,
+        target: str,
+    ) -> Path:
+        executable = repository.root / f"fake-native-reviewer-{mode}"
+        source = r'''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import re
+import sys
+import time
+
+EXPECTED = __EXPECTED__
+MODE = __MODE__
+TARGET = __TARGET__
+EVENTS_CAP_BYTES = __EVENTS_CAP_BYTES__
+arguments = sys.argv[1:]
+output_index = arguments.index("--output-last-message") + 1
+verdict_path = Path(arguments[output_index])
+fixture_id = verdict_path.parent.name
+prompt = sys.stdin.buffer.read()
+
+def binding(key):
+    match = re.search(
+        rb"(?m)^" + key.encode("ascii") + rb": ([0-9a-f]+)$", prompt
+    )
+    if match is None:
+        raise SystemExit(92)
+    return match.group(1).decode("ascii")
+
+def write_all(descriptor, raw):
+    remaining = memoryview(raw)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written <= 0:
+            raise SystemExit(93)
+        remaining = remaining[written:]
+
+def write_verdict(verdict):
+    verdict_path.write_text(
+        "VERDICT: " + verdict + "\n"
+        + "authorization_id: " + binding("authorization_id") + "\n"
+        + "request_id: " + binding("request_id") + "\n"
+        + "fixture_package: " + binding("fixture_package") + "\n",
+        encoding="utf-8",
+    )
+
+event_prefix = b'{"item":{"aggregated_output":"'
+event_suffix = b'","type":"command_execution"},"type":"item.completed"}\n'
+event_line = (
+    event_prefix
+    + b"x" * (4096 - len(event_prefix) - len(event_suffix))
+    + event_suffix
+)
+if len(event_line) != 4096:
+    raise SystemExit(94)
+
+if fixture_id != TARGET:
+    write_verdict(EXPECTED[fixture_id])
+    write_all(1, b'{"type":"result"}\n')
+elif MODE == "above-legacy-cap":
+    for _ in range(17):
+        write_all(1, event_line)
+    time.sleep(0.5)
+    write_verdict("BLOCK")
+elif MODE == "above-events-cap":
+    for _ in range(EVENTS_CAP_BYTES // len(event_line) + 1):
+        write_all(1, event_line)
+    time.sleep(2)
+else:
+    raise SystemExit(95)
+'''
+        source = (
+            source.replace("__EXPECTED__", repr(repository.expected_verdicts))
+            .replace("__MODE__", repr(mode))
+            .replace("__TARGET__", repr(target))
+            .replace("__EVENTS_CAP_BYTES__", str(FRESH.EVENTS_CAP_BYTES))
+        )
+        executable.write_text(source, encoding="utf-8")
+        executable.chmod(0o700)
+        return executable
+
     def test_native_launcher_forwards_fixed_timeout_cap_prompt_and_process_group(self) -> None:
         verdict_path = Path("/tmp/forge-fresh-native-verdict-test")
         environment = {
@@ -1718,7 +1803,7 @@ class FreshReviewerNativeLauncherTests(unittest.TestCase):
             prompt=b"bounded native prompt\n",
             cwd=Path("/tmp"),
             timeout_seconds=1200.0,
-            output_cap_bytes=65_536,
+            output_cap_bytes=FRESH.EVENTS_CAP_BYTES,
             environment=environment,
             verdict_path=verdict_path,
         )
@@ -1741,7 +1826,7 @@ class FreshReviewerNativeLauncherTests(unittest.TestCase):
             cwd=request.cwd,
             env=environment,
             timeout=1200.0,
-            cap=65_536,
+            cap=FRESH.EVENTS_CAP_BYTES,
             input_bytes=request.prompt,
             watched_path=verdict_path,
             watched_cap=FRESH.VERDICT_CAP_BYTES,
@@ -1827,6 +1912,106 @@ class FreshReviewerNativeLauncherTests(unittest.TestCase):
                 self.assertFalse(result.timed_out)
                 self.assertEqual(len(result.output), min(byte_count, 65_536))
                 self.assertEqual(result.output, b"a" * first + b"b" * min(second, 65_536 - first))
+
+    def test_native_collection_accepts_live_events_above_64k_and_compares_verdict(self) -> None:
+        with FreshEvalRepo() as repository, MemoryArtifacts() as artifacts:
+            repository.stage_append("rules/review-constitution.md")
+            snapshot = repository.snapshot()
+            target = "review-passes-clean-change"
+            executable = self._write_sized_events_reviewer(
+                repository,
+                mode="above-legacy-cap",
+                target=target,
+            )
+
+            with mock.patch.object(
+                FRESH, "REVIEWER_EXECUTABLE", str(executable)
+            ):
+                outcome = FRESH.collect(
+                    repository.evaluation(snapshot, request_id="b" * 32),
+                    artifacts,
+                )
+
+            self.assertEqual(outcome.exit_code, 1, outcome.diagnostic)
+            self.assertEqual(
+                outcome.diagnostic,
+                "forge: fresh reviewer eval regression: "
+                "review-passes-clean-change (expected PASS, got BLOCK)",
+            )
+            self.assertEqual(outcome.manifest["outcome"], "BLOCK")
+            result = next(
+                item
+                for item in outcome.manifest["results"]
+                if item["fixture_id"] == target
+            )
+            events = artifacts.read(
+                result["events_path"],
+                result["events_sha256"],
+                max_bytes=FRESH.EVENTS_CAP_BYTES,
+            )
+            self.assertEqual(len(events), 17 * 4096)
+            self.assertGreater(len(events), 65_536)
+            self.assertTrue(FRESH._events_are_valid(events))
+            self.assertFalse(result["output_overflow"])
+            self.assertEqual(result["actual_verdict"], "BLOCK")
+            self.assertGreater(result["verdict_byte_count"], 0)
+
+    def test_native_collection_kills_group_and_invalidates_events_above_8mib(self) -> None:
+        self.assertEqual(FRESH.EVENTS_CAP_BYTES, 8_388_608)
+        with FreshEvalRepo() as repository, MemoryArtifacts() as artifacts:
+            repository.stage_append("rules/review-constitution.md")
+            snapshot = repository.snapshot()
+            target = "review-passes-clean-change"
+            executable = self._write_sized_events_reviewer(
+                repository,
+                mode="above-events-cap",
+                target=target,
+            )
+
+            with mock.patch.object(
+                FRESH, "REVIEWER_EXECUTABLE", str(executable)
+            ):
+                outcome = FRESH.collect(
+                    repository.evaluation(snapshot, request_id="c" * 32),
+                    artifacts,
+                )
+
+            self.assertEqual(outcome.exit_code, 2, outcome.diagnostic)
+            self.assertEqual(
+                outcome.diagnostic,
+                "forge: fresh reviewer eval evidence invalid: reviewer result "
+                "is incomplete or malformed",
+            )
+            self.assertEqual(outcome.manifest["outcome"], "INVALID")
+            result = next(
+                item
+                for item in outcome.manifest["results"]
+                if item["fixture_id"] == target
+            )
+            events = artifacts.read(
+                result["events_path"],
+                result["events_sha256"],
+                max_bytes=FRESH.EVENTS_CAP_BYTES,
+            )
+            completion = json.loads(
+                artifacts.read(
+                    result["completion_path"],
+                    result["completion_sha256"],
+                    max_bytes=FRESH.COMPLETION_CAP_BYTES,
+                )
+            )
+            self.assertTrue(result["output_overflow"])
+            self.assertEqual(result["events_byte_count"], FRESH.EVENTS_CAP_BYTES)
+            self.assertEqual(len(events), FRESH.EVENTS_CAP_BYTES)
+            self.assertTrue(FRESH._events_are_valid(events))
+            self.assertIsNone(result["actual_verdict"])
+            self.assertEqual(result["verdict_byte_count"], 0)
+            self.assertLess(result["exit_status"], 0)
+            self.assertEqual(completion["reviewer_pid"], completion["process_group_id"])
+            self.assertGreater(completion["process_group_id"], 1)
+            self.assertIsNone(completion["error"])
+            with self.assertRaises(ProcessLookupError):
+                os.killpg(completion["process_group_id"], 0)
 
     def test_temporary_executable_receives_prompt_and_emits_native_artifacts(self) -> None:
         with FreshEvalRepo() as repository, MemoryArtifacts() as artifacts:
