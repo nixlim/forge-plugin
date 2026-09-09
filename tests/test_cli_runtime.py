@@ -67,6 +67,12 @@ while True:
 """
 
 
+_TERM_RESISTANT_LEADER_PROGRAM = _LEADER_PROGRAM.replace(
+    "signal.signal(signal.SIGTERM, signal.SIG_DFL)",
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+)
+
+
 class RuntimeProcessGroupTests(unittest.TestCase):
     @staticmethod
     def _wait_until(predicate: Callable[[], bool], timeout: float) -> bool:
@@ -342,6 +348,92 @@ class RuntimeProcessGroupTests(unittest.TestCase):
                         os.killpg(process_group, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+    def test_run_bounded_post_launch_baseexceptions_kill_and_reap_group(self) -> None:
+        cases = (
+            ("selector-construction", SystemExit(73)),
+            ("selector-monitoring", KeyboardInterrupt("selector interrupted")),
+        )
+        for injection, raised in cases:
+            with self.subTest(injection=injection), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                ready_path = directory / "ready"
+                release_path = directory / "release"
+                output_path = directory / "descendant-output"
+                captured: list[subprocess.Popen[bytes]] = []
+                real_popen = RUNTIME.subprocess.Popen
+
+                def capture_popen(*args, **kwargs):
+                    process = real_popen(*args, **kwargs)
+                    captured.append(process)
+                    return process
+
+                def raise_after_ready(*_args, **_kwargs):
+                    self.assertTrue(
+                        self._wait_until(ready_path.exists, 2.0),
+                        "process tree did not become ready before injected exception",
+                    )
+                    raise raised
+
+                real_selector = None
+                selector_patch = None
+                if injection == "selector-construction":
+                    selector_patch = mock.patch.object(
+                        RUNTIME.selectors,
+                        "DefaultSelector",
+                        side_effect=raise_after_ready,
+                    )
+                else:
+                    real_selector = RUNTIME.selectors.DefaultSelector()
+                    exploding_selector = mock.Mock(wraps=real_selector)
+                    exploding_selector.select.side_effect = raise_after_ready
+                    selector_patch = mock.patch.object(
+                        RUNTIME.selectors,
+                        "DefaultSelector",
+                        return_value=exploding_selector,
+                    )
+
+                process_group = 0
+                try:
+                    with mock.patch.object(
+                        RUNTIME.subprocess, "Popen", side_effect=capture_popen
+                    ), selector_patch, self.assertRaises(type(raised)) as caught:
+                        RUNTIME.run_bounded(
+                            [
+                                sys.executable,
+                                "-c",
+                                _TERM_RESISTANT_LEADER_PROGRAM,
+                                _DESCENDANT_PROGRAM,
+                                str(ready_path),
+                                str(release_path),
+                                str(output_path),
+                            ],
+                            cwd=directory,
+                            timeout=5.0,
+                            cap=1024,
+                        )
+                    self.assertEqual(len(captured), 1)
+                    process = captured[0]
+                    if isinstance(raised, SystemExit):
+                        self.assertEqual(caught.exception.code, raised.code)
+                    else:
+                        self.assertEqual(str(caught.exception), str(raised))
+                    self.assertIsNotNone(
+                        process.returncode,
+                        "post-launch exception propagated before the leader was reaped",
+                    )
+                    record = self._read_ready_record(process, ready_path)
+                    process_group = record[1]
+                    self._assert_group_gone_before_descendant_write(
+                        process_group, release_path, output_path
+                    )
+                finally:
+                    if captured:
+                        self._cleanup_process_tree(
+                            captured[0], process_group or captured[0].pid
+                        )
+                    if real_selector is not None:
+                        real_selector.close()
 
 
 if __name__ == "__main__":

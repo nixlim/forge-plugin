@@ -21,6 +21,23 @@ UPSTREAM_RULES_FIXTURE = ROOT / "tests" / "fixtures" / "upstream-forge.rules"
 VENDORED_UPSTREAM_RULES = ROOT / ".upstream/forge/system/template/.codex/rules/forge.rules"
 BEGIN = "<!-- FORGE:BEGIN -->"
 END = "<!-- FORGE:END -->"
+REGION_ORDER = (
+    "project-overview",
+    "file-categories",
+    "stack-validations",
+    "gate1-test-command",
+    "changelog-policy",
+    "review-prompt-project-focus",
+    "project-triggers",
+    "completeness-project-items",
+    "agent-project-context",
+    "mutation-testing",
+    "invariants",
+    "risk-tiers",
+    "drift-config",
+    "trigger-paths",
+    "reviewer-facing-eval-triggers",
+)
 
 
 def region_body(document: str, name: str) -> str:
@@ -74,6 +91,82 @@ def init_phase(document: str, number: int) -> str:
     if match is None:
         raise AssertionError(f"missing Phase {number}")
     return match.group(0)
+
+
+def canonical_reviewer_eval_table() -> str:
+    """Read the complete canonical trigger table from specification authority."""
+    specification = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(
+        r"The `reviewer-facing-eval-triggers` region is the sole maintained "
+        r"reviewer-facing trigger path list and contains exactly these ordered rows:\n\n"
+        r"(\| control \| path patterns \|\n"
+        r"\|---\|---\|\n"
+        r"(?:\| [^\n]+ \|\n)+)",
+        specification,
+    )
+    if match is None:
+        raise AssertionError("specification lacks the canonical reviewer trigger table")
+    return match.group(1)
+
+
+def canonical_reviewer_eval_patterns() -> tuple[str, ...]:
+    """Read the complete canonical trigger inventory from specification authority."""
+
+    rows = [
+        [cell.strip() for cell in line.strip().strip("|").split("|")]
+        for line in canonical_reviewer_eval_table().splitlines()[2:]
+    ]
+    patterns = tuple(
+        pattern.strip()
+        for row in rows
+        for pattern in row[1].split(",")
+        if pattern.strip()
+    )
+    if len(rows) != 6 or not patterns:
+        raise AssertionError("canonical reviewer trigger table is incomplete")
+    return patterns
+
+
+def assert_commit_fresh_eval_source_contract(skill: str) -> None:
+    """Compile the Step 4 source-of-truth prose into a fail-closed contract."""
+
+    step4 = skill[skill.index("## Step 4"):skill.index("## Step 5")]
+    match = re.search(
+        r"After the immutable artifact passes the secret scan,.*?"
+        r"(?=Before selecting a reviewer,)",
+        step4,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError("fresh-evaluation procedure is not ordered before review")
+    procedure = " ".join(match.group(0).split())
+    for required in (
+        (
+            "Supply only the pinned `policy_sha` policy bytes and the exact "
+            "bytewise-sorted `snapshot.paths`"
+        ),
+        (
+            "never use target arguments, `git status`, working-tree paths, or a "
+            "locally duplicated pattern list"
+        ),
+        (
+            "A missing or malformed authenticated `reviewer-facing-eval-triggers` "
+            "region blocks every control-class chain"
+        ),
+        (
+            "report the matched control row names sourced from that result, not a "
+            "restated list of their path patterns"
+        ),
+    ):
+        if required not in procedure:
+            raise AssertionError(f"fresh-evaluation source contract missing: {required}")
+    for duplicated_pattern in canonical_reviewer_eval_patterns():
+        if duplicated_pattern in procedure:
+            raise AssertionError(
+                f"fresh-evaluation procedure duplicates a trigger: {duplicated_pattern}"
+            )
 
 
 def simulate_init_approval_reporting(
@@ -177,9 +270,25 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         project = self.read("forge-project.md")
         agents = self.read("AGENTS.md")
+        self.assertEqual(
+            tuple(
+                re.findall(
+                    r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
+                    project,
+                )
+            ),
+            REGION_ORDER,
+        )
         self.assertNotIn("{{FORGE_INSTALL_DATE}}", project)
         self.assertRegex(project, r"Install date: `\d{4}-\d{2}-\d{2}`")
         self.assertIn("forge-init:", project)
+        self.assertEqual(
+            region_body(project, "reviewer-facing-eval-triggers").strip(),
+            canonical_reviewer_eval_table().strip(),
+        )
+        self.assertNotIn(
+            "forge-init:", region_body(project, "reviewer-facing-eval-triggers")
+        )
         sentinel_search = subprocess.run(
             ["grep", "-rln", "forge-init:", "forge-project.md"],
             cwd=self.repo,
@@ -342,6 +451,45 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertEqual(merged_risk, owner_prefix + fixed_block + owner_suffix)
         self.assertNotIn("owner-only.lock", merged_risk)
 
+    def test_reinstall_refreshes_a_narrowed_reviewer_trigger_table(self) -> None:
+        first = self.install()
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        project = self.read("forge-project.md")
+        operator_body = "\noperator project overview stays byte-identical  \n"
+        project = replace_region(project, "project-overview", operator_body)
+        narrowed = region_body(project, "reviewer-facing-eval-triggers").replace(
+            "| constitution | rules/** |",
+            "| constitution | rules/never/** |",
+        )
+        project = replace_region(
+            project, "reviewer-facing-eval-triggers", narrowed
+        )
+        (self.repo / "forge-project.md").write_text(project, encoding="utf-8")
+
+        second = self.install()
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        refreshed_project = self.read("forge-project.md")
+        refreshed = region_body(refreshed_project, "reviewer-facing-eval-triggers")
+        self.assertEqual(refreshed, "\n" + canonical_reviewer_eval_table())
+        self.assertNotIn("rules/never/**", refreshed)
+        self.assertEqual(
+            region_body(refreshed_project, "project-overview"), operator_body
+        )
+        agents = self.read("AGENTS.md")
+        self.assertEqual(
+            agents.split(BEGIN + "\n", 1)[1].split(END, 1)[0],
+            refreshed_project,
+        )
+
+        stable_project = (self.repo / "forge-project.md").read_bytes()
+        stable_agents = (self.repo / "AGENTS.md").read_bytes()
+        third = self.install()
+        self.assertEqual(third.returncode, 0, third.stderr)
+        self.assertEqual((self.repo / "forge-project.md").read_bytes(), stable_project)
+        self.assertEqual((self.repo / "AGENTS.md").read_bytes(), stable_agents)
+
     def test_malformed_filled_dependency_manifest_block_stops_before_write(self) -> None:
         base = (self.plugin / "system/template/forge-project.md").read_text(
             encoding="utf-8"
@@ -390,26 +538,63 @@ class InstallerIntegrationTests(unittest.TestCase):
         migrated = self.read("forge-project.md")
         self.assertEqual(region_body(migrated, "project-overview"), legacy_body)
         self.assertEqual(
-            re.findall(
-                r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
-                migrated,
+            tuple(
+                re.findall(
+                    r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
+                    migrated,
+                )
             ),
-            [
-                "project-overview",
-                "file-categories",
-                "stack-validations",
-                "gate1-test-command",
-                "changelog-policy",
-                "review-prompt-project-focus",
-                "project-triggers",
-                "completeness-project-items",
-                "agent-project-context",
-                "mutation-testing",
-                "invariants",
-                "risk-tiers",
-                "drift-config",
-                "trigger-paths",
-            ],
+            REGION_ORDER,
+        )
+
+    def test_reinstall_migrates_the_exact_predecessor_fourteen_region_inventory(self) -> None:
+        first = self.install()
+        self.assertEqual(first.returncode, 0, first.stderr)
+
+        project = self.read("forge-project.md")
+        predecessor_body = "\npredecessor project overview stays byte-identical\n"
+        project = replace_region(project, "project-overview", predecessor_body)
+        project, replacements = re.subn(
+            r"\n?<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->.*?"
+            r"<!-- FORGE:REGION reviewer-facing-eval-triggers END -->\n?",
+            "\n",
+            project,
+            flags=re.DOTALL,
+        )
+        self.assertEqual(replacements, 1)
+        self.assertEqual(
+            tuple(
+                re.findall(
+                    r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
+                    project,
+                )
+            ),
+            REGION_ORDER[:-1],
+        )
+        (self.repo / "forge-project.md").write_text(project, encoding="utf-8")
+
+        second = self.install()
+
+        self.assertEqual(second.returncode, 0, second.stderr)
+        migrated = self.read("forge-project.md")
+        self.assertEqual(region_body(migrated, "project-overview"), predecessor_body)
+        self.assertEqual(
+            region_body(migrated, "reviewer-facing-eval-triggers"),
+            region_body(
+                (self.plugin / "system/template/forge-project.md").read_text(
+                    encoding="utf-8"
+                ),
+                "reviewer-facing-eval-triggers",
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                re.findall(
+                    r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->",
+                    migrated,
+                )
+            ),
+            REGION_ORDER,
         )
 
     def test_reinstall_rejects_a_missing_region_outside_the_legacy_shape(self) -> None:
@@ -777,6 +962,22 @@ exit 97
 
 
 class InstallerPayloadContractTests(unittest.TestCase):
+    def test_installer_region_inventory_has_current_and_exact_migration_shapes(self) -> None:
+        installer = INSTALLER.read_text(encoding="utf-8")
+        match = re.search(r"my @required = qw\((.*?)\n\s*\);", installer, re.DOTALL)
+        self.assertIsNotNone(match)
+        self.assertEqual(tuple(match.group(1).split()), REGION_ORDER)
+        self.assertIn(
+            "my @predecessor_required = @required[0 .. 13];",
+            installer,
+        )
+        self.assertIn("my @legacy_required = @required[0 .. 8];", installer)
+        self.assertIn(
+            "$previous_inventory eq $predecessor_inventory",
+            installer,
+        )
+        self.assertIn("$previous_inventory eq $legacy_inventory", installer)
+
     def test_codex_config_and_agents_match_routing_contract(self) -> None:
         config = (ROOT / "system/codex/config.toml").read_text(encoding="utf-8")
         self.assertEqual(toml_string(config, "approval_policy"), "on-failure")
@@ -917,7 +1118,19 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "CANDIDATE_ID",
             "sha256sum",
             "shasum -a 256",
-            "all fourteen regions filled",
+            "all fifteen regions filled",
+            "reviewer-facing-eval-triggers",
+            "sole maintained source",
+            "Recorded-baseline integrity",
+            "Candidate-bound fresh reviewer evaluation",
+            "matched control row names",
+            "FR-083 and FR-103",
+            "separately authorized future revision",
+            (
+                "forge: fresh reviewer eval evidence invalid: fixed first-policy "
+                "fresh-evaluation coordinator is\n   unavailable"
+            ),
+            "init must stop before\n   `review-final`",
             ".forge/history/runs/",
             ".forge/history/drift/",
             ".forge/tmp/authorized/",
@@ -951,21 +1164,113 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "second explicit approval",
         ):
             self.assertIn(required, skill)
+        self.assertIn(
+            "fixed-authority bootstrap coordinator is not implemented or authorized "
+            "in this revision",
+            " ".join(skill.split()),
+        )
+
+        specification = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "this revision specifies the first-policy bootstrap fresh-review requirement",
+            "does not implement or authorize its fixed-authority coordinator",
+            "separately authorized future revision supplies that coordinator",
+            "every bootstrap fresh-review request MUST fail closed",
+            "init stops before `review-final`",
+        ):
+            self.assertIn(required, specification)
 
         phase1 = skill.index("## Phase 1")
         invalidation = skill.index("make re-init invalidation")
         phase5 = skill.index("## Phase 5")
         freeze = skill.index("freeze the review candidate")
+        fresh_evaluation = skill.index(
+            "Require Candidate-bound fresh reviewer evaluation"
+        )
+        binding_review = skill.index("Spawn a fresh, read-only `review-final` agent")
         phase6 = skill.index("## Phase 6")
         approval_recheck = skill.index("After explicit approval")
         completion_flip = skill.index("Only after that comparison passes")
         self.assertLess(invalidation, phase1)
         self.assertLess(phase5, freeze)
+        self.assertLess(freeze, fresh_evaluation)
+        self.assertLess(fresh_evaluation, binding_review)
         self.assertLess(freeze, phase6)
         self.assertLess(phase6, approval_recheck)
         self.assertLess(approval_recheck, completion_flip)
         self.assertIn("byte-for-byte with the reviewed snapshot", skill)
         self.assertIn("invalidates both `review-final` PASS and", skill)
+
+    def test_commit_skill_keeps_eval_layers_distinct_and_uses_one_trigger_source(self) -> None:
+        skill = (ROOT / "skills/commit/SKILL.md").read_text(encoding="utf-8")
+        step2 = skill[skill.index("## Step 2"):skill.index("## Step 3")]
+        step4 = skill[skill.index("## Step 4"):skill.index("## Step 5")]
+
+        for required in (
+            "Recorded-baseline integrity",
+            "does not launch an agent",
+            "Candidate-bound fresh reviewer evaluation",
+            "reviewer-facing-eval-triggers",
+            "snapshot.paths",
+            "matched control row names",
+            "must not restate, reconstruct, or maintain a\nsecond trigger path list",
+            "fresh-reviewer-evals",
+            "unconditionally true",
+        ):
+            self.assertIn(required, step2 + step4)
+        self.assertIn("Neither can satisfy the other", step4)
+        assert_commit_fresh_eval_source_contract(skill)
+
+        mutants = {
+            "authenticated base": (
+                "Supply only the pinned `policy_sha` policy bytes",
+                "Supply the working-tree policy bytes",
+            ),
+            "exact snapshot paths": (
+                "exact\nbytewise-sorted `snapshot.paths`",
+                "caller-selected target paths",
+            ),
+            "alternate-source prohibition": (
+                (
+                    "never use target arguments, `git status`, working-tree paths, or a\n"
+                    "locally duplicated pattern list"
+                ),
+                "prefer caller targets and locally duplicated defaults",
+            ),
+            "malformed source fails closed": (
+                (
+                    "A missing or malformed authenticated\n"
+                    "`reviewer-facing-eval-triggers` region blocks every control-class chain"
+                ),
+                "A missing trigger region means that no fresh evaluation applies",
+            ),
+            "matched row names only": (
+                (
+                    "report the matched control row names sourced from that result,\n"
+                    "not a restated list of their path patterns"
+                ),
+                "report a locally maintained list of matching path patterns",
+            ),
+        }
+        for label, (control, replacement) in mutants.items():
+            with self.subTest(disabled_control=label):
+                self.assertEqual(skill.count(control), 1)
+                disabled = skill.replace(control, replacement, 1)
+                with self.assertRaises(AssertionError):
+                    assert_commit_fresh_eval_source_contract(disabled)
+
+        duplicated_trigger = skill.replace(
+            "After the immutable artifact passes the secret scan,",
+            (
+                "After the immutable artifact passes the secret scan, preselect "
+                "`agents/**` candidates, then"
+            ),
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            assert_commit_fresh_eval_source_contract(duplicated_trigger)
 
     def test_codex_stop_hook_appends_rows_for_distinct_stdin_sessions(self) -> None:
         hooks = json.loads(

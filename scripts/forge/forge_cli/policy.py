@@ -28,9 +28,12 @@ class Policy:
     stack_commands: list[str]
     invariants: list[dict[str, str | int]]
     changelog: dict[str, Any] | None
+    reviewer_eval_triggers: tuple[tuple[str, tuple[str, ...]], ...]
+    reviewer_eval_region_digest: str | None
+    reviewer_eval_trigger_error: str | None
 
 
-REGION_ORDER = (
+LEGACY_REGION_ORDER = (
     "project-overview",
     "file-categories",
     "stack-validations",
@@ -45,6 +48,26 @@ REGION_ORDER = (
     "risk-tiers",
     "drift-config",
     "trigger-paths",
+)
+
+
+REGION_ORDER = (*LEGACY_REGION_ORDER, "reviewer-facing-eval-triggers")
+
+
+REVIEWER_EVAL_TRIGGER_TABLE = (
+    "| control | path patterns |\n"
+    "|---|---|\n"
+    "| constitution | rules/** |\n"
+    "| agent-prompt-template | agents/**, system/codex/prompts/**, "
+    ".claude/agents/** |\n"
+    "| reviewer-routing | system/codex/agents/**, system/codex/config.toml, "
+    ".codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, "
+    "scripts/forge/forge_cli/engine.py |\n"
+    "| execpolicy | system/codex/rules/**, .codex/rules/** |\n"
+    "| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, "
+    "system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, "
+    "scripts/forge/forge_cli/engine.py |\n"
+    "| commit-review-prompt | skills/commit/SKILL.md |\n"
 )
 
 
@@ -87,9 +110,76 @@ def _parse_regions(raw: bytes) -> dict[str, str]:
             body.append(line)
     if active is not None:
         raise PolicyError(f"unterminated Forge region: {active}")
-    if tuple(seen_order) != REGION_ORDER:
+    # The one-generation predecessor inventory remains readable solely so an
+    # authenticated fourteen-region installation can reach the migration
+    # candidate that appends reviewer-facing-eval-triggers.  Consumers treat
+    # its absent trigger source as malformed and fail closed for control-class
+    # chains; a legacy policy never obtains an implicit empty trigger list.
+    if tuple(seen_order) not in {REGION_ORDER, LEGACY_REGION_ORDER}:
         raise PolicyError("Forge region inventory/order does not match committed schema")
     return result
+
+
+def _parse_regions_with_trigger_defect(
+    raw: bytes,
+) -> tuple[dict[str, str], str | None]:
+    """Carry only structural defects in the appended reviewer-trigger region.
+
+    The fourteen predecessor regions remain executable policy and therefore
+    retain the strict parser unchanged.  The fifteenth region is gate input:
+    when only its markers are malformed, project those bytes away, re-parse the
+    complete legacy inventory, and carry the defect to the dedicated fresh-eval
+    INVALID path.  The returned policy identity always remains bound to ``raw``.
+    """
+
+    try:
+        return _parse_regions(raw), None
+    except PolicyError as original:
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise original
+
+        begin_re = re.compile(r"^<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->$")
+        end_re = re.compile(r"^<!-- FORGE:REGION ([a-z0-9-]+) END -->$")
+        trigger_name = "reviewer-facing-eval-triggers"
+        trigger_depth = 0
+        saw_trigger_marker = False
+        projected: list[str] = []
+        for line in text.splitlines(keepends=True):
+            plain = line.rstrip("\r\n")
+            begin = begin_re.fullmatch(plain)
+            end = end_re.fullmatch(plain)
+            if begin and begin.group(1) == trigger_name:
+                saw_trigger_marker = True
+                trigger_depth += 1
+                continue
+            if end and end.group(1) == trigger_name:
+                saw_trigger_marker = True
+                trigger_depth = 0
+                continue
+            if trigger_depth:
+                # A renamed/mismatched terminator cannot make its quarantined
+                # body executable policy.  Resume after that terminator so a
+                # later independent legacy defect cannot be hidden by it.
+                if begin is not None:
+                    raise original
+                if end is not None:
+                    trigger_depth = 0
+                continue
+            projected.append(line)
+
+        if not saw_trigger_marker:
+            raise original
+        try:
+            legacy_regions = _parse_regions("".join(projected).encode("utf-8"))
+        except PolicyError:
+            # A defect remains after removing only trigger material, so this is
+            # ordinary unreadable policy rather than a fresh-eval transport case.
+            raise original
+        if tuple(legacy_regions) != LEGACY_REGION_ORDER:
+            raise original
+        return legacy_regions, "reviewer-facing-eval-triggers is malformed"
 
 
 _FENCE_OPEN_LINE = re.compile(r"([ \t]*)```(?:bash|sh)\r?")
@@ -236,6 +326,21 @@ def _parse_invariants(body: str) -> list[dict[str, str | int]]:
     return parsed
 
 
+def _parse_reviewer_eval_triggers(
+    body: str,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Accept only the one plugin-owned reviewer-facing trigger table."""
+
+    if body != REVIEWER_EVAL_TRIGGER_TABLE:
+        raise PolicyError("reviewer-facing-eval-triggers is malformed")
+    rows = [_split_markdown_row(line) for line in REVIEWER_EVAL_TRIGGER_TABLE.splitlines()]
+    return tuple(
+        (row[0], tuple(pattern.strip() for pattern in row[1].split(",")))
+        for row in rows[2:]
+        if row is not None
+    )
+
+
 def _parse_changelog(body: str) -> dict[str, Any] | None:
     normalized = body.strip()
     if re.fullmatch(
@@ -266,7 +371,7 @@ def _parse_changelog(body: str) -> dict[str, Any] | None:
 
 
 def parse_policy(sha: str, raw: bytes) -> Policy:
-    regions = _parse_regions(raw)
+    regions, structural_trigger_error = _parse_regions_with_trigger_defect(raw)
     for required in ("file-categories", "stack-validations", "gate1-test-command"):
         if not regions[required].strip() or "forge-init:" in regions[required]:
             raise PolicyError(f"forge: {required} not configured — run /forge:init")
@@ -276,6 +381,22 @@ def parse_policy(sha: str, raw: bytes) -> Policy:
     stack_cells = _fenced_shell_cells(regions["stack-validations"])
     if not stack_cells:
         raise PolicyError("forge: stack-validations not configured — run /forge:init")
+    reviewer_eval_triggers: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    reviewer_eval_region_digest: str | None = None
+    reviewer_eval_trigger_error: str | None = structural_trigger_error
+    trigger_body = regions.get("reviewer-facing-eval-triggers")
+    if reviewer_eval_trigger_error is not None:
+        pass
+    elif trigger_body is None:
+        reviewer_eval_trigger_error = (
+            "authenticated reviewer-facing-eval-triggers region is missing"
+        )
+    else:
+        reviewer_eval_region_digest = sha256_bytes(trigger_body.encode("utf-8"))
+        try:
+            reviewer_eval_triggers = _parse_reviewer_eval_triggers(trigger_body)
+        except PolicyError as exc:
+            reviewer_eval_trigger_error = str(exc)
     return Policy(
         sha=sha,
         raw=raw,
@@ -285,4 +406,7 @@ def parse_policy(sha: str, raw: bytes) -> Policy:
         stack_commands=stack_cells,
         invariants=_parse_invariants(regions["invariants"]),
         changelog=_parse_changelog(regions["changelog-policy"]),
+        reviewer_eval_triggers=reviewer_eval_triggers,
+        reviewer_eval_region_digest=reviewer_eval_region_digest,
+        reviewer_eval_trigger_error=reviewer_eval_trigger_error,
     )

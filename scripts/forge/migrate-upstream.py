@@ -299,7 +299,8 @@ def prepare_eval_imports(root: Path, stage_tasks: Path) -> tuple[list[str], list
             imported_fixtures.append(relative)
 
     # A missing committed baseline remains pending.  It must never be minted
-    # during migration; the required strict eval run will block Phase 5.
+    # during migration; Recorded-baseline integrity in strict mode will block
+    # Phase 5.
     return imported, imported_fixtures
 
 

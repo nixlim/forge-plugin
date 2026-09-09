@@ -137,6 +137,16 @@ cadence: 14d
 <!-- FORGE:REGION trigger-paths BEGIN -->
 scripts/**
 <!-- FORGE:REGION trigger-paths END -->
+<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->
+| control | path patterns |
+|---|---|
+| constitution | rules/** |
+| agent-prompt-template | agents/**, system/codex/prompts/**, .claude/agents/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| execpolicy | system/codex/rules/**, .codex/rules/** |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| commit-review-prompt | skills/commit/SKILL.md |
+<!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 """
 
 
@@ -350,6 +360,29 @@ def policy_with_changelog() -> str:
         "<!-- FORGE:REGION changelog-policy END -->"
     )
     return POLICY.replace(old, new)
+
+
+def policy_with_structural_trigger_defect(kind: str) -> str:
+    begin = "<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->\n"
+    end = "<!-- FORGE:REGION reviewer-facing-eval-triggers END -->\n"
+    before, remainder = POLICY.split(begin, 1)
+    body, after = remainder.split(end, 1)
+    region = begin + body + end
+    without_region = before + after
+    if kind == "duplicate":
+        return POLICY + "\n" + region
+    if kind == "nested":
+        return POLICY.replace(begin, begin + begin, 1)
+    if kind == "mismatched":
+        return POLICY.replace(
+            end,
+            "<!-- FORGE:REGION reviewer-facing-eval-trigger END -->\n",
+            1,
+        )
+    if kind == "misordered":
+        trigger_paths = "<!-- FORGE:REGION trigger-paths BEGIN -->\n"
+        return without_region.replace(trigger_paths, region + trigger_paths, 1)
+    raise AssertionError(f"unknown trigger defect fixture: {kind}")
 
 
 def canonical_bytes(value: object) -> bytes:
@@ -659,6 +692,93 @@ class ForgeCLIFixture(unittest.TestCase):
 
 
 class ForgeCLIChainTests(ForgeCLIFixture):
+    def _assert_structural_trigger_defect_is_fresh_invalid(self, kind: str) -> None:
+        (self.repo / "forge-project.md").write_text(
+            policy_with_structural_trigger_defect(kind), encoding="utf-8"
+        )
+        self.git("add", "--", "forge-project.md")
+        self.git("commit", "--quiet", "-m", f"malformed trigger region: {kind}")
+        relative = "scripts/forge/forge_cli/engine.py"
+        target = self.repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("CONTROL = 1\n", encoding="utf-8")
+        chain_id = str(self.start(relative)["chain_id"])
+
+        _result, envelope = self.cli(
+            "verify", "--chain-id", chain_id, expected=2
+        )
+
+        diagnostic = (
+            "forge: fresh reviewer eval evidence invalid: "
+            "reviewer-facing-eval-triggers is malformed"
+        )
+        retry = f"forge gate run fresh-reviewer-evals --chain-id {chain_id}"
+        self.assertEqual(
+            envelope,
+            {
+                "chain_id": chain_id,
+                "evidence_refs": [],
+                "expected": "complete, current-candidate fresh reviewer evidence",
+                "message": diagnostic,
+                "next_required_step": retry,
+                "observed": diagnostic,
+                "ok": False,
+                "reason_code": "evidence-incomplete",
+                "remediation": retry,
+                "schema": "forge-cli/1",
+                "state": "verifying",
+            },
+        )
+        state = self.state(chain_id)
+        self.assertNotIn("fresh-reviewer-evals-requests", state["steps"])
+        self.assertNotIn("fresh-reviewer-evals", state["steps"])
+
+    def test_duplicate_trigger_region_is_fresh_invalid_exit_two(self) -> None:
+        self._assert_structural_trigger_defect_is_fresh_invalid("duplicate")
+
+    def test_nested_trigger_region_is_fresh_invalid_exit_two(self) -> None:
+        self._assert_structural_trigger_defect_is_fresh_invalid("nested")
+
+    def test_mismatched_trigger_region_is_fresh_invalid_exit_two(self) -> None:
+        self._assert_structural_trigger_defect_is_fresh_invalid("mismatched")
+
+    def test_misordered_trigger_region_is_fresh_invalid_exit_two(self) -> None:
+        self._assert_structural_trigger_defect_is_fresh_invalid("misordered")
+
+    def test_unrelated_structural_region_defect_remains_policy_unreadable(self) -> None:
+        trigger_begin = (
+            "<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->\n"
+        )
+        foreign_region = (
+            "<!-- FORGE:REGION project-overview BEGIN -->\n"
+            "duplicate nested legacy region\n"
+            "<!-- FORGE:REGION project-overview END -->\n"
+        )
+        malformed = POLICY.replace(
+            trigger_begin,
+            trigger_begin + foreign_region,
+            1,
+        )
+        (self.repo / "forge-project.md").write_text(malformed, encoding="utf-8")
+        self.git("add", "--", "forge-project.md")
+        self.git("commit", "--quiet", "-m", "malformed unrelated region")
+        relative = "scripts/forge/forge_cli/engine.py"
+        target = self.repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("CONTROL = 1\n", encoding="utf-8")
+
+        result, envelope = self.cli(
+            "commit", "start", "--paths", relative, expected=1
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(envelope["reason_code"], "policy-unreadable")
+        self.assertEqual(
+            envelope["message"],
+            "committed policy is unreadable: nested Forge region marker",
+        )
+        self.assertEqual(envelope["observed"], "nested Forge region marker")
+
     def test_module_import_is_safe_and_status_json_is_one_exact_envelope(self) -> None:
         import_cwd = self.temp_root / "import-cwd"
         import_cwd.mkdir()
@@ -2092,6 +2212,51 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.cli("gate", "run", "gate-1", "--chain-id", chain_id, expected=0)
         self.assertEqual(self.gate_lines(), ["changelog", "gate-1"])
 
+    def test_operator_skips_configured_mechanical_gates_and_verify_resumes(self) -> None:
+        (self.repo / "forge-project.md").write_text(
+            policy_with_changelog(), encoding="utf-8"
+        )
+        (self.repo / "CHANGELOG.md").write_text("# Changes\n", encoding="utf-8")
+        self.git("add", "--", "forge-project.md", "CHANGELOG.md")
+        self.git("commit", "--quiet", "-m", "configure changelog gate")
+        self.change("src/app.py", "VALUE = 2\n")
+        chain_id = str(self.start("src/app.py")["chain_id"])
+
+        reasons = {
+            "changelog": "operator accepts changelog omission",
+            "gate-1": "operator accepts test omission",
+            "invariant:1": "operator accepts invariant omission",
+        }
+        for gate_id, reason in reasons.items():
+            with self.subTest(gate_id=gate_id):
+                _result, skipped = self.cli(
+                    "commit",
+                    "skip",
+                    gate_id,
+                    "--reason",
+                    reason,
+                    "--chain-id",
+                    chain_id,
+                    expected=0,
+                )
+                self.assertEqual(skipped["state"], "verifying")
+
+        _result, verified = self.cli(
+            "verify", "--chain-id", chain_id, expected=0
+        )
+        self.assertEqual(verified["state"], "reviewing")
+        state = self.state(chain_id)
+        self.assertEqual(
+            set(state["steps"]["user_skips"]), set(reasons)
+        )
+        for gate_id, reason in reasons.items():
+            self.assertEqual(
+                state["steps"]["user_skips"][gate_id]["reason"], reason
+            )
+        self.assertNotIn("changelog", self.gate_lines())
+        self.assertNotIn("gate-1", self.gate_lines())
+        self.assertNotIn("invariant:1", self.gate_lines())
+
     def test_mismatched_gate_one_fingerprints_void_pair_and_require_two_fresh_runs(self) -> None:
         self.change("src/app.py", "VALUE = 2\n")
         chain_id = str(self.start("src/app.py")["chain_id"])
@@ -2144,6 +2309,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         ):
             self.assertEqual(state["steps"][required][-1]["result"], "passed")
         self.assertNotIn("strict-evals", state["steps"])
+        self.assertNotIn("fresh-reviewer-evals", state["steps"])
         self.assertIsNone(state["review"]["request"])
         self.assertIsNone(state["review"]["verdict"])
         self.assertEqual(state["approval"], {})

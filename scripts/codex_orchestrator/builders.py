@@ -162,6 +162,7 @@ _COMMIT_EVENT_NAMES = frozenset(
         "commit_intent_rolled_back",
         "commit_produced",
         "finding_dispositioned",
+        "fresh_reviewer_evals_requested",
         "gate_1_pair_voided",
         "head_moved",
         "head_rebased",
@@ -178,6 +179,27 @@ _COMMIT_EVENT_NAMES = frozenset(
         "review_requested",
         "secret_scan_recorded",
         "step_recorded",
+    }
+)
+
+_FRESH_REVIEWER_EVALS_GATE = "fresh-reviewer-evals"
+_FRESH_REVIEWER_EVALS_REQUESTS = "fresh-reviewer-evals-requests"
+_FRESH_REVIEWER_EVAL_REQUEST_SCHEMA = "forge-fresh-reviewer-eval-request/1"
+_FRESH_REVIEWER_MANIFEST_CAP_BYTES = 4 * 1024 * 1024
+_FRESH_REVIEWER_REQUEST_KEYS = frozenset(
+    {
+        "schema",
+        "chain_id",
+        "request_id",
+        "requested_at",
+        "iteration",
+        "candidate",
+        "paths",
+        "policy_sha",
+        "trigger",
+        "suite",
+        "fixture_packages",
+        "artifact_prefix",
     }
 )
 _MERGE_EVENT_NAMES = frozenset(
@@ -242,7 +264,14 @@ _COMMIT_STATES = frozenset(
 _COMMIT_STATE_TRANSITIONS = {
     "classifying": frozenset({"classifying", "verifying", "aborted"}),
     "verifying": frozenset(
-        {"verifying", "classifying", "reviewing", "authorized", "aborted"}
+        {
+            "verifying",
+            "classifying",
+            "reviewing",
+            "revising",
+            "authorized",
+            "aborted",
+        }
     ),
     "reviewing": frozenset(
         {
@@ -581,6 +610,7 @@ _COMMIT_EVENT_TOP_LEVEL_CHANGES: dict[str, frozenset[str]] = {
     "commit_intent_rolled_back": frozenset({"state", "commit_result"}),
     "commit_produced": frozenset({"repo_head", "commit_result"}),
     "finding_dispositioned": frozenset({"review"}),
+    "fresh_reviewer_evals_requested": frozenset({"steps"}),
     "gate_1_pair_voided": frozenset({"steps"}),
     "head_moved": frozenset({"steps"}),
     "head_rebased": frozenset(
@@ -629,7 +659,7 @@ _COMMIT_EVENT_TOP_LEVEL_CHANGES: dict[str, frozenset[str]] = {
     ),
     "review_requested": frozenset({"review"}),
     "secret_scan_recorded": frozenset({"steps"}),
-    "step_recorded": frozenset({"steps"}),
+    "step_recorded": frozenset({"state", "steps", "review"}),
 }
 _COMMIT_DETAIL_KEYS: dict[str, frozenset[str]] = {
     "authorization_consumed": frozenset({"candidate"}),
@@ -661,6 +691,7 @@ _COMMIT_DETAIL_KEYS: dict[str, frozenset[str]] = {
     "finding_dispositioned": frozenset(
         {"finding", "severity", "operator_cosign"}
     ),
+    "fresh_reviewer_evals_requested": frozenset({"request"}),
     "gate_1_pair_voided": frozenset({"reason", "fingerprints"}),
     "head_moved": frozenset({"old", "new", "diagnostic"}),
     "head_rebased": frozenset(
@@ -1937,6 +1968,67 @@ def _commit_candidate_is_v2(state: object) -> bool:
     )
 
 
+def _commit_gate_pass_or_skip(
+    state: dict[str, object], gate_id: str, *, allow_skip: bool = True
+) -> bool:
+    """Mirror the CLI's candidate-current gate satisfaction for replay order."""
+
+    steps = state.get("steps")
+    candidate = state.get("candidate")
+    if not isinstance(steps, dict) or not isinstance(candidate, dict):
+        return False
+    if allow_skip:
+        skips = steps.get("user_skips")
+        if isinstance(skips, dict) and isinstance(skips.get(gate_id), dict):
+            return True
+    runs = steps.get(gate_id)
+    if not isinstance(runs, list) or not runs:
+        return False
+    authorization_id = candidate.get("authorization_id")
+    current = [
+        fact
+        for fact in runs
+        if isinstance(fact, dict) and fact.get("candidate") == authorization_id
+    ]
+    if gate_id == "gate-1":
+        return bool(
+            len(current) >= 2
+            and all(
+                fact.get("result") == "passed" and not fact.get("pair_voided")
+                for fact in current[-2:]
+            )
+            and current[-2].get("env_fingerprint")
+            == current[-1].get("env_fingerprint")
+        )
+    return bool(current and current[-1].get("result") == "passed")
+
+
+def _commit_fresh_gate_position_valid(state: dict[str, object]) -> bool:
+    """Require the intrinsic Gate-2 prefix before a fresh request or result."""
+
+    tier = state.get("tier")
+    if (
+        not _commit_candidate_is_v2(state)
+        or not isinstance(tier, dict)
+        or tier.get("control") is not True
+        or not isinstance(tier.get("categories"), list)
+        or any(
+            not isinstance(category, str) or not category
+            for category in tier["categories"]
+        )
+    ):
+        return False
+    prefix = (
+        "gate-1",
+        *(f"stack:{category}" for category in sorted(set(tier["categories"]))),
+        "assertion-sensor",
+        "secret-scan",
+    )
+    return all(_commit_gate_pass_or_skip(state, gate_id) for gate_id in prefix) and (
+        _commit_gate_pass_or_skip(state, "strict-evals", allow_skip=False)
+    )
+
+
 def _commit_binding_authorization(candidate: object) -> str | None:
     """Project the scalar authority stored by commit gate and approval facts."""
 
@@ -2200,10 +2292,118 @@ def _ordinary_commit_details(event: dict[str, object]) -> dict[str, object]:
     return ordinary
 
 
+def _commit_dynamic_skip_gate_ids(
+    state: dict[str, object], *, repository: Path | None = None
+) -> frozenset[str] | None:
+    """Derive policy-dependent commit skip IDs from authenticated Git bytes."""
+
+    try:
+        from forge_cli import candidate as candidate_module
+        from forge_cli import fresh_evals as fresh_eval_module
+        from forge_cli import policy as policy_module
+    except (ImportError, AttributeError):
+        return None
+
+    policy_source = state.get("policy_source")
+    staging = state.get("staging")
+    candidate = state.get("candidate")
+    tier = state.get("tier")
+    paths = state.get("paths")
+    root = repository
+    if root is None and isinstance(staging, dict):
+        worktree_root = staging.get("worktree_root")
+        if isinstance(worktree_root, str) and worktree_root:
+            root = Path(worktree_root)
+    if (
+        root is None
+        or not isinstance(policy_source, dict)
+        or policy_source.get("path") != "forge-project.md"
+        or not isinstance(policy_source.get("sha"), str)
+        or not isinstance(policy_source.get("digest"), str)
+        or not isinstance(tier, dict)
+        or not isinstance(paths, list)
+        or not all(isinstance(path, str) for path in paths)
+    ):
+        return None
+    policy_sha = str(policy_source["sha"])
+    try:
+        context = candidate_module.discover_context(root)
+        base_tree = candidate_module.resolve_base_tree(context, policy_sha)
+        raw = candidate_module.tree_blob(context, base_tree, "forge-project.md")
+        if (
+            raw is None
+            or journal._sha256(raw) != policy_source.get("digest")
+        ):
+            return None
+        policy = policy_module.parse_policy(policy_sha, raw)
+    except (
+        OSError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+        candidate_module.CandidateError,
+        policy_module.PolicyError,
+    ):
+        return None
+
+    configured: set[str] = set()
+    if policy.changelog is not None:
+        configured.add("changelog")
+    configured.update(
+        f"invariant:{row['row_number']}"
+        for row in policy.invariants
+        if row.get("enforcement") == "commit"
+    )
+    if tier.get("control") is True and _commit_candidate_is_v2(state):
+        try:
+            trigger = fresh_eval_module.derive_trigger(
+                context, policy, candidate, tuple(paths)
+            )
+        except (KeyError, TypeError, fresh_eval_module.FreshEvalError):
+            # The live gate is conservatively required when its authenticated
+            # trigger cannot be proved.  Replay makes the same fail-closed
+            # choice rather than mistaking invalid configuration for no match.
+            configured.add(_FRESH_REVIEWER_EVALS_GATE)
+        else:
+            if fresh_eval_module.trigger_required(trigger):
+                configured.add(_FRESH_REVIEWER_EVALS_GATE)
+    return frozenset(configured)
+
+
+def _commit_skip_authorization_valid(
+    authorization: object, candidate_id: object
+) -> bool:
+    """Recognize the exact unconsumed authorization issued by review skip."""
+
+    if not isinstance(authorization, dict) or set(authorization) != {
+        "token",
+        "candidate",
+        "issued_at",
+        "expires_at",
+        "consumed",
+        "consumed_at",
+    }:
+        return False
+    issued = _utc_value(authorization.get("issued_at"))
+    expires = _utc_value(authorization.get("expires_at"))
+    return bool(
+        isinstance(authorization.get("token"), str)
+        and re.fullmatch(r"[0-9a-f]{32}", str(authorization["token"])) is not None
+        and authorization.get("candidate") == candidate_id
+        and issued is not None
+        and expires is not None
+        and expires - issued == dt.timedelta(minutes=30)
+        and authorization.get("consumed") is False
+        and authorization.get("consumed_at") is None
+    )
+
+
 def _commit_skip_delta(
     event: dict[str, object],
     prior: dict[str, object] | None,
     current: dict[str, object],
+    *,
+    repository: Path | None = None,
 ) -> tuple[str, dict[str, object]] | None:
     """Return the one exact user-skip fact introduced by an operator event."""
 
@@ -2225,6 +2425,129 @@ def _commit_skip_delta(
         or not isinstance(current_steps, dict)
     ):
         return None
+    tier = prior.get("tier")
+    categories = (
+        tier.get("categories") if isinstance(tier, dict) else None
+    )
+    prior_state = prior.get("state")
+    fresh_runs = prior_steps.get(_FRESH_REVIEWER_EVALS_GATE)
+    latest_fresh = (
+        fresh_runs[-1]
+        if isinstance(fresh_runs, list) and fresh_runs
+        else None
+    )
+    candidate = prior.get("candidate")
+    candidate_id = (
+        candidate.get("sha256") if isinstance(candidate, dict) else None
+    )
+    dynamic_ids = (
+        _commit_dynamic_skip_gate_ids(prior, repository=repository)
+        if gate_id == "changelog"
+        or gate_id == _FRESH_REVIEWER_EVALS_GATE
+        or re.fullmatch(r"invariant:[1-9][0-9]*", gate_id) is not None
+        else frozenset()
+    )
+    fresh_block_override = bool(
+        gate_id == _FRESH_REVIEWER_EVALS_GATE
+        and dynamic_ids is not None
+        and gate_id in dynamic_ids
+        and prior_state == "revising"
+        and isinstance(latest_fresh, dict)
+        and latest_fresh.get("candidate") == candidate_id
+        and latest_fresh.get("result") == "failed"
+        and latest_fresh.get("outcome") == "BLOCK"
+        and current.get("state") == "classifying"
+    )
+    ordinary_mechanical = bool(
+        prior_state == "verifying"
+        and (
+            gate_id
+            in {
+                "gate-1",
+                "assertion-sensor",
+                "secret-scan",
+            }
+            or (dynamic_ids is not None and gate_id in dynamic_ids)
+            or (
+                isinstance(categories, list)
+                and gate_id.startswith("stack:")
+                and gate_id.removeprefix("stack:") in categories
+            )
+        )
+    )
+    review_skip = bool(
+        gate_id == "review"
+        and prior_state == "reviewing"
+        and isinstance(tier, dict)
+        and tier.get("control") is not True
+    )
+    index_drift_skip = bool(
+        gate_id == "index-drift"
+        and prior_state
+        in {"verifying", "reviewing", "awaiting_approval", "authorized"}
+    )
+    if not (
+        ordinary_mechanical
+        or fresh_block_override
+        or review_skip
+        or index_drift_skip
+    ):
+        return None
+    if (
+        gate_id == "strict-evals"
+        and isinstance(tier, dict)
+        and tier.get("control") is True
+    ):
+        return None
+    retained_authority = ("review", "approval", "authorization")
+    if ordinary_mechanical:
+        if current.get("state") != "verifying" or any(
+            current.get(name) != prior.get(name) for name in retained_authority
+        ):
+            return None
+    elif fresh_block_override:
+        if any(
+            current.get(name) != prior.get(name) for name in retained_authority
+        ):
+            return None
+    elif index_drift_skip:
+        if current.get("state") != prior_state or any(
+            current.get(name) != prior.get(name) for name in retained_authority
+        ):
+            return None
+    else:
+        prior_review = prior.get("review")
+        current_candidate = current.get("candidate")
+        current_candidate_id = (
+            current_candidate.get("sha256")
+            if isinstance(current_candidate, dict)
+            else None
+        )
+        if (
+            not isinstance(prior_review, dict)
+            or current.get("review") != prior_review
+            or prior.get("authorization") != {}
+        ):
+            return None
+        if prior_review.get("operator_cosign_required") is True:
+            if (
+                current.get("state") != "awaiting_approval"
+                or current.get("authorization") != prior.get("authorization")
+                or current.get("approval")
+                != {
+                    "required_for": "finding-disposition",
+                    "candidate": current_candidate_id,
+                }
+            ):
+                return None
+        elif (
+            current.get("state") != "authorized"
+            or current.get("approval") != prior.get("approval")
+            or not _commit_skip_authorization_valid(
+                current.get("authorization"), current_candidate_id
+            )
+        ):
+            return None
     old_container = prior_steps.get("user_skips")
     current_container = current_steps.get("user_skips")
     if (
@@ -2236,9 +2559,17 @@ def _commit_skip_delta(
     fact = current_container.get(gate_id)
     if (
         not isinstance(fact, dict)
+        or set(fact)
+        != {"directed_by", "reason", "argv_digest", "journaled_at"}
         or old_skips.get(gate_id) == fact
-        or fact.get("directed_by") != details.get("directed_by")
+        or details.get("directed_by") != "operator"
+        or fact.get("directed_by") != "operator"
+        or not isinstance(fact.get("reason"), str)
+        or not fact.get("reason")
         or fact.get("reason") != details.get("reason")
+        or not isinstance(fact.get("argv_digest"), str)
+        or journal.HEX_SHA256_PATTERN.fullmatch(str(fact["argv_digest"])) is None
+        or _utc_value(fact.get("journaled_at")) is None
     ):
         return None
     expected_skips = copy.deepcopy(old_skips)
@@ -2445,6 +2776,8 @@ def _commit_transition_valid(
     event: dict[str, object],
     prior: dict[str, object] | None,
     current: dict[str, object],
+    *,
+    repository: Path | None = None,
 ) -> bool:
     payload = event["payload"]
     assert isinstance(payload, dict)
@@ -2691,6 +3024,214 @@ def _commit_transition_valid(
             and details.get("effective_tier") == tier.get("effective")
             and details.get("control") == tier.get("control")
         )
+    if event_name == "fresh_reviewer_evals_requested":
+        prior_steps = prior.get("steps")
+        current_steps = current.get("steps")
+        old_requests = (
+            prior_steps.get(_FRESH_REVIEWER_EVALS_REQUESTS)
+            if isinstance(prior_steps, dict)
+            else None
+        )
+        requests = (
+            current_steps.get(_FRESH_REVIEWER_EVALS_REQUESTS)
+            if isinstance(current_steps, dict)
+            else None
+        )
+        request = requests[-1] if isinstance(requests, list) and requests else None
+        expected_steps = copy.deepcopy(prior_steps)
+        if isinstance(expected_steps, dict):
+            expected_steps[_FRESH_REVIEWER_EVALS_REQUESTS] = requests
+        policy_source = current.get("policy_source")
+        trigger = request.get("trigger") if isinstance(request, dict) else None
+        matches = trigger.get("matches") if isinstance(trigger, dict) else None
+        suite = request.get("suite") if isinstance(request, dict) else None
+        inventory = suite.get("inventory") if isinstance(suite, dict) else None
+        fixture_packages = (
+            request.get("fixture_packages") if isinstance(request, dict) else None
+        )
+        prior_review = prior.get("review")
+        prior_runs = (
+            prior_steps.get(_FRESH_REVIEWER_EVALS_GATE)
+            if isinstance(prior_steps, dict)
+            else None
+        )
+        previous_request = (
+            old_requests[-1]
+            if isinstance(old_requests, list) and old_requests
+            else None
+        )
+        previous_terminal = (
+            next(
+                (
+                    record
+                    for record in reversed(prior_runs)
+                    if isinstance(record, dict)
+                    and isinstance(previous_request, dict)
+                    and record.get("request_id")
+                    == previous_request.get("request_id")
+                ),
+                None,
+            )
+            if isinstance(prior_runs, list)
+            else None
+        )
+        fresh_fixture_ids = (
+            [
+                item.get("id")
+                for item in inventory
+                if isinstance(item, dict)
+                and item.get("disposition") == "fresh-review"
+            ]
+            if isinstance(inventory, list)
+            else None
+        )
+        iteration = request.get("iteration") if isinstance(request, dict) else None
+        request_id = request.get("request_id") if isinstance(request, dict) else None
+        expected_prefix = (
+            f"fresh-reviewer-evals/iteration-{iteration:02d}/{request_id}"
+            if type(iteration) is int and isinstance(request_id, str)
+            else None
+        )
+        return bool(
+            before_state == "verifying"
+            and after_state == "verifying"
+            and _commit_fresh_gate_position_valid(prior)
+            and _commit_candidate_is_v2(current)
+            and isinstance(prior_steps, dict)
+            and isinstance(current_steps, dict)
+            and (old_requests is None or isinstance(old_requests, list))
+            and isinstance(requests, list)
+            and len(requests) == len(old_requests or []) + 1
+            and requests[:-1] == (old_requests or [])
+            and current_steps == expected_steps
+            and isinstance(request, dict)
+            and set(request) == _FRESH_REVIEWER_REQUEST_KEYS
+            and details == {"request": request}
+            and request.get("schema") == _FRESH_REVIEWER_EVAL_REQUEST_SCHEMA
+            and request.get("chain_id") == current.get("chain_id")
+            and isinstance(request.get("candidate"), dict)
+            and set(request["candidate"]) == _COMMIT_CANDIDATE_V2_KEYS
+            and request.get("candidate") == current_candidate
+            and request.get("paths") == current.get("paths")
+            and isinstance(policy_source, dict)
+            and request.get("policy_sha") == policy_source.get("sha")
+            and isinstance(request_id, str)
+            and re.fullmatch(r"[0-9a-f]{32}", request_id) is not None
+            and _utc_value(request.get("requested_at")) is not None
+            and type(iteration) is int
+            and 1 <= iteration <= 8
+            and isinstance(prior_review, dict)
+            and type(prior_review.get("iteration")) is int
+            and iteration == int(prior_review["iteration"]) + 1
+            and prior.get("review") == current.get("review")
+            and isinstance(prior_steps.get("strict-evals"), list)
+            and bool(prior_steps["strict-evals"])
+            and isinstance(prior_steps["strict-evals"][-1], dict)
+            and prior_steps["strict-evals"][-1].get("candidate") == current_sha
+            and prior_steps["strict-evals"][-1].get("result") == "passed"
+            and request_id
+            not in {
+                prior_request.get("request_id")
+                for prior_request in (old_requests or [])
+                if isinstance(prior_request, dict)
+            }
+            and (
+                previous_request is None
+                or (
+                    isinstance(previous_terminal, dict)
+                    and previous_terminal.get("iteration")
+                    == previous_request.get("iteration")
+                    and (
+                        previous_request.get("candidate") != current_candidate
+                        or previous_terminal.get("outcome") == "INVALID"
+                    )
+                )
+            )
+            and request.get("artifact_prefix") == expected_prefix
+            and isinstance(trigger, dict)
+            and set(trigger) == {"policy_sha", "region_sha256", "paths", "matches"}
+            and trigger.get("policy_sha") == request.get("policy_sha")
+            and isinstance(trigger.get("region_sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", str(trigger.get("region_sha256")))
+            is not None
+            and trigger.get("paths") == current.get("paths")
+            and isinstance(matches, list)
+            and bool(matches)
+            and all(
+                isinstance(match, dict)
+                and set(match) == {"control", "pattern", "path"}
+                and all(isinstance(match.get(key), str) and match.get(key) for key in match)
+                for match in matches
+            )
+            and isinstance(suite, dict)
+            and set(suite) == {"fixture_root_oid", "fixture_root_sha256", "inventory"}
+            and isinstance(suite.get("fixture_root_oid"), str)
+            and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", str(suite.get("fixture_root_oid")))
+            is not None
+            and isinstance(suite.get("fixture_root_sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", str(suite.get("fixture_root_sha256")))
+            is not None
+            and isinstance(inventory, list)
+            and bool(inventory)
+            and all(
+                isinstance(item, dict)
+                and set(item)
+                == {
+                    "id",
+                    "path",
+                    "sha256",
+                    "agent",
+                    "expected_verdict",
+                    "subject_sha256",
+                    "disposition",
+                }
+                and all(
+                    isinstance(item.get(key), str) and item.get(key)
+                    for key in ("id", "path", "agent")
+                )
+                and item.get("disposition")
+                in {"fresh-review", "subject-specific-baseline-only"}
+                and (
+                    (
+                        item.get("disposition") == "fresh-review"
+                        and item.get("expected_verdict") in {"PASS", "BLOCK"}
+                    )
+                    or (
+                        item.get("disposition")
+                        == "subject-specific-baseline-only"
+                        and item.get("expected_verdict")
+                        in {"PASS", "BLOCK", "FLAG"}
+                    )
+                )
+                and re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256")))
+                is not None
+                and re.fullmatch(r"[0-9a-f]{64}", str(item.get("subject_sha256")))
+                is not None
+                for item in inventory
+            )
+            and [item.get("id") for item in inventory]
+            == sorted(
+                [item.get("id") for item in inventory],
+                key=lambda value: str(value).encode("utf-8"),
+            )
+            and len({item.get("id") for item in inventory}) == len(inventory)
+            and isinstance(fixture_packages, list)
+            and bool(fixture_packages)
+            and all(
+                isinstance(item, dict)
+                and set(item) == {"fixture_id", "sha256"}
+                and isinstance(item.get("fixture_id"), str)
+                and item.get("fixture_id")
+                and isinstance(item.get("sha256"), str)
+                and re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256")))
+                is not None
+                for item in fixture_packages
+            )
+            and [item.get("fixture_id") for item in fixture_packages]
+            == fresh_fixture_ids
+            and fresh_fixture_ids
+            == sorted(fresh_fixture_ids or [], key=lambda value: str(value).encode("utf-8"))
+        )
     if event_name == "step_recorded":
         step_id = details.get("step_id")
         steps = current.get("steps")
@@ -2700,7 +3241,7 @@ def _commit_transition_valid(
         expected_steps = copy.deepcopy(previous_steps)
         if isinstance(expected_steps, dict) and isinstance(step_id, str):
             expected_steps[step_id] = runs
-        return bool(
+        appended = bool(
             isinstance(step_id, str)
             and isinstance(runs, list)
             and runs
@@ -2711,6 +3252,148 @@ def _commit_transition_valid(
             and runs[-1].get("result") == details.get("result")
             and runs[-1].get("candidate") == current_sha
             and steps == expected_steps
+        )
+        if not appended:
+            return False
+        record = runs[-1]
+        if step_id != _FRESH_REVIEWER_EVALS_GATE:
+            return bool(
+                before_state == after_state
+                and prior.get("review") == current.get("review")
+            )
+
+        requests = (
+            steps.get(_FRESH_REVIEWER_EVALS_REQUESTS)
+            if isinstance(steps, dict)
+            else None
+        )
+        request = requests[-1] if isinstance(requests, list) and requests else None
+        outcome = record.get("outcome")
+        expected_result = {
+            "PASS": ("passed", 0),
+            "BLOCK": ("failed", 1),
+            "INVALID": ("failed", 2),
+        }.get(outcome)
+        manifest = record.get("manifest")
+        manifest_digest = record.get("manifest_sha256")
+        manifest_byte_count = record.get("manifest_byte_count")
+        expected_manifest = (
+            ".forge/chains/"
+            f"{current.get('chain_id')}/{request.get('artifact_prefix')}/manifest.json"
+            if isinstance(request, dict)
+            and isinstance(request.get("artifact_prefix"), str)
+            else None
+        )
+        manifest_binding = bool(
+            (
+                outcome in {"PASS", "BLOCK"}
+                and isinstance(manifest, str)
+                and manifest == expected_manifest
+                and isinstance(manifest_digest, str)
+                and re.fullmatch(r"[0-9a-f]{64}", manifest_digest) is not None
+                and type(manifest_byte_count) is int
+                and 1
+                <= manifest_byte_count
+                <= _FRESH_REVIEWER_MANIFEST_CAP_BYTES
+            )
+            or (
+                outcome == "INVALID"
+                and (
+                    (
+                        manifest is None
+                        and manifest_digest is None
+                        and "manifest_byte_count" not in record
+                    )
+                    or (
+                        isinstance(manifest, str)
+                        and manifest == expected_manifest
+                        and isinstance(manifest_digest, str)
+                        and re.fullmatch(r"[0-9a-f]{64}", manifest_digest)
+                        is not None
+                        and type(manifest_byte_count) is int
+                        and 1
+                        <= manifest_byte_count
+                        <= _FRESH_REVIEWER_MANIFEST_CAP_BYTES
+                    )
+                )
+            )
+        )
+        diagnostic = record.get("diagnostic")
+        prior_review = prior.get("review")
+        fresh_fact = bool(
+            expected_result is not None
+            and _commit_fresh_gate_position_valid(prior)
+            and _commit_candidate_is_v2(current)
+            and record.get("result") == expected_result[0]
+            and record.get("exit_code") == expected_result[1]
+            and record.get("kind") == _FRESH_REVIEWER_EVALS_GATE
+            and isinstance(record.get("request_id"), str)
+            and re.fullmatch(r"[0-9a-f]{32}", str(record.get("request_id")))
+            is not None
+            and type(record.get("iteration")) is int
+            and 1 <= int(record["iteration"]) <= 8
+            and isinstance(request, dict)
+            and request.get("request_id") == record.get("request_id")
+            and request.get("iteration") == record.get("iteration")
+            and isinstance(prior_review, dict)
+            and type(prior_review.get("iteration")) is int
+            and record.get("iteration") == int(prior_review["iteration"]) + 1
+            and isinstance(request.get("candidate"), dict)
+            and set(request["candidate"]) == _COMMIT_CANDIDATE_V2_KEYS
+            and request.get("candidate") == current_candidate
+            and request.get("trigger") == record.get("trigger")
+            and not any(
+                isinstance(old_record, dict)
+                and old_record.get("request_id") == record.get("request_id")
+                for old_record in (old_runs or [])
+            )
+            and manifest_binding
+            and isinstance(diagnostic, str)
+            and (
+                (outcome == "PASS" and diagnostic == "forge: fresh reviewer eval PASS")
+                or (
+                    outcome == "BLOCK"
+                    and diagnostic.startswith("forge: fresh reviewer eval regression: ")
+                )
+                or (
+                    outcome == "INVALID"
+                    and diagnostic.startswith(
+                        "forge: fresh reviewer eval evidence invalid: "
+                    )
+                )
+            )
+        )
+        if not fresh_fact:
+            return False
+        if outcome == "PASS":
+            return bool(
+                before_state == "verifying"
+                and after_state == "verifying"
+                and prior_review == current.get("review")
+            )
+        review = current.get("review")
+        expected_review = copy.deepcopy(prior_review)
+        if not isinstance(expected_review, dict) or not isinstance(review, dict):
+            return False
+        expected_review["iteration"] = record.get("iteration")
+        if int(record["iteration"]) >= 8:
+            residual = review.get("residual_risk")
+            if not (
+                isinstance(residual, dict)
+                and residual.get("reason")
+                == "fresh reviewer evaluation iteration cap reached"
+                and residual.get("findings")
+                == [{"severity": "MAJOR", "text": diagnostic}]
+                and _utc_value(residual.get("at")) is not None
+            ):
+                return False
+            expected_review["residual_risk"] = residual
+        return bool(
+            before_state == "verifying"
+            and after_state == (
+                "revising" if outcome == "BLOCK" else "verifying"
+            )
+            and review == expected_review
         )
     if event_name == "review_requested":
         review = current.get("review")
@@ -2752,7 +3435,12 @@ def _commit_transition_valid(
             and details.get("directed_by") == "operator"
         )
     if event_name == "operator_skip":
-        return _commit_skip_delta(event, prior, current) is not None
+        return (
+            _commit_skip_delta(
+                event, prior, current, repository=repository
+            )
+            is not None
+        )
     if event_name == "commit_intent":
         result = current.get("commit_result")
         intent = result.get("intent") if isinstance(result, dict) else None
@@ -5171,6 +5859,7 @@ def _binding_matches_source_fact(
     current: dict[str, object],
     *,
     family: str,
+    repository: Path | None = None,
 ) -> bool:
     candidate = _candidate_binding_for_state(family, current)
     if candidate is None or binding.get("candidate") != candidate:
@@ -5291,9 +5980,24 @@ def _binding_matches_source_fact(
     if outcome == "chain-skip":
         if family != "commit" or event_name != "operator_skip":
             return False
+        delta = _commit_skip_delta(
+            event, prior, current, repository=repository
+        )
+        if binding.get("review") is not None or delta is None:
+            return False
+        gate_id, fact = delta
+        if gate_id != _FRESH_REVIEWER_EVALS_GATE:
+            # Historical mechanical skips predate reason-bearing journal
+            # decisions.  Fresh-reviewer skips have no such legacy form and
+            # bind their exact operator reason from their first admission.
+            return True
         return bool(
-            binding.get("review") is None
-            and _commit_skip_delta(event, prior, current) is not None
+            record.get("resolution")
+            == (
+                f"Forge commit chain skip recorded: {gate_id}; "
+                f"operator reason: {fact.get('reason')}"
+            )
+            and record.get("basis") == []
         )
     if outcome == "chain-landing":
         if binding.get("review") is not None or prior is None:
@@ -5911,7 +6615,12 @@ def _resolve_binding_from_descriptor(
             if (
                 not _state_shape_valid(candidate_state, chain_id, family)
                 or not isinstance(candidate_state, dict)
-                or not _commit_transition_valid(event, replayed_state, candidate_state)
+                or not _commit_transition_valid(
+                    event,
+                    replayed_state,
+                    candidate_state,
+                    repository=repository,
+                )
             ):
                 raise _binding_replay_refusal()
             next_state = copy.deepcopy(candidate_state)
@@ -5969,6 +6678,7 @@ def _resolve_binding_from_descriptor(
                     prior_state,
                     next_state,
                     family=family,
+                    repository=repository,
                 )
             ):
                 raise _binding_replay_refusal()
@@ -6060,6 +6770,7 @@ def _resolve_binding_from_descriptor(
                     prior,
                     event_state,
                     family=str(chain_family),
+                    repository=repository,
                 )
             ):
                 continue
@@ -6076,6 +6787,7 @@ def _resolve_binding_from_descriptor(
         source_state,
         replay_entries,
         chain_family=str(chain_family),
+        repository=repository,
     ):
         raise _binding_replay_refusal()
     return dict(resolved)
@@ -6455,10 +7167,17 @@ def _skip_fact_is_current(
             str | None,
         ]
     ],
+    *,
+    repository: Path | None = None,
 ) -> bool:
     """Prove the named source event introduced the current exact skip fact."""
 
-    source_delta = _commit_skip_delta(source_event, source_prior, source_state)
+    source_delta = _commit_skip_delta(
+        source_event,
+        source_prior,
+        source_state,
+        repository=repository,
+    )
     if source_delta is None:
         return False
     gate_id, source_fact = source_delta
@@ -6494,7 +7213,9 @@ def _skip_fact_is_current(
         )
         if prior_candidate != event_candidate or prior_fact != event_fact:
             latest_introduction = None
-        delta = _commit_skip_delta(event, prior, event_state)
+        delta = _commit_skip_delta(
+            event, prior, event_state, repository=repository
+        )
         if delta == (gate_id, source_fact):
             latest_introduction = event
     return bool(
@@ -6521,6 +7242,7 @@ def _binding_is_current(
     ],
     *,
     chain_family: str,
+    repository: Path | None = None,
 ) -> bool:
     """Prove the generation-free journal binding against current chain state."""
 
@@ -6641,6 +7363,7 @@ def _binding_is_current(
                 source_prior,
                 source_state,
                 replay_entries,
+                repository=repository,
             )
         ):
             return False

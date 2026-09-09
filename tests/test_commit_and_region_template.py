@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from datetime import datetime, timezone
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 from tests._cli_loader import package_module
 
 ROOT = Path(__file__).resolve().parents[1]
+POLICY = package_module("policy")
 TEMPLATE = (ROOT / "system" / "template" / "forge-project.md").read_text(
     encoding="utf-8"
 )
@@ -40,6 +42,7 @@ REGIONS = [
     "risk-tiers",
     "drift-config",
     "trigger-paths",
+    "reviewer-facing-eval-triggers",
 ]
 
 DEPENDENCY_MANIFEST_PATHS = [
@@ -80,6 +83,8 @@ GATE1_DEFAULT = (
     ">&2; exit 1"
 )
 
+REVIEWER_EVAL_TRIGGER_TABLE = POLICY.REVIEWER_EVAL_TRIGGER_TABLE.rstrip("\n")
+
 
 def region_body(name: str) -> str:
     match = re.search(
@@ -93,15 +98,70 @@ def region_body(name: str) -> str:
     return match.group(1)
 
 
+def document_region_body(document: str, name: str) -> str:
+    match = re.search(
+        rf"<!-- FORGE:REGION {re.escape(name)} BEGIN -->(.*?)"
+        rf"<!-- FORGE:REGION {re.escape(name)} END -->",
+        document,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"missing region {name}")
+    return match.group(1)
+
+
 class ForgeProjectTemplateTests(unittest.TestCase):
-    def test_fourteen_regions_are_complete_and_in_contract_order(self) -> None:
+    def test_canonical_trigger_table_pins_spec_template_and_root_bytes(self) -> None:
+        specification = (ROOT / "docs/specs/forge-plugin-spec.md").read_bytes()
+        specification_match = re.search(
+            rb"The `reviewer-facing-eval-triggers` region is the sole maintained "
+            rb"reviewer-facing trigger path list and contains exactly these ordered rows:\n\n"
+            rb"(\| control \| path patterns \|\n"
+            rb"\|---\|---\|\n"
+            rb"(?:\| [^\n]+ \|\n)+)",
+            specification,
+        )
+        self.assertIsNotNone(specification_match)
+        canonical = POLICY.REVIEWER_EVAL_TRIGGER_TABLE.encode("utf-8")
+        self.assertEqual(
+            hashlib.sha256(canonical).hexdigest(),
+            "3d1be7b789a8ee5cc7b5f65ac7f77a5ce3622fe0214a09650c85424c91147d93",
+        )
+        self.assertEqual(specification_match.group(1), canonical)
+        for label, path in (
+            ("template", ROOT / "system/template/forge-project.md"),
+            ("root", ROOT / "forge-project.md"),
+        ):
+            with self.subTest(document=label):
+                document = path.read_bytes()
+                marker = b"<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->\n"
+                end = b"<!-- FORGE:REGION reviewer-facing-eval-triggers END -->"
+                body = document.split(marker, 1)[1].split(end, 1)[0]
+                self.assertEqual(body, canonical)
+                self.assertEqual(
+                    hashlib.sha256(body).hexdigest(),
+                    "3d1be7b789a8ee5cc7b5f65ac7f77a5ce3622fe0214a09650c85424c91147d93",
+                )
+
+    def test_fifteen_regions_are_complete_and_in_contract_order(self) -> None:
         begins = re.findall(r"<!-- FORGE:REGION ([a-z0-9-]+) BEGIN -->", TEMPLATE)
         ends = re.findall(r"<!-- FORGE:REGION ([a-z0-9-]+) END -->", TEMPLATE)
         self.assertEqual(begins, REGIONS)
         self.assertEqual(ends, REGIONS)
         for name in REGIONS:
             with self.subTest(region=name):
-                self.assertIn("<!-- forge-init:", region_body(name))
+                body = region_body(name)
+                if name == "reviewer-facing-eval-triggers":
+                    self.assertNotIn("<!-- forge-init:", body)
+                    self.assertEqual(body.strip(), REVIEWER_EVAL_TRIGGER_TABLE)
+                else:
+                    self.assertIn("<!-- forge-init:", body)
+        self.assertEqual(
+            document_region_body(
+                ROOT_PROJECT, "reviewer-facing-eval-triggers"
+            ).strip(),
+            REVIEWER_EVAL_TRIGGER_TABLE,
+        )
 
     def test_revision_two_region_defaults_are_conservative_and_complete(self) -> None:
         self.assertIn("fail closed", region_body("invariants"))

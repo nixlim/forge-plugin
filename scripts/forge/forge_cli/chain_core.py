@@ -35,6 +35,7 @@ import threading
 import time
 
 from forge_cli import candidate as candidate_module
+from forge_cli import fresh_evals as fresh_eval_module
 from forge_cli import runtime
 from forge_cli.envelope import (
     FrozenError,
@@ -57,6 +58,15 @@ SCHEMA = "forge-chain/1"
 
 
 KIND = "commit"
+
+
+FRESH_REVIEWER_EVALS_GATE = "fresh-reviewer-evals"
+
+
+FRESH_REVIEWER_EVALS_REQUESTS = "fresh-reviewer-evals-requests"
+
+
+FRESH_REVIEWER_EVALS_REQUESTED_EVENT = "fresh_reviewer_evals_requested"
 
 
 STATES = {
@@ -16193,8 +16203,24 @@ def _user_skip(state: Mapping[str, Any], gate_id: str) -> dict[str, Any] | None:
 
 
 def _gate_satisfied(state: Mapping[str, Any], gate_id: str) -> bool:
+    # Recorded-baseline integrity is mandatory for control candidates.  Keep
+    # the legacy generic skip behavior only where this gate is not a binding
+    # control-class requirement.
+    if gate_id == "strict-evals" and bool(state.get("tier", {}).get("control")):
+        return _latest_current_pass(state, gate_id)
     if _user_skip(state, gate_id) is not None:
         return True
+    # Without an explicit operator skip, the fresh-reviewer gate retains its
+    # stronger candidate/request/manifest validation instead of falling back
+    # to the generic latest-process-result predicate.
+    if gate_id == FRESH_REVIEWER_EVALS_GATE:
+        try:
+            return fresh_eval_module.current_step_satisfied(
+                state,
+                expected_candidate=str(state["candidate"].get("sha256") or ""),
+            )
+        except (KeyError, TypeError, fresh_eval_module.FreshEvalError):
+            return False
     if gate_id.startswith("stack:"):
         runs = state["steps"].get(gate_id)
         if not isinstance(runs, list) or not runs:
@@ -16217,6 +16243,31 @@ def _gate_satisfied(state: Mapping[str, Any], gate_id: str) -> bool:
     return _latest_current_pass(state, gate_id)
 
 
+def _fresh_reviewer_evals_required(
+    ctx: CommandContext, state: Mapping[str, Any]
+) -> bool:
+    """Derive fresh-eval applicability from the pinned base policy and tree pair.
+
+    A malformed/unreadable trigger derivation remains required for a control
+    candidate so the dedicated gate can surface its exit-2 INVALID result.  It
+    must never degrade into an untriggered fast path.
+    """
+
+    if not bool(state.get("tier", {}).get("control")):
+        return False
+    policy = ctx.policy or _policy_for_state(ctx, state)
+    try:
+        trigger = fresh_eval_module.derive_trigger(
+            ctx.repo.candidate_context(),
+            policy,
+            state["candidate"],
+            tuple(str(path) for path in state.get("paths", ())),
+        )
+    except (KeyError, TypeError, fresh_eval_module.FreshEvalError):
+        return True
+    return fresh_eval_module.trigger_required(trigger)
+
+
 def _required_steps(ctx: CommandContext, state: Mapping[str, Any]) -> list[str]:
     policy = ctx.policy or _policy_for_state(ctx, state)
     result: list[str] = []
@@ -16233,6 +16284,8 @@ def _required_steps(ctx: CommandContext, state: Mapping[str, Any]) -> list[str]:
     result.append("secret-scan")
     if state["tier"].get("control"):
         result.append("strict-evals")
+        if _fresh_reviewer_evals_required(ctx, state):
+            result.append(FRESH_REVIEWER_EVALS_GATE)
     return result
 
 
@@ -18641,6 +18694,9 @@ __all__ = [
     'FENCED_CHILD_DRAIN_SECONDS',
     'FENCED_CHILD_REAP_SECONDS',
     'FENCED_CHILD_STOP_GRACE_SECONDS',
+    'FRESH_REVIEWER_EVALS_GATE',
+    'FRESH_REVIEWER_EVALS_REQUESTED_EVENT',
+    'FRESH_REVIEWER_EVALS_REQUESTS',
     'FencedChildSurvived',
     'FencedProcessResult',
     'INACTIVE_SECONDS',
@@ -18730,6 +18786,7 @@ __all__ = [
     '_fence_death_proof',
     '_fence_matches_owner',
     '_forge_command',
+    '_fresh_reviewer_evals_required',
     '_gate_one_complete',
     '_gate_satisfied',
     '_group_probe',

@@ -102,7 +102,7 @@ class RunEvalsTests(ShellScriptTestCase):
             self.assertIn(f"PASS {fixture_id}", result.stdout)
         self.assertIn("tasks=3 pass=3 fail=0 pending=0 malformed=0 strict=0", result.stdout)
 
-    def test_flipped_seed_baseline_is_a_regression_with_exit_one(self) -> None:
+    def test_flipped_seed_baseline_is_a_recorded_pair_mismatch_with_exit_one(self) -> None:
         self.write_seed_suite(overrides={"review-passes-clean-change": "BLOCK"})
 
         result = self.run_script(RUN_EVALS)
@@ -113,6 +113,38 @@ class RunEvalsTests(ShellScriptTestCase):
             result.stdout,
         )
         self.assertIn("tasks=3 pass=2 fail=1 pending=0 malformed=0 strict=0", result.stdout)
+
+    def test_recorded_baseline_integrity_never_launches_the_named_agent(self) -> None:
+        self.write_fixture("recorded-only", expected="PASS", result="PASS")
+        fake_bin = self.repo / "fake-bin"
+        fake_bin.mkdir()
+        launch_marker = self.repo / "reviewer-launched"
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text(
+            "#!/bin/sh\n: > \"${FORGE_EVAL_LAUNCH_MARKER}\"\nexit 97\n",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+
+        result = self.run_script(
+            RUN_EVALS,
+            env_overrides={
+                "FORGE_EVAL_LAUNCH_MARKER": str(launch_marker),
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                "STRICT": "1",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            result.stdout,
+            "PASS recorded-only\n"
+            "----\n"
+            "tasks=1 pass=1 fail=0 pending=0 malformed=0 strict=1\n"
+            "OK (no regressions in recorded results)\n",
+        )
+        self.assertFalse(launch_marker.exists())
 
     def test_matching_pass_block_and_flag_baselines_exit_zero(self) -> None:
         self.write_fixture("clean-review", expected="PASS", result="PASS")
@@ -134,7 +166,7 @@ class RunEvalsTests(ShellScriptTestCase):
         self.assertIn("tasks=3 pass=3 fail=0 pending=0 malformed=0 strict=0", result.stdout)
         self.assertTrue(result.stdout.rstrip().endswith("OK (no regressions in recorded results)"))
 
-    def test_flipped_baseline_is_a_regression_with_exit_one(self) -> None:
+    def test_flipped_baseline_is_a_recorded_pair_mismatch_with_exit_one(self) -> None:
         self.write_fixture("clean-review", expected="PASS", result="BLOCK")
 
         result = self.run_script(RUN_EVALS)

@@ -72,6 +72,16 @@ cadence: 14d
 | Path pattern |
 |---|
 <!-- FORGE:REGION trigger-paths END -->
+<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->
+| control | path patterns |
+|---|---|
+| constitution | rules/** |
+| agent-prompt-template | agents/**, system/codex/prompts/**, .claude/agents/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| execpolicy | system/codex/rules/**, .codex/rules/** |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| commit-review-prompt | skills/commit/SKILL.md |
+<!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 """
 
 FLAT_GATE1 = "```bash\n" + FLAT_CELL + "\n```"
@@ -258,6 +268,20 @@ class HelpTextTests(unittest.TestCase):
         )
         self.assertEqual(options.run_id, "run-1")
         self.assertEqual(remaining, ["commit", "start", "--paths", "a", "--task", "task-01"])
+
+    def test_fresh_gate_identifier_cannot_change_help_bytes(self) -> None:
+        arguments = (["--help"], ["gate", "--help"], ["gate", "run", "--help"])
+        expected = [self._help(list(argv)) for argv in arguments]
+
+        with mock.patch.object(
+            CLI.chain_core,
+            "FRESH_REVIEWER_EVALS_GATE",
+            "disabled-fresh-gate-identifier",
+        ):
+            observed = [self._help(list(argv)) for argv in arguments]
+
+        self.assertEqual(observed, expected)
+        self.assertTrue(all("fresh-reviewer-evals" not in text for text in expected))
 
 
 if __name__ == "__main__":

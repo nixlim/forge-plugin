@@ -16,9 +16,10 @@ the chain, set `policy_sha` to the full result of `git rev-parse HEAD`, load the
 `git show "${policy_sha}:forge-project.md"`, and use only those returned bytes for every policy read
 in Steps 1–4, including classification, executable commands, changelog policy, review context,
 invariants, `risk-tiers`, its fixed `FORGE:DEPENDENCY-MANIFEST-PATHS` block, `trigger-paths`, and
-`file-categories`. Never open the working-tree `forge-project.md`, a rendered copy, or duplicated
-defaults for policy. Keep the full `policy_sha` with the gate evidence. If HEAD changes before the
-commit, discard the snapshot and restart the chain; never relabel an older snapshot as current.
+`file-categories`, and `reviewer-facing-eval-triggers`. Never open the working-tree
+`forge-project.md`, a rendered copy, or duplicated defaults for policy. Keep the full `policy_sha`
+with the gate evidence. If HEAD changes before the commit, discard the snapshot and restart the
+chain; never relabel an older snapshot as current.
 Before Step 1, require the committed `file-categories`, `stack-validations`, and
 `gate1-test-command` regions to contain no `forge-init:` sentinel. For a missing committed file,
 missing region, or unfilled region, print `forge: <region> not configured — run /forge:init` with
@@ -77,8 +78,9 @@ Do not use it to authorize a gate. Final tier derivation occurs from the exact s
 Step 4, where gate-time classification may promote this declaration but can never demote it.
 
 If any target is `control`, classify the whole commit as control-class. Control-class work is
-`gated-approval`, runs the evaluation harness in Step 2, uses `review-final` in Step 4, and never
-commits autonomously.
+`gated-approval`, runs Recorded-baseline integrity in Step 2, runs Candidate-bound fresh reviewer
+evaluation after the Step 4 snapshot when the authenticated trigger matches, uses `review-final`
+in Step 4, and never commits autonomously.
 
 ## Step 2 — Validate
 
@@ -148,25 +150,33 @@ stable non-secret finding/disposition code as `--reason`. A clean sensor result 
 advisory disposition emits no assertion event. Event emission is advisory and occurs only after
 the sensor result is preserved; an emitter failure never changes Step 2's result or exit status.
 
-For a control-class commit, additionally run:
+For every control-class commit, additionally run Recorded-baseline integrity in strict mode:
 
 ```bash
 STRICT=1 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"
 ```
 
-An empty or malformed evaluation suite, pending result, or regression blocks the commit. Strict
-evaluation is mandatory when a control-class change touches an agent prompt template, the review
-constitution, model/effort/sandbox routing, execpolicy rules, or a Codex or Claude model/provider
-version.
+An empty or malformed evaluation suite, missing result, or mismatched expected/result pair blocks
+the commit. This mechanical layer proves only that the committed suite is nonempty and structurally
+valid and that its recorded pairs agree; it does not launch an agent or claim that a reviewer still
+produces the expected judgment. It is mandatory for every control-class candidate and no user skip
+directive covers it.
+
+Candidate-bound fresh reviewer evaluation is a separate Gate-2 requirement. Its applicability can
+be decided only after Step 4 creates the v2 snapshot. The later Step 4 procedure derives that
+decision solely from the snapshot's exact immutable path set and the authenticated
+`reviewer-facing-eval-triggers` region; this skill must not restate, reconstruct, or maintain a
+second trigger path list.
 
 When an explicitly identified run is open, append one journal `verification` for every validation
 execution. Follow `${CLAUDE_PLUGIN_ROOT}/docs/orchestration-contract.md` and DM-001. Use a criterion
 beginning exactly `gate-1: ` for project-test executions. Use one beginning exactly `gate-2: ` for
-lint, format, static-analysis, type, build, and evaluation-harness executions. If one configured
-command covers both concerns, append both gate verifications against that same command, with
-evidence specific to each concern. Record the exact command in `check`, the real result and exit
-evidence, and append a later passing recheck after any failed execution. Do not fabricate or
-collapse distinct gate executions.
+lint, format, static-analysis, type, build, Recorded-baseline integrity, and Candidate-bound fresh
+reviewer evaluation executions. A fresh-evaluation verification criterion is exactly
+`gate-2: fresh reviewer evaluation`. If one configured command covers both concerns, append both
+gate verifications against that same command, with evidence specific to each concern. Record the
+exact command in `check`, the real result and exit evidence, and append a later passing recheck after
+any failed execution. Do not fabricate or collapse distinct gate executions.
 
 ## Step 3 — Apply the Changelog Policy
 
@@ -326,6 +336,29 @@ path while leaving it staged. Before the scanner and again before reviewer launc
 artifact's byte count and SHA-256 to equal the snapshot metadata; a changed artifact restarts Step
 4. For an explicitly identified run, copy those exact verified bytes into that run's execution
 directory before citing them. Otherwise remove the temporary artifact when the attempt terminates.
+
+After the immutable artifact passes the secret scan, derive fresh-evaluation applicability with the
+shared policy parser and evaluator. Supply only the pinned `policy_sha` policy bytes and the exact
+bytewise-sorted `snapshot.paths`; never use target arguments, `git status`, working-tree paths, or a
+locally duplicated pattern list. A missing or malformed authenticated
+`reviewer-facing-eval-triggers` region blocks every control-class chain. For the fixed plugin-owned
+first-policy bootstrap, where no authenticated base region exists, treat applicability as
+unconditionally true and run the complete supported fresh-review fixture set.
+
+When the derivation returns matches, report the matched control row names sourced from that result,
+not a restated list of their path patterns, and run exactly one `fresh-reviewer-evals` Gate-2 suite
+request for this candidate generation. Require its canonical manifest to validate and its outcome
+to be `PASS` while naming this snapshot's authorization ID, object format, tree OID, base commit,
+review-diff digest, and byte count. Exit 1 is a reviewer-verdict mismatch and blocks this generation;
+exit 2, absent evidence, stale or foreign binding, an unavailable reviewer, or any other non-PASS
+result fails closed. An unchanged candidate must not rerun a complete mismatch to seek a different
+judgment. A changed candidate restarts Step 4 and receives a new snapshot and request.
+
+This fresh suite is distinct from both Recorded-baseline integrity and the one binding reviewer
+selected below. Neither can satisfy the other. `fresh-reviewer-evals` follows the ordinary
+mechanical-gate skip rule: only explicit operator direction durably recorded on the current
+candidate's chain may waive the PASS requirement above; no fast classification, broad
+user-directed step skip, CI result, later review, or approval can substitute for that record.
 
 Before selecting a reviewer, mechanically classify the snapshot's exact immutable path/tree
 evidence against the same committed policy snapshot. Invoke the shared classifier with the full
@@ -1086,11 +1119,15 @@ Map skip directives exactly:
 | `"just commit"` or `"skip everything"` | Steps 2–4 |
 
 Warn in the reply about every skipped step. Do not infer a skip from urgency or convenience. Steps
-1 and 5 are never skipped by these directives. Record every user-directed skip durably as soon as
-the directive is accepted, before the next step can fail, including a Step 2-only or Step 3-only
-skip. First deliver acceptance of the skip as the primary outcome, then make exactly one advisory
-`user_skip` event attempt through `emit-decision-event.py` using the v2 `authorization_id` when a
-snapshot already exists (otherwise `""`), the full `policy_sha`, surface `/forge:commit`, and a stable
+1 and 5 are never skipped by these directives. For a control-class candidate, the table never skips
+Recorded-baseline integrity or an applicable `fresh-reviewer-evals` Gate-2 step; run both required
+layers even when the containing step otherwise has a user-directed skip.
+Record every user-directed skip durably as soon as the directive is accepted, before the next step
+can fail, including a Step
+2-only or Step 3-only skip. First deliver acceptance of the skip as the primary outcome, then make
+exactly one advisory `user_skip` event attempt through `emit-decision-event.py` using the v2
+`authorization_id` when a snapshot already exists (otherwise `""`), the full `policy_sha`, surface
+`/forge:commit`, and a stable
 non-secret reason identifying the mapped skip. Event failure never retracts the accepted skip or
 changes any subsequent gate status. When an explicitly identified run is open, append a journal
 `decision` naming the user's directive, skipped steps, authorization ID when already available, and

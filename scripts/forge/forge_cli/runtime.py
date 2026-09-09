@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import selectors
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -85,6 +86,9 @@ class ProcessResult:
     output_digest: str
     timed_out: bool = False
     output_limit: bool = False
+    pid: int | None = None
+    process_group_id: int | None = None
+    process_group_survived: bool = False
 
 
 def _process_group_exists(process_group: int) -> bool:
@@ -138,99 +142,290 @@ def run_bounded(
     timeout: float = COMMAND_TIMEOUT_SECONDS,
     cap: int = OUTPUT_CAP_BYTES,
     verbose: bool = False,
+    input_bytes: bytes | None = None,
+    watched_path: Path | None = None,
+    watched_cap: int | None = None,
 ) -> ProcessResult:
-    """Run one process group while bounding combined output and wall time."""
+    """Run one process group while bounding output, one artifact, and wall time."""
+
+    if (watched_path is None) != (watched_cap is None) or (
+        watched_cap is not None and watched_cap < 0
+    ):
+        raise ValueError("watched path and cap must be supplied together")
+    watched_descriptor: int | None = None
+    watched_identity: tuple[int, int] | None = None
+
+    def open_watched_path() -> tuple[int, tuple[int, int]]:
+        assert watched_path is not None
+        descriptor = -1
+        try:
+            path_metadata = watched_path.lstat()
+            if (
+                not stat.S_ISREG(path_metadata.st_mode)
+                or path_metadata.st_uid != os.geteuid()
+            ):
+                raise OSError("watched path is not owner-controlled and regular")
+            descriptor = os.open(
+                watched_path,
+                os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+            )
+            metadata = os.fstat(descriptor)
+            identity = (metadata.st_dev, metadata.st_ino)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or (path_metadata.st_dev, path_metadata.st_ino) != identity
+            ):
+                raise OSError("watched path changed while it was opened")
+            return descriptor, identity
+        except OSError:
+            if descriptor >= 0:
+                os.close(descriptor)
+            raise
+
+    if watched_path is not None:
+        try:
+            watched_descriptor, watched_identity = open_watched_path()
+            metadata = os.fstat(watched_descriptor)
+        except OSError as exc:
+            raise ValueError("watched path is unavailable") from exc
+        if metadata.st_size > int(watched_cap):
+            os.close(watched_descriptor)
+            watched_descriptor = None
+            raise ValueError("watched path is not a bounded regular file")
+
+    def watch_exceeded() -> bool:
+        nonlocal watched_descriptor, watched_identity
+        if watched_descriptor is None or watched_path is None:
+            return False
+        try:
+            descriptor_metadata = os.fstat(watched_descriptor)
+            path_metadata = watched_path.lstat()
+        except OSError:
+            return True
+        if (
+            not stat.S_ISREG(descriptor_metadata.st_mode)
+            or descriptor_metadata.st_uid != os.geteuid()
+            or descriptor_metadata.st_size > int(watched_cap)
+            or not stat.S_ISREG(path_metadata.st_mode)
+            or path_metadata.st_uid != os.geteuid()
+        ):
+            return True
+        path_identity = (path_metadata.st_dev, path_metadata.st_ino)
+        if path_identity == watched_identity:
+            return False
+
+        # ``codex exec --output-last-message`` may publish its final message
+        # with an atomic rename.  Reopen the replacement without following a
+        # symlink, prove the guarded name and descriptor still identify the
+        # same owner-controlled regular file, and continue enforcing the cap
+        # against that new inode.  Any ambiguous replacement remains a hard
+        # process-bound violation.
+        try:
+            replacement, replacement_identity = open_watched_path()
+            replacement_metadata = os.fstat(replacement)
+        except OSError:
+            return True
+        if replacement_metadata.st_size > int(watched_cap):
+            os.close(replacement)
+            return True
+        previous = watched_descriptor
+        watched_descriptor = replacement
+        watched_identity = replacement_identity
+        os.close(previous)
+        return False
+
+    def truncate_watched_evidence() -> None:
+        if watched_descriptor is None or watched_path is None:
+            return
+        retained = int(watched_cap) + 1
+        try:
+            if os.fstat(watched_descriptor).st_size > retained:
+                os.ftruncate(watched_descriptor, retained)
+        except OSError:
+            pass
+        try:
+            path_metadata = watched_path.lstat()
+        except OSError:
+            return
+        if (
+            not stat.S_ISREG(path_metadata.st_mode)
+            or path_metadata.st_uid != os.geteuid()
+            or (path_metadata.st_dev, path_metadata.st_ino) == watched_identity
+        ):
+            return
+        replacement: int | None = None
+        try:
+            replacement = os.open(
+                watched_path,
+                os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+            )
+            replacement_metadata = os.fstat(replacement)
+            if (
+                stat.S_ISREG(replacement_metadata.st_mode)
+                and replacement_metadata.st_uid == os.geteuid()
+                and (
+                    replacement_metadata.st_dev,
+                    replacement_metadata.st_ino,
+                )
+                == (path_metadata.st_dev, path_metadata.st_ino)
+                and replacement_metadata.st_size > retained
+            ):
+                os.ftruncate(replacement, retained)
+        except OSError:
+            pass
+        finally:
+            if replacement is not None:
+                os.close(replacement)
 
     started = time.monotonic()
-    process = subprocess.Popen(
-        list(argv),
-        cwd=str(cwd),
-        env=dict(env) if env is not None else None,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    assert process.stdout is not None
-    descriptor = process.stdout.fileno()
-    os.set_blocking(descriptor, False)
-    selector = selectors.DefaultSelector()
-    selector.register(descriptor, selectors.EVENT_READ)
-    kept = bytearray()
-    digest = hashlib.sha256()
-    total = 0
-    timed_out = False
-    output_limit = False
-    eof = False
     try:
-        while not eof:
-            remaining = timeout - (time.monotonic() - started)
-            if remaining <= 0:
-                timed_out = True
-                _kill_process_group(process)
-                remaining = 0
-            events = selector.select(min(max(remaining, 0.0), 0.1))
-            if not events:
-                if timed_out:
-                    break
-                if process.poll() is not None:
+        process = subprocess.Popen(
+            list(argv),
+            cwd=str(cwd),
+            env=dict(env) if env is not None else None,
+            stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except BaseException:
+        if watched_descriptor is not None:
+            os.close(watched_descriptor)
+        raise
+    writer: threading.Thread | None = None
+    selector: selectors.BaseSelector | None = None
+    watched_limit = False
+    try:
+        try:
+            if input_bytes is not None:
+                assert process.stdin is not None
+
+                def write_input() -> None:
                     try:
-                        chunk = os.read(descriptor, 8192)
-                    except BlockingIOError:
-                        continue
-                    if not chunk:
-                        eof = True
-                        break
-                    events = [(None, None)]
-                else:
-                    continue
-            if events and events[0][0] is None:
-                # The post-exit drain above already populated ``chunk``.
-                chunks = [chunk]
-            else:
-                chunks = []
-                while True:
-                    try:
-                        part = os.read(descriptor, 8192)
-                    except BlockingIOError:
-                        break
-                    if not part:
-                        eof = True
-                        break
-                    chunks.append(part)
-            for part in chunks:
-                digest.update(part)
-                total += len(part)
-                if len(kept) < cap:
-                    kept.extend(part[: cap - len(kept)])
-                if verbose:
-                    sys.stderr.write(part.decode("utf-8", "replace"))
-                    sys.stderr.flush()
-                if total > cap and not output_limit:
+                        view = memoryview(input_bytes)
+                        while view:
+                            written = process.stdin.write(view)
+                            if written is None or written <= 0:
+                                break
+                            view = view[written:]
+                        process.stdin.flush()
+                    except (BrokenPipeError, OSError, ValueError):
+                        pass
+                    finally:
+                        try:
+                            process.stdin.close()
+                        except OSError:
+                            pass
+
+                pending_writer = threading.Thread(target=write_input, daemon=True)
+                pending_writer.start()
+                writer = pending_writer
+            assert process.stdout is not None
+            descriptor = process.stdout.fileno()
+            os.set_blocking(descriptor, False)
+            selector = selectors.DefaultSelector()
+            selector.register(descriptor, selectors.EVENT_READ)
+            kept = bytearray()
+            digest = hashlib.sha256()
+            total = 0
+            timed_out = False
+            output_limit = False
+            eof = False
+            while not eof:
+                if not watched_limit and watch_exceeded():
+                    watched_limit = True
                     output_limit = True
                     _kill_process_group(process)
-            if output_limit:
-                # Drain whatever was already in the pipe, without waiting on
-                # the terminated producer.
-                if process.poll() is not None and not chunks:
-                    break
-        try:
-            returncode = process.wait(timeout=0.5)
-        except subprocess.TimeoutExpired:
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    timed_out = True
+                    _kill_process_group(process)
+                    remaining = 0
+                events = selector.select(min(max(remaining, 0.0), 0.1))
+                if not events:
+                    if timed_out:
+                        break
+                    if process.poll() is not None:
+                        try:
+                            chunk = os.read(descriptor, 8192)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            eof = True
+                            break
+                        events = [(None, None)]
+                    else:
+                        continue
+                if events and events[0][0] is None:
+                    # The post-exit drain above already populated ``chunk``.
+                    chunks = [chunk]
+                else:
+                    chunks = []
+                    while True:
+                        try:
+                            part = os.read(descriptor, 8192)
+                        except BlockingIOError:
+                            break
+                        if not part:
+                            eof = True
+                            break
+                        chunks.append(part)
+                for part in chunks:
+                    digest.update(part)
+                    total += len(part)
+                    if len(kept) < cap:
+                        kept.extend(part[: cap - len(kept)])
+                    if verbose:
+                        sys.stderr.write(part.decode("utf-8", "replace"))
+                        sys.stderr.flush()
+                    if total > cap and not output_limit:
+                        output_limit = True
+                        _kill_process_group(process)
+                if output_limit:
+                    # Drain whatever was already in the pipe, without waiting on
+                    # the terminated producer.
+                    if process.poll() is not None and not chunks:
+                        break
+            if not watched_limit and watch_exceeded():
+                watched_limit = True
+                output_limit = True
+                _kill_process_group(process)
+            try:
+                returncode = process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                _kill_process_group(process)
+                returncode = process.wait()
+        finally:
+            if watched_limit:
+                truncate_watched_evidence()
+            if selector is not None:
+                selector.close()
+            if process.stdout is not None:
+                process.stdout.close()
+            if writer is not None:
+                writer.join(timeout=0.5)
+            if watched_descriptor is not None:
+                os.close(watched_descriptor)
+        process_group_survived = _process_group_exists(process.pid)
+        if process_group_survived:
             _kill_process_group(process)
-            returncode = process.wait()
-    finally:
-        selector.close()
-        process.stdout.close()
-    return ProcessResult(
-        argv=list(argv),
-        returncode=returncode,
-        duration_seconds=time.monotonic() - started,
-        output=bytes(kept),
-        output_digest=digest.hexdigest(),
-        timed_out=timed_out,
-        output_limit=output_limit,
-    )
+        return ProcessResult(
+            argv=list(argv),
+            returncode=returncode,
+            duration_seconds=time.monotonic() - started,
+            output=bytes(kept),
+            output_digest=digest.hexdigest(),
+            timed_out=timed_out,
+            output_limit=output_limit,
+            pid=process.pid,
+            process_group_id=process.pid,
+            process_group_survived=process_group_survived,
+        )
+    except BaseException:
+        _kill_process_group(process)
+        process.wait()
+        raise
 
 
 def _fast_mechanical_skips(state: Mapping[str, Any]) -> list[str]:

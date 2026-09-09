@@ -12,12 +12,15 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tests._cli_loader import package_module
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "forge" / "install.sh"
 TOOLS = ROOT / "scripts" / "codex_orch_tools.py"
 ARCHIVER = ROOT / "scripts" / "forge" / "archive-run.py"
 FAKE_CODEX = ROOT / "tests" / "replay" / "long-run-001" / "fake_codex.py"
 PLAIN_KEYS = {"issues", "non_passing_verifications", "ok", "warnings"}
+POLICY = package_module("policy")
 
 
 def utc_now() -> str:
@@ -285,6 +288,7 @@ composer.lock
 retention: forever
 event-retention: 400d""",
             "trigger-paths": "No trigger paths configured.",
+            "reviewer-facing-eval-triggers": POLICY.REVIEWER_EVAL_TRIGGER_TABLE,
         }
         for name, body in regions.items():
             pattern = re.compile(
@@ -299,6 +303,15 @@ event-retention: 400d""",
             self.assertEqual(replacements, 1, f"missing init region {name}")
         self.assertNotIn("forge-init:", project)
         project_path.write_text(project, encoding="utf-8")
+        self.install()
+        project = project_path.read_text(encoding="utf-8")
+        agents = (self.repo / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            agents.split("<!-- FORGE:BEGIN -->\n", 1)[1].split(
+                "<!-- FORGE:END -->", 1
+            )[0],
+            project,
+        )
 
         task_dir = self.repo / ".forge" / "evals" / "tasks"
         for seed in sorted((ROOT / "system" / "seeds" / "eval-tasks").glob("*.template.md")):

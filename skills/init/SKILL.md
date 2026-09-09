@@ -52,8 +52,11 @@ Complete every precondition before running the installer.
    state, and region lines, then inspect `forge-project.md` directly. A region is unfilled when its
    body contains `forge-init:` and filled otherwise. The file is authoritative: do not infer filled
    state only from the manifest. Report filled and unfilled regions. Preserve filled bodies
-   byte-for-byte and process only unfilled regions unless the user explicitly requests a change.
-   Never overwrite an existing eval fixture or `.result` baseline.
+   byte-for-byte and process only unfilled regions unless the user explicitly requests a change,
+   except for the two fixed plugin-owned refresh surfaces: refresh only the delimited dependency
+   manifest block inside `risk-tiers`, and refresh a noncanonical
+   `reviewer-facing-eval-triggers` body from the current template. Never overwrite an existing eval
+   fixture or `.result` baseline.
 
    For upstream migration, before continuing, enumerate every live `FORGE:REGION <name> BEGIN`
    marker with the helper's read-only plan mode:
@@ -124,7 +127,7 @@ Complete every precondition before running the installer.
    the existing `.forge-manifest` to be well formed before making any target-repository mutation:
    require exactly one nonempty value for each single-valued DM-005 key, exact
    `forge_version: 1`, exactly one completion line whose value is `true` or `false`, and unique
-   `region:` values drawn only from the fourteen defined regions. Cross-check its region lines against
+   `region:` values drawn only from the fifteen defined regions. Cross-check its region lines against
    the filled bodies reported in step 2; a malformed, duplicate, unknown, or inconsistent value
    stops init without changing the manifest.
 
@@ -257,7 +260,9 @@ At minimum:
    citations. Use churn, coupling, and dependency evidence to propose an always-run blast-radius
    suite. Separately propose `trigger-paths` only from positive repository-relative Git pathspec
    globs that can be validated mechanically against the repository; never copy prose trigger rows
-   into executable path policy.
+   into executable path policy. Do not mine, propose, or customize reviewer-facing evaluation
+   trigger paths: `reviewer-facing-eval-triggers` is a fixed plugin-owned table and its managed
+   region is the sole maintained source.
 8. Confirm the drift policy or retain the conservative defaults: `cadence: 14d`,
    `retention: forever`, and `event-retention: 400d`.
 9. When history shows merge commits or a PR merge workflow, surface its conflict with Forge's
@@ -277,7 +282,7 @@ candidate install artifact, not an executable policy source. Preserve every
 For each region still containing a `forge-init:` comment, replace its body and remove that comment.
 Do not rewrite a carried-forward filled body on re-init.
 
-End with all fourteen regions filled:
+End with all fifteen regions filled:
 
 1. `project-overview`
 2. `file-categories`
@@ -293,6 +298,7 @@ End with all fourteen regions filled:
 12. `risk-tiers`
 13. `drift-config`
 14. `trigger-paths`
+15. `reviewer-facing-eval-triggers`
 
 Make every configured validation executable in this repository. Include the confirmed targeted
 test and always-run blast-radius suite in `gate1-test-command`. Use 3–5 evidenced review-focus
@@ -339,9 +345,22 @@ correctly ordered pair and do not edit its contents. Fill `drift-config` with ex
 repository-relative Git pathspec rows in `| Path pattern |` form; when none are evidenced, remove the
 sentinel and use exactly `No trigger paths configured.`
 
-Before re-running the installer, validate the complete candidate `mutation-testing` and `invariants`
-regions with fixed plugin-owned parsing and without executing any cell. Decode Markdown table escapes
-once, require the exact table headers and separators, and reject stray nonempty table content.
+The `reviewer-facing-eval-triggers` region is plugin-owned. Install the exact table shipped by the
+current template, including its row order, without adding a `forge-init:` sentinel or adapting its
+controls or path cells to the target repository. Do not reconstruct that table from this skill or
+any mined evidence. On re-init, compare an existing current-format body with that template: retain
+an exact match and refresh any noncanonical body, including a syntactically well-formed narrowed
+row. Missing/reordered region markers, a foreign region inventory, or any other structural defect
+still stops before mutation instead of being treated as an empty trigger set.
+
+Before re-running the installer, validate the complete candidate `mutation-testing` and
+`invariants` regions with fixed plugin-owned parsing and without executing any cell. Validate the
+`reviewer-facing-eval-triggers` marker pair and closed region inventory, record whether its body is
+the exact current template body, and let the installer refresh any noncanonical body before the
+shared policy parser admits it. The reviewer-facing table has no permissive or empty fallback after
+that refresh: acceptance requires exact equality with the canonical LF-terminated table, not only
+valid row shape or path grammar. Decode Markdown table escapes once where applicable, require the
+exact table headers and separators, and reject stray nonempty table content.
 Every invariant row must have exactly three nonempty logical cells, a one-line nonempty command, and
 an enforcement point exactly equal to `commit`, `merge`, or `hook`. An empty invariants region is
 valid. Every configured mutation row must have four nonempty logical cells, one-line nonempty
@@ -362,7 +381,9 @@ Repeat this fixed structural validation after the installer refresh and immediat
 the Phase 5 candidate. Candidate validation is not authority to execute a candidate command.
 
 After filling the regions, rerun the Phase 1 installer command. Its region merge must preserve all
-filled region bodies byte-for-byte while refreshing the AGENTS splice from the now-current full
+filled region bodies byte-for-byte except the two fixed plugin-owned refresh surfaces: it refreshes
+only the dependency-manifest block inside `risk-tiers` and a noncanonical
+`reviewer-facing-eval-triggers` body. It then refreshes the AGENTS splice from the now-current full
 `forge-project.md`. Verify the splice interior equals the complete rendered file, the CLAUDE import
 occurs once, and content outside the AGENTS markers still matches its pre-init bytes.
 
@@ -409,21 +430,23 @@ existing fixture. Never reuse the author as reviewer. Never overwrite an existin
 `.result`, and never edit a result merely to make a gate pass. Treat a launch error, missing verdict,
 or unexpected verdict as a failure to investigate.
 
-Run:
+Run Recorded-baseline integrity in strict mode:
 
 ```bash
 STRICT=1 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"
 ```
 
-Require strict exit 0 before Phase 5. Exit 1 or 2 stops init; report malformed, missing, pending, or
-regressing tasks without weakening their expectations.
+Require exit 0 before Phase 5. This command does not launch an agent; it proves only that the
+recorded fixture/result suite is nonempty and structurally valid and that every recorded pair agrees.
+Exit 1 or 2 stops init; report malformed, missing, pending, or mismatched pairs without
+weakening their expectations.
 
 ## Phase 5 — Self-review and manifest
 
 Treat the complete init output as a control-class change.
 
 1. Write or refresh `.forge-manifest` in this exact line-oriented shape, using the confirmed values
-   and one `region:` line for each of the fourteen filled regions, in DM-003 order:
+   and one `region:` line for each of the fifteen filled regions, in DM-003 order:
 
    ```text
    forge_version: 1
@@ -442,7 +465,7 @@ Treat the complete init output as a control-class change.
    This warning does not block initialization, but it must also be repeated in the Phase 6 approval
    summary. Do not mark the manifest complete yet.
 
-2. Run the strict suite and require exit 0:
+2. Run Recorded-baseline integrity in strict mode and require exit 0:
 
    ```bash
    STRICT=1 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"
@@ -469,8 +492,9 @@ Treat the complete init output as a control-class change.
    ```
 
    A match means at least one region is unfilled and blocks completion. Also repeat the fixed
-   `mutation-testing` and `invariants` structural validation from Phase 3 and verify again that the
-   AGENTS splice interior equals the full rendered `forge-project.md`.
+   `mutation-testing`, `invariants`, and `reviewer-facing-eval-triggers` structural validation from
+   Phase 3 and verify again that the AGENTS splice interior equals the full rendered
+   `forge-project.md`.
 
    On migration, also require the collision-free report named in Phase 1 to exist and be included in
    the frozen candidate, and enumerate its facts from the live disk again. Refuse to continue if it
@@ -500,7 +524,24 @@ Treat the complete init output as a control-class change.
    snapshot path, candidate ID, and selected implementation. The snapshot is immutable for the rest
    of this attempt. Any candidate-path mutation after this point invalidates the candidate.
 
-7. Spawn a fresh, read-only `review-final` agent and send that agent the exact frozen snapshot bytes
+7. Require Candidate-bound fresh reviewer evaluation before the binding review. Once the ordinary
+   coordinator has created this candidate's DM-012 v2 snapshot, derive applicability solely from
+   its exact immutable path set and the authenticated base-policy
+   `reviewer-facing-eval-triggers` region. Report the matched control row names returned by that
+   derivation rather than copying or reconstructing their patterns. When any row matches, require
+   the `fresh-reviewer-evals` Gate-2 step and its candidate-bound manifest to return a complete
+   `PASS`; missing, invalid, unavailable, mismatched, or stale evidence blocks init. No baseline
+   result, binding review, approval, or user skip substitutes for this gate.
+
+   A first-policy bootstrap has no authenticated base region. FR-083 and FR-103 specify its fresh
+   review as unconditionally applicable, but the fixed-authority bootstrap coordinator is not
+   implemented or authorized in this revision. Until a separately authorized future revision
+   supplies it, every bootstrap fresh-review request must refuse with
+   `forge: fresh reviewer eval evidence invalid: fixed first-policy fresh-evaluation coordinator is
+   unavailable` before candidate control or reviewer launch, and init must stop before
+   `review-final`. Never infer PASS or improvise an alternate launch path.
+
+8. Spawn a fresh, read-only `review-final` agent and send that agent the exact frozen snapshot bytes
    from `.forge/tmp/init-candidate.diff`, the reported `CANDIDATE_ID`, and project context loaded from
    `git show HEAD:forge-project.md`. On a first-policy bootstrap, use only FR-037's fixed plugin-owned
    bootstrap context; candidate command and prompt regions are untrusted diff content and must never
@@ -517,7 +558,9 @@ concise summary of:
 - files written, refreshed, skipped, and preserved as `.forge-new`;
 - every filled or byte-preserved region and its evidence;
 - the confirmed blast-radius suite and clean-tree Gate 1/stack-validation results;
-- every eval fixture, preserved or new baseline, normal and strict eval results;
+- every eval fixture, preserved or new baseline, and both baseline-establishment and
+  Recorded-baseline integrity results, plus the fresh-evaluation applicability, matched control row
+  names, and Candidate-bound fresh reviewer evaluation result;
 - both execpolicy decisions, the binding `review-final` verdict, the Codex trust caveat, and any
   residual risk;
 - the exact Phase 1 dcg integration result, including
@@ -556,11 +599,11 @@ After that first commit, require a clean tree and load policy only with
 `git show HEAD:forge-project.md`. Run FR-082's Gate 1 and stack calibration in an isolated clean
 checkout with the Phase 3 execution discipline. If it passes, propose a separate activation diff
 whose only semantic manifest change is exactly `init_completed: false` to
-`init_completed: true`. Run the ordinary control-class chain from committed policy, including strict
-evals and a fresh `review-final`, present that exact activation diff and candidate ID, and require a
-second explicit approval naming it. Only then may the ordinary control chain create the second
-commit. A first approval never authorizes activation, and committed false remains fail-closed after
-any stop.
+`init_completed: true`. Run the ordinary control-class chain from committed policy, including
+Recorded-baseline integrity, any applicable Candidate-bound fresh reviewer evaluation, and a fresh
+`review-final`. Present that exact activation diff and candidate ID. Require the second explicit approval
+naming it. Only then may the ordinary control chain create the second commit. A first
+approval never authorizes activation, and committed false remains fail-closed after any stop.
 
 For an upstream migration where Phase 0 found an already-committed `forge-project.md`, do not use the
 uncommitted re-init activation below. Apply FR-083's ordinary existing-policy rule: the explicit

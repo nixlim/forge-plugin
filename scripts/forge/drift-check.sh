@@ -60,6 +60,7 @@ REGION_ORDER = (
     "risk-tiers",
     "drift-config",
     "trigger-paths",
+    "reviewer-facing-eval-triggers",
 )
 DEDUPE_EVENTS = {
     "gate_commit",
@@ -964,13 +965,34 @@ def main() -> None:
     if eval_result.returncode != 0:
         code = "eval-regression" if eval_result.returncode == 1 else "eval-execution"
         if eval_result.returncode == 1:
-            checks.append(check("evals-strict", started, "finding", "STRICT evals found regressions"))
-            findings.append(finding("evals-strict", code, ["exit=1"], "STRICT evaluation regression", "CRITICAL"))
+            checks.append(check(
+                "evals-strict",
+                started,
+                "finding",
+                "Recorded-baseline integrity found a disagreement or missing result",
+            ))
+            findings.append(finding(
+                "evals-strict",
+                code,
+                ["exit=1"],
+                "Recorded-baseline integrity disagreement or missing result",
+                "CRITICAL",
+            ))
         else:
-            checks.append(check("evals-strict", started, "failed", "STRICT evals failed to execute"))
+            checks.append(check(
+                "evals-strict",
+                started,
+                "failed",
+                "Recorded-baseline integrity failed to execute",
+            ))
             emit(repo, now, policy_sha, checks, [], {"failure": code, "state": "failed"}, telemetry, 2)
     else:
-        checks.append(check("evals-strict", started, "passed", "STRICT evals passed"))
+        checks.append(check(
+            "evals-strict",
+            started,
+            "passed",
+            "Recorded-baseline integrity passed",
+        ))
 
     started = time.monotonic()
     try:

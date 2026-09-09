@@ -22,6 +22,14 @@ CONFIG_WARNING = (
     "(cadence: 14d, retention: forever, event-retention: 400d)"
 )
 STALE_WARNING = "forge: drift report stale — run /forge:drift"
+REVIEWER_EVAL_TRIGGER_TABLE = """| control | path patterns |
+|---|---|
+| constitution | rules/** |
+| agent-prompt-template | agents/**, system/codex/prompts/**, .claude/agents/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| execpolicy | system/codex/rules/**, .codex/rules/** |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| commit-review-prompt | skills/commit/SKILL.md |"""
 
 
 def region(name: str, body: str) -> str:
@@ -60,6 +68,7 @@ def policy_text(
         "drift-config": drift_config
         or "cadence: 14d\nretention: forever\nevent-retention: 400d",
         "trigger-paths": "Fixture trigger paths.",
+        "reviewer-facing-eval-triggers": REVIEWER_EVAL_TRIGGER_TABLE,
     }
     return "\n\n".join(region(name, body) for name, body in bodies.items()) + "\n"
 
@@ -313,7 +322,7 @@ class DriftCheckTests(unittest.TestCase):
                     ],
                     [
                         ("worktree-clean", "passed", "clean"),
-                        ("evals-strict", "passed", "STRICT evals passed"),
+                        ("evals-strict", "passed", "Recorded-baseline integrity passed"),
                         ("gate-1", "passed", "Gate 1 passed on clean tree"),
                         ("gate-2", "passed", "1 validations passed"),
                         ("invariant-sweep", "passed", "0 invariants passed"),
@@ -357,6 +366,35 @@ class DriftCheckTests(unittest.TestCase):
                     self.assertEqual(block.read_bytes(), marker)
                 else:
                     self.assertFalse(block.exists())
+
+    def test_recorded_baseline_pair_failure_is_labeled_without_fresh_review_claim(self) -> None:
+        fixture = self.fixture()
+
+        result = fixture.invoke(extra_env={"FORGE_TEST_EVAL_EXIT": "1"})
+
+        self.assertEqual(result.returncode, 1, result.stderr.decode())
+        summary = self.assert_canonical(fixture, result)
+        baseline_check = next(
+            item for item in summary["checks"] if item["check"] == "evals-strict"
+        )
+        self.assertEqual(
+            (baseline_check["outcome"], baseline_check["summary"]),
+            (
+                "finding",
+                "Recorded-baseline integrity found a disagreement or missing result",
+            ),
+        )
+        self.assertIn(
+            {
+                "check": "evals-strict",
+                "code": "eval-regression",
+                "evidence": ["exit=1"],
+                "severity": "CRITICAL",
+                "summary": "Recorded-baseline integrity disagreement or missing result",
+            },
+            summary["findings"],
+        )
+        self.assertNotIn("fresh reviewer", baseline_check["summary"].lower())
 
     def test_disabled_or_invalid_journal_extractor_forces_exit_two(self) -> None:
         unavailable = {
@@ -700,7 +738,10 @@ class DriftCheckTests(unittest.TestCase):
         result = fixture.invoke()
         self.assertEqual(result.returncode, 2)
         summary = self.assert_canonical(fixture, result)
-        self.assertFalse(fixture.eval_log.exists(), "STRICT evals ran despite dirty precondition")
+        self.assertFalse(
+            fixture.eval_log.exists(),
+            "Recorded-baseline integrity ran despite dirty precondition",
+        )
         self.assertEqual(summary["findings"], [])
         self.assertEqual(
             [{key: value for key, value in summary["checks"][0].items() if key != "duration_ms"}],
@@ -743,7 +784,10 @@ class DriftCheckTests(unittest.TestCase):
         result = fixture.invoke()
         self.assertEqual(result.returncode, 2)
         summary = self.assert_canonical(fixture, result)
-        self.assertFalse(fixture.eval_log.exists(), "STRICT evals ran after manifest deletion")
+        self.assertFalse(
+            fixture.eval_log.exists(),
+            "Recorded-baseline integrity ran after manifest deletion",
+        )
         self.assert_empty_journal_patterns(
             summary["journal_patterns"], available=False, failure="not-run"
         )
@@ -797,21 +841,32 @@ class DriftCheckTests(unittest.TestCase):
         self.assertEqual([item["check"] for item in summary["checks"]], ["worktree-clean"])
 
     def test_missing_region_is_reported_by_region_staleness_inventory(self) -> None:
-        fixture = self.fixture()
-        policy = (fixture.repo / "forge-project.md").read_text(encoding="utf-8")
-        begin = "<!-- FORGE:REGION project-overview BEGIN -->"
-        end = "<!-- FORGE:REGION project-overview END -->"
-        before, remainder = policy.split(begin, 1)
-        _body, after = remainder.split(end, 1)
-        policy = (before + after).lstrip("\n")
-        fixture.write("forge-project.md", policy)
-        fixture.write("AGENTS.md", "<!-- FORGE:BEGIN -->\n" + policy.rstrip("\n") + "\n<!-- FORGE:END -->\n")
-        fixture.commit("remove region")
-        result = fixture.invoke()
-        self.assertEqual(result.returncode, 1, result.stderr.decode())
-        summary = self.assert_canonical(fixture, result)
-        finding = next(item for item in summary["findings"] if item["code"] == "stale-policy-region")
-        self.assertIn("region-inventory", finding["evidence"])
+        for name in ("project-overview", "reviewer-facing-eval-triggers"):
+            with self.subTest(region=name):
+                fixture = DriftFixture(self.temp / name)
+                policy = (fixture.repo / "forge-project.md").read_text(encoding="utf-8")
+                begin = f"<!-- FORGE:REGION {name} BEGIN -->"
+                end = f"<!-- FORGE:REGION {name} END -->"
+                before, remainder = policy.split(begin, 1)
+                _body, after = remainder.split(end, 1)
+                policy = (before + after).lstrip("\n")
+                fixture.write("forge-project.md", policy)
+                fixture.write(
+                    "AGENTS.md",
+                    "<!-- FORGE:BEGIN -->\n"
+                    + policy.rstrip("\n")
+                    + "\n<!-- FORGE:END -->\n",
+                )
+                fixture.commit(f"remove {name} region")
+                result = fixture.invoke()
+                self.assertEqual(result.returncode, 1, result.stderr.decode())
+                summary = self.assert_canonical(fixture, result)
+                finding = next(
+                    item
+                    for item in summary["findings"]
+                    if item["code"] == "stale-policy-region"
+                )
+                self.assertIn("region-inventory", finding["evidence"])
 
     def test_mutation_survivor_exit_one_matches_literal_finding_shape(self) -> None:
         for block_present in (False, True):
@@ -884,7 +939,7 @@ class DriftCheckTests(unittest.TestCase):
         )
         expected_checks = [
             ("worktree-clean", "passed", "clean"),
-            ("evals-strict", "passed", "STRICT evals passed"),
+            ("evals-strict", "passed", "Recorded-baseline integrity passed"),
             ("gate-1", "passed", "Gate 1 passed on clean tree"),
             ("gate-2", "passed", "1 validations passed"),
             ("invariant-sweep", "failed", "runner failed"),
@@ -1394,7 +1449,11 @@ class DriftCheckTests(unittest.TestCase):
                     [(item["check"], item["outcome"], item["summary"]) for item in summary["checks"]],
                     [
                         ("worktree-clean", "passed", "clean"),
-                        ("evals-strict", "failed", "STRICT evals failed to execute"),
+                        (
+                            "evals-strict",
+                            "failed",
+                            "Recorded-baseline integrity failed to execute",
+                        ),
                     ],
                 )
                 self.assertEqual(

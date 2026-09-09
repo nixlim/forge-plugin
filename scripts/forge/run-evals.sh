@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Offline evaluation harness for Forge AI components.
+# Recorded-baseline integrity for Forge evaluation fixtures.
 #
-# Exit codes: 0 = no regressions, 1 = a golden task regressed (or STRICT=1
-# with a pending result), 2 = a fixture is malformed or the suite is empty.
+# Exit codes: 0 = all recorded pairs agree, 1 = a pair disagrees (or STRICT=1
+# finds a missing result), 2 = a fixture is malformed or the suite is empty.
+# This layer never launches the named agent; fresh judgments use the separate
+# Candidate-bound fresh reviewer evaluation gate.
 # forge: modified from upstream — fixtures are repo-local under .forge/evals/tasks
 set -uo pipefail
 

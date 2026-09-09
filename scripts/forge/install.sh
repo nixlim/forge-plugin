@@ -253,7 +253,9 @@ validate_and_merge_regions() {
             risk-tiers
             drift-config
             trigger-paths
+            reviewer-facing-eval-triggers
         );
+        my @predecessor_required = @required[0 .. 13];
         my @legacy_required = @required[0 .. 8];
         my %required = map { $_ => 1 } @required;
         for my $name (@required) {
@@ -290,9 +292,11 @@ validate_and_merge_regions() {
             }
             my $previous_inventory = join("\0", @previous_order);
             my $current_inventory = join("\0", @required);
+            my $predecessor_inventory = join("\0", @predecessor_required);
             my $legacy_inventory = join("\0", @legacy_required);
             die "existing forge-project.md has missing or reordered regions\n"
                 unless $previous_inventory eq $current_inventory
+                    || $previous_inventory eq $predecessor_inventory
                     || $previous_inventory eq $legacy_inventory;
             my %filled = map {
                 $_ => $previous_regions->{$_}
@@ -310,6 +314,17 @@ validate_and_merge_regions() {
                     $fresh_dependency_block,
                 );
                 $filled{"risk-tiers"} = $body;
+            }
+
+            # This table is plugin-owned fixed policy.  A noncanonical filled
+            # body is refreshed from the template instead of being carried
+            # forward, including a well-formed narrowed row.
+            if (
+                exists $filled{"reviewer-facing-eval-triggers"}
+                && $filled{"reviewer-facing-eval-triggers"}
+                    ne $fresh_regions->{"reviewer-facing-eval-triggers"}
+            ) {
+                delete $filled{"reviewer-facing-eval-triggers"};
             }
 
             $fresh =~ s{(<!-- FORGE:REGION (\S+) BEGIN -->).*?(<!-- FORGE:REGION \2 END -->)}{

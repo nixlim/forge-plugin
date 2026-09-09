@@ -172,6 +172,9 @@ class MergeStoreFixture(unittest.TestCase):
             stack_commands=[],
             invariants=[],
             changelog=None,
+            reviewer_eval_triggers=(),
+            reviewer_eval_region_digest=None,
+            reviewer_eval_trigger_error=None,
         )
         repository = CLI.Repository(self.root)
         with mock.patch.object(RUNTIME, "utc_now", return_value=fixed):

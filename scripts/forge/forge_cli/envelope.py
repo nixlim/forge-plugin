@@ -138,9 +138,17 @@ class Outcome:
     next_required_step: str = "none — chain closed"
     evidence_refs: tuple[str, ...] = ()
     schema: str = OUTPUT_SCHEMA
+    # Some gate programs distinguish an invalid/unverifiable result (2) from
+    # an ordinary non-pass (1) while still using the closed reason corpus in
+    # the public envelope.  This transport-only value is deliberately omitted
+    # from ``envelope()`` so the forge-cli/1 and forge-cli/2 schemas do not
+    # change.
+    exit_code_override: int | None = None
 
     @property
     def exit_code(self) -> int:
+        if self.exit_code_override in {1, 2}:
+            return self.exit_code_override
         if self.reason_code.value == "ok" and self.ok:
             return 0
         if self.reason_code.value == "frozen-chain":
@@ -178,6 +186,7 @@ class Refusal(Exception):
         chain: Mapping[str, Any] | None = None,
         evidence_refs: Iterable[str] = (),
         schema: str | None = None,
+        exit_code_override: int | None = None,
     ) -> None:
         super().__init__(message)
         if reason_code.value in {"ok", "frozen-chain"}:
@@ -190,6 +199,9 @@ class Refusal(Exception):
         self.next_required_step = next_required_step or self.remediation
         self.chain = chain
         self.evidence_refs = tuple(evidence_refs)
+        if exit_code_override not in {None, 1, 2}:
+            raise ValueError("refusal exit-code override must be 1 or 2")
+        self.exit_code_override = exit_code_override
         chain_is_revision9 = bool(
             isinstance(chain, Mapping)
             and (
@@ -219,6 +231,7 @@ class Refusal(Exception):
             next_required_step=self.next_required_step,
             evidence_refs=self.evidence_refs,
             schema=self.schema,
+            exit_code_override=self.exit_code_override,
         )
 
 

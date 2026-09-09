@@ -235,6 +235,7 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
             {"scripts/tool.py": ["review-coding"]},
             candidate_header,
             b"fixture controlling policy\n",
+            b"fixture fresh reviewer evidence\n",
             candidate_diff,
         )
         contexts = [

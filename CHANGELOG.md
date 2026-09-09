@@ -10,6 +10,19 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Targeted fresh-execution evals (bead forge-plugin-7p4, external-review
+  finding 5, operator option c): the recorded eval runner is honestly relabeled
+  recorded-baseline integrity, and a new fresh-reviewer-evals chain gate runs
+  real reviewer judgments on the nine review-role fixtures — in-session against
+  a materialized copy of the exact candidate tree, compared by verdict, bound
+  to the forge-commit-candidate/2 identity in a forge-fresh-reviewer-evals/1
+  manifest under the chain directory — whenever the staged candidate matches
+  the new committed reviewer-facing-eval-triggers policy region (a fixed
+  plugin-owned table); trigger-region structural failures surface as the
+  gate's INVALID exit-2 envelope, the TUI and orchestrator-oracle fixtures are
+  explicitly dispositioned subject-specific-baseline-only, tests use a
+  scripted-reviewer seam (no live model), and the bounded runner now kills and
+  reaps the complete child process group on any post-launch exception.
 - Immutable commit-candidate boundary (beads forge-plugin-w86 and forge-plugin-kmj,
   external-review findings 2 and 3): commit authorization now binds a
   `forge-commit-candidate/2` identity — a domain-separated SHA-256 over the

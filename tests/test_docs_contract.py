@@ -414,6 +414,47 @@ def assert_candidate_v2_spec_contract(spec: str) -> None:
         raise AssertionError("FR-223 overclaims hook breadth")
 
 
+def assert_fresh_reviewer_operator_skip_contract(spec: str, commit: str) -> None:
+    heading = "Candidate-bound fresh reviewer evaluation operator-skip amendment"
+    amendment = spec.split(heading, maxsplit=1)[1].split(
+        "- **FR-218**", maxsplit=1
+    )[0]
+    for marker in (
+        "**FR-214**",
+        "**FR-216**",
+        "follows the ordinary mechanical-gate skip rule",
+        "`commit skip fresh-reviewer-evals --reason <text>`",
+        "only on explicit operator direction",
+        "`operator_skip` event and DM-012 `user_skip` record",
+        "`chain-skip` decision whose `resolution` carries the exact reason",
+        "`basis` remains limited to evidence references",
+        "creates no fresh manifest, Gate-2 verification, or fabricated fresh-evaluation segment",
+        "trigger-region-introducing bootstrap commit",
+        "between plugin upgrade and committed adoption",
+        "No broad skip mapping, model-issued command",
+        "Recorded-baseline integrity remains non-skippable",
+        "moves the unchanged candidate from `revising` to `classifying`",
+        "leaves another fresh request forbidden",
+        "Finalize accepts only that exact current-chain skip",
+    ):
+        if marker not in amendment:
+            raise AssertionError(marker)
+
+    wiring = commit.split(
+        "This fresh suite is distinct from both Recorded-baseline integrity",
+        maxsplit=1,
+    )[1].split("Before selecting a reviewer", maxsplit=1)[0]
+    for marker in (
+        "`fresh-reviewer-evals` follows the ordinary",
+        "mechanical-gate skip rule",
+        "only explicit operator direction durably recorded on the current",
+        "candidate's chain may waive the PASS requirement",
+        "broad\nuser-directed step skip",
+    ):
+        if marker not in wiring:
+            raise AssertionError(marker)
+
+
 class DocumentationContractTests(unittest.TestCase):
     def test_skills_are_not_duplicated_by_command_stubs(self) -> None:
         self.assertEqual(list((ROOT / "commands").glob("*.md")), [])
@@ -557,6 +598,39 @@ class DocumentationContractTests(unittest.TestCase):
                 mutated = spec.replace(control, "DISABLED_CONTROL")
                 with self.assertRaises(AssertionError):
                     assert_candidate_v2_spec_contract(mutated)
+
+    def test_fresh_reviewer_operator_skip_contract_survives_mutation(self) -> None:
+        spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+        commit = (ROOT / "skills/commit/SKILL.md").read_text(encoding="utf-8")
+        assert_fresh_reviewer_operator_skip_contract(spec, commit)
+
+        for marker in (
+            "only on explicit operator direction",
+            "`operator_skip` event and DM-012 `user_skip` record",
+            "`resolution` carries the exact reason",
+            "`basis` remains limited to evidence references",
+            "trigger-region-introducing bootstrap commit",
+            "between plugin upgrade and committed adoption",
+            "Recorded-baseline integrity remains non-skippable",
+            "moves the unchanged candidate from `revising` to `classifying`",
+        ):
+            with self.subTest(disabled=marker):
+                amendment_offset = spec.index(
+                    "Candidate-bound fresh reviewer evaluation operator-skip amendment"
+                )
+                mutated = spec[:amendment_offset] + spec[amendment_offset:].replace(
+                    marker, "DISABLED_CONTROL", 1
+                )
+                with self.assertRaises(AssertionError):
+                    assert_fresh_reviewer_operator_skip_contract(mutated, commit)
+
+        weakened = commit.replace(
+            "only explicit operator direction durably recorded on the current",
+            "any caller may silently",
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            assert_fresh_reviewer_operator_skip_contract(spec, weakened)
 
     def test_workflow_refuses_drift_block_before_registry_admission(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")

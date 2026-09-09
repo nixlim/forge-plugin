@@ -335,6 +335,9 @@ class Revision9CommitStateTests(unittest.TestCase):
             stack_commands=["true"],
             invariants=[],
             changelog=None,
+            reviewer_eval_triggers=(),
+            reviewer_eval_region_digest=None,
+            reviewer_eval_trigger_error=None,
         )
         binding = (
             {

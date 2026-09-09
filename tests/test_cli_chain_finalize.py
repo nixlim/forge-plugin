@@ -82,6 +82,16 @@ cadence: 14d
 | Path pattern |
 |---|
 <!-- FORGE:REGION trigger-paths END -->
+<!-- FORGE:REGION reviewer-facing-eval-triggers BEGIN -->
+| control | path patterns |
+|---|---|
+| constitution | rules/** |
+| agent-prompt-template | agents/**, system/codex/prompts/**, .claude/agents/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| execpolicy | system/codex/rules/**, .codex/rules/** |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| commit-review-prompt | skills/commit/SKILL.md |
+<!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 """
 
 
@@ -443,11 +453,115 @@ class AuthorizationTests(FinalizeFixture):
 
 
 class FinalizeCheckTests(FinalizeFixture):
+    def test_fresh_reviewer_gate_follows_strict_evals_and_honors_operator_skip(self) -> None:
+        self.state["tier"]["control"] = True
+        candidate = self.state["candidate"]["sha256"]
+
+        with mock.patch.object(
+            CLI.chain_core, "_fresh_reviewer_evals_required", return_value=True
+        ):
+            required = CLI._required_steps(self.context, self.state)
+            self.assertEqual(
+                required[-2:], ["strict-evals", "fresh-reviewer-evals"]
+            )
+            self.assertEqual(
+                CLI._next_incomplete(self.context, self.state), "strict-evals"
+            )
+
+            self.state["steps"]["strict-evals"] = [
+                {"candidate": candidate, "result": "passed"}
+            ]
+            self.assertEqual(
+                CLI._next_incomplete(self.context, self.state),
+                "fresh-reviewer-evals",
+            )
+
+            self.state["steps"]["user_skips"] = {
+                "fresh-reviewer-evals": {
+                    "directed_by": "operator",
+                    "reason": "bootstrap the trigger region",
+                }
+            }
+            self.assertTrue(
+                CLI._gate_satisfied(self.state, "fresh-reviewer-evals")
+            )
+            self.assertIsNone(CLI._next_incomplete(self.context, self.state))
+            self.assertTrue(CLI._mechanical_complete(self.context, self.state))
+            finalize_context = CLI.FinalizeContext(
+                engine=self.engine,
+                state=self.state,
+                policy=self.policy,
+                message="fixture commit",
+            )
+            self.assertTrue(CLI._finalize_fresh_reviewer_evals(finalize_context))
+            self.assertEqual(
+                ENGINE._fresh_reviewer_evidence_package(self.context, self.state),
+                b"",
+            )
+
+    def test_fresh_reviewer_gate_records_operator_skip_and_verify_satisfies_it(self) -> None:
+        self.state["state"] = "verifying"
+        self.state["tier"]["control"] = True
+        self.state["authorization"] = {}
+        self.state["steps"]["strict-evals"] = [
+            {"candidate": self.candidate, "result": "passed"}
+        ]
+        self.persist()
+
+        with mock.patch.object(
+            CLI.chain_core, "_fresh_reviewer_evals_required", return_value=True
+        ):
+            skipped = self.engine.skip(
+                "fresh-reviewer-evals",
+                False,
+                "bootstrap the trigger region",
+            )
+            verified = self.engine.verify()
+
+        self.assertTrue(skipped.ok)
+        self.assertEqual(
+            skipped.message,
+            "operator skip recorded for fresh-reviewer-evals",
+        )
+        self.assertTrue(verified.ok)
+        durable = self.store.load(CHAIN_ID)
+        self.assertEqual(durable["state"], "reviewing")
+        self.assertEqual(
+            durable["steps"]["user_skips"]["fresh-reviewer-evals"]["reason"],
+            "bootstrap the trigger region",
+        )
+        self.assertEqual(
+            durable["steps"]["user_skips"]["fresh-reviewer-evals"]["directed_by"],
+            "operator",
+        )
+        self.assertNotIn("fresh-reviewer-evals", durable["steps"])
+        self.assertEqual(durable["authorization"], {})
+
+    def test_fresh_reviewer_gate_refuses_before_strict_evals(self) -> None:
+        self.state["state"] = "verifying"
+        self.state["tier"]["control"] = True
+        self.state["authorization"] = {}
+        self.persist()
+
+        with mock.patch.object(
+            CLI.chain_core, "_fresh_reviewer_evals_required", return_value=True
+        ), self.assertRaises(CLI.Refusal) as caught:
+            self.engine.gate_run("fresh-reviewer-evals")
+
+        self.assertIs(caught.exception.reason_code, CLI.ReasonCode.STATE_PRECONDITION)
+        self.assertEqual(caught.exception.expected, "strict-evals")
+        self.assertEqual(caught.exception.observed, "fresh-reviewer-evals")
+        durable = self.store.load(CHAIN_ID)
+        self.assertNotIn("fresh-reviewer-evals", durable["steps"])
+        self.assertNotIn("fresh-reviewer-evals-requests", durable["steps"])
+        self.assertEqual(durable["authorization"], {})
+
     def test_finalize_registry_has_exact_independent_check_functions(self) -> None:
         self.assertEqual(
             CLI.FINALIZE_CHECKS,
             {
                 "evidence-completeness": CLI._finalize_evidence,
+                "fresh-reviewer-evals": CLI._finalize_fresh_reviewer_evals,
                 "candidate-byte-identity": CLI._finalize_candidate,
                 "produced-commit-identity": CLI._finalize_produced_identity,
                 "ttl-token": CLI._finalize_ttl,
@@ -466,6 +580,9 @@ class FinalizeCheckTests(FinalizeFixture):
                         {key: value for key, value in CLI.FINALIZE_CHECKS.items() if key != name},
                         {key: value for key, value in originals.items() if key != name},
                     )
+
+    def test_fresh_reviewer_finalize_check_has_an_independent_seam(self) -> None:
+        self.assert_check_can_be_replaced("fresh-reviewer-evals")
 
     def test_halt_check_is_load_bearing_and_has_an_independent_seam(self) -> None:
         refusal = self.assert_refusal(
