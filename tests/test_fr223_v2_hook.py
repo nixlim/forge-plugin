@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import os
 import re
@@ -1330,6 +1331,51 @@ class GuardSegmentationAndResolutionTests(HookHarnessMixin, unittest.TestCase):
         'echo "&& case"; {inner}; case a in a) :;; esac',
         'echo "| case"; {inner}; case a in a) :;; esac',
     )
+    DISTINCT_ACTION_FLOOD = "; ".join(
+        f"git push origin HEAD:branch-{index}" for index in range(2000)
+    )
+
+    def commit_guard_denied_policy(self, repo: Path, body: str) -> None:
+        (repo / "forge-project.md").write_text(
+            "<!-- FORGE:REGION guard-denied-commands BEGIN -->\n"
+            f"{body}\n"
+            "<!-- FORGE:REGION guard-denied-commands END -->\n",
+            encoding="utf-8",
+        )
+        self.git(repo, "add", "forge-project.md")
+        self.git(repo, "commit", "--quiet", "-m", "guard denied policy")
+
+    def invoke_guard_main(
+        self,
+        module: ModuleType,
+        repo: Path,
+        command: str,
+    ) -> tuple[int, str, str]:
+        stdin = io.StringIO(
+            json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        argv = [
+            str(GUARD),
+            str(GUARD.parent / "check-halt.sh"),
+            str(GUARD.parent / "risk_tier.py"),
+            str(GUARD.parent / "emit-decision-event.py"),
+            str(V2_HOOK),
+        ]
+        with (
+            mock.patch.object(module.Path, "cwd", return_value=repo.resolve()),
+            mock.patch.object(module.sys, "argv", argv),
+            mock.patch.object(module.sys, "stdin", stdin),
+            mock.patch.object(module.sys, "stdout", stdout),
+            mock.patch.object(module.sys, "stderr", stderr),
+            mock.patch.object(module, "audit_block"),
+            mock.patch.object(module, "emit_decision_event"),
+            mock.patch.object(module, "staged_candidate", return_value=""),
+            mock.patch.object(module, "head_policy_sha", return_value=""),
+        ):
+            status = module.main()
+        return status, stdout.getvalue(), stderr.getvalue()
 
     def test_quoted_case_word_never_merges_segments_and_the_seam_is_load_bearing(
         self,
@@ -1408,6 +1454,89 @@ class GuardSegmentationAndResolutionTests(HookHarnessMixin, unittest.TestCase):
                 result = self.invoke(repo, command)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(result.stdout), denial(reason))
+
+    def test_filled_empty_policy_skips_direct_invocation_lexer_for_flood(
+        self,
+    ) -> None:
+        repo = self.repository("forge-verbs-v1", None)
+        module = load_guard_module(self, "forge_commit_guard_empty_policy_flood")
+        self.commit_guard_denied_policy(repo, module.GUARD_DENIED_EMPTY)
+        with mock.patch.object(
+            module,
+            "find_direct_invocations",
+            wraps=module.find_direct_invocations,
+        ) as lexer:
+            started = time.monotonic()
+            status, stdout, stderr = self.invoke_guard_main(
+                module, repo, self.DISTINCT_ACTION_FLOOD
+            )
+            elapsed = time.monotonic() - started
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual(stderr, "")
+        self.assertEqual(json.loads(stdout), denial(DENIALS["deny-raw-push"]))
+        self.assertEqual(lexer.call_count, 0)
+        self.assertLess(elapsed, module.PARSE_TIME_BUDGET_SECONDS)
+
+    def test_configured_policy_lexes_flood_once_and_matches(self) -> None:
+        repo = self.repository("forge-verbs-v1", None)
+        reason = "flood pushes are operator-routed"
+        self.commit_guard_denied_policy(
+            repo,
+            "| pattern | reason |\n"
+            "|---|---|\n"
+            f"| git push | {reason} |",
+        )
+        module = load_guard_module(self, "forge_commit_guard_configured_policy_flood")
+        with (
+            mock.patch.object(module.Path, "cwd", return_value=repo.resolve()),
+            mock.patch.object(module, "find_actions", return_value=[]),
+            mock.patch.object(
+                module, "classify_forge_cli_invocation", return_value="no-match"
+            ),
+            mock.patch.object(
+                module,
+                "find_direct_invocations",
+                wraps=module.find_direct_invocations,
+            ) as lexer,
+        ):
+            resolved = module._classify_command_bounded(
+                self.DISTINCT_ACTION_FLOOD,
+                GUARD.parent / "check-halt.sh",
+            )
+        self.assertEqual(lexer.call_count, 1)
+        self.assertIsNone(resolved[9])
+        denied_rule = module.guard_denied_match(resolved[5], resolved[8])
+        self.assertIsNotNone(denied_rule)
+        self.assertEqual(denied_rule.pattern, ("git", "push"))
+        self.assertEqual(denied_rule.reason, reason)
+
+    def test_malformed_policy_flood_denies_without_direct_invocation_lexer(
+        self,
+    ) -> None:
+        repo = self.repository("forge-verbs-v1", None)
+        self.commit_guard_denied_policy(
+            repo,
+            "| pattern | reason |\n|---|---|",
+        )
+        module = load_guard_module(self, "forge_commit_guard_malformed_policy_flood")
+        with (
+            mock.patch.object(module, "find_actions", return_value=[]),
+            mock.patch.object(
+                module, "classify_forge_cli_invocation", return_value="no-match"
+            ),
+            mock.patch.object(
+                module,
+                "find_direct_invocations",
+                side_effect=AssertionError("lexer must not run"),
+            ) as lexer,
+        ):
+            status, stdout, stderr = self.invoke_guard_main(
+                module, repo, self.DISTINCT_ACTION_FLOOD
+            )
+        self.assertEqual(status, 0, stderr)
+        self.assertEqual(stderr, "")
+        self.assertEqual(json.loads(stdout), denial(module.GUARD_DENIED_MALFORMED))
+        self.assertEqual(lexer.call_count, 0)
 
     def test_distinct_action_flood_is_memoized_and_stays_under_the_deadline(
         self,

@@ -10,6 +10,14 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Guard hook latency (bead forge-plugin-kc9, CI red at 18bbe01): the PreToolUse guard
+  now resolves the committed guard-denied-commands rules before direct-invocation
+  parsing and runs the Bash-accurate lexer only when denied rules exist, removing
+  the per-segment lexing cost that pushed the 2,000-segment flood test past the
+  10-second budget on slower CI runners. Hook outcomes, literals, precedence,
+  the budget, and the configured-rule path are unchanged; new flood tests pin the
+  filled-empty (zero lexer calls), configured (one call, match), and malformed
+  (lexer-independent denial) policies.
 - Fresh-reviewer events ceiling (first live fresh-evals run, this chain): the
   reviewer child's retained `events.jsonl` stream gets its own 8 MiB ceiling —
   live reviewers' search-command output routinely exceeded the old 64 KiB cap,

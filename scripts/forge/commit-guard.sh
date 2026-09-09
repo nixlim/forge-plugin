@@ -4500,12 +4500,6 @@ def _resolve_command(command: str, check_halt: Path) -> ResolvedCommand:
     """Parse, then resolve action and committed command-policy inputs once."""
     actions = find_actions(command)
     cli_class = classify_forge_cli_invocation(command)
-    direct_invocation_error = False
-    try:
-        direct_invocations = find_direct_invocations(command)
-    except GuardDeniedCommandError:
-        direct_invocations = []
-        direct_invocation_error = True
     contexts = [(action, resolve_repo_context(action)) for action in actions]
     modes: dict[tuple[object, ...], str] = {}
     sentinels: dict[tuple[object, ...], str | None] = {}
@@ -4533,6 +4527,13 @@ def _resolve_command(command: str, check_halt: Path) -> ResolvedCommand:
             (),
             GUARD_DENIED_MALFORMED,
         )
+    direct_invocations = []
+    direct_invocation_error = False
+    if denied_rules:
+        try:
+            direct_invocations = find_direct_invocations(command)
+        except GuardDeniedCommandError:
+            direct_invocation_error = True
     if direct_invocation_error and denied_rules:
         denied_rules = ()
         denied_policy_error = GUARD_DENIED_MALFORMED
