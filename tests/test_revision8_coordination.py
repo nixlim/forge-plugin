@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "scripts/codex_orch_tools.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
-from codex_orchestrator import journal  # noqa: E402
+from codex_orchestrator import batch, journal  # noqa: E402
 
 
 RECORDED_AT = "2026-08-26T12:00:00Z"
@@ -358,6 +358,12 @@ class Revision8CoordinationTests(unittest.TestCase):
         lock = self.repo / ".forge/tmp/run-registry.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
         lock.touch()
+
+    def prime_batch_lock(self, run_id: str) -> None:
+        """Give a legacy run the stable lock retained by its first raw mutation."""
+
+        with batch.batch_lock(self.run_dir(run_id), create=True):
+            pass
 
     def assert_absent_registry_node_collision(self, kind: str) -> None:
         self.runs_root.mkdir(parents=True)
@@ -1719,7 +1725,19 @@ class Revision8CoordinationTests(unittest.TestCase):
             "run-fresh-shells", "src/fresh/new/**", replace=True
         )
         self.assertEqual(readmitted.returncode, 0, readmitted.stderr)
-        closed = self.close("run-fresh-shells")
+        closed = self.command(
+            "run-close",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-fresh-shells",
+            "--idempotency-key",
+            "1" * 64,
+            "--judgment",
+            "passed",
+            "--summary",
+            "Fresh-shell owner identity remained stable",
+        )
         self.assertEqual(closed.returncode, 0, closed.stderr)
 
         self.assertEqual(owner_path.read_bytes(), owner_before)
@@ -1909,6 +1927,7 @@ class Revision8CoordinationTests(unittest.TestCase):
         self.assertNotIn("secret", str(caught.exception))
 
         self.assertEqual(self.open_run("run-update", "src/update/**").returncode, 0)
+        self.prime_batch_lock("run-update")
         before = self.coordination_snapshot()
         with self.api_environment(), mock.patch.object(
             journal, "_write_registry", side_effect=OSError("secret update failure")
@@ -2135,6 +2154,7 @@ class Revision8CoordinationTests(unittest.TestCase):
     def test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting(self) -> None:
         opened = self.open_run("run-registry-epoch", "src/epoch/**")
         self.assertEqual(opened.returncode, 0, opened.stderr)
+        self.prime_batch_lock("run-registry-epoch")
         tmp_directory = self.repo / ".forge/tmp"
         lock_path = tmp_directory / "run-registry.lock"
         original_registry = self.registry_path.read_bytes()
@@ -2218,6 +2238,7 @@ class Revision8CoordinationTests(unittest.TestCase):
         ):
             opened = self.open_run(run_id, scope)
             self.assertEqual(opened.returncode, 0, opened.stderr)
+            self.prime_batch_lock(run_id)
 
         operations = (
             (
@@ -2560,6 +2581,7 @@ class Revision8CoordinationTests(unittest.TestCase):
         run_id = "run-stale-owner-lifecycle"
         opened = self.open_run(run_id, "src/stale/lifecycle/**")
         self.assertEqual(opened.returncode, 0, opened.stderr)
+        self.prime_batch_lock(run_id)
         run_dir = self.run_dir(run_id)
         owner_path = run_dir / "owner"
         journal_path = run_dir / "journal.jsonl"
@@ -3266,6 +3288,7 @@ class Revision8CoordinationTests(unittest.TestCase):
 
         primed = self.open_run("run-interrupted-prime", "src/interrupted/**")
         self.assertEqual(primed.returncode, 0, primed.stderr)
+        self.prime_batch_lock("run-interrupted-prime")
         before_existing = self.coordination_snapshot()
         real_exchange = journal._exchange_names_at
         registry_exchanged = False
@@ -3344,7 +3367,12 @@ class Revision8CoordinationTests(unittest.TestCase):
                 )
 
         self.assertTrue(owner_exchanged)
-        self.assertEqual(self.coordination_snapshot(), stale_before)
+        interrupted_after = dict(stale_before)
+        interrupted_after[
+            ".codex-orchestrator/runs/run-interrupted-prime/"
+            + journal.BATCH_LOCK_NAME
+        ] = ("file", b"")
+        self.assertEqual(self.coordination_snapshot(), interrupted_after)
 
         legacy_id = "run-interrupted-missing-owner"
         legacy_dir = self.run_dir(legacy_id)
@@ -3398,7 +3426,12 @@ class Revision8CoordinationTests(unittest.TestCase):
                 )
 
         self.assertTrue(owner_linked)
-        self.assertEqual(self.coordination_snapshot(), missing_before)
+        missing_after = dict(missing_before)
+        missing_after[
+            f".codex-orchestrator/runs/{legacy_id}/"
+            + journal.BATCH_LOCK_NAME
+        ] = ("file", b"")
+        self.assertEqual(self.coordination_snapshot(), missing_after)
         self.assertFalse((legacy_dir / "owner").exists())
 
     def test_postsyscall_baseexception_during_rollback_retains_coherent_candidate(
@@ -4303,7 +4336,19 @@ class Revision8CoordinationTests(unittest.TestCase):
             "scope-reserving retired run run-U\n",
         )
 
-        closed = self.close("run-C", judgment="passed")
+        closed = self.command(
+            "run-close",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            "run-C",
+            "--idempotency-key",
+            "2" * 64,
+            "--judgment",
+            "passed",
+            "--summary",
+            "Successor ancestry was transferred and released",
+        )
         self.assertEqual(closed.returncode, 0, closed.stderr)
         readmitted_after_release = self.open_run(
             "run-after-release", "src/ancestor/new.py"
@@ -5100,6 +5145,7 @@ class Revision8CoordinationTests(unittest.TestCase):
             ).returncode,
             0,
         )
+        self.prime_batch_lock("run-rollback-B")
         before = self.coordination_snapshot()
 
         with self.api_environment(), mock.patch.object(

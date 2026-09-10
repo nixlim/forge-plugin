@@ -21,7 +21,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Sequence
 
 FORGE_SCRIPTS = Path(__file__).resolve().parents[1] / "forge"
 if str(FORGE_SCRIPTS) not in sys.path:
@@ -83,6 +83,32 @@ LEGACY_EXECUTION_STATUS_MAP = {
 
 # forge: modified from upstream — Revision-9 structured journal bindings
 WRITER_CONTRACT = "forge-journal-binding/1"
+WRITER_ACTIVATION_RESOLUTION = (
+    "writer-contract-activated: forge-journal-binding/1"
+)
+WRITER_ACTIVATION_ID_PATTERN = re.compile(r"decision-[0-9]{2,}")
+WRITER_ACTIVATION_FIELDS = frozenset(
+    {
+        "type",
+        "id",
+        "resolution",
+        "writer_contract",
+        "receipt_origin_size",
+        "receipt_origin_sha256",
+        "run_id",
+        "recorded_at",
+    }
+)
+_WRITER_ACTIVATION_REQUIRED = frozenset(
+    {
+        "marker-injection",
+        "marker-recognition",
+        "receipt-origin",
+        "recovery-extension",
+    }
+)
+WRITER_ACTIVATION_CONTROLS = _WRITER_ACTIVATION_REQUIRED
+_WRITER_ACTIVATION_BUILDER_AUTHORITY = object()
 BINDING_SCHEMA = "forge-gate-binding/1"
 BINDING_CANDIDATE_KINDS = frozenset(
     {
@@ -132,6 +158,10 @@ BATCH_RECEIPTS_NAME = ".journal-batch-receipts.jsonl"
 BATCH_REQUEST_SCHEMA = "forge-journal-builder-request/1"
 BATCH_INTENT_SCHEMA = "forge-journal-batch-intent/1"
 BATCH_RECEIPT_SCHEMA = "forge-journal-batch-receipt/1"
+BATCH_GAP_REPAIR_SCHEMA = "forge-journal-batch-gap-repair/1"
+BATCH_GAP_REPAIR_REASON = (
+    "reconstructed from canonical journal bytes and byte-exact following receipt"
+)
 BATCH_KEY_REFUSAL = (
     "forge: journal batch refused — idempotency key must be 64 lowercase hex"
 )
@@ -141,6 +171,11 @@ BATCH_KEY_CONFLICT = (
 BATCH_PENDING = "forge: journal batch refused — another intent is pending"
 BATCH_DIVERGED = (
     "forge: journal batch recovery refused — journal diverged from intent"
+)
+LEGACY_ACTIVATION_LEDGER_INCOMPLETE = (
+    "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; "
+    "retire the run and open a successor with --successor-of, or run journal "
+    "batch-recover if the trailing records were written by an interrupted typed batch"
 )
 JOURNAL_READ_TRANSACTION_REFUSAL = (
     "forge: journal read refused — pending or changed batch transaction"
@@ -747,12 +782,425 @@ def _git_tree_candidate_authorization_id(
     )
 
 
-def _writer_contract_active(records: tuple[dict[str, object], ...] | list[dict[str, object]]) -> bool:
+def _writer_activation_candidate(record: object) -> bool:
+    """Return whether a row attempts to use the reserved activation grammar."""
+
     return bool(
-        records
-        and records[0].get("type") == "run_started"
+        isinstance(record, dict)
+        and record.get("type") == "decision"
+        and (
+            record.get("resolution") == WRITER_ACTIVATION_RESOLUTION
+            or "writer_contract" in record
+            or "receipt_origin_size" in record
+            or "receipt_origin_sha256" in record
+        )
+    )
+
+
+def _writer_activation_marker(record: object) -> bool:
+    """Recognize the exact append-only writer-activation decision grammar."""
+
+    if not isinstance(record, dict):
+        return False
+    public = {name: value for name, value in record.items() if name != "_line"}
+    return bool(
+        set(public) == WRITER_ACTIVATION_FIELDS
+        and public.get("type") == "decision"
+        and isinstance(public.get("id"), str)
+        and WRITER_ACTIVATION_ID_PATTERN.fullmatch(str(public["id"])) is not None
+        and public.get("resolution") == WRITER_ACTIVATION_RESOLUTION
+        and public.get("writer_contract") == WRITER_CONTRACT
+        and type(public.get("receipt_origin_size")) is int
+        and int(public["receipt_origin_size"]) >= 0
+        and isinstance(public.get("receipt_origin_sha256"), str)
+        and HEX_SHA256_PATTERN.fullmatch(str(public["receipt_origin_sha256"]))
+        is not None
+        and _valid_run_id(public.get("run_id"))
+        and isinstance(public.get("recorded_at"), str)
+        and _valid_utc(str(public["recorded_at"]))
+    )
+
+
+def _writer_activation_id_is_allocated(
+    records: Sequence[dict[str, object]], marker: dict[str, object]
+) -> bool:
+    """Prove that a persisted marker uses the ordinary next decision ID."""
+
+    try:
+        marker_index = next(
+            index for index, record in enumerate(records) if record is marker
+        )
+    except StopIteration:
+        return False
+    highest = 0
+    for record in records[:marker_index]:
+        if record.get("type") != "decision":
+            continue
+        decision_id = record.get("id")
+        if not isinstance(decision_id, str) or not decision_id.startswith(
+            "decision-"
+        ):
+            continue
+        suffix = decision_id[len("decision-") :]
+        if suffix.isdigit():
+            if not suffix.isascii() or len(suffix) > 64:
+                return False
+            try:
+                highest = max(highest, int(suffix))
+            except (ValueError, OverflowError):
+                return False
+    allocated = f"decision-{highest + 1:02d}"
+    return len(allocated.removeprefix("decision-")) <= 64 and marker.get(
+        "id"
+    ) == allocated
+
+
+def _writer_contract_active(
+    records: tuple[dict[str, object], ...] | list[dict[str, object]],
+) -> bool:
+    """Recognize opening activation or one exact decision mode marker."""
+
+    if not records:
+        return False
+    opening = bool(
+        records[0].get("type") == "run_started"
         and records[0].get("writer_contract") == WRITER_CONTRACT
     )
+    markers = [record for record in records if _writer_activation_marker(record)]
+    candidates = [record for record in records if _writer_activation_candidate(record)]
+    if candidates and "marker-recognition" not in WRITER_ACTIVATION_CONTROLS:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    return bool(
+        (opening and not candidates)
+        or (not opening and len(markers) == 1 and len(candidates) == 1)
+    )
+
+
+def writer_contract_active(
+    records: tuple[dict[str, object], ...] | list[dict[str, object]],
+) -> bool:
+    """Expose the journal's writer-activation classifier to read-only consumers."""
+
+    return _writer_contract_active(records)
+
+
+def _writer_activation_snapshot(
+    raw: bytes,
+) -> tuple[int, tuple[int, int] | None]:
+    """Return the authenticated origin and marker interval for one snapshot."""
+
+    records = _parse_raw_records(raw)
+    opening = records[0] if records else None
+    opening_activated = bool(
+        opening is not None
+        and opening.get("type") == "run_started"
+        and opening.get("writer_contract") == WRITER_CONTRACT
+    )
+    candidates = [
+        record for record in records if _writer_activation_candidate(record)
+    ]
+    if opening_activated:
+        if candidates:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        return 0, None
+    if not candidates:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if (
+        "marker-recognition" not in WRITER_ACTIVATION_CONTROLS
+        or len(candidates) != 1
+        or not _writer_activation_marker(candidates[0])
+        or not _writer_activation_id_is_allocated(records, candidates[0])
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    marker = candidates[0]
+    run_id = (
+        opening.get("run_id")
+        if isinstance(opening, dict) and "run_id" in opening
+        else opening.get("id") if isinstance(opening, dict) else None
+    )
+    origin = int(marker["receipt_origin_size"])
+    if (
+        marker.get("run_id") != run_id
+        or origin > len(raw)
+        or _sha256(raw[:origin]) != marker["receipt_origin_sha256"]
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    marker_line = _journal_line(marker)
+    intervals: list[tuple[int, int]] = []
+    offset = 0
+    for line in raw.splitlines(keepends=True):
+        end = offset + len(line)
+        if line == marker_line:
+            intervals.append((offset, end))
+        offset = end
+    if len(intervals) != 1 or intervals[0][0] < origin:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    return origin, intervals[0]
+
+
+def _validate_adopted_receipt_coverage(
+    run_dir: Path,
+    raw: bytes,
+    *,
+    origin: int,
+    marker_interval: tuple[int, int] | None,
+    require_journal_eof: bool = True,
+) -> None:
+    """Authenticate receipt coverage, strictly through EOF unless reconciling."""
+
+    if "receipt-origin" not in WRITER_ACTIVATION_CONTROLS:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+    descriptor: int | None = None
+    try:
+        descriptor, directory_observation = _open_bound_directory(run_dir)
+        ledger, _ledger_observation = _read_bound_regular(
+            descriptor, BATCH_RECEIPTS_NAME, require_nonempty=True
+        )
+        if (
+            _file_observation(os.fstat(descriptor)) != directory_observation
+            or _file_observation(os.lstat(run_dir)) != directory_observation
+        ):
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    except (FileNotFoundError, OSError, CoordinationRefusal) as exc:
+        if isinstance(exc, CoordinationRefusal):
+            raise
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if not ledger.endswith(b"\n"):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    ordinary_keys = {
+        "schema",
+        "idempotency_key",
+        "request_sha256",
+        "base_size",
+        "batch_sha256",
+        "record_count",
+        "journal_size",
+        "journal_sha256",
+        "recorded_at",
+    }
+    repair_keys = ordinary_keys | {"repaired", "repair_reason"}
+    receipts: list[dict[str, object]] = []
+    try:
+        for line in ledger.splitlines(keepends=True):
+            value = json.loads(line.decode("utf-8"))
+            if (
+                not isinstance(value, dict)
+                or set(value) not in (ordinary_keys, repair_keys)
+                or _canonical_json_bytes(value) + b"\n" != line
+                or value.get("schema") != BATCH_RECEIPT_SCHEMA
+                or any(
+                    not isinstance(value.get(name), str)
+                    or HEX_SHA256_PATTERN.fullmatch(str(value[name])) is None
+                    for name in (
+                        "idempotency_key",
+                        "request_sha256",
+                        "batch_sha256",
+                        "journal_sha256",
+                    )
+                )
+                or any(
+                    type(value.get(name)) is not int
+                    or int(value[name]) < 0
+                    for name in ("base_size", "record_count", "journal_size")
+                )
+                or int(value["record_count"]) <= 0
+                or int(value["base_size"]) >= int(value["journal_size"])
+                or int(value["journal_size"]) > len(raw)
+                or not isinstance(value.get("recorded_at"), str)
+                or not _valid_utc(str(value["recorded_at"]))
+                or (
+                    set(value) == repair_keys
+                    and value.get("repaired") is not True
+                )
+            ):
+                raise ValueError
+            base = int(value["base_size"])
+            end = int(value["journal_size"])
+            batch_bytes = raw[base:end]
+            batch_records = _parse_raw_records(batch_bytes)
+            if (
+                _sha256(raw[:end]) != value["journal_sha256"]
+                or _sha256(batch_bytes) != value["batch_sha256"]
+                or len(batch_records) != value["record_count"]
+            ):
+                raise ValueError
+            receipts.append(value)
+    except (
+        UnicodeError,
+        ValueError,
+        RecursionError,
+        CoordinationRefusal,
+    ) as exc:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+
+    repair_entries = [
+        (index, receipt)
+        for index, receipt in enumerate(receipts)
+        if receipt.get("repaired") is True
+    ]
+    if repair_entries:
+        try:
+            # The registry remains batch-owned, but stable readers must enforce
+            # it without taking a batch lock or importing batch at module load.
+            from . import batch as batch_module
+
+            if (
+                batch_module.BATCH_GAP_REPAIR_CONTROLS
+                != batch_module._BATCH_GAP_REPAIR_REQUIRED
+            ):
+                raise ValueError
+            records = _parse_raw_records(raw)
+            opening = records[0]
+            repository = opening.get("repo")
+            run_id = (
+                opening.get("run_id")
+                if "run_id" in opening
+                else opening.get("id")
+            )
+            if (
+                not isinstance(repository, str)
+                or not repository
+                or not isinstance(run_id, str)
+                or not run_id
+            ):
+                raise ValueError
+            for repair_index, repair in repair_entries:
+                if repair_index == 0:
+                    raise ValueError
+                following = receipts[repair_index - 1]
+                gap_base = int(repair["base_size"])
+                gap_end = int(repair["journal_size"])
+                if (
+                    following.get("repaired") is True
+                    or int(following["base_size"]) != gap_end
+                    or not 0 <= gap_base < gap_end <= len(raw)
+                ):
+                    raise ValueError
+                expected = _derive_repair_receipt(
+                    repository=repository,
+                    run_id=run_id,
+                    gap_base=gap_base,
+                    gap_end=gap_end,
+                    gap_bytes=raw[gap_base:gap_end],
+                    following=following,
+                    journal_raw=raw,
+                )
+                if repair != expected:
+                    raise ValueError
+        except (
+            ImportError,
+            AttributeError,
+            KeyError,
+            TypeError,
+            UnicodeError,
+            ValueError,
+            RecursionError,
+            CoordinationRefusal,
+        ) as exc:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE) from exc
+    if len({str(receipt["idempotency_key"]) for receipt in receipts}) != len(
+        receipts
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    ordered = sorted(
+        receipts,
+        key=lambda receipt: (
+            int(receipt["base_size"]),
+            int(receipt["journal_size"]),
+        ),
+    )
+    cursor = origin
+    for receipt in ordered:
+        if int(receipt["base_size"]) != cursor:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        cursor = int(receipt["journal_size"])
+    if require_journal_eof and cursor != len(raw):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if marker_interval is not None:
+        marker_base, marker_end = marker_interval
+        covering = [
+            receipt
+            for receipt in receipts
+            if set(receipt) == ordinary_keys
+            and int(receipt["base_size"]) == marker_base
+            and int(receipt["journal_size"]) >= marker_end
+        ]
+        if len(covering) != 1:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+
+
+def _gap_record_matches_run(record: dict[str, object], run_id: str) -> bool:
+    """Accept journal-position membership unless an explicit run ID conflicts."""
+
+    return "run_id" not in record or record.get("run_id") == run_id
+
+
+def _derive_repair_receipt(
+    *,
+    repository: str,
+    run_id: str,
+    gap_base: int,
+    gap_end: int,
+    gap_bytes: bytes,
+    following: dict[str, object],
+    journal_raw: bytes,
+) -> dict[str, object]:
+    """Purely derive one repair receipt from its authenticated byte evidence."""
+
+    gap_records = _parse_raw_records(gap_bytes)
+    if (
+        not gap_records
+        or b"".join(_journal_line(record) for record in gap_records) != gap_bytes
+        or not all(
+            _gap_record_matches_run(record, run_id)
+            for record in gap_records
+        )
+    ):
+        raise ValueError("repair gap is not canonical same-run journal data")
+    following_key = following.get("idempotency_key")
+    recorded_at = following.get("recorded_at")
+    if (
+        not isinstance(following_key, str)
+        or HEX_SHA256_PATTERN.fullmatch(following_key) is None
+        or not isinstance(recorded_at, str)
+        or not _valid_utc(recorded_at)
+    ):
+        raise ValueError("following receipt is invalid")
+    batch_sha256 = _sha256(gap_bytes)
+    identity = {
+        "schema": BATCH_GAP_REPAIR_SCHEMA,
+        "repository": repository,
+        "run_id": run_id,
+        "base_size": gap_base,
+        "journal_size": gap_end,
+        "batch_sha256": batch_sha256,
+        "record_count": len(gap_records),
+        "following_idempotency_key": following_key,
+    }
+    request = {
+        "schema": BATCH_REQUEST_SCHEMA,
+        "verb": "journal batch-recover",
+        "repository": repository,
+        "run_id": run_id,
+        "inputs": identity,
+    }
+    return {
+        "schema": BATCH_RECEIPT_SCHEMA,
+        "idempotency_key": _sha256(_canonical_json_bytes(identity)),
+        "request_sha256": _sha256(_canonical_json_bytes(request)),
+        "base_size": gap_base,
+        "batch_sha256": batch_sha256,
+        "record_count": len(gap_records),
+        "journal_size": gap_end,
+        "journal_sha256": _sha256(journal_raw[:gap_end]),
+        "recorded_at": recorded_at,
+        "repaired": True,
+        "repair_reason": BATCH_GAP_REPAIR_REASON,
+    }
 
 
 def _binding_shape_valid(
@@ -1381,6 +1829,7 @@ def _validate_proposed_record(
     scope: tuple[str, ...],
     prior_records: tuple[dict[str, object], ...] = (),
     _defer_binding: bool = False,
+    _activation_authority: object | None = None,
 ) -> dict[str, object]:
     """Validate one FR-019 new-write candidate without mutating coordination state."""
 
@@ -1579,6 +2028,21 @@ def _validate_proposed_record(
             if field in candidate and not isinstance(candidate.get(field), str):
                 _invalid_record_field(kind, field, "must be a string")
         _string_array(candidate, kind, "basis", required=False)
+        if _writer_activation_candidate(candidate):
+            if not _writer_activation_marker(candidate):
+                _invalid_record_field(
+                    kind,
+                    "writer_contract",
+                    "must match the reserved writer activation grammar",
+                )
+            if candidate.get("run_id") != run_id:
+                _invalid_record_field(kind, "run_id", "must match target run")
+            if _activation_authority is not _WRITER_ACTIVATION_BUILDER_AUTHORITY:
+                _invalid_record_field(
+                    kind,
+                    "writer_contract",
+                    "is reserved for the typed builder",
+                )
         if "binding" in candidate:
             _validate_binding_field(candidate, kind)
             if activated and candidate.get("outcome") not in CHAIN_DECISION_OUTCOMES:
@@ -1679,6 +2143,7 @@ def _reserved_lifecycle_decision(record: dict[str, object]) -> bool:
             and decision_id.startswith("forge-scope-readmission-")
         )
         or resolution == READMISSION_RESOLUTION
+        or _writer_activation_candidate(record)
     )
 
 
@@ -2008,6 +2473,8 @@ def _scan_run(
     raw: bytes | None = None,
     directory_observation: FileObservation | None = None,
     journal_observation: FileObservation | None = None,
+    reconcile_stale_adopted_coverage: bool = False,
+    reconcile_pending_intent: bool = False,
 ) -> RunState:
     """Read historical lifecycle state without applying the FR-019 write schema."""
 
@@ -2032,6 +2499,33 @@ def _scan_run(
                 os.close(run_descriptor)
     assert raw is not None
     records = _parse_raw_records(raw)
+    activation_candidates = [
+        record for record in records if _writer_activation_candidate(record)
+    ]
+    opening_activated = bool(
+        records
+        and records[0].get("type") == "run_started"
+        and records[0].get("writer_contract") == WRITER_CONTRACT
+    )
+    if activation_candidates and (
+        opening_activated
+        or len(activation_candidates) != 1
+        or not _writer_activation_marker(activation_candidates[0])
+        or activation_candidates[0].get("run_id") != run_id
+    ):
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    if activation_candidates:
+        origin, marker_interval = _writer_activation_snapshot(raw)
+        if marker_interval is None:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        if not reconcile_pending_intent:
+            _validate_adopted_receipt_coverage(
+                run_dir,
+                raw,
+                origin=origin,
+                marker_interval=marker_interval,
+                require_journal_eof=not reconcile_stale_adopted_coverage,
+            )
     starts = [record for record in records if record.get("type") == "run_started"]
     closures = [record for record in records if record.get("type") == "run_closed"]
     if len(starts) != 1 or records[0] is not starts[0]:
@@ -2088,8 +2582,16 @@ def _scan_run(
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     if retirement_positions:
         expected_position = (
-            close_position - 1 if close_position is not None else len(records) - 1
+            close_position - 1
+            if close_position is not None
+            else len(records) - 1
         )
+        if (
+            close_position is not None
+            and expected_position >= 0
+            and _writer_activation_marker(records[expected_position])
+        ):
+            expected_position -= 1
         if retirement_positions[0] != expected_position:
             raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
     was_retired = bool(retirement_positions)
@@ -2208,6 +2710,33 @@ def _readable_mode(mode: int, *, directory: bool = False) -> bool:
     read_mask = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
     execute_mask = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
     return bool(mode & read_mask) and (not directory or bool(mode & execute_mask))
+
+
+def _reconciliation_intent_present(
+    run_descriptor: int,
+    child_names: set[str],
+    *,
+    refusal: str = REGISTRY_UNAVAILABLE,
+) -> bool:
+    """Observe a safe intent name without taking the per-run batch lock."""
+
+    if BATCH_INTENT_NAME not in child_names:
+        return False
+    try:
+        observed = os.stat(
+            BATCH_INTENT_NAME,
+            dir_fd=run_descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise CoordinationRefusal(refusal) from exc
+    if not _batch_regular_stat_valid(observed) or not _readable_mode(
+        observed.st_mode
+    ):
+        raise CoordinationRefusal(refusal)
+    return True
 
 
 def _read_owner_observation_at(
@@ -2354,6 +2883,10 @@ def _classify_runs(
                     raw=raw,
                     directory_observation=run_observation,
                     journal_observation=journal_observation,
+                    reconcile_stale_adopted_coverage=True,
+                    reconcile_pending_intent=_reconciliation_intent_present(
+                        run_descriptor, child_names
+                    ),
                 )
                 if state.run_id in states:
                     raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
@@ -2689,7 +3222,17 @@ def _validate_registry_publication(
         else prior_changed.records + (appended_record,)
     )
     if changed.records != expected_records:
-        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        activation_expected = bool(
+            prior_changed is not None
+            and not _writer_contract_active(prior_changed.records)
+            and len(changed.records) == len(prior_changed.records) + 2
+            and changed.records[: len(prior_changed.records)]
+            == prior_changed.records
+            and _writer_activation_marker(changed.records[-2])
+            and changed.records[-1] == appended_record
+        )
+        if not activation_expected:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
 
     prior_owners = {
         run_id: owner
@@ -4785,8 +5328,188 @@ def _preflight_existing_candidate(
     return state, repository
 
 
+@contextmanager
+def _legacy_raw_append_guard(
+    state: RunState,
+    repository: Path,
+) -> Iterator[None]:
+    """Serialize legacy raw writers with first-use intents and chain outboxes."""
+
+    try:
+        from . import batch as batch_module
+        from . import builders as builders_module
+    except (ImportError, AttributeError) as exc:
+        raise CoordinationRefusal(BATCH_DIVERGED) from exc
+    with batch_module.batch_lock(state.run_dir, create=True) as locked:
+        if (
+            batch_module._validate_no_orphan_intent_temporary(locked)
+            is not None
+            or batch_module._load_intent(locked) is not None
+        ):
+            raise CoordinationRefusal(BATCH_PENDING)
+        try:
+            builders_module._require_no_pending_activation_outbox(
+                repository, state.run_id
+            )
+        except CoordinationRefusal as exc:
+            if str(exc) == builders_module.JOURNAL_OUTBOX_PENDING:
+                raise CoordinationRefusal(BATCH_PENDING) from exc
+            raise
+        yield
+
+
+def _prevalidate_legacy_lifecycle(
+    state_root: Path,
+    repository: Path,
+    run_id: str,
+    record: dict[str, object],
+    current: Owner,
+    *,
+    operation: str,
+    scope: tuple[str, ...] = (),
+    replace: bool = False,
+    authority_supplied: bool = False,
+    record_supplied: bool = True,
+) -> RunState:
+    """Complete lifecycle validation before reserving legacy first use."""
+
+    with _registry_lock(state_root) as registry_lock:
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = _target_state(
+            view,
+            run_id,
+            operation,
+            allow_reserving_retired_close=operation == "run close",
+        )
+        if operation == "run readmit":
+            if authority_supplied and not record_supplied:
+                raise CoordinationRefusal(
+                    "forge: journal append refused — activated writer requires typed builder"
+                )
+            if authority_supplied and (
+                record.get("run_id") != run_id
+                or record.get("scope") != list(scope)
+            ):
+                raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
+        if _writer_contract_active(state.records):
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
+        if operation == "run retire" and state.pre_coordination:
+            raise CoordinationRefusal(
+                "forge: run retire refused — pre-coordination run "
+                f"{run_id} has no admitted scope to reuse; adopt and close it instead"
+            )
+        with _locked_journal(state) as locked:
+            prior = state.records
+            _validate_append_citations(repository, state.run_dir, record)
+            _validate_citation_targets(record, list(prior))
+            _classify_owner(
+                state,
+                current,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            )
+            _validate_proposed_record(
+                record,
+                run_id=run_id,
+                repo_root=repository,
+                scope=scope if operation == "run readmit" else state.scope,
+                prior_records=prior,
+            )
+            if operation == "run readmit":
+                _validate_readmission_scope(
+                    view,
+                    state,
+                    run_id=run_id,
+                    scope=scope,
+                    replace=replace,
+                )
+            if operation == "run close" and record.get("type") != "run_closed":
+                raise CoordinationRefusal(
+                    "forge: journal append refused — lifecycle command required"
+                )
+            _journal_payload(record)
+        return state
+
+
+def _prevalidate_raw_append(
+    state_root: Path,
+    run_id: str,
+    candidate: dict[str, object],
+) -> tuple[RunState, Path]:
+    """Run the legacy append refusal order before creating its stable lock."""
+
+    current = _session_owner()
+    with _registry_lock(state_root) as registry_lock:
+        view = _coordination_view(
+            state_root,
+            owner_target_ids=frozenset({run_id}),
+            locked=registry_lock,
+        )
+        state = _target_state(view, run_id, "journal append")
+        if _writer_contract_active(state.records):
+            raise CoordinationRefusal(
+                "forge: journal append refused — activated writer requires typed builder"
+            )
+        repository = _recorded_repository_root(
+            state.run_dir, state_root, records=state.records
+        )
+        with _locked_journal(state) as locked:
+            prior = state.records
+            _validate_append_citations(repository, state.run_dir, candidate)
+            _validate_citation_targets(candidate, list(prior))
+            _journal_payload(candidate)
+            _classify_owner(
+                state,
+                current,
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            )
+            _validate_append_with_named_scope(
+                candidate,
+                run_id=run_id,
+                repo_root=repository,
+                scope=view.open_runs[run_id],
+                prior_records=prior,
+            )
+            if _ordinary_append_requires_lifecycle_command(candidate):
+                raise CoordinationRefusal(
+                    "forge: journal append refused — lifecycle command required"
+                )
+        return state, repository
+
+
 def append_owned_record(journal: Path, record: object) -> None:
     """Append one record only after the current session proves DM-010 ownership."""
+
+    candidate = _validate_record_envelope(record)
+    supplied = Path(os.path.abspath(os.fspath(journal.expanduser())))
+    run_dir = supplied.parent
+    run_id = _operation_run_id("journal append", run_dir.name)
+    repository_probe = run_dir
+    while not repository_probe.exists() and repository_probe.parent != repository_probe:
+        repository_probe = repository_probe.parent
+    _, state_root = _resolve_repository(repository_probe, "journal append")
+    expected = state_root / ".codex-orchestrator/runs" / run_id / "journal.jsonl"
+    if supplied != expected:
+        raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+    _preflight_existing_candidate(
+        state_root, run_id, "journal append", candidate
+    )
+    state, repository = _prevalidate_raw_append(
+        state_root, run_id, candidate
+    )
+    with _legacy_raw_append_guard(state, repository):
+        _append_owned_record_reserved(journal, record)
+
+
+def _append_owned_record_reserved(journal: Path, record: object) -> None:
+    """Execute append_owned_record after any legacy reservation is held."""
 
     candidate = _validate_record_envelope(record)
     supplied = Path(os.path.abspath(os.fspath(journal.expanduser())))
@@ -5531,7 +6254,7 @@ def open_run(
         or _batch.authority is not _OPEN_BATCH_AUTHORITY
     ):
         raise CoordinationRefusal(
-            "forge: journal append refused — activated writer requires typed batch"
+            "forge: journal append refused — activated writer requires typed builder"
         )
     if not activated_candidate and _batch is not None:
         raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
@@ -6284,6 +7007,26 @@ def append_run_record(
     _typed: bool = False,
 ) -> None:
     candidate = _validate_record_envelope(record)
+    validated_run_id = _operation_run_id("journal append", run_id)
+    _, state_root = _resolve_repository(repo, "journal append")
+    _preflight_existing_candidate(
+        state_root, validated_run_id, "journal append", candidate
+    )
+    state, repository = _prevalidate_raw_append(
+        state_root, validated_run_id, candidate
+    )
+    with _legacy_raw_append_guard(state, repository):
+        _append_run_record_reserved(repo, run_id, record, _typed=_typed)
+
+
+def _append_run_record_reserved(
+    repo: Path,
+    run_id: str,
+    record: object,
+    *,
+    _typed: bool = False,
+) -> None:
+    candidate = _validate_record_envelope(record)
     run_id = _operation_run_id("journal append", run_id)
     _, state_root = _resolve_repository(repo, "journal append")
     _preflight_existing_candidate(
@@ -6379,7 +7122,25 @@ def readmit_run(
         }
     )
     current = _session_owner()
-    with _registry_lock(state_root) as registry_lock:
+    authority_supplied = (
+        _builder_authority is _SCOPE_CHANGE_BUILDER_AUTHORITY
+    )
+    reservation_state = _prevalidate_legacy_lifecycle(
+        state_root,
+        repository,
+        run_id,
+        record,
+        current,
+        operation="run readmit",
+        scope=scope,
+        replace=replace,
+        authority_supplied=authority_supplied,
+        record_supplied=_record is not None,
+    )
+    with (
+        _legacy_raw_append_guard(reservation_state, repository),
+        _registry_lock(state_root) as registry_lock,
+    ):
         view = _coordination_view(
             state_root,
             owner_target_ids=frozenset({run_id}),
@@ -6387,9 +7148,6 @@ def readmit_run(
         )
         state = _target_state(view, run_id, "run readmit")
         activated = _writer_contract_active(state.records)
-        authority_supplied = (
-            _builder_authority is _SCOPE_CHANGE_BUILDER_AUTHORITY
-        )
         if authority_supplied and _record is None:
             raise CoordinationRefusal(
                 "forge: journal append refused — activated writer requires typed builder"
@@ -6522,7 +7280,18 @@ def close_run(
         repository=repository,
     )
     current = _session_owner()
-    with _registry_lock(state_root) as registry_lock:
+    reservation_state = _prevalidate_legacy_lifecycle(
+        state_root,
+        repository,
+        run_id,
+        candidate,
+        current,
+        operation="run close",
+    )
+    with (
+        _legacy_raw_append_guard(reservation_state, repository),
+        _registry_lock(state_root) as registry_lock,
+    ):
         view = _coordination_view(
             state_root,
             owner_target_ids=frozenset({run_id}),
@@ -6605,7 +7374,18 @@ def retire_run(repo: Path, run_id: str) -> None:
     )
     current = _session_owner()
     repository, state_root = _resolve_repository(repo, "run retire")
-    with _registry_lock(state_root) as registry_lock:
+    reservation_state = _prevalidate_legacy_lifecycle(
+        state_root,
+        repository,
+        run_id,
+        record,
+        current,
+        operation="run retire",
+    )
+    with (
+        _legacy_raw_append_guard(reservation_state, repository),
+        _registry_lock(state_root) as registry_lock,
+    ):
         view = _coordination_view(
             state_root,
             owner_target_ids=frozenset({run_id}),
@@ -6746,19 +7526,45 @@ def _read_journal_descriptor_snapshot(
 
 
 def _snapshot_activates_writer(raw: bytes) -> bool:
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        try:
-            opening = json.loads(line.decode("utf-8"))
-        except (UnicodeError, ValueError, RecursionError):
-            return False
-        return bool(
-            isinstance(opening, dict)
-            and opening.get("type") == "run_started"
-            and opening.get("writer_contract") == WRITER_CONTRACT
+    """Return whether a snapshot declares or attempts writer activation."""
+
+    try:
+        records = _parse_raw_records(raw)
+    except CoordinationRefusal:
+        return False
+    return bool(
+        records
+        and records[0].get("type") == "run_started"
+        and records[0].get("writer_contract") == WRITER_CONTRACT
+    ) or any(_writer_activation_candidate(record) for record in records)
+
+
+def _validate_stable_activation_snapshot(path: Path, raw: bytes) -> None:
+    """Apply activation-origin receipt authentication to a reader snapshot."""
+
+    try:
+        records = _parse_raw_records(raw)
+        opening_activated = bool(
+            records
+            and records[0].get("type") == "run_started"
+            and records[0].get("writer_contract") == WRITER_CONTRACT
         )
-    return False
+        has_candidate = any(
+            _writer_activation_candidate(record) for record in records
+        )
+        if not opening_activated and not has_candidate:
+            return
+        origin, marker_interval = _writer_activation_snapshot(raw)
+        if opening_activated and marker_interval is not None:
+            raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
+        _validate_adopted_receipt_coverage(
+            path.parent,
+            raw,
+            origin=origin,
+            marker_interval=marker_interval,
+        )
+    except CoordinationRefusal as exc:
+        raise CoordinationRefusal(JOURNAL_READ_TRANSACTION_REFUSAL) from exc
 
 
 def _stable_journal_read(path: Path) -> bytes:
@@ -6796,6 +7602,7 @@ def _stable_journal_read(path: Path) -> bytes:
             _revalidate_optional_batch_observation(
                 run_descriptor, BATCH_LOCK_NAME, lock_observation
             )
+            _validate_stable_activation_snapshot(path, raw)
             return raw
         try:
             lock_before = os.stat(
@@ -6874,6 +7681,7 @@ def _stable_journal_read(path: Path) -> bytes:
         _revalidate_optional_batch_observation(
             run_descriptor, BATCH_RECEIPTS_NAME, ledger_observation
         )
+        _validate_stable_activation_snapshot(path, raw)
         return raw
     finally:
         if lock_descriptor is not None:

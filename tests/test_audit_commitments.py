@@ -63,6 +63,47 @@ class AuditCommitmentsTests(unittest.TestCase):
         )
         (self.run_dir / "journal.jsonl").write_text(value, encoding="utf-8")
 
+    def install_adopted_writer_contract(self) -> dict[str, object]:
+        records = self.records()
+        close = records.pop()
+        prefix = b"".join(
+            json.dumps(record, separators=(",", ":"), sort_keys=True).encode()
+            + b"\n"
+            for record in records
+        )
+        marker = {
+            "type": "decision",
+            "id": "decision-02",
+            "resolution": "writer-contract-activated: forge-journal-binding/1",
+            "writer_contract": "forge-journal-binding/1",
+            "receipt_origin_size": len(prefix),
+            "receipt_origin_sha256": hashlib.sha256(prefix).hexdigest(),
+            "run_id": "archive-audit",
+            "recorded_at": "2026-09-10T10:00:00Z",
+        }
+        records.extend([marker, close])
+        self.write_records(records)
+        raw = (self.run_dir / "journal.jsonl").read_bytes()
+        receipt = {
+            "schema": "forge-journal-batch-receipt/1",
+            "idempotency_key": hashlib.sha256(b"adopted-audit-fixture").hexdigest(),
+            "request_sha256": hashlib.sha256(
+                b"adopted-audit-fixture-request"
+            ).hexdigest(),
+            "base_size": len(prefix),
+            "batch_sha256": hashlib.sha256(raw[len(prefix) :]).hexdigest(),
+            "record_count": 2,
+            "journal_size": len(raw),
+            "journal_sha256": hashlib.sha256(raw).hexdigest(),
+            "recorded_at": "2026-09-10T10:00:00Z",
+        }
+        (self.run_dir / ".journal-batch.lock").write_bytes(b"")
+        (self.run_dir / ".journal-batch-receipts.jsonl").write_text(
+            json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return marker
+
     def invoke(
         self, script: Path = AUDIT, *, cwd: Path | None = None
     ) -> subprocess.CompletedProcess[bytes]:
@@ -842,10 +883,76 @@ class AuditCommitmentsTests(unittest.TestCase):
 
         self.mutate(activate)
         (self.run_dir / ".journal-batch.lock").write_bytes(b"")
-        (self.run_dir / ".journal-batch-receipts.jsonl").write_bytes(b"receipt\n")
+        journal_bytes = (self.run_dir / "journal.jsonl").read_bytes()
+        journal_sha256 = hashlib.sha256(journal_bytes).hexdigest()
+        receipt = {
+            "schema": "forge-journal-batch-receipt/1",
+            "idempotency_key": hashlib.sha256(
+                b"activated-audit-fixture"
+            ).hexdigest(),
+            "request_sha256": hashlib.sha256(
+                b"activated-audit-fixture-request"
+            ).hexdigest(),
+            "base_size": 0,
+            "batch_sha256": journal_sha256,
+            "record_count": len(self.records()),
+            "journal_size": len(journal_bytes),
+            "journal_sha256": journal_sha256,
+            "recorded_at": "2026-08-28T12:00:00Z",
+        }
+        (self.run_dir / ".journal-batch-receipts.jsonl").write_text(
+            json.dumps(receipt, separators=(",", ":"), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         activated = self.invoke()
         self.assertEqual(0, activated.returncode, activated.stderr)
         self.assertEqual(EXPECTED, activated.stdout)
+
+    def test_adopted_run_audits_without_treating_activation_as_a_commitment(
+        self,
+    ) -> None:
+        marker = self.install_adopted_writer_contract()
+        self.assertNotIn("writer_contract", self.records()[0])
+
+        result = self.invoke()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(EXPECTED, result.stdout)
+        module = self.load_audit_module("adopted_lifecycle")
+        records = self.records_with_lines()
+        auditable = module.commitment_records(records)
+        self.assertFalse(any(record.get("id") == marker["id"] for record in auditable))
+        with mock.patch.object(
+            module.journal_engine, "_writer_activation_marker", return_value=False
+        ):
+            disabled = module.commitment_records(records)
+        self.assertTrue(any(record.get("id") == marker["id"] for record in disabled))
+
+    def test_adopted_activation_classifier_delegation_is_load_bearing(self) -> None:
+        self.install_adopted_writer_contract()
+        (self.run_dir / ".journal-batch-receipts.jsonl").unlink()
+        module = self.load_audit_module("adopted_classifier")
+        records = self.records_with_lines()
+        start = records[0]
+
+        with self.assertRaises(module.Failure) as intact:
+            module.audit_projected_surfaces(
+                records,
+                start,
+                repository=self.repo,
+                run_dir=self.run_dir,
+            )
+        self.assertEqual(5, intact.exception.exit_code)
+        self.assertIn("batch.receipt", intact.exception.diagnostic)
+        with mock.patch.object(
+            module.journal_engine, "writer_contract_active", return_value=False
+        ):
+            module.audit_projected_surfaces(
+                records,
+                start,
+                repository=self.repo,
+                run_dir=self.run_dir,
+            )
 
     def test_pending_intent_is_refused_by_the_locked_reader(self) -> None:
         (self.run_dir / ".journal-batch.lock").write_bytes(b"")

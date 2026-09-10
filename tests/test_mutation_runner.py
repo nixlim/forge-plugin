@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import io
 import json
 import os
+import runpy
 import shutil
 import socket
 import subprocess
@@ -10,6 +14,9 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
+
+from tests._cli_loader import package_module
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "forge" / "run-scoped-mutation.py"
@@ -118,7 +125,16 @@ class MutationRunnerTests(unittest.TestCase):
             head,
         ]
         if journal is not None:
-            arguments.extend(("--journal", str(journal), "--task", task))
+            arguments.extend(
+                (
+                    "--repository",
+                    str(self.repo.resolve()),
+                    "--run-id",
+                    journal.parent.name,
+                    "--task",
+                    task,
+                )
+            )
         invocation_environment = os.environ.copy() if environment is None else environment.copy()
         invocation_environment.setdefault("FORGE_SESSION_PID", str(os.getpid()))
         return subprocess.run(
@@ -166,7 +182,16 @@ class MutationRunnerTests(unittest.TestCase):
             head,
         ]
         if journal is not None:
-            arguments.extend(("--journal", str(journal), "--task", task))
+            arguments.extend(
+                (
+                    "--repository",
+                    str(self.repo.resolve()),
+                    "--run-id",
+                    journal.parent.name,
+                    "--task",
+                    task,
+                )
+            )
         return subprocess.run(
             arguments,
             cwd=self.repo,
@@ -202,10 +227,28 @@ class MutationRunnerTests(unittest.TestCase):
         )
         opening = {
             "type": "run_started",
+            "recorded_at": started_at,
             "run_id": run_id,
+            "goal": "Exercise scoped mutation persistence",
             "repo": str(self.repo.resolve()),
+            "repo_head": "0" * 40,
+            "repo_status": [],
+            "plugin_ref": "forge-mutation-runner-test",
             "scope": ["README.md", "package.json", "pyproject.toml", "src/**", "tests/**"],
         }
+        if not records:
+            records = (
+                {
+                    "type": "task",
+                    "id": "task-04",
+                    "status": "active",
+                    "goal": "Exercise scoped mutation persistence",
+                    "acceptance": ["Mutation evidence remains advisory"],
+                    "files": ["src/**", "tests/**"],
+                    "recorded_at": started_at,
+                    "run_id": run_id,
+                },
+            )
         journal = run_dir / "journal.jsonl"
         journal.write_text(
             "".join(
@@ -243,6 +286,13 @@ class MutationRunnerTests(unittest.TestCase):
 
     def appended_record(self, journal: Path) -> dict[str, object]:
         return json.loads(journal.read_text(encoding="utf-8").splitlines()[-1])
+
+    def receipts(self, journal: Path) -> list[dict[str, object]]:
+        ledger = journal.parent / ".journal-batch-receipts.jsonl"
+        return [
+            json.loads(line)
+            for line in ledger.read_text(encoding="utf-8").splitlines()
+        ]
 
     def evidence(self, result: subprocess.CompletedProcess[str]) -> list[dict[str, object]]:
         return [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
@@ -769,15 +819,209 @@ class MutationRunnerTests(unittest.TestCase):
             [("mutation: python", "passed"), ("mutation: npm", "passed")],
         )
 
+    def test_coordinated_mutation_uses_typed_receipt(self) -> None:
+        changed_form = "true"
+        base, head = self.establish_candidate(
+            mutation_table(f"| python | mutmut run | {changed_form} | 5 |"),
+            candidate_files={"src/new.py": "value = 1\n"},
+        )
+        journal = self.open_journal()
+        observation = (
+            "tool=mutmut run; scope=python; outcome=completed; exit_code=0; "
+            'timeout=5s; scoped_files=["src/new.py"]; output='
+        )
+        preimage = {
+            "schema": "forge-scoped-mutation-journal/1",
+            "repository": str(self.repo.resolve()),
+            "run_id": journal.parent.name,
+            "task": "task-04",
+            "base": base,
+            "head": head,
+            "criterion": "mutation: python",
+            "result": "passed",
+            "check": changed_form,
+            "truncated_observation": observation,
+            "evidence": [],
+        }
+        expected_key = hashlib.sha256(
+            json.dumps(
+                preimage,
+                allow_nan=False,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+        first = self.invoke(base, head, journal=journal)
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(first.stderr, "")
+        verification = self.appended_record(journal)
+        self.assertEqual(verification["id"], "check-01")
+        self.assertEqual(verification["evidence"], [])
+        self.assertEqual(verification["observation"], observation)
+        records = [
+            json.loads(line)
+            for line in journal.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertFalse(
+            any(
+                isinstance(record.get("id"), str)
+                and str(record["id"]).startswith("mutation-")
+                for record in records
+            )
+        )
+        receipts = self.receipts(journal)
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["idempotency_key"], expected_key)
+        self.assertEqual(receipts[0]["record_count"], 2)
+        journal_before = journal.read_bytes()
+        ledger = journal.parent / ".journal-batch-receipts.jsonl"
+        ledger_before = ledger.read_bytes()
+
+        repeated = self.invoke(base, head, journal=journal)
+
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        self.assertEqual(repeated.stderr, "")
+        self.assertEqual(repeated.stdout, first.stdout)
+        self.assertEqual(journal.read_bytes(), journal_before)
+        self.assertEqual(ledger.read_bytes(), ledger_before)
+        self.assertNotIn("append_owned_record", RUNNER.read_text(encoding="utf-8"))
+
+    def test_mutation_persistence_refusal_remains_advisory(self) -> None:
+        base, head = self.establish_candidate(
+            mutation_table("| python | mutmut run | true | 5 |"),
+            candidate_files={"src/new.py": "value = 1\n"},
+        )
+        journal = self.open_journal(run_id="foreign-owner-advisory-run")
+        (journal.parent / "owner").write_text(
+            "pid: 42\nhost: remote-host\nstarted_at: 2026-08-13T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        before = journal.read_bytes()
+
+        result = self.invoke(base, head, journal=journal)
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            result.stderr,
+            "forge: journal append refused — run foreign-owner-advisory-run has live owner "
+            "42@remote-host\n"
+            "forge: scoped mutation journal persistence unavailable — advisory evidence "
+            "emitted only\n",
+        )
+        self.assertEqual(journal.read_bytes(), before)
+        self.assertFalse((journal.parent / ".journal-batch-receipts.jsonl").exists())
+        self.assertEqual(len(self.evidence(result)), 1)
+        self.assertNotIn("activated writer requires typed builder", result.stderr)
+
+    def test_mutation_child_does_not_inherit_session_owner(self) -> None:
+        changed_form = 'test -z "${FORGE_SESSION_PID+x}"'
+        base, head = self.establish_candidate(
+            mutation_table(f"| python | mutmut run | {changed_form} | 5 |"),
+            candidate_files={"src/new.py": "value = 1\n"},
+        )
+        journal = self.open_journal()
+
+        result = self.invoke(base, head, journal=journal)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(self.evidence(result)[0]["result"], "passed")
+        self.assertEqual(self.appended_record(journal)["id"], "check-01")
+        self.assertEqual(len(self.receipts(journal)), 1)
+
+    def test_mutation_group_anchor_and_bash_child_both_scrub_session_owner(self) -> None:
+        runner = runpy.run_path(str(RUNNER))
+        popen = runner["subprocess"].Popen
+        child_environments: list[dict[str, str]] = []
+
+        def capture(*args, **kwargs):
+            child_environments.append(dict(kwargs["env"]))
+            return popen(*args, **kwargs)
+
+        with mock.patch.dict(
+            os.environ, {"FORGE_SESSION_PID": str(os.getpid())}
+        ), mock.patch.object(
+            runner["subprocess"], "Popen", side_effect=capture
+        ):
+            outcome = runner["run_command"]("true", [], 5, self.repo)
+
+        self.assertEqual(outcome.result, "passed")
+        self.assertEqual(len(child_environments), 2)
+        self.assertTrue(
+            all(
+                "FORGE_SESSION_PID" not in environment
+                for environment in child_environments
+            )
+        )
+
+    def test_mutation_journal_controls_are_independently_load_bearing(self) -> None:
+        runner = runpy.run_path(str(RUNNER))
+        controls = runner["MUTATION_JOURNAL_CONTROLS"]
+        self.assertEqual(
+            controls,
+            frozenset({"typed-builder", "deterministic-key", "owner-scrub"}),
+        )
+        record = runner["verification_record"](
+            task="task-04",
+            scope="python",
+            result="passed",
+            check="true",
+            observation="control test",
+        )
+        for control in sorted(controls):
+            with self.subTest(control=control), mock.patch.dict(
+                runner["run_command"].__globals__,
+                {"MUTATION_JOURNAL_CONTROLS": controls - {control}},
+            ):
+                if control == "owner-scrub":
+                    marker = self.repo / "owner-scrub-disabled-must-not-run"
+                    outcome = runner["run_command"](
+                        "touch owner-scrub-disabled-must-not-run", [], 5, self.repo
+                    )
+                    self.assertEqual(outcome.result, "inconclusive")
+                    self.assertEqual(outcome.outcome, "launch-failed")
+                    self.assertFalse(marker.exists())
+                    continue
+                journal = self.open_journal(run_id=f"mutation-control-{control}")
+                before = journal.read_bytes()
+                stderr = io.StringIO()
+                stdout = io.StringIO()
+                with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                    persisted = runner["persist_verification"](
+                        repository=self.repo,
+                        run_id=journal.parent.name,
+                        base="0" * 40,
+                        head="1" * 40,
+                        record=record,
+                    )
+                    runner["emit_journal_request"](
+                        repository=self.repo,
+                        run_id=journal.parent.name,
+                        base="0" * 40,
+                        head="1" * 40,
+                        record=record,
+                    )
+                self.assertFalse(persisted)
+                self.assertEqual(journal.read_bytes(), before)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(
+                    stderr.getvalue(),
+                    "forge: scoped mutation journal persistence unavailable — advisory "
+                    "evidence emitted only\n"
+                    "forge: scoped mutation journal persistence unavailable — advisory "
+                    "evidence emitted only\n",
+                )
+
     def test_nonzero_result_is_journaled_but_runner_remains_advisory(self) -> None:
         changed_form = 'printf "survivors: 2\\n"; exit 7'
         base, head = self.establish_candidate(
             mutation_table(f"| python | mutmut run | {changed_form} | 12 |"),
             candidate_files={"src/new.py": "value = 1\n"},
         )
-        journal = self.open_journal(
-            records=({"type": "task", "id": "task-04", "status": "complete"},),
-        )
+        journal = self.open_journal()
 
         result = self.invoke(base, head, journal=journal)
 
@@ -822,7 +1066,12 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stderr,
-            "forge: new run refused — run registry unavailable\n" * 2,
+            (
+                "forge: journal batch recovery refused — journal diverged from intent\n"
+                "forge: scoped mutation journal persistence unavailable — advisory evidence "
+                "emitted only\n"
+            )
+            * 2,
         )
         self.assertNotIn("Traceback", result.stdout)
         self.assertEqual(
@@ -871,7 +1120,9 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertEqual(
             result.stderr,
             "forge: journal append refused — run foreign-owner-run has live owner "
-            "42@remote-host\n",
+            "42@remote-host\n"
+            "forge: scoped mutation journal persistence unavailable — advisory evidence "
+            "emitted only\n",
         )
         self.assertEqual(journal.read_bytes(), before)
         self.assertEqual(len(self.evidence(result)), 1)
@@ -891,7 +1142,9 @@ class MutationRunnerTests(unittest.TestCase):
         self.assertEqual(
             result.stderr,
             "forge: journal append refused — owner record missing or malformed for "
-            "run missing-owner-run\n",
+            "run missing-owner-run\n"
+            "forge: scoped mutation journal persistence unavailable — advisory evidence "
+            "emitted only\n",
         )
         self.assertEqual(journal.read_bytes(), before)
         self.assertEqual(len(self.evidence(result)), 1)
@@ -1277,6 +1530,121 @@ class MutationRunnerTests(unittest.TestCase):
             verification["observation"][: 2_000 - len(marker)],
             observation[: 2_000 - len(marker)],
         )
+
+    def _assert_deferred_request_survives_fenced_cap(
+        self, mutation_output_size: int, expected_result: str
+    ) -> None:
+        changed_form = (
+            "python3 -c 'import sys; "
+            f"sys.stdout.write(\"x\" * {mutation_output_size})'"
+        )
+        base, head = self.establish_candidate(
+            mutation_table(f"| python | mutmut run | {changed_form} | 5 |"),
+            candidate_files={"tests/test_large_output.py": "def test_value():\n    assert True\n"},
+        )
+        journal_path = self.open_journal(
+            run_id=f"mutation-deferred-{mutation_output_size}"
+        )
+        app = package_module("app")
+        core = package_module("chain_core")
+        runtime = package_module("runtime")
+        prefix = app._MUTATION_JOURNAL_SIDEBAND_PREFIX
+        argv = [
+            "python3",
+            str(RUNNER),
+            "--base",
+            base,
+            "--head",
+            head,
+            "--repository",
+            str(self.repo.resolve()),
+            "--run-id",
+            journal_path.parent.name,
+            "--task",
+            "task-04",
+            "--defer-journal",
+        ]
+        raw_results: list[object] = []
+        persisted: list[object] = []
+
+        def transform(raw: object) -> object:
+            raw_results.append(raw)
+            with mock.patch.dict(
+                os.environ,
+                {"FORGE_SESSION_PID": str(os.getpid())},
+            ):
+                return app._persist_deferred_mutation_result(
+                    raw,
+                    repository=self.repo,
+                    run_id=journal_path.parent.name,
+                    task="task-04",
+                    base=base,
+                    head=head,
+                )
+
+        lock = core.acquire_common_lock(
+            self.repo / ".git",
+            owner_kind="merge",
+            chain_id="c-2026-09-10T050000Z-a105",
+            operation="finalize",
+            use_flock=False,
+            timeout=2,
+            no_transaction_record=True,
+        )
+        try:
+            transformed = core.run_fenced_command(
+                lock,
+                operation="gate",
+                intent_digest=hashlib.sha256(
+                    f"deferred-cap-{mutation_output_size}".encode("ascii")
+                ).hexdigest(),
+                intent_validator=lambda: True,
+                argv=argv,
+                cwd=self.repo,
+                persist_result=persisted.append,
+                env={
+                    **os.environ,
+                    "FORGE_SESSION_PID": str(os.getpid()),
+                    "PYTHONIOENCODING": "utf-8:strict",
+                },
+                timeout=8,
+                cap=runtime.OUTPUT_CAP_BYTES,
+                result_transform=transform,
+            )
+        finally:
+            lock.release()
+
+        self.assertTrue(transformed.output_limit)
+        self.assertEqual(persisted, [transformed])
+        self.assertEqual(len(raw_results), 1)
+        raw = raw_results[0]
+        self.assertTrue(raw.output.startswith(prefix))
+        request_end = raw.output.index(b"\n") + 1
+        self.assertLess(request_end, runtime.OUTPUT_CAP_BYTES)
+        self.assertEqual(len(raw.output), runtime.OUTPUT_CAP_BYTES)
+        self.assertNotIn(prefix, transformed.output)
+        verification = self.appended_record(journal_path)
+        self.assertEqual(
+            verification["id"],
+            "check-01",
+            transformed.output.decode("utf-8", "backslashreplace"),
+        )
+        self.assertEqual(verification["result"], expected_result)
+        self.assertEqual(len(verification["observation"]), 2_000)
+        self.assertTrue(
+            verification["observation"].endswith(
+                "... [truncated for journal; full observation retained in mutation evidence]"
+            )
+        )
+        receipts = self.receipts(journal_path)
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["record_count"], 2)
+
+    def test_deferred_request_survives_fenced_cap_at_mutation_limit(self) -> None:
+        self._assert_deferred_request_survives_fenced_cap(65_536, "passed")
+
+    def test_deferred_request_survives_fenced_cap_over_mutation_limit(self) -> None:
+        self._assert_deferred_request_survives_fenced_cap(65_537, "inconclusive")
 
     def test_non_utf8_git_path_is_backslash_escaped_without_losing_evidence(self) -> None:
         changed_form = "true"

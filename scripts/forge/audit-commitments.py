@@ -19,6 +19,9 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
+SCRIPTS_ROOT = PLUGIN_ROOT / "scripts"
+if str(SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from commitment_paths import (  # noqa: E402
     AUDIT_ACTIVATED_REQUIRED,
@@ -38,13 +41,7 @@ from commitment_paths import (  # noqa: E402
     validate_surface_path,
 )
 
-from scripts.codex_orchestrator.journal import (  # noqa: E402
-    TERMINAL_TASK_STATUSES,
-    WRITER_CONTRACT,
-    _legacy_compatibility_declaration,
-    read_journal,
-    record_line,
-)
+from codex_orchestrator import journal as journal_engine  # noqa: E402
 
 DIAGNOSTIC_PREFIX = "forge: commitment audit failed — "
 CORRECTION_TOKEN = "citation-correction:"
@@ -215,13 +212,13 @@ def record_name(record: dict[str, object]) -> str:
     identifier = record.get("id")
     if isinstance(identifier, str) and identifier:
         return f"{kind} {identifier}"
-    return record_line(record)
+    return journal_engine.record_line(record)
 
 
 def closed_records(
     run_dir: Path,
 ) -> tuple[list[dict[str, object]], dict[str, object], dict[str, object]]:
-    records, issues = read_journal(run_dir / "journal.jsonl")
+    records, issues = journal_engine.read_journal(run_dir / "journal.jsonl")
     if issues:
         fail(2, f"journal invalid: {issues[0]}")
     starts = [record for record in records if record.get("type") == "run_started"]
@@ -233,6 +230,18 @@ def closed_records(
     if not records or records[-1] is not closures[0]:
         fail(2, "run_closed must be the final journal entry")
     return records, starts[0], closures[0]
+
+
+def commitment_records(
+    records: Iterable[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Exclude mechanical lifecycle metadata from commitment semantics."""
+
+    return [
+        record
+        for record in records
+        if not journal_engine._writer_activation_marker(record)
+    ]
 
 
 def known_tasks(records: Iterable[dict[str, object]]) -> set[str]:
@@ -329,7 +338,7 @@ def audit_non_terminal_tasks(records: list[dict[str, object]]) -> list[str]:
     return [
         f"{task} (latest status: {record.get('status')})"
         for task, record in latest.items()
-        if record.get("status") not in TERMINAL_TASK_STATUSES
+        if record.get("status") not in journal_engine.TERMINAL_TASK_STATUSES
     ]
 
 
@@ -754,7 +763,7 @@ def audit_projected_surfaces(
     run_id = start.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         fail(2, "run_started run_id must be a nonempty string")
-    activated = start.get("writer_contract") == WRITER_CONTRACT
+    activated = journal_engine.writer_contract_active(records)
     for surface in commitment_surfaces(enforcement="audit"):
         policy = surface.audit_policy
         if policy == AUDIT_RECORD_CITATION:
@@ -895,32 +904,33 @@ def audit(
     dispense_reason: str | None = None,
 ) -> str:
     records, start, close = closed_records(run_dir)
+    auditable = commitment_records(records)
     repo_root = recorded_repository(start)
-    source_citations = citations(records)
+    source_citations = citations(auditable)
     audited_citations = [
         AuditedCitation(citation, citation.value) for citation in source_citations
     ]
 
     # CONTROL citation-correction BEGIN
-    corrections = citation_corrections(records, source_citations)
+    corrections = citation_corrections(auditable, source_citations)
     audited_citations = apply_corrections(source_citations, corrections)
     # CONTROL citation-correction END
 
     # CONTROL unknown-task BEGIN
-    unknown = audit_unknown_task_references(records)
+    unknown = audit_unknown_task_references(auditable)
     if unknown:
         fail(3, f"unknown task reference: {unknown[0]}")
     # CONTROL unknown-task END
 
     # CONTROL terminal-task BEGIN
-    non_terminal = audit_non_terminal_tasks(records)
+    non_terminal = audit_non_terminal_tasks(auditable)
     if non_terminal:
         fail(4, f"task is non-terminal at close: {non_terminal[0]}")
     # CONTROL terminal-task END
 
     missing = audit_missing_paths(
         audited_citations,
-        records,
+        auditable,
         run_dir,
         repo_root,
     )
@@ -934,7 +944,7 @@ def audit(
     # records at or after the declaration and undeclared journals keep the
     # exact refusal. Only the refusal lives inside the control block, so the
     # disable sensor removes the gate without breaking the rendering.
-    declaration = _legacy_compatibility_declaration(records)
+    declaration = journal_engine._legacy_compatibility_declaration(auditable)
     declaration_line = int(declaration["_line"]) if declaration is not None else None
     legacy_citations = [
         citation
@@ -954,7 +964,7 @@ def audit(
     # journal fails closed instead of being ignored. With the dispensation leg
     # disabled in memory, parsed targets grant nothing and every missing citation
     # keeps the fail(5) refusal.
-    parsed_targets = parse_dispensation_targets(dispense_targets, records)
+    parsed_targets = parse_dispensation_targets(dispense_targets, auditable)
     dispensed_citations: list[AuditedCitation] = []
     for raw, target in zip(dispense_targets, parsed_targets):
         matched = [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.test_e2e_smoke import assemble_codex_prompt
 from pathlib import Path
@@ -242,6 +244,123 @@ class ArchiveRunTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+    @staticmethod
+    def canonical_journal(records: list[dict[str, object]]) -> bytes:
+        return b"".join(
+            json.dumps(
+                record,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+            for record in records
+        )
+
+    def writer_activation_marker(
+        self, *, origin_size: int, origin_sha256: str
+    ) -> dict[str, object]:
+        return {
+            "type": "decision",
+            "id": "decision-08",
+            "resolution": "writer-contract-activated: forge-journal-binding/1",
+            "writer_contract": "forge-journal-binding/1",
+            "receipt_origin_size": origin_size,
+            "receipt_origin_sha256": origin_sha256,
+            "run_id": self.run_id,
+            "recorded_at": "2026-09-10T10:00:00Z",
+        }
+
+    def install_adopted_writer_contract(self) -> dict[str, object]:
+        """Adopt after a recovered overlay record, then close in the marker batch."""
+
+        retained = [
+            record
+            for record in self.records
+            if record.get("type") not in {"verification", "run_closed"}
+        ]
+        overlay = next(
+            record
+            for record in retained
+            if record.get("type") == "task" and record.get("status") == "complete"
+        )
+        legacy = [record for record in retained if record is not overlay]
+        overlay = {
+            **overlay,
+            "run_id": self.run_id,
+            "recorded_at": "2026-09-10T09:59:59Z",
+        }
+        close = next(
+            record for record in self.records if record.get("type") == "run_closed"
+        )
+        close = {
+            **close,
+            "run_id": self.run_id,
+            "recorded_at": "2026-09-10T10:00:00Z",
+        }
+        prefix = self.canonical_journal(legacy)
+        marker = self.writer_activation_marker(
+            origin_size=len(prefix),
+            origin_sha256=hashlib.sha256(prefix).hexdigest(),
+        )
+        recovered_overlay = self.canonical_journal([overlay])
+        adopting = self.canonical_journal([marker, close])
+        marker_base = len(prefix) + len(recovered_overlay)
+        raw = prefix + recovered_overlay + adopting
+
+        def receipt(
+            *, label: bytes, base: int, end: int, record_count: int, recorded_at: str
+        ) -> dict[str, object]:
+            return {
+                "schema": "forge-journal-batch-receipt/1",
+                "idempotency_key": hashlib.sha256(label).hexdigest(),
+                "request_sha256": hashlib.sha256(label + b"-request").hexdigest(),
+                "base_size": base,
+                "batch_sha256": hashlib.sha256(raw[base:end]).hexdigest(),
+                "record_count": record_count,
+                "journal_size": end,
+                "journal_sha256": hashlib.sha256(raw[:end]).hexdigest(),
+                "recorded_at": recorded_at,
+            }
+
+        marker_receipt = receipt(
+            label=b"archive-adoption-close",
+            base=marker_base,
+            end=len(raw),
+            record_count=2,
+            recorded_at="2026-09-10T10:00:00Z",
+        )
+        module = self.load_archive_module("adoption_fixture")
+        repair_receipt = module.journal_engine._derive_repair_receipt(
+            repository=str(self.repo.resolve()),
+            run_id=self.run_id,
+            gap_base=len(prefix),
+            gap_end=marker_base,
+            gap_bytes=recovered_overlay,
+            following=marker_receipt,
+            journal_raw=raw,
+        )
+        # A completed recovery appends its derived repair after the physically
+        # final ordinary receipt that supplied the byte-exact following proof.
+        receipts = [marker_receipt, repair_receipt]
+        self.records = [*legacy, overlay, marker, close]
+        (self.run_dir / "journal.jsonl").write_bytes(raw)
+        (self.run_dir / ".journal-batch.lock").write_bytes(b"")
+        (self.run_dir / ".journal-batch-receipts.jsonl").write_bytes(
+            self.canonical_journal(receipts)
+        )
+        return marker
+
+    def load_archive_module(self, suffix: str):
+        name = f"archive_run_{suffix}"
+        spec = importlib.util.spec_from_file_location(name, ARCHIVER)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        self.addCleanup(sys.modules.pop, name, None)
+        spec.loader.exec_module(module)
+        return module
 
     def refresh_validation_payloads(self) -> None:
         # Preserve the independently passing pre-close snapshot while deriving
@@ -504,6 +623,209 @@ class ArchiveRunTests(unittest.TestCase):
         first = b'<!-- BEGIN VERBATIM DOCUMENT: [ADR](plan%20choice.yaml "binding choice") -->\n'
         last = b'<!-- END VERBATIM DOCUMENT: [ADR](plan%20choice.yaml "binding choice") -->'
         self.assertEqual(archive.split(first, 1)[1].split(last, 1)[0], (self.run_dir / "plan choice.yaml").read_bytes())
+
+    def test_adopted_run_archives_activation_as_lifecycle_metadata(self) -> None:
+        marker = self.install_adopted_writer_contract()
+        self.assertNotIn("writer_contract", self.records[0])
+        raw = (self.run_dir / "journal.jsonl").read_bytes()
+        marker_line = self.canonical_journal([marker])
+        self.assertLess(int(marker["receipt_origin_size"]), raw.index(marker_line))
+        receipts = [
+            json.loads(line)
+            for line in (
+                self.run_dir / ".journal-batch-receipts.jsonl"
+            ).read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(1, sum(receipt.get("repaired") is True for receipt in receipts))
+
+        result = self.invoke()
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        text = self.archive_path.read_text(encoding="utf-8")
+        lifecycle = text.split("## Lifecycle metadata\n", 1)[1].split(
+            "## Decisions\n", 1
+        )[0]
+        decisions = text.split("## Decisions\n", 1)[1].split(
+            "## Learning provenance\n", 1
+        )[0]
+        self.assertIn(f"### {marker['id']}", lifecycle)
+        self.assertIn("Lifecycle event: writer contract activation", lifecycle)
+        self.assertIn(str(marker["resolution"]), lifecycle)
+        self.assertIn(f"Receipt origin size: {marker['receipt_origin_size']}", lifecycle)
+        self.assertIn("### decision-07", decisions)
+        self.assertNotIn(str(marker["id"]), decisions)
+        self.assertIn("Final status: complete", text)
+
+    def test_activation_receipt_snapshot_replacement_is_detected(self) -> None:
+        self.install_adopted_writer_contract()
+        module = self.load_archive_module("activation_receipt_recheck")
+        _records, raw, snapshot = module.stable_archive_journal_snapshot(
+            self.run_dir
+        )
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        replacement = self.run_dir / ".journal-batch-receipts.replacement"
+        replacement.write_bytes(snapshot.receipt_payload)
+        os.replace(
+            replacement,
+            self.run_dir / ".journal-batch-receipts.jsonl",
+        )
+
+        with self.assertRaisesRegex(module.ArchiveRefusal, "snapshot_changed$"):
+            module.recheck_archive_journal_snapshot(
+                self.run_dir,
+                raw,
+                snapshot,
+            )
+
+    def test_activated_journal_snapshot_replacement_is_detected(self) -> None:
+        self.install_adopted_writer_contract()
+        module = self.load_archive_module("activated_journal_recheck")
+        _records, raw, snapshot = module.stable_archive_journal_snapshot(
+            self.run_dir
+        )
+        replacement = self.run_dir / "journal.replacement"
+        replacement.write_bytes(raw)
+        os.replace(replacement, self.run_dir / "journal.jsonl")
+
+        with self.assertRaisesRegex(module.ArchiveRefusal, "snapshot_changed$"):
+            module.recheck_archive_journal_snapshot(
+                self.run_dir,
+                raw,
+                snapshot,
+            )
+
+    def test_legacy_journal_snapshot_replacement_is_detected(self) -> None:
+        module = self.load_archive_module("legacy_journal_recheck")
+        _records, raw, snapshot = module.stable_archive_journal_snapshot(
+            self.run_dir
+        )
+        replacement = self.run_dir / "journal.replacement"
+        replacement.write_bytes(raw)
+        os.replace(replacement, self.run_dir / "journal.jsonl")
+
+        with self.assertRaisesRegex(module.ArchiveRefusal, "snapshot_changed$"):
+            module.recheck_archive_journal_snapshot(
+                self.run_dir,
+                raw,
+                snapshot,
+            )
+
+    def test_archive_activation_classifier_delegation_is_load_bearing(self) -> None:
+        module = self.load_archive_module("activation_classifier")
+        gate_index = next(
+            index
+            for index, record in enumerate(self.records)
+            if record.get("type") == "verification"
+        )
+        prefix = self.canonical_journal(self.records[:gate_index])
+        marker = self.writer_activation_marker(
+            origin_size=len(prefix),
+            origin_sha256=hashlib.sha256(prefix).hexdigest(),
+        )
+        self.records.insert(gate_index, marker)
+        arguments = {
+            "repo": self.repo.resolve(),
+            "run_dir": self.run_dir.resolve(),
+            "records": self.records,
+            "closing_head": self.starting_head,
+            "post_close": self.post_payload,
+            "audit_fragment": "## Residual Risks\n\nNone recorded\n",
+        }
+
+        with self.assertRaises(module.ArchiveRefusal):
+            module.render_archive(**arguments)
+        with mock.patch.object(
+            module.journal_engine, "writer_contract_active", return_value=False
+        ):
+            disabled = module.render_archive(**arguments)
+        self.assertIn("## Lifecycle metadata\n", disabled)
+        self.assertIn("UNBOUND", disabled)
+
+    def test_adopted_archive_keeps_pre_activation_gates_unbound(self) -> None:
+        module = self.load_archive_module("activation_cutoff")
+        close_index = next(
+            index
+            for index, record in enumerate(self.records)
+            if record.get("type") == "run_closed"
+        )
+        prefix = self.canonical_journal(self.records[:close_index])
+        marker = self.writer_activation_marker(
+            origin_size=len(prefix),
+            origin_sha256=hashlib.sha256(prefix).hexdigest(),
+        )
+        self.records.insert(close_index, marker)
+
+        rendered = module.render_archive(
+            repo=self.repo.resolve(),
+            run_dir=self.run_dir.resolve(),
+            records=self.records,
+            closing_head=self.starting_head,
+            post_close=self.post_payload,
+            audit_fragment="## Residual Risks\n\nNone recorded\n",
+        )
+
+        gate_rows = rendered.split("## Gate evidence\n", 1)[1].split(
+            "## Binding discrepancies\n", 1
+        )[0]
+        rows = [line for line in gate_rows.splitlines() if line.startswith("| gate-")]
+        self.assertEqual(3, len(rows))
+        self.assertTrue(all(line.endswith("| UNBOUND | UNBOUND |") for line in rows))
+        self.assertIn("gate-1: project tests", gate_rows)
+        self.assertIn("gate-2: lint and types", gate_rows)
+        self.assertIn("gate-3: review-final verdict", gate_rows)
+
+    def test_typed_opening_and_legacy_render_bytes_have_no_activation_section(
+        self,
+    ) -> None:
+        module = self.load_archive_module("opening_byte_parity")
+        records = [
+            record
+            for record in self.records
+            if record.get("type") != "verification"
+        ]
+        arguments = {
+            "repo": self.repo.resolve(),
+            "run_dir": self.run_dir.resolve(),
+            "closing_head": self.starting_head,
+            "post_close": self.post_payload,
+            "audit_fragment": "## Residual Risks\n\nNone recorded\n",
+        }
+        legacy = module.render_archive(
+            records=records,
+            journal_raw=self.canonical_journal(records),
+            **arguments,
+        )
+        typed_records = json.loads(json.dumps(records))
+        typed_records[0]["writer_contract"] = "forge-journal-binding/1"
+        typed = module.render_archive(
+            records=typed_records,
+            journal_raw=self.canonical_journal(typed_records),
+            **arguments,
+        )
+
+        self.assertEqual(legacy.encode("utf-8"), typed.encode("utf-8"))
+        self.assertNotIn("## Lifecycle metadata\n", legacy)
+        self.assertNotIn("## Lifecycle metadata\n", typed)
+
+    def test_writer_activation_lifecycle_rendering_is_load_bearing(self) -> None:
+        module = self.load_archive_module("activation_lifecycle")
+        marker = self.writer_activation_marker(
+            origin_size=0,
+            origin_sha256="0" * 64,
+        )
+        records = [*self.records[:-1], marker, self.records[-1]]
+        decisions, lifecycle = module.archive_decision_records(records)
+        self.assertIn(marker, lifecycle)
+        self.assertNotIn(marker, decisions)
+
+        with mock.patch.object(
+            module,
+            "RENDERER_CONTROLS",
+            module.RENDERER_CONTROLS - {"writer-activation-lifecycle"},
+        ):
+            with self.assertRaises(module.ArchiveRefusal):
+                module.archive_decision_records(records)
 
     def test_committed_learning_provenance_reaches_real_locked_writer(self) -> None:
         prior_gotchas = b"# Forge Gotchas\n\n- Prior committed observation.\n"

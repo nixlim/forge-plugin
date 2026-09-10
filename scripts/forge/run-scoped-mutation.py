@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -13,9 +14,7 @@ import signal
 import subprocess
 import sys
 import time
-import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 OUTPUT_LIMIT = 65_536
@@ -26,6 +25,14 @@ JOURNAL_TRUNCATION_MARKER = (
 DEFAULT_TIMEOUT_SECONDS = 600
 MALFORMED_DIAGNOSTIC = "forge: executable policy row malformed"
 POLICY_ABSENT_DIAGNOSTIC = "forge: mutation policy absent at HEAD"
+MUTATION_JOURNAL_SCHEMA = "forge-scoped-mutation-journal/1"
+MUTATION_JOURNAL_SIDEBAND_PREFIX = "\x00FMJ1\x00"
+MUTATION_PERSISTENCE_ADVISORY = (
+    "forge: scoped mutation journal persistence unavailable — advisory evidence emitted only"
+)
+MUTATION_JOURNAL_CONTROLS = frozenset(
+    {"typed-builder", "deterministic-key", "owner-scrub"}
+)
 ABSENCE_RE = re.compile(
     r"No mutation tool available for ([^\s]+) — assertion-quality fallback only\."
 )
@@ -60,6 +67,10 @@ TEST_PATTERN_EXCLUSIONS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
 
 class PolicyError(RuntimeError):
     """The committed executable policy cannot be parsed safely."""
+
+
+class _MutationJournalControlUnavailable(RuntimeError):
+    """An in-memory safety control was disabled during verification."""
 
 
 @dataclass(frozen=True)
@@ -426,7 +437,11 @@ def kill_process_group(
 
 
 def run_command(command: str, paths: list[str], timeout: int, repo: Path) -> RunOutcome:
+    if "owner-scrub" not in MUTATION_JOURNAL_CONTROLS:
+        return RunOutcome("inconclusive", "launch-failed", None, "")
     started = time.monotonic()
+    child_environment = os.environ.copy()
+    child_environment.pop("FORGE_SESSION_PID", None)
     try:
         # Keep a dedicated group leader alive and unreaped until cleanup. This
         # reserves the PGID even after the command leader has been polled/reaped,
@@ -434,6 +449,7 @@ def run_command(command: str, paths: list[str], timeout: int, repo: Path) -> Run
         anchor = subprocess.Popen(
             [sys.executable, "-c", "import signal; signal.pause()"],
             cwd=repo,
+            env=child_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -445,6 +461,7 @@ def run_command(command: str, paths: list[str], timeout: int, repo: Path) -> Run
         process = subprocess.Popen(
             ["bash", "-c", command, "forge", *paths],
             cwd=repo,
+            env=child_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -563,52 +580,203 @@ def verification_record(
     observation: str,
     method: str = "command",
 ) -> dict[str, object]:
-    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return {
         "type": "verification",
-        "id": f"mutation-{uuid.uuid4().hex}",
         "task": task,
         "criterion": f"mutation: {scope}",
         "method": method,
         "check": check,
         "result": result,
         "observation": observation,
-        "recorded_at": timestamp,
+        "evidence": [],
     }
 
 
-def append_record(path: Path, record: dict[str, object]) -> None:
-    # forge: modified from upstream — load D13 ownership only for an actual
-    # journal append, so the standalone mutation sensor remains portable.
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from codex_orchestrator.journal import (  # noqa: PLC0415
-            CoordinationRefusal,
-            JournalAppendRefusal,
-            append_owned_record,
-        )
-    except (ImportError, OSError):
-        return
+def truncated_observation(record: dict[str, object]) -> str:
+    observation = record.get("observation")
+    if not isinstance(observation, str):
+        raise ValueError("mutation verification observation must be a string")
+    if len(observation) <= JOURNAL_OBSERVATION_LIMIT:
+        return observation
+    prefix_length = JOURNAL_OBSERVATION_LIMIT - len(JOURNAL_TRUNCATION_MARKER)
+    return observation[:prefix_length] + JOURNAL_TRUNCATION_MARKER
+
+
+def mutation_journal_preimage(
+    *,
+    repository: Path,
+    run_id: str,
+    task: str,
+    base: str,
+    head: str,
+    criterion: str,
+    result: str,
+    check: str,
+    observation: str,
+    evidence: list[str],
+) -> dict[str, object]:
+    """Build the exact deterministic FR-142 mutation-journal key preimage."""
+
+    return {
+        "schema": MUTATION_JOURNAL_SCHEMA,
+        "repository": str(repository.resolve()),
+        "run_id": run_id,
+        "task": task,
+        "base": base,
+        "head": head,
+        "criterion": criterion,
+        "result": result,
+        "check": check,
+        "truncated_observation": observation,
+        "evidence": list(evidence),
+    }
+
+
+def mutation_idempotency_key(preimage: dict[str, object]) -> str:
+    if "deterministic-key" not in MUTATION_JOURNAL_CONTROLS:
+        raise _MutationJournalControlUnavailable()
+    payload = json.dumps(
+        preimage,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def mutation_journal_request(
+    *,
+    repository: Path,
+    run_id: str,
+    base: str,
+    head: str,
+    record: dict[str, object],
+) -> dict[str, object]:
+    if "typed-builder" not in MUTATION_JOURNAL_CONTROLS:
+        raise _MutationJournalControlUnavailable()
+    observation = truncated_observation(record)
+    evidence = record.get("evidence")
+    if not isinstance(evidence, list) or not all(isinstance(item, str) for item in evidence):
+        raise ValueError("mutation verification evidence must be an array of strings")
+    values: dict[str, str] = {}
+    for field in ("task", "criterion", "method", "check", "result"):
+        value = record.get(field)
+        if not isinstance(value, str):
+            raise ValueError(f"mutation verification {field} must be a string")
+        values[field] = value
+    preimage = mutation_journal_preimage(
+        repository=repository,
+        run_id=run_id,
+        task=values["task"],
+        base=base,
+        head=head,
+        criterion=values["criterion"],
+        result=values["result"],
+        check=values["check"],
+        observation=observation,
+        evidence=evidence,
+    )
+    return {
+        **preimage,
+        "method": values["method"],
+        "idempotency_key": mutation_idempotency_key(preimage),
+    }
+
+
+def _report_persistence_failure(error: Exception) -> None:
+    detail = str(error)
+    if detail.startswith("forge: "):
+        print(detail, file=sys.stderr)
+    print(MUTATION_PERSISTENCE_ADVISORY, file=sys.stderr)
+
+
+def persist_verification(
+    *,
+    repository: Path,
+    run_id: str,
+    base: str,
+    head: str,
+    record: dict[str, object],
+) -> bool:
+    """Persist one ordinary verification only through the typed builder."""
 
     try:
-        journal_record = record.copy()
-        observation = journal_record.get("observation")
-        if isinstance(observation, str) and len(observation) > JOURNAL_OBSERVATION_LIMIT:
-            prefix_length = JOURNAL_OBSERVATION_LIMIT - len(JOURNAL_TRUNCATION_MARKER)
-            journal_record["observation"] = observation[:prefix_length] + JOURNAL_TRUNCATION_MARKER
-        append_owned_record(path, journal_record)
-    except JournalAppendRefusal as exc:
-        # FR-191 ownership refusals are hard and operator-visible, while the
-        # mutation result itself retains its established advisory disposition.
-        print(str(exc), file=sys.stderr)
+        if "typed-builder" not in MUTATION_JOURNAL_CONTROLS:
+            raise _MutationJournalControlUnavailable()
+        request = mutation_journal_request(
+            repository=repository,
+            run_id=run_id,
+            base=base,
+            head=head,
+            record=record,
+        )
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from codex_orchestrator import builders  # noqa: PLC0415
+
+        builders.verification_add(
+            repository,
+            run_id,
+            idempotency_key=str(request["idempotency_key"]),
+            task=str(request["task"]),
+            criterion=str(request["criterion"]),
+            method=str(request["method"]),
+            check=str(request["check"]),
+            result=str(request["result"]),
+            observation=str(request["truncated_observation"]),
+            evidence=list(request["evidence"]),
+            binding_chain=None,
+            binding_id=None,
+        )
+        return True
+    except Exception as error:  # Persistence is advisory; never raw-fallback.
+        _report_persistence_failure(error)
+        return False
+
+
+def emit_journal_request(
+    *,
+    repository: Path,
+    run_id: str,
+    base: str,
+    head: str,
+    record: dict[str, object],
+) -> None:
+    try:
+        request = mutation_journal_request(
+            repository=repository,
+            run_id=run_id,
+            base=base,
+            head=head,
+            record=record,
+        )
+        print(
+            MUTATION_JOURNAL_SIDEBAND_PREFIX
+            + json_text(request, allow_nan=False, sort_keys=True, separators=(",", ":"))
+        )
+    except Exception as error:
+        _report_persistence_failure(error)
+
+
+def handle_journal_record(args: argparse.Namespace, record: dict[str, object]) -> None:
+    if args.repository is None:
         return
-    except CoordinationRefusal as exc:
-        print(str(exc), file=sys.stderr)
+    if args.defer_journal:
+        emit_journal_request(
+            repository=args.repository,
+            run_id=args.run_id,
+            base=args.base,
+            head=args.head,
+            record=record,
+        )
         return
-    except (OSError, UnicodeError):
-        # Evidence is emitted before every append attempt. Journal persistence is
-        # advisory, so a write failure degrades to that evidence-only record.
-        return
+    persist_verification(
+        repository=args.repository,
+        run_id=args.run_id,
+        base=args.base,
+        head=args.head,
+        record=record,
+    )
 
 
 def emit_evidence(record: dict[str, object], *, diagnostic: str | None = None) -> None:
@@ -618,6 +786,21 @@ def emit_evidence(record: dict[str, object], *, diagnostic: str | None = None) -
     if diagnostic is not None:
         evidence["diagnostic"] = diagnostic
     print(json_text({"type": "mutation_evidence", **evidence}))
+
+
+def emit_record(
+    args: argparse.Namespace,
+    record: dict[str, object],
+    *,
+    diagnostic: str | None = None,
+) -> None:
+    """Emit trusted deferred sideband before cap-consuming public evidence."""
+
+    if args.defer_journal:
+        handle_journal_record(args, record)
+    emit_evidence(record, diagnostic=diagnostic)
+    if not args.defer_journal:
+        handle_journal_record(args, record)
 
 
 def emit_unavailable(diagnostic: str) -> None:
@@ -645,13 +828,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, help="Fixed full-SHA candidate base.")
     parser.add_argument("--head", required=True, help="Fixed full-SHA candidate head.")
-    parser.add_argument("--journal", type=Path, help="Explicit open-run journal.jsonl path.")
+    parser.add_argument(
+        "--repository",
+        type=Path,
+        help="Repository bound to the explicitly selected coordinated run.",
+    )
+    parser.add_argument("--run-id", help="Explicitly selected coordinated run ID.")
     parser.add_argument("--task", help="Task id in the explicitly selected open run.")
+    parser.add_argument(
+        "--defer-journal",
+        action="store_true",
+        help="Emit trusted persistence requests for the lock-owning parent process.",
+    )
     args = parser.parse_args(argv)
-    if (args.journal is None) != (args.task is None):
-        parser.error("--journal and --task must be supplied together")
-    if args.task is not None and (not args.task or "\n" in args.task or "\r" in args.task):
-        parser.error("--task must be a nonempty single-line value")
+    coordinated = (args.repository, args.run_id, args.task)
+    if any(value is not None for value in coordinated) and not all(
+        value is not None for value in coordinated
+    ):
+        parser.error("--repository, --run-id, and --task must be supplied together")
+    for name in ("run_id", "task"):
+        value = getattr(args, name)
+        if value is not None and (not value or "\n" in value or "\r" in value):
+            parser.error(f"--{name.replace('_', '-')} must be a nonempty single-line value")
+    if args.defer_journal and args.repository is None:
+        parser.error("--defer-journal requires coordinated run arguments")
+    if args.repository is not None:
+        args.repository = args.repository.resolve()
     return args
 
 
@@ -707,9 +909,7 @@ def main(argv: list[str] | None = None) -> int:
                 observation=observation,
                 method="inspection",
             )
-            emit_evidence(record, diagnostic=MALFORMED_DIAGNOSTIC)
-            if args.journal:
-                append_record(args.journal, record)
+            emit_record(args, record, diagnostic=MALFORMED_DIAGNOSTIC)
         else:
             emit_unavailable(diagnostic)
         return 0
@@ -736,9 +936,7 @@ def main(argv: list[str] | None = None) -> int:
             check=row.changed_files_form,
             observation=observation,
         )
-        emit_evidence(record)
-        if args.journal:
-            append_record(args.journal, record)
+        emit_record(args, record)
         evidence_emitted = True
 
     for stack in sorted(absences):
@@ -757,9 +955,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 method="inspection",
             )
-            emit_evidence(record)
-            if args.journal:
-                append_record(args.journal, record)
+            emit_record(args, record)
             evidence_emitted = True
             continue
         synthetic = MutationRow(category, f"No mutation tool available for {stack}", ":", 600)
@@ -777,9 +973,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 method="inspection",
             )
-            emit_evidence(record)
-            if args.journal:
-                append_record(args.journal, record)
+            emit_record(args, record)
             evidence_emitted = True
 
     if not evidence_emitted:
@@ -800,9 +994,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             method="inspection",
         )
-        emit_evidence(record)
-        if args.journal:
-            append_record(args.journal, record)
+        emit_record(args, record)
     return 0
 
 

@@ -1434,6 +1434,8 @@ def _build_chain_journal_records(
     event: str,
     details: Mapping[str, Any],
     source_event_digest: str,
+    *,
+    retrospective_ingest: bool = False,
 ) -> tuple[dict[str, Any], ...]:
     """Build the exact ordinary records carried by one consequential event."""
 
@@ -1455,6 +1457,21 @@ def _build_chain_journal_records(
     ]
     if not task_records or task_records[-1].get("status") != "active":
         raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+
+    activation_preamble: tuple[dict[str, Any], ...] | None = None
+
+    def projected_run_records() -> list[dict[str, Any]]:
+        nonlocal activation_preamble
+        if activation_preamble is None:
+            activation_preamble = (
+                ()
+                if journal._writer_contract_active(run_state.records)
+                or retrospective_ingest
+                else batch.prepare_outbox_records(
+                    _canonical_repository, run_state, ()
+                )
+            )
+        return [*run_state.records, *activation_preamble]
 
     record: dict[str, Any] | None = None
     binding_review: dict[str, Any] | None = None
@@ -1499,7 +1516,7 @@ def _build_chain_journal_records(
         argv = fact.get("command_argv")
         record = {
             "type": "verification",
-            "id": builders._allocate_id(run_state.records, "verification"),
+            "id": builders._allocate_id(projected_run_records(), "verification"),
             "task": task_id,
             "criterion": criterion,
             "method": (
@@ -1549,7 +1566,7 @@ def _build_chain_journal_records(
         argv = fact["command_argv"]
         record = {
             "type": "verification",
-            "id": builders._allocate_id(run_state.records, "verification"),
+            "id": builders._allocate_id(projected_run_records(), "verification"),
             "task": task_id,
             "criterion": "gate-2: secret-scan",
             "method": "Forge CLI commit chain",
@@ -1626,7 +1643,7 @@ def _build_chain_journal_records(
         verdict_path = verdict.get("verdict_path")
         record = {
             "type": "verification",
-            "id": builders._allocate_id(run_state.records, "verification"),
+            "id": builders._allocate_id(projected_run_records(), "verification"),
             "task": task_id,
             "criterion": journal.GATE_3_CRITERION,
             "method": "independent review-final",
@@ -1650,7 +1667,7 @@ def _build_chain_journal_records(
         transcript = identity.get("transcript")
         record = {
             "type": "verification",
-            "id": builders._allocate_id(run_state.records, "verification"),
+            "id": builders._allocate_id(projected_run_records(), "verification"),
             "task": task_id,
             "criterion": "gate-2: produced commit identity",
             "method": "Forge CLI bounded raw commit-object verification",
@@ -1724,7 +1741,7 @@ def _build_chain_journal_records(
         }[event]
         record = {
             "type": "decision",
-            "id": builders._allocate_id(run_state.records, "decision"),
+            "id": builders._allocate_id(projected_run_records(), "decision"),
             "task": task_id,
             "resolution": resolution,
             "outcome": outcome,
@@ -1732,11 +1749,14 @@ def _build_chain_journal_records(
         }
     if record is None:
         return ()
+    if activation_preamble is None:
+        projected_run_records()
+    assert activation_preamble is not None
     record = builders._with_derived(record, run_id)
     record["binding"] = _binding_for_commit_event(
         state, source_event_digest, binding_review
     )
-    return (record,)
+    return (*activation_preamble, record)
 
 
 # cli split phase 2b: chain_core reaches the journal-record builder through this
@@ -8394,7 +8414,7 @@ class Engine:
             # Keep proof-derived ID allocation and the builder's receipt/intent
             # decision on one stable journal snapshot.  The task-03 lock is
             # deliberately re-entrant for this verifier-to-builder handoff.
-            with batch.batch_lock(run_dir, create=False):
+            with batch.batch_lock(run_dir, create=True):
                 ingested = batch.lookup_existing_batch(
                     canonical_repository,
                     run_id,

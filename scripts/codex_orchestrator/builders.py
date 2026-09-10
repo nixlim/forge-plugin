@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -85,6 +86,11 @@ JOURNAL_OUTBOX_PENDING = (
 RUN_CLOSE_VALIDATION_REFUSAL = (
     "forge: journal builder refused — passing run validation failed"
 )
+# Activation scans cap states well above the observed 89,294-byte maximum and
+# full event histories above the observed 4,258,703-byte maximum.
+_ACTIVATION_STATE_CAP_BYTES = 1_048_576
+_ACTIVATION_EVENTS_CAP_BYTES = 8_388_608
+_ACTIVATION_EVENT_ONE_CAP_BYTES = 65_536
 
 # DM-014 events are deltas, not the full-state snapshots carried by DM-012.
 # The merge engine must install its own authoritative reducer before a merge
@@ -854,8 +860,318 @@ def _allocate_id(
             continue
         suffix = value[len(prefix) :]
         if suffix.isdigit():
-            highest = max(highest, int(suffix))
-    return f"{prefix}{highest + 1:02d}"
+            if not suffix.isascii() or len(suffix) > 64:
+                raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+            try:
+                highest = max(highest, int(suffix))
+            except (ValueError, OverflowError) as exc:
+                raise journal.CoordinationRefusal(
+                    journal.BATCH_DIVERGED
+                ) from exc
+    allocated = f"{highest + 1:02d}"
+    if len(allocated) > 64:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    return f"{prefix}{allocated}"
+
+
+def _writer_activation_decision(
+    state: journal.RunState,
+    *,
+    receipt_origin_size: int,
+    receipt_origin_sha256: str,
+    recorded_at: str | None = None,
+) -> dict[str, object]:
+    """Allocate the sole builder-owned activation preamble for a legacy run."""
+
+    record = {
+        "type": "decision",
+        "id": _allocate_id(state.records, "decision"),
+        "resolution": journal.WRITER_ACTIVATION_RESOLUTION,
+        "writer_contract": journal.WRITER_CONTRACT,
+        "receipt_origin_size": receipt_origin_size,
+        "receipt_origin_sha256": receipt_origin_sha256,
+        "run_id": state.run_id,
+        "recorded_at": recorded_at or journal._utc_now(),
+    }
+    if not journal._writer_activation_marker(record):
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    return record
+
+
+def _activation_chain_bound_to_run(
+    binding: object, repository: Path, run_id: str
+) -> bool:
+    """Classify only a materialized chain claim for activation reservation."""
+
+    return bool(
+        isinstance(binding, dict)
+        and binding.get("run_id") == run_id
+        and binding.get("repository") == str(repository)
+    )
+
+
+def _activation_chain_names(descriptor: int) -> tuple[str, ...]:
+    """Snapshot activation-scan names through one focused race-test seam."""
+
+    return tuple(os.listdir(descriptor))
+
+
+def _activation_bound_set_stable(
+    initial: dict[str, object], current: dict[str, object]
+) -> bool:
+    """Require exact continuity only for chains claiming the adopting run."""
+
+    return initial == current
+
+
+def _activation_event_one_binding_authority_unchecked(
+    descriptor: int, chain_id: str
+) -> tuple[str, object] | None:
+    raw = _read_regular_first_line_at(
+        descriptor,
+        f"{chain_id}.events.jsonl",
+        cap=_ACTIVATION_EVENT_ONE_CAP_BYTES,
+    )
+    event = json.loads(raw.decode("utf-8"))
+    if not isinstance(event, dict) or raw != journal._canonical_json_bytes(event) + b"\n":
+        return None
+    projection = {name: event[name] for name in event if name != "digest"}
+    if event.get("digest") != journal._sha256(
+        journal._canonical_json_bytes(projection)
+    ):
+        return None
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    snapshot = payload.get("state")
+    if (
+        set(event) == {"digest", "payload", "prev_digest", "sequence"}
+        and event.get("sequence") == 1
+        and event.get("prev_digest") == "0" * 64
+        and set(payload) == {"at", "details", "event", "state"}
+        and payload.get("event") == "chain_started"
+        and isinstance(snapshot, dict)
+        and "run_binding" in snapshot
+        and "journal_outbox" in snapshot
+        and _state_shape_valid(snapshot, chain_id, "commit")
+    ):
+        return "commit", snapshot.get("run_binding")
+    delta = payload.get("delta")
+    if (
+        set(event)
+        == {
+            "schema",
+            "chain_id",
+            "sequence",
+            "at",
+            "event",
+            "generation_digest",
+            "previous_digest",
+            "payload",
+            "digest",
+        }
+        and event.get("schema") == "forge-merge-event/1"
+        and event.get("chain_id") == chain_id
+        and event.get("sequence") == 1
+        and event.get("previous_digest") == "0" * 64
+        and event.get("event") == "chain_started"
+        and isinstance(delta, dict)
+        and "run_binding" in delta
+        and _run_binding_valid(delta.get("run_binding"))
+    ):
+        return "merge", delta.get("run_binding")
+    return None
+
+
+def _activation_event_one_binding_authority(
+    descriptor: int, chain_id: str
+) -> tuple[str, object] | None:
+    """Return the family and binding carried by authenticated event one."""
+
+    try:
+        return _activation_event_one_binding_authority_unchecked(
+            descriptor, chain_id
+        )
+    except (
+        journal.CoordinationRefusal,
+        UnicodeError,
+        ValueError,
+        RecursionError,
+        MemoryError,
+    ):
+        return None
+
+
+def _activation_event_one_has_current_binding_authority(
+    descriptor: int,
+    chain_id: str,
+    family: str,
+    materialized: object,
+) -> bool:
+    """Recognize current binding authority without replaying unrelated history."""
+
+    if family not in {"commit", "merge"} or not _state_shape_valid(
+        materialized, chain_id, family
+    ):
+        return False
+    authority = _activation_event_one_binding_authority(descriptor, chain_id)
+    return authority is not None and authority[0] == family
+
+
+def _require_no_pending_activation_outbox(
+    repository: Path, run_id: str
+) -> None:
+    """Reserve legacy first use against authenticated durable chain outboxes."""
+
+    chains_root = chain_storage_root(repository)
+    descriptor: int | None = None
+    try:
+        descriptor, root_observation = journal._open_bound_directory(
+            chains_root
+        )
+        names = _activation_chain_names(descriptor)
+        if (
+            journal._file_observation(os.fstat(descriptor))
+            != root_observation
+            or journal._file_observation(os.lstat(chains_root))
+            != root_observation
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    except FileNotFoundError:
+        return
+    except journal.CoordinationRefusal:
+        raise
+    except OSError as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+    try:
+        warned: set[str] = set()
+
+        def warn_unreadable(chain_id: str, family: str = "activation") -> None:
+            if chain_id in warned:
+                return
+            warned.add(chain_id)
+            print(
+                "forge: warning — skipped unreadable chain "
+                f"{chain_id} while enumerating {family} chains",
+                file=sys.stderr,
+            )
+
+        def bound_materialized_states(
+            observed_names: Iterable[str],
+        ) -> dict[str, object]:
+            state_ids = {
+                name[:-5]
+                for name in observed_names
+                if name.endswith(".json")
+                and journal.CHAIN_ID_PATTERN.fullmatch(name[:-5]) is not None
+            }
+            event_ids = {
+                name[: -len(".events.jsonl")]
+                for name in observed_names
+                if name.endswith(".events.jsonl")
+                and journal.CHAIN_ID_PATTERN.fullmatch(
+                    name[: -len(".events.jsonl")]
+                )
+                is not None
+            }
+            bound: dict[str, object] = {}
+            for chain_id in sorted(state_ids | event_ids, key=os.fsencode):
+                if chain_id not in state_ids:
+                    warn_unreadable(chain_id)
+                    continue
+                try:
+                    state = _read_json_at(
+                        descriptor,
+                        f"{chain_id}.json",
+                        cap=_ACTIVATION_STATE_CAP_BYTES,
+                    )
+                except journal.CoordinationRefusal as exc:
+                    authority = _activation_event_one_binding_authority(
+                        descriptor, chain_id
+                    )
+                    family, binding = (
+                        authority if authority is not None else ("activation", None)
+                    )
+                    if _activation_chain_bound_to_run(
+                        binding, repository, run_id
+                    ):
+                        raise journal.CoordinationRefusal(
+                            journal.BATCH_DIVERGED
+                        ) from exc
+                    warn_unreadable(chain_id, family)
+                    continue
+                if not isinstance(state, dict):
+                    warn_unreadable(chain_id)
+                    continue
+                family = (
+                    str(state["kind"])
+                    if state.get("kind") in {"commit", "merge"}
+                    else "activation"
+                )
+                binding = state.get("run_binding")
+                if _activation_chain_bound_to_run(
+                    binding, repository, run_id
+                ):
+                    bound[chain_id] = binding
+                    continue
+                if not _activation_event_one_has_current_binding_authority(
+                    descriptor, chain_id, family, state
+                ):
+                    warn_unreadable(chain_id, family)
+            return bound
+
+        bound = bound_materialized_states(names)
+        for chain_id in sorted(bound, key=os.fsencode):
+            binding = bound[chain_id]
+            try:
+                replayed = _resolve_binding_from_descriptor(
+                    repository,
+                    descriptor,
+                    chain_id,
+                    "0" * 64,
+                    expected_type=None,
+                    expected_fields=None,
+                    expected_run_id=None,
+                    expected_task_id=None,
+                    replay_only=True,
+                    allow_pending=True,
+                    validate_lineage=False,
+                    resolve_tombstone=False,
+                    state_cap=_ACTIVATION_STATE_CAP_BYTES,
+                    events_cap=_ACTIVATION_EVENTS_CAP_BYTES,
+                )
+            except (journal.CoordinationRefusal, MemoryError) as exc:
+                raise journal.CoordinationRefusal(
+                    journal.BATCH_DIVERGED
+                ) from exc
+            if replayed.get("run_binding") != binding:
+                raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+            if replayed.get("journal_outbox") is not None:
+                raise journal.CoordinationRefusal(
+                    JOURNAL_OUTBOX_PENDING
+                )
+        final_names = _activation_chain_names(descriptor)
+        final_bound = bound_materialized_states(final_names)
+        required_artifacts = {
+            artifact
+            for chain_id in final_bound
+            for artifact in (
+                f"{chain_id}.json",
+                f"{chain_id}.events.jsonl",
+            )
+        }
+        if (
+            journal._file_observation(os.fstat(descriptor))
+            != root_observation
+            or journal._file_observation(os.lstat(chains_root))
+            != root_observation
+            or not _activation_bound_set_stable(bound, final_bound)
+            or not required_artifacts.issubset(final_names)
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _require_new_chain_binding(
@@ -888,27 +1204,110 @@ def _chain_paths(repository: Path, chain_id: str) -> tuple[Path, Path]:
     return root / f"{chain_id}.json", root / f"{chain_id}.events.jsonl"
 
 
-def _read_regular_bytes_at(root_descriptor: int, name: str) -> bytes:
+def _read_regular_first_line_at(
+    root_descriptor: int, name: str, *, cap: int
+) -> bytes:
+    """Read one bounded LF-terminated line from a stable regular file."""
+
     descriptor: int | None = None
     try:
         before = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
         if not journal._batch_regular_stat_valid(before):
             raise ValueError
+        observation = journal._file_observation(before)
         descriptor = os.open(
             name,
             os.O_RDONLY
             | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0),
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=root_descriptor,
+        )
+        opened = os.fstat(descriptor)
+
+        def unchanged(current: os.stat_result) -> bool:
+            return bool(
+                journal._batch_regular_stat_valid(current)
+                and journal._file_observation(current) == observation
+                and current.st_size == before.st_size
+                and current.st_mtime_ns == before.st_mtime_ns
+                and current.st_ctime_ns == before.st_ctime_ns
+            )
+
+        if not unchanged(opened):
+            raise ValueError
+        buffered = bytearray()
+        while len(buffered) < cap + 1:
+            chunk = os.read(descriptor, min(8192, cap + 1 - len(buffered)))
+            if not chunk:
+                break
+            newline = chunk.find(b"\n")
+            if newline >= 0:
+                buffered.extend(chunk[: newline + 1])
+                break
+            buffered.extend(chunk)
+        after = os.fstat(descriptor)
+        rebound = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
+        raw = bytes(buffered)
+        if (
+            not unchanged(after)
+            or not unchanged(rebound)
+            or len(raw) > cap
+            or not raw.endswith(b"\n")
+        ):
+            raise ValueError
+        return raw
+    except (OSError, ValueError, MemoryError) as exc:
+        raise _binding_replay_refusal() from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _read_regular_bytes_at(
+    root_descriptor: int, name: str, *, cap: int | None = None
+) -> bytes:
+    descriptor: int | None = None
+    try:
+        if cap is not None and (type(cap) is not int or cap < 0):
+            raise ValueError
+        before = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
+        if not journal._batch_regular_stat_valid(before):
+            raise ValueError
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        if cap is not None:
+            flags |= getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(
+            name,
+            flags,
             dir_fd=root_descriptor,
         )
         opened = os.fstat(descriptor)
         if journal._file_observation(opened) != journal._file_observation(before):
             raise ValueError
-        raw = journal._read_descriptor(descriptor)
+        over_cap = False
+        if cap is None:
+            raw = journal._read_descriptor(descriptor)
+        else:
+            buffered = bytearray()
+            while len(buffered) < cap:
+                chunk = os.read(descriptor, min(1024 * 1024, cap - len(buffered)))
+                if not chunk:
+                    break
+                buffered.extend(chunk)
+            over_cap = bool(os.read(descriptor, 1))
+            raw = bytes(buffered)
         after = os.fstat(descriptor)
         rebound = os.stat(name, dir_fd=root_descriptor, follow_symlinks=False)
         if (
-            journal._file_observation(after) != journal._file_observation(before)
+            over_cap
+            or (cap is not None and len(raw) > cap)
+            or journal._file_observation(after)
+            != journal._file_observation(before)
             or journal._file_observation(rebound)
             != journal._file_observation(before)
             or after.st_size != before.st_size
@@ -918,15 +1317,29 @@ def _read_regular_bytes_at(root_descriptor: int, name: str) -> bytes:
         return raw
     except (OSError, ValueError) as exc:
         raise _binding_replay_refusal() from exc
+    except MemoryError as exc:
+        if cap is None:
+            raise
+        raise _binding_replay_refusal() from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
 
 
-def _read_json_at(root_descriptor: int, name: str) -> object:
+def _read_json_at(
+    root_descriptor: int, name: str, *, cap: int | None = None
+) -> object:
     try:
-        return json.loads(_read_regular_bytes_at(root_descriptor, name).decode("utf-8"))
+        if cap is None:
+            raw = _read_regular_bytes_at(root_descriptor, name)
+        else:
+            raw = _read_regular_bytes_at(root_descriptor, name, cap=cap)
+        return json.loads(raw.decode("utf-8"))
     except (UnicodeError, ValueError, RecursionError) as exc:
+        raise _binding_replay_refusal() from exc
+    except MemoryError as exc:
+        if cap is None:
+            raise
         raise _binding_replay_refusal() from exc
 
 
@@ -3630,6 +4043,25 @@ def _event_batch_records(
     ):
         raise _binding_replay_refusal()
     records = tuple(dict(record) for record in carried["records"])
+    activation_preamble = (
+        records[:1]
+        if records and journal._writer_activation_candidate(records[0])
+        else ()
+    )
+    ordinary_records = records[len(activation_preamble) :]
+    if (
+        any(
+            journal._writer_activation_candidate(record)
+            for record in ordinary_records
+        )
+        or (
+            activation_preamble
+            and not journal._writer_activation_marker(
+                activation_preamble[0]
+            )
+        )
+    ):
+        raise _binding_replay_refusal()
     batch_bytes = b"".join(journal._journal_line(record) for record in records)
     if journal._sha256(batch_bytes) != carried["batch_digest"]:
         raise _binding_replay_refusal()
@@ -3668,7 +4100,7 @@ def _event_batch_records(
     chain_id = event.get("chain_id")
     if family == "commit" and isinstance(snapshotted_state, dict):
         chain_id = snapshotted_state.get("chain_id")
-    for record in records:
+    for record in ordinary_records:
         binding = record.get("binding")
         if (
             record.get("type") not in {"verification", "decision"}
@@ -4213,8 +4645,23 @@ def _merge_outbox_matches_expected_records(
     records = batch_value.get("records")
     if (
         not isinstance(records, list)
-        or len(records) != len(expected)
-        or batch_value.get("record_count") != len(expected)
+        or batch_value.get("record_count") != len(records)
+    ):
+        return False
+    activation_preamble = (
+        records[:1]
+        if records and journal._writer_activation_candidate(records[0])
+        else []
+    )
+    ordinary_records = records[len(activation_preamble) :]
+    if (
+        len(ordinary_records) != len(expected)
+        or (
+            activation_preamble
+            and not journal._writer_activation_marker(
+                activation_preamble[0]
+            )
+        )
     ):
         return False
     return all(
@@ -4222,7 +4669,7 @@ def _merge_outbox_matches_expected_records(
         and record.get("type") == record_type
         and record.get(field) == value
         for record, (record_type, field, value) in zip(
-            records, expected, strict=True
+            ordinary_records, expected, strict=True
         )
     )
 
@@ -5706,7 +6153,9 @@ def _verify_receipted_batch(
     )
     try:
         with batch.batch_lock(run_dir, create=False) as locked:
-            receipts, _raw, _observation = batch._load_receipts(locked)
+            receipts, _raw, _observation = (
+                batch._load_receipts_for_chain_replay(locked)
+            )
             matches = [
                 receipt
                 for receipt in receipts
@@ -6477,25 +6926,36 @@ def _resolve_binding_from_descriptor(
     replay_only: bool = False,
     allow_pending: bool = False,
     validate_lineage: bool = True,
+    verify_external: bool = True,
     ownership_summary: bool = False,
     tombstone_candidate: object | None = None,
+    resolve_tombstone: bool = True,
+    state_cap: int | None = None,
+    events_cap: int | None = None,
 ) -> dict[str, object]:
-    tombstone = _resolve_tombstone_abort_binding(
-        chains_descriptor,
-        chain_id,
-        binding_id,
-        expected_type=expected_type,
-        expected_fields=expected_fields,
-        replay_only=replay_only,
-        tombstone_candidate=tombstone_candidate,
-    )
-    if tombstone is not None:
-        return tombstone
+    if resolve_tombstone:
+        tombstone = _resolve_tombstone_abort_binding(
+            chains_descriptor,
+            chain_id,
+            binding_id,
+            expected_type=expected_type,
+            expected_fields=expected_fields,
+            replay_only=replay_only,
+            tombstone_candidate=tombstone_candidate,
+        )
+        if tombstone is not None:
+            return tombstone
     # Event authority is read and reduced before the materialized projection.
     # A state file must never select or repair the history that authenticates it.
-    raw_event_bytes = _read_regular_bytes_at(
-        chains_descriptor, f"{chain_id}.events.jsonl"
-    )
+    event_name = f"{chain_id}.events.jsonl"
+    if events_cap is None:
+        raw_event_bytes = _read_regular_bytes_at(
+            chains_descriptor, event_name
+        )
+    else:
+        raw_event_bytes = _read_regular_bytes_at(
+            chains_descriptor, event_name, cap=events_cap
+        )
     if not raw_event_bytes or not raw_event_bytes.endswith(b"\n"):
         raise _binding_replay_refusal()
     raw_lines = raw_event_bytes.splitlines(keepends=True)
@@ -6598,14 +7058,15 @@ def _resolve_binding_from_descriptor(
                 raise _binding_replay_refusal()
             if replayed_state is None:
                 raise _binding_replay_refusal()
-            _verify_receipted_batch(
-                repository,
-                chain_id,
-                replayed_state,
-                pending_outbox,
-                pending_records,
-                receipt,
-            )
+            if verify_external:
+                _verify_receipted_batch(
+                    repository,
+                    chain_id,
+                    replayed_state,
+                    pending_outbox,
+                    pending_records,
+                    receipt,
+                )
         elif event_outbox is not None and pending_outbox is not None:
             raise _binding_replay_refusal()
 
@@ -6667,21 +7128,28 @@ def _resolve_binding_from_descriptor(
         elif next_state.get("journal_outbox") != pending_outbox:
             raise _binding_replay_refusal()
 
-        for carried_record in records:
-            carried_binding = carried_record.get("binding")
-            if (
-                not isinstance(carried_binding, dict)
-                or not _binding_matches_source_fact(
-                    carried_binding,
-                    carried_record,
-                    event,
-                    prior_state,
-                    next_state,
-                    family=family,
-                    repository=repository,
-                )
-            ):
-                raise _binding_replay_refusal()
+        activation_preamble = (
+            records[:1]
+            if records
+            and journal._writer_activation_candidate(records[0])
+            else ()
+        )
+        if verify_external:
+            for carried_record in records[len(activation_preamble) :]:
+                carried_binding = carried_record.get("binding")
+                if (
+                    not isinstance(carried_binding, dict)
+                    or not _binding_matches_source_fact(
+                        carried_binding,
+                        carried_record,
+                        event,
+                        prior_state,
+                        next_state,
+                        family=family,
+                        repository=repository,
+                    )
+                ):
+                    raise _binding_replay_refusal()
 
         replayed_state = next_state
         replay_entries.append(
@@ -6692,7 +7160,13 @@ def _resolve_binding_from_descriptor(
     if not events or replayed_state is None:
         raise _binding_replay_refusal()
 
-    state = _read_json_at(chains_descriptor, f"{chain_id}.json")
+    state_name = f"{chain_id}.json"
+    if state_cap is None:
+        state = _read_json_at(chains_descriptor, state_name)
+    else:
+        state = _read_json_at(
+            chains_descriptor, state_name, cap=state_cap
+        )
     if (
         not isinstance(state, dict)
         or not _state_shape_valid(state, chain_id, str(chain_family))

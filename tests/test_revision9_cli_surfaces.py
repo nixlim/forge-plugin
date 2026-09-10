@@ -449,6 +449,76 @@ class Revision9CommitStateTests(unittest.TestCase):
 
 
 class Revision9CoordinationSeamTests(unittest.TestCase):
+    def _build_legacy_chain_decision(
+        self, *, retrospective_ingest: bool
+    ) -> SimpleNamespace:
+        batch, _builders, journal = CLI._coordination_modules()
+        repository = Path("/fixture/revision9/repository")
+        run_id = "run-20260910-legacy-chain-records"
+        chain_id = "c-2026-09-10T120000Z-cafe"
+        source_event_digest = key("legacy-chain-source-event")
+        state = {
+            "chain_id": chain_id,
+            "candidate": {"sha256": key("legacy-chain-candidate")},
+            "run_binding": {
+                "run_id": run_id,
+                "task_id": "task-01",
+                "repository": str(repository),
+                "policy_digest": key("legacy-chain-policy"),
+            },
+        }
+        run_state = SimpleNamespace(
+            records=[
+                {
+                    "type": "run_started",
+                    "run_id": run_id,
+                    "recorded_at": "2026-09-10T11:59:00Z",
+                },
+                {"type": "task", "id": "task-01", "status": "active"},
+            ]
+        )
+        activation_marker = {
+            "type": "decision",
+            "id": "decision-01",
+            "resolution": journal.WRITER_ACTIVATION_RESOLUTION,
+            "writer_contract": journal.WRITER_CONTRACT,
+            "receipt_origin_size": 123,
+            "receipt_origin_sha256": key("legacy-prefix"),
+            "run_id": run_id,
+            "recorded_at": "2026-09-10T12:00:00Z",
+        }
+        prepare_outbox_records = mock.Mock(
+            return_value=(activation_marker,)
+        )
+        with mock.patch.object(
+            journal,
+            "_resolve_repository",
+            return_value=(repository, repository),
+        ), mock.patch.object(
+            journal, "_scan_run", return_value=run_state
+        ), mock.patch.object(
+            batch, "prepare_outbox_records", prepare_outbox_records
+        ):
+            records = CLI._build_chain_journal_records(
+                repository,
+                state,
+                "operator_skip",
+                {"gate_id": "gate-2", "reason": "fixture skip"},
+                source_event_digest,
+                retrospective_ingest=retrospective_ingest,
+            )
+
+        return SimpleNamespace(
+            activation_marker=activation_marker,
+            chain_id=chain_id,
+            journal=journal,
+            prepare_outbox_records=prepare_outbox_records,
+            records=records,
+            repository=repository,
+            run_state=run_state,
+            source_event_digest=source_event_digest,
+        )
+
     def test_registration_installs_exact_identities_and_is_idempotent(self) -> None:
         batch, builders, _journal = CLI._coordination_modules()
         with mock.patch.object(
@@ -528,6 +598,7 @@ class Revision9CoordinationSeamTests(unittest.TestCase):
                 Path(repository),
             ),
             _scan_run=lambda _run_dir: run_state,
+            _writer_contract_active=lambda _records: True,
         )
         with mock.patch.object(
             RUNTIME,
@@ -558,6 +629,56 @@ class Revision9CoordinationSeamTests(unittest.TestCase):
                     "tree_oid": tree_oid,
                 },
             },
+        )
+
+    def test_retrospective_commit_ingest_builds_only_source_bound_records(
+        self,
+    ) -> None:
+        built = self._build_legacy_chain_decision(
+            retrospective_ingest=True
+        )
+
+        self.assertEqual(len(built.records), 1)
+        ordinary = built.records[0]
+        self.assertFalse(
+            built.journal._writer_activation_candidate(ordinary)
+        )
+        self.assertEqual(ordinary["id"], "decision-01")
+        self.assertEqual(ordinary["outcome"], "chain-skip")
+        self.assertEqual(
+            ordinary["binding"]["source_record"],
+            {
+                "chain_id": built.chain_id,
+                "event_digest": built.source_event_digest,
+            },
+        )
+        built.prepare_outbox_records.assert_not_called()
+
+    def test_live_first_use_outbox_builds_marker_then_source_bound_record(
+        self,
+    ) -> None:
+        built = self._build_legacy_chain_decision(
+            retrospective_ingest=False
+        )
+
+        self.assertEqual(len(built.records), 2)
+        marker, ordinary = built.records
+        self.assertEqual(marker, built.activation_marker)
+        self.assertTrue(built.journal._writer_activation_marker(marker))
+        self.assertFalse(
+            built.journal._writer_activation_candidate(ordinary)
+        )
+        self.assertEqual(ordinary["id"], "decision-02")
+        self.assertEqual(ordinary["outcome"], "chain-skip")
+        self.assertEqual(
+            ordinary["binding"]["source_record"],
+            {
+                "chain_id": built.chain_id,
+                "event_digest": built.source_event_digest,
+            },
+        )
+        built.prepare_outbox_records.assert_called_once_with(
+            built.repository, built.run_state, ()
         )
 
     def test_merge_reducer_uses_explicit_delta_and_refuses_payload_state(self) -> None:
@@ -785,6 +906,7 @@ class Revision9IngestProofControlTests(unittest.TestCase):
                 Path(repository),
             ),
             _scan_run=lambda _run_dir: run_state,
+            _writer_contract_active=lambda _records: True,
         )
         with mock.patch.object(
             RUNTIME,
@@ -1068,9 +1190,57 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         *,
         scope: tuple[str, ...] = ("src/**",),
         files: tuple[str, ...] = ("src/app.py",),
+        legacy: bool = False,
     ) -> None:
-        _batch, builders, _journal = CLI._coordination_modules()
+        _batch, builders, journal = CLI._coordination_modules()
         with self.cli_process_context():
+            if legacy:
+                journal.open_run(
+                    self.repo,
+                    run_id,
+                    list(scope),
+                    {
+                        "type": "run_started",
+                        "recorded_at": "2026-08-28T12:00:00Z",
+                        "run_id": run_id,
+                        "goal": "Exercise legacy first-use ingest",
+                        "repo": str(self.repo.resolve()),
+                        "repo_head": self.git("rev-parse", "HEAD"),
+                        "repo_status": self.git(
+                            "status", "--short"
+                        ).splitlines(),
+                        "plugin_ref": "forge-revision9-cli-tests",
+                    },
+                )
+                journal.append_run_record(
+                    self.repo,
+                    run_id,
+                    {
+                        "type": "task",
+                        "recorded_at": "2026-08-28T12:01:00Z",
+                        "run_id": run_id,
+                        "id": "task-01",
+                        "status": "active",
+                        "goal": "Bind one retrospective commit chain",
+                        "acceptance": [
+                            "The first typed use activates and ingests atomically"
+                        ],
+                        "files": list(files),
+                    },
+                )
+                # The historical target predates the batch sidecars.  The raw
+                # task append above uses today's guarded setup path, so remove
+                # only that empty test-created lock to restore the old shape.
+                legacy_lock = (
+                    self.repo
+                    / ".codex-orchestrator"
+                    / "runs"
+                    / run_id
+                    / journal.BATCH_LOCK_NAME
+                )
+                self.assertTrue(legacy_lock.is_file())
+                legacy_lock.unlink()
+                return
             builders.run_open(
                 self.repo,
                 run_id,
@@ -1281,6 +1451,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         *,
         install_captures: bool,
         mechanical_skip: bool = False,
+        legacy_run: bool = False,
     ) -> SimpleNamespace:
         """Finalize a native unbound chain and capture its exact live package."""
 
@@ -1407,6 +1578,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             run_id,
             scope=("docs/**",),
             files=("docs/guide.md",),
+            legacy=legacy_run,
         )
         with self.cli_process_context():
             (
@@ -1599,6 +1771,118 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(journal_path.read_bytes(), journal_after)
         self.assertEqual(receipts_path.read_bytes(), receipts_after)
         self.assertFalse(intent_path.exists())
+
+    def test_legacy_run_ingest_first_typed_use_activates_once_and_is_receipted(
+        self,
+    ) -> None:
+        prepared = self.prepare_unbound_fast_ingest(
+            "run-20260910-cli-ingest-legacy-first-use",
+            install_captures=False,
+            legacy_run=True,
+        )
+        _batch, _builders, journal = CLI._coordination_modules()
+        journal_path = prepared.run_dir / "journal.jsonl"
+        receipts_path = prepared.run_dir / journal.BATCH_RECEIPTS_NAME
+        journal_before = journal_path.read_bytes()
+        self.assertFalse(receipts_path.exists())
+
+        exit_code, ingested = self.invoke_cli(*prepared.ingest_argv)
+
+        self.assertEqual(exit_code, 0, ingested)
+        self.assertTrue(ingested["ok"])
+        records, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        normalized = self.normalized_journal_records(records)
+        appended = normalized[2:]
+        markers = [
+            record
+            for record in appended
+            if journal._writer_activation_marker(record)
+        ]
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0]["id"], "decision-01")
+        self.assertEqual(
+            [
+                record["id"]
+                for record in appended
+                if record.get("type") == "decision"
+            ],
+            ["decision-01", "decision-02"],
+        )
+        receipts = [
+            json.loads(line)
+            for line in receipts_path.read_bytes().splitlines()
+        ]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["base_size"], len(journal_before))
+        self.assertEqual(receipts[0]["record_count"], len(appended))
+        self.assertEqual(
+            receipts[0]["journal_size"], len(journal_path.read_bytes())
+        )
+        self.assertFalse(
+            (prepared.run_dir / journal.BATCH_INTENT_NAME).exists()
+        )
+
+    def test_legacy_run_ingest_allocation_projection_is_load_bearing(
+        self,
+    ) -> None:
+        prepared = self.prepare_unbound_fast_ingest(
+            "run-20260910-cli-ingest-legacy-disabled",
+            install_captures=False,
+            legacy_run=True,
+        )
+        _batch, _builders, journal = CLI._coordination_modules()
+        journal_path = prepared.run_dir / "journal.jsonl"
+        receipts_path = prepared.run_dir / journal.BATCH_RECEIPTS_NAME
+        journal_before = journal_path.read_bytes()
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.object(
+            CORE,
+            "_ingest_allocation_records",
+            side_effect=lambda _repository, state: list(state.records),
+        ) as disabled_projection, mock.patch.object(
+            _builders,
+            "_activation_event_one_has_current_binding_authority",
+            return_value=False,
+        ) as disabled_authority, mock.patch.object(
+            _builders,
+            "_resolve_binding_from_descriptor",
+            wraps=_builders._resolve_binding_from_descriptor,
+        ) as resolver, self.cli_process_context(), contextlib.redirect_stdout(
+            stdout
+        ), contextlib.redirect_stderr(stderr):
+            exit_code = CLI.main(
+                [
+                    "--json",
+                    "--repo",
+                    str(self.repo),
+                    *prepared.ingest_argv,
+                ]
+            )
+
+        self.assertGreaterEqual(disabled_projection.call_count, 1)
+        disabled_authority.assert_called()
+        resolver.assert_not_called()
+        self.assertEqual(
+            stderr.getvalue(),
+            "forge: warning — skipped unreadable chain "
+            f"{prepared.chain_id} while enumerating commit chains\n",
+        )
+        refused = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "ingest-proof-invalid")
+        self.assertEqual(
+            refused["message"],
+            "forge: journal append refused — invalid journal record: "
+            "decision.id must be unique",
+        )
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertFalse(receipts_path.exists())
+        self.assertFalse(
+            (prepared.run_dir / journal.BATCH_INTENT_NAME).exists()
+        )
 
     def test_captured_commit_and_merge_sources_reopen_from_the_run_root(
         self,
@@ -3602,6 +3886,154 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
     def test_commit_identity_receipt_append_crash_replays_once(self) -> None:
         self.assert_commit_identity_drain_crash_replays_once("after-receipt")
+
+    def test_chain_receipt_replay_reader_is_read_only_and_fail_closed(
+        self,
+    ) -> None:
+        run_id = "run-20260910-chain-receipt-replay-reader"
+        chain_id = self.start_bound_fast_chain(run_id)
+        batch, _builders, journal = CLI._coordination_modules()
+        repository = CLI.Repository(self.repo)
+        context = CLI.CommandContext(
+            repo=repository,
+            store=CLI.ChainStore(repository.common_root()),
+            options=CLI.CLIOptions(
+                repo=str(self.repo),
+                chain_id=chain_id,
+                revision9_face=True,
+                original_argv=(
+                    "commit",
+                    "finalize",
+                    "--message",
+                    "Exercise the chain replay receipt reader",
+                ),
+            ),
+        )
+        original_append = batch._append_missing_prefix
+        crashed = False
+
+        def append_journal_then_crash(*args: object, **kwargs: object):
+            nonlocal crashed
+            result = original_append(*args, **kwargs)
+            name = args[1] if len(args) > 1 else kwargs.get("name")
+            if not crashed and name == "journal.jsonl":
+                crashed = True
+                raise RuntimeError("injected chain replay reader crash")
+            return result
+
+        with self.cli_process_context(), mock.patch.object(
+            batch,
+            "_append_missing_prefix",
+            side_effect=append_journal_then_crash,
+        ), self.assertRaisesRegex(RuntimeError, "chain replay reader crash"):
+            CLI.Engine(context).finalize(
+                "Exercise the chain replay receipt reader"
+            )
+
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        journal_path = run_dir / "journal.jsonl"
+        ledger_path = run_dir / journal.BATCH_RECEIPTS_NAME
+        intent_path = run_dir / journal.BATCH_INTENT_NAME
+        paths = (journal_path, ledger_path, intent_path)
+        pristine_journal, pristine_ledger, pristine_intent = (
+            path.read_bytes() for path in paths
+        )
+        intent = json.loads(pristine_intent)
+        intended_batch = batch._decode_base64url(intent["batch_bytes"])
+        intended_receipt = batch._decode_base64url(intent["receipt_bytes"])
+        historical_receipts = [
+            json.loads(line) for line in pristine_ledger.splitlines()
+        ]
+        self.assertTrue(historical_receipts)
+        self.assertEqual(
+            pristine_journal[int(intent["base_size"]) :], intended_batch
+        )
+        self.assertEqual(len(pristine_ledger), intent["receipt_base_size"])
+        self.assertFalse(
+            any(
+                receipt["idempotency_key"] == intent["idempotency_key"]
+                for receipt in historical_receipts
+            )
+        )
+
+        before = tuple(path.read_bytes() for path in paths)
+        with self.cli_process_context(), batch.batch_lock(
+            run_dir, create=False
+        ) as locked:
+            loaded, raw, _observation = batch._load_receipts_for_chain_replay(
+                locked
+            )
+        self.assertEqual(loaded, historical_receipts)
+        self.assertEqual(raw, pristine_ledger)
+        self.assertEqual(tuple(path.read_bytes() for path in paths), before)
+
+        tampered_intent = dict(intent)
+        tampered_intent["base_sha256"] = key("tampered intent base")
+        duplicate_receipts = copy.deepcopy(historical_receipts)
+        duplicate_receipts[0]["idempotency_key"] = intent["idempotency_key"]
+        duplicate_ledger = b"".join(
+            batch._canonical_sidecar(receipt)
+            for receipt in duplicate_receipts
+        )
+        duplicate_intent = dict(intent)
+        duplicate_intent["receipt_base_sha256"] = hashlib.sha256(
+            duplicate_ledger
+        ).hexdigest()
+        corruptions = (
+            (
+                "partial journal",
+                pristine_journal[:-1],
+                pristine_ledger,
+                pristine_intent,
+            ),
+            (
+                "extra journal",
+                pristine_journal + b"{}\n",
+                pristine_ledger,
+                pristine_intent,
+            ),
+            (
+                "partial receipt ledger",
+                pristine_journal,
+                pristine_ledger
+                + intended_receipt[: len(intended_receipt) // 2],
+                pristine_intent,
+            ),
+            (
+                "tampered intent",
+                pristine_journal,
+                pristine_ledger,
+                batch._canonical_sidecar(tampered_intent),
+            ),
+            (
+                "duplicate pending key",
+                pristine_journal,
+                duplicate_ledger,
+                batch._canonical_sidecar(duplicate_intent),
+            ),
+        )
+        for name, journal_raw, ledger_raw, intent_raw in corruptions:
+            with self.subTest(name=name):
+                for path, raw in zip(
+                    paths, (journal_raw, ledger_raw, intent_raw), strict=True
+                ):
+                    path.write_bytes(raw)
+                corrupted = tuple(path.read_bytes() for path in paths)
+                with self.cli_process_context(), self.assertRaises(
+                    journal.CoordinationRefusal
+                ) as raised, batch.batch_lock(run_dir, create=False) as locked:
+                    batch._load_receipts_for_chain_replay(locked)
+                self.assertEqual(str(raised.exception), journal.BATCH_DIVERGED)
+                self.assertEqual(
+                    tuple(path.read_bytes() for path in paths), corrupted
+                )
+
+        for path, raw in zip(
+            paths,
+            (pristine_journal, pristine_ledger, pristine_intent),
+            strict=True,
+        ):
+            path.write_bytes(raw)
 
     def test_receipted_commit_produced_crash_recovers_one_landing(self) -> None:
         run_id = "run-20260828-cli-landing-replay"

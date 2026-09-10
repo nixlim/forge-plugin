@@ -36,6 +36,7 @@ CLI_FIXTURE_SUPPORT = load_module(
 CLI = load_module("_forge_revision9_matrix_cli", CLI_PATH)
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 ENGINE = package_module("engine")  # cli split phase 3: canonical engine patch seam
+CORE = package_module("chain_core")
 ARCHIVE = load_module("_forge_revision9_matrix_archive", ARCHIVE_PATH)
 
 
@@ -787,23 +788,48 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
 
         with self.cli_context():
             _batch, builders, journal = CLI._coordination_modules()
-            builders.run_open(
+            journal.open_run(
                 self.repo,
                 self.run_id,
-                idempotency_key=hashlib.sha256(b"merge-matrix-open").hexdigest(),
-                goal="Ingest one already-landed merge chain",
-                scope=["docs/**"],
-                plugin_ref="forge-revision9-matrix",
+                ["docs/**"],
+                {
+                    "type": "run_started",
+                    "recorded_at": "2026-08-28T12:00:00Z",
+                    "run_id": self.run_id,
+                    "goal": "Ingest one already-landed merge chain",
+                    "repo": str(self.repo.resolve()),
+                    "repo_head": self.git("rev-parse", "HEAD"),
+                    "repo_status": self.git(
+                        "status", "--short"
+                    ).splitlines(),
+                    "plugin_ref": "forge-revision9-matrix",
+                },
             )
-            builders.task_start(
+            journal.append_run_record(
                 self.repo,
                 self.run_id,
-                idempotency_key=hashlib.sha256(b"merge-matrix-task").hexdigest(),
-                task=self.task_id,
-                goal="Prove merge ingest and archive parity",
-                acceptance=["Replay, ingest, close, and rerender are exact"],
-                files=["docs/guide.md"],
+                {
+                    "type": "task",
+                    "recorded_at": "2026-08-28T12:01:00Z",
+                    "run_id": self.run_id,
+                    "id": self.task_id,
+                    "status": "active",
+                    "goal": "Prove merge ingest and archive parity",
+                    "acceptance": [
+                        "Replay, ingest, close, and rerender are exact"
+                    ],
+                    "files": ["docs/guide.md"],
+                },
             )
+
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / self.run_id
+        journal_path = run_dir / "journal.jsonl"
+        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+        legacy_lock = run_dir / journal.BATCH_LOCK_NAME
+        self.assertTrue(legacy_lock.is_file())
+        legacy_lock.unlink()
+        legacy_journal = journal_path.read_bytes()
+        self.assertFalse(receipts_path.exists())
 
         source_dir = self.repo / "external-merge"
         source_dir.mkdir()
@@ -835,13 +861,80 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
             "--idempotency-key",
             ingest_key,
         )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.object(
+            CORE,
+            "_ingest_allocation_records",
+            side_effect=lambda _repository, state: list(state.records),
+        ) as disabled_projection, mock.patch.object(
+            builders,
+            "_activation_event_one_has_current_binding_authority",
+            return_value=False,
+        ) as disabled_authority, mock.patch.object(
+            builders,
+            "_resolve_binding_from_descriptor",
+            wraps=builders._resolve_binding_from_descriptor,
+        ) as resolver, self.cli_context(), contextlib.redirect_stdout(
+            stdout
+        ), contextlib.redirect_stderr(stderr):
+            disabled_exit = CLI.main(
+                ["--json", "--repo", str(self.repo), *ingest_argv]
+            )
+        disabled_projection.assert_called()
+        disabled_authority.assert_called()
+        resolver.assert_not_called()
+        self.assertEqual(
+            stderr.getvalue(),
+            "forge: warning — skipped unreadable chain "
+            f"{self.chain_id} while enumerating merge chains\n",
+        )
+        disabled = json.loads(stdout.getvalue())
+        self.assertEqual(disabled_exit, 1, disabled)
+        self.assertEqual(disabled["reason_code"], "ingest-proof-invalid")
+        self.assertEqual(
+            disabled["message"],
+            "forge: journal append refused — invalid journal record: "
+            "decision.id must be unique",
+        )
+        self.assertEqual(journal_path.read_bytes(), legacy_journal)
+        self.assertFalse(receipts_path.exists())
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+
         result = self.invoke_cli(*ingest_argv)
         self.assertEqual(result["reason_code"], "ok")
 
-        run_dir = self.repo / ".codex-orchestrator" / "runs" / self.run_id
-        journal_path = run_dir / "journal.jsonl"
-        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
         records, _journal_raw = ARCHIVE.stable_journal_snapshot(run_dir)
+        activation_markers = [
+            record
+            for record in records
+            if journal._writer_activation_marker(record)
+        ]
+        self.assertEqual(len(activation_markers), 1)
+        self.assertEqual(activation_markers[0]["id"], "decision-01")
+        decision_ids = [
+            str(record["id"])
+            for record in records
+            if record.get("type") == "decision"
+        ]
+        self.assertEqual(
+            decision_ids,
+            [
+                f"decision-{index:02d}"
+                for index in range(1, len(decision_ids) + 1)
+            ],
+        )
+        receipts = [
+            json.loads(line)
+            for line in receipts_path.read_bytes().splitlines()
+        ]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["base_size"], len(legacy_journal))
+        self.assertEqual(receipts[0]["record_count"], len(records) - 2)
+        self.assertEqual(
+            receipts[0]["journal_size"], len(journal_path.read_bytes())
+        )
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
         bound = [
             record
             for record in records

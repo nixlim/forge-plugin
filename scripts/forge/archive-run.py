@@ -7,6 +7,7 @@ import argparse
 import base64
 import copy
 import datetime as dt
+import fcntl
 import hashlib
 import html
 import importlib.util
@@ -91,7 +92,6 @@ LEGACY_APPROVAL = re.compile(
     r"(?P<decision>[A-Za-z0-9][A-Za-z0-9._-]{0,127})$"
 )
 
-WRITER_CONTRACT = "forge-journal-binding/1"
 CHAIN_STATE_SCHEMA = "forge-chain/1"
 MERGE_STATE_SCHEMA = "forge-merge-chain/1"
 CHAIN_TOMBSTONE_SCHEMA = "forge-chain-tombstone/1"
@@ -158,6 +158,7 @@ RENDERER_CONTROLS = frozenset(
         "captured-ingest-binding",
         "captured-ingest-eligibility",
         "tombstone-validation",
+        "writer-activation-lifecycle",
     }
 )
 
@@ -178,6 +179,24 @@ class ExactFile:
     name: str
     raw: bytes
     identity: FileIdentity
+
+
+@dataclass(frozen=True)
+class JournalIdentitySnapshot:
+    """Bound identity retained with one exact journal payload."""
+
+    directory_observation: journal_engine.FileObservation
+    journal_observation: journal_engine.FileObservation
+
+
+@dataclass(frozen=True)
+class ActivationReceiptSnapshot(JournalIdentitySnapshot):
+    """Exact sidecar state that authenticated one activated journal read."""
+
+    lock_payload: bytes
+    lock_observation: journal_engine.FileObservation
+    receipt_payload: bytes
+    receipt_observation: journal_engine.FileObservation
 
 
 @dataclass(frozen=True)
@@ -628,6 +647,221 @@ def stable_journal_snapshot(run_dir: Path) -> tuple[list[dict[str, Any]], bytes]
     if issues:
         raise ArchiveRefusal("forge: archive refused — invalid run journal")
     return [dict(record) for record in records], raw
+
+
+def _locked_activated_journal_snapshot(
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]], bytes, ActivationReceiptSnapshot]:
+    """Capture one activated journal and its authenticating sidecars together."""
+
+    run_descriptor: int | None = None
+    lock_descriptor: int | None = None
+    refusal = journal_engine.JOURNAL_READ_TRANSACTION_REFUSAL
+    try:
+        run_descriptor, directory_observation = (
+            journal_engine._open_strict_batch_directory(
+                run_dir,
+                refusal=refusal,
+            )
+        )
+        lock_payload, lock_observation = journal_engine._read_strict_batch_file(
+            run_descriptor,
+            journal_engine.BATCH_LOCK_NAME,
+            refusal=refusal,
+        )
+        lock_descriptor = os.open(
+            journal_engine.BATCH_LOCK_NAME,
+            journal_engine._strict_batch_open_flags(refusal=refusal),
+            dir_fd=run_descriptor,
+        )
+        if not journal_engine._strict_batch_stat_matches(
+            os.fstat(lock_descriptor), lock_observation
+        ):
+            raise journal_engine.CoordinationRefusal(refusal)
+        fcntl.flock(lock_descriptor, fcntl.LOCK_SH)
+        if journal_engine._name_exists_at(
+            run_descriptor, journal_engine.BATCH_INTENT_NAME
+        ):
+            raise journal_engine.CoordinationRefusal(refusal)
+        locked_payload, locked_observation = journal_engine._read_strict_batch_file(
+            run_descriptor,
+            journal_engine.BATCH_LOCK_NAME,
+            refusal=refusal,
+        )
+        receipt_payload, receipt_observation = (
+            journal_engine._read_strict_batch_file(
+                run_descriptor,
+                journal_engine.BATCH_RECEIPTS_NAME,
+                refusal=refusal,
+            )
+        )
+        journal_payload, journal_observation = (
+            journal_engine._read_strict_batch_file(
+                run_descriptor,
+                "journal.jsonl",
+                refusal=refusal,
+            )
+        )
+        if (
+            (locked_payload, locked_observation)
+            != (lock_payload, lock_observation)
+            or not receipt_payload
+        ):
+            raise journal_engine.CoordinationRefusal(refusal)
+
+        # The shared reader reuses the same lock protocol and authenticates the
+        # activation origin against the receipt ledger.  The outer shared lock
+        # keeps that exact ledger stable while this consumer retains its bytes.
+        raw = journal_engine._stable_journal_read(run_dir / "journal.jsonl")
+
+        final_journal = journal_engine._read_strict_batch_file(
+            run_descriptor,
+            "journal.jsonl",
+            refusal=refusal,
+        )
+        final_receipt = journal_engine._read_strict_batch_file(
+            run_descriptor,
+            journal_engine.BATCH_RECEIPTS_NAME,
+            refusal=refusal,
+        )
+        final_lock = journal_engine._read_strict_batch_file(
+            run_descriptor,
+            journal_engine.BATCH_LOCK_NAME,
+            refusal=refusal,
+        )
+        rebound_directory = os.lstat(run_dir)
+        if (
+            raw != journal_payload
+            or final_journal != (journal_payload, journal_observation)
+            or final_receipt != (receipt_payload, receipt_observation)
+            or final_lock != (lock_payload, lock_observation)
+            or journal_engine._file_observation(os.fstat(run_descriptor))
+            != directory_observation
+            or journal_engine._file_observation(rebound_directory)
+            != directory_observation
+            or journal_engine._name_exists_at(
+                run_descriptor, journal_engine.BATCH_INTENT_NAME
+            )
+        ):
+            raise journal_engine.CoordinationRefusal(refusal)
+        records, issues = journal_engine._decode_journal_snapshot(
+            raw, allow_partial_final_line=False
+        )
+        materialized = [dict(record) for record in records]
+        if issues or not journal_engine.writer_contract_active(materialized):
+            raise journal_engine.CoordinationRefusal(refusal)
+        return (
+            materialized,
+            raw,
+            ActivationReceiptSnapshot(
+                directory_observation=directory_observation,
+                journal_observation=journal_observation,
+                lock_payload=lock_payload,
+                lock_observation=lock_observation,
+                receipt_payload=receipt_payload,
+                receipt_observation=receipt_observation,
+            ),
+        )
+    except (OSError, RuntimeError, ValueError, journal_engine.CoordinationRefusal) as exc:
+        raise ArchiveRefusal("forge: archive refused — invalid run journal") from exc
+    finally:
+        if lock_descriptor is not None:
+            try:
+                fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(lock_descriptor)
+        if run_descriptor is not None:
+            os.close(run_descriptor)
+
+
+def _bound_legacy_journal_snapshot(
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]], bytes, JournalIdentitySnapshot]:
+    """Capture legacy journal bytes with their stable directory/inode identity."""
+
+    run_descriptor: int | None = None
+    refusal = journal_engine.JOURNAL_READ_TRANSACTION_REFUSAL
+    try:
+        run_descriptor, directory_observation = (
+            journal_engine._open_strict_batch_directory(
+                run_dir,
+                refusal=refusal,
+            )
+        )
+        journal_payload, journal_observation = (
+            journal_engine._read_strict_batch_file(
+                run_descriptor,
+                "journal.jsonl",
+                refusal=refusal,
+            )
+        )
+        raw = journal_engine._stable_journal_read(run_dir / "journal.jsonl")
+        final_journal = journal_engine._read_strict_batch_file(
+            run_descriptor,
+            "journal.jsonl",
+            refusal=refusal,
+        )
+        if (
+            raw != journal_payload
+            or final_journal != (journal_payload, journal_observation)
+            or journal_engine._file_observation(os.fstat(run_descriptor))
+            != directory_observation
+            or journal_engine._file_observation(os.lstat(run_dir))
+            != directory_observation
+        ):
+            raise journal_engine.CoordinationRefusal(refusal)
+        records, issues = journal_engine._decode_journal_snapshot(
+            raw, allow_partial_final_line=False
+        )
+        materialized = [dict(record) for record in records]
+        if issues or journal_engine.writer_contract_active(materialized):
+            raise journal_engine.CoordinationRefusal(refusal)
+        return (
+            materialized,
+            raw,
+            JournalIdentitySnapshot(
+                directory_observation=directory_observation,
+                journal_observation=journal_observation,
+            ),
+        )
+    except (OSError, RuntimeError, ValueError, journal_engine.CoordinationRefusal) as exc:
+        raise ArchiveRefusal("forge: archive refused — invalid run journal") from exc
+    finally:
+        if run_descriptor is not None:
+            os.close(run_descriptor)
+
+
+def stable_archive_journal_snapshot(
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]], bytes, JournalIdentitySnapshot]:
+    """Return journal bytes with exact identity and any activation sidecars."""
+
+    records, raw = stable_journal_snapshot(run_dir)
+    try:
+        activated = journal_engine.writer_contract_active(records)
+    except journal_engine.CoordinationRefusal as exc:
+        raise ArchiveRefusal("forge: archive refused — invalid run journal") from exc
+    if not activated:
+        return _bound_legacy_journal_snapshot(run_dir)
+    return _locked_activated_journal_snapshot(run_dir)
+
+
+def recheck_archive_journal_snapshot(
+    run_dir: Path,
+    expected_raw: bytes,
+    expected_snapshot: JournalIdentitySnapshot,
+) -> None:
+    """Require journal identity and any activation sidecars to remain exact."""
+
+    try:
+        _records, current_raw, current_snapshot = stable_archive_journal_snapshot(
+            run_dir
+        )
+    except (OSError, RuntimeError, ValueError, ArchiveRefusal):
+        authoritative_discrepancy("snapshot_changed")
+    if current_raw != expected_raw or current_snapshot != expected_snapshot:
+        authoritative_discrepancy("snapshot_changed")
 
 
 def journal_raw_lines(raw: bytes) -> dict[int, bytes]:
@@ -2439,70 +2673,188 @@ def is_passing_gated_payload(value: object) -> bool:
     )
 
 
+def journal_record_intervals(
+    records: Sequence[dict[str, Any]], journal_raw: bytes
+) -> list[tuple[dict[str, Any], int, int]]:
+    """Bind decoded records to their exact physical byte intervals."""
+
+    physical: list[tuple[int, int, int]] = []
+    offset = 0
+    for line_number, line in enumerate(journal_raw.splitlines(keepends=True), start=1):
+        end = offset + len(line)
+        if line.strip():
+            physical.append((line_number, offset, end))
+        offset = end
+    if len(physical) != len(records):
+        authoritative_discrepancy("snapshot_changed")
+    intervals: list[tuple[dict[str, Any], int, int]] = []
+    for record, (line_number, start, end) in zip(records, physical, strict=True):
+        recorded_line = record_line_number(record)
+        if recorded_line is not None and recorded_line != line_number:
+            authoritative_discrepancy("snapshot_changed")
+        intervals.append((record, start, end))
+    return intervals
+
+
+def activated_record_partition(
+    records: Sequence[dict[str, Any]], journal_raw: bytes, activated: bool
+) -> tuple[frozenset[int], int | None]:
+    """Return record identities governed at the authenticated activation cutoff."""
+
+    if not activated:
+        return frozenset(), None
+    try:
+        origin, _marker_interval = journal_engine._writer_activation_snapshot(journal_raw)
+    except journal_engine.CoordinationRefusal:
+        authoritative_discrepancy("structured_chain_mismatch")
+    intervals = journal_record_intervals(records, journal_raw)
+    if origin not in {0, *(start for _record, start, _end in intervals)}:
+        authoritative_discrepancy("structured_chain_mismatch")
+    return (
+        frozenset(id(record) for record, start, _end in intervals if start >= origin),
+        origin,
+    )
+
+
+def _activation_close_batch_base(
+    records: Sequence[dict[str, Any]],
+    journal_raw: bytes,
+    intervals: Sequence[tuple[dict[str, Any], int, int]],
+    receipt_ledger_raw: bytes | None,
+) -> int | None:
+    """Prove a final activation marker and close share one ordinary receipt."""
+
+    if (
+        receipt_ledger_raw is None
+        or len(records) < 2
+        or not journal_engine._writer_activation_marker(records[-2])
+    ):
+        return None
+    marker_base = intervals[-2][1]
+    matches = []
+    try:
+        for line in receipt_ledger_raw.splitlines(keepends=True):
+            receipt = json.loads(line.decode("utf-8"))
+            if not isinstance(receipt, dict) or receipt.get("repaired") is True:
+                continue
+            if (
+                receipt.get("base_size") == marker_base
+                and receipt.get("journal_size") == len(journal_raw)
+                and receipt.get("record_count") == 2
+                and receipt.get("batch_sha256")
+                == hashlib.sha256(journal_raw[marker_base:]).hexdigest()
+                and receipt.get("journal_sha256")
+                == hashlib.sha256(journal_raw).hexdigest()
+            ):
+                matches.append(receipt)
+    except (UnicodeError, ValueError, RecursionError):
+        return None
+    return marker_base if len(matches) == 1 else None
+
+
 def recompute_pre_close_validation(
-    run_dir: Path, records: list[dict[str, Any]]
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    journal_raw: bytes | None = None,
+    activation_snapshot: ActivationReceiptSnapshot | None = None,
 ) -> dict[str, object] | None:
     """Run gated validation against the journal prefix before ``run_closed``."""
 
     if not records or records[-1].get("type") != "run_closed":
         raise ArchiveRefusal("forge: archive refused — run_closed must be final")
     try:
-        prefix = b"".join(
-            json.dumps(
-                {key: value for key, value in record.items() if key != "_line"},
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            + b"\n"
-            for record in records[:-1]
+        if journal_raw is None:
+            journal_raw = b"".join(
+                json.dumps(
+                    {key: value for key, value in record.items() if key != "_line"},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                + b"\n"
+                for record in records
+            )
+        intervals = journal_record_intervals(records, journal_raw)
+        prefix_end = intervals[-1][1]
+        activation_close_base = _activation_close_batch_base(
+            records,
+            journal_raw,
+            intervals,
+            (
+                activation_snapshot.receipt_payload
+                if activation_snapshot is not None
+                else None
+            ),
         )
+        if activation_close_base is not None:
+            prefix_end = activation_close_base
+        prefix = journal_raw[:prefix_end]
         with tempfile.TemporaryDirectory(prefix="forge-pre-close-") as temporary:
             mirror = Path(temporary) / run_dir.name
             mirror.mkdir()
             for child in run_dir.iterdir():
-                if child.name == "journal.jsonl":
-                    continue
                 if child.name in {
+                    "journal.jsonl",
                     journal_engine.BATCH_LOCK_NAME,
                     journal_engine.BATCH_RECEIPTS_NAME,
                 }:
-                    directory: int | None = None
-                    try:
-                        directory, _observation = journal_engine._open_bound_directory(
-                            run_dir
-                        )
-                        sidecar, _file_observation = journal_engine._read_bound_regular(
-                            directory, child.name
-                        )
-                    finally:
-                        if directory is not None:
-                            os.close(directory)
-                    if child.name == journal_engine.BATCH_RECEIPTS_NAME:
-                        retained: list[bytes] = []
-                        for line in sidecar.splitlines(keepends=True):
-                            try:
-                                receipt = json.loads(line.decode("utf-8"))
-                            except (UnicodeError, ValueError, RecursionError) as exc:
-                                raise ArchiveRefusal(
-                                    "forge: archive refused — invalid batch receipt ledger"
-                                ) from exc
-                            size = receipt.get("journal_size") if isinstance(receipt, dict) else None
-                            if (
-                                type(size) is int
-                                and 0 < int(size) <= len(prefix)
-                                and receipt.get("journal_sha256")
-                                == hashlib.sha256(prefix[: int(size)]).hexdigest()
-                            ):
-                                retained.append(line)
-                        sidecar = b"".join(retained)
-                    (mirror / child.name).write_bytes(sidecar)
                     continue
                 os.symlink(
                     child.resolve(),
                     mirror / child.name,
                     target_is_directory=child.is_dir(),
                 )
+            for sidecar_name in (
+                journal_engine.BATCH_LOCK_NAME,
+                journal_engine.BATCH_RECEIPTS_NAME,
+            ):
+                if activation_snapshot is not None:
+                    sidecar = (
+                        activation_snapshot.lock_payload
+                        if sidecar_name == journal_engine.BATCH_LOCK_NAME
+                        else activation_snapshot.receipt_payload
+                    )
+                else:
+                    directory: int | None = None
+                    try:
+                        directory, _observation = journal_engine._open_bound_directory(
+                            run_dir
+                        )
+                        try:
+                            sidecar, _file_observation = (
+                                journal_engine._read_bound_regular(
+                                    directory,
+                                    sidecar_name,
+                                )
+                            )
+                        except FileNotFoundError:
+                            continue
+                    finally:
+                        if directory is not None:
+                            os.close(directory)
+                if sidecar_name == journal_engine.BATCH_RECEIPTS_NAME:
+                    retained: list[bytes] = []
+                    for line in sidecar.splitlines(keepends=True):
+                        try:
+                            receipt = json.loads(line.decode("utf-8"))
+                        except (UnicodeError, ValueError, RecursionError) as exc:
+                            raise ArchiveRefusal(
+                                "forge: archive refused — invalid batch receipt ledger"
+                            ) from exc
+                        size = (
+                            receipt.get("journal_size")
+                            if isinstance(receipt, dict)
+                            else None
+                        )
+                        if (
+                            type(size) is int
+                            and 0 < int(size) <= len(prefix)
+                            and receipt.get("journal_sha256")
+                            == hashlib.sha256(prefix[: int(size)]).hexdigest()
+                        ):
+                            retained.append(line)
+                    sidecar = b"".join(retained)
+                (mirror / sidecar_name).write_bytes(sidecar)
             (mirror / "journal.jsonl").write_bytes(prefix)
             # The mirror sits outside the fixed run layout, so pass the real
             # run's layout-derived repository root: repository-relative
@@ -2565,6 +2917,27 @@ def record_line_number(record: dict[str, Any]) -> int | None:
     return value if isinstance(value, int) and value > 0 else None
 
 
+def archive_decision_records(
+    records: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate mechanical writer activation from consensus decisions."""
+
+    lifecycle = [
+        record
+        for record in records
+        if journal_engine._writer_activation_marker(record)
+    ]
+    if lifecycle and "writer-activation-lifecycle" not in RENDERER_CONTROLS:
+        authoritative_discrepancy("structured_chain_mismatch")
+    decisions = [
+        record
+        for record in records
+        if record.get("type") == "decision"
+        and not journal_engine._writer_activation_marker(record)
+    ]
+    return decisions, lifecycle
+
+
 def result_verdict_conflicts(record: dict[str, Any]) -> bool:
     binding = record.get("binding")
     review = binding.get("review") if isinstance(binding, dict) else None
@@ -2578,7 +2951,10 @@ def result_verdict_conflicts(record: dict[str, Any]) -> bool:
 
 
 def required_binding_records(
-    records: list[dict[str, Any]], activated: bool
+    records: list[dict[str, Any]],
+    activated: bool,
+    *,
+    activated_record_ids: frozenset[int] | None = None,
 ) -> list[dict[str, Any]]:
     if not activated:
         return []
@@ -2586,6 +2962,8 @@ def required_binding_records(
         authoritative_discrepancy("structured_chain_mismatch")
     result: list[dict[str, Any]] = []
     for record in records:
+        if activated_record_ids is not None and id(record) not in activated_record_ids:
+            continue
         kind = record.get("type")
         criterion = record.get("criterion")
         is_gate = bool(
@@ -2615,9 +2993,18 @@ def required_binding_records(
     return result
 
 
-def binding_chain_ids(records: list[dict[str, Any]], activated: bool) -> set[str]:
+def binding_chain_ids(
+    records: list[dict[str, Any]],
+    activated: bool,
+    *,
+    activated_record_ids: frozenset[int] | None = None,
+) -> set[str]:
     result: set[str] = set()
-    for record in required_binding_records(records, activated):
+    for record in required_binding_records(
+        records,
+        activated,
+        activated_record_ids=activated_record_ids,
+    ):
         binding = record["binding"]
         assert isinstance(binding, dict)
         source = binding.get("source_record")
@@ -2896,8 +3283,14 @@ def resolve_archive_bindings(
     records: list[dict[str, Any]],
     package: ChainPackage,
     activated: bool,
+    *,
+    activated_record_ids: frozenset[int] | None = None,
 ) -> dict[int, dict[str, object]]:
-    required = required_binding_records(records, activated)
+    required = required_binding_records(
+        records,
+        activated,
+        activated_record_ids=activated_record_ids,
+    )
     if not required:
         return {}
     captured = {snapshot.chain.chain_id: snapshot for snapshot in package.captured}
@@ -3064,16 +3457,22 @@ def legacy_review_values(
 
 
 def legacy_discrepancies(
-    records: list[dict[str, Any]], activated: bool
+    records: list[dict[str, Any]],
+    activated: bool,
+    *,
+    activated_record_ids: frozenset[int] | None = None,
 ) -> list[Discrepancy]:
     result: list[Discrepancy] = []
     for record in records:
+        record_activated = activated and (
+            activated_record_ids is None or id(record) in activated_record_ids
+        )
         legacy_decision = isinstance(record.get("decision"), str)
         structured_decision = isinstance(record.get("resolution"), str)
         if (
             record.get("type") == "decision"
             and legacy_decision
-            and (not activated or structured_decision)
+            and (not record_activated or structured_decision)
         ):
             result.append(
                 Discrepancy(
@@ -3085,7 +3484,7 @@ def legacy_discrepancies(
             )
         criterion = record.get("criterion")
         if (
-            not activated
+            not record_activated
             and
             record.get("type") == "verification"
             and isinstance(criterion, str)
@@ -3652,6 +4051,8 @@ def render_archive(
 ) -> str:
     started = only_record(records, "run_started")
     closed = only_record(records, "run_closed")
+    activated = journal_engine.writer_contract_active(records)
+    decisions, lifecycle_decisions = archive_decision_records(records)
     if closing is None:
         if closing_head is None:
             raise ArchiveRefusal("forge: archive refused — invalid closing HEAD")
@@ -3669,6 +4070,9 @@ def render_archive(
             + b"\n"
             for record in records
         )
+    activated_record_ids, _activation_origin = activated_record_partition(
+        records, journal_raw, activated
+    )
     if package is None:
         package = ChainPackage(None, None, (), ())
     tombstone_citations = tombstone_evidence_citations(package)
@@ -3677,18 +4081,17 @@ def render_archive(
     if discrepancies is None:
         discrepancies = [
             *legacy_discrepancies(
-                records, started.get("writer_contract") == WRITER_CONTRACT
+                records,
+                activated,
+                activated_record_ids=activated_record_ids,
             ),
             *tombstone_discrepancies(package, records),
         ]
     if documents is None:
-        decisions_for_documents = [
-            record for record in records if record.get("type") == "decision"
-        ]
         documents = basis_documents(
             repo,
             run_dir,
-            decisions_for_documents,
+            decisions,
             excluded_references=tombstone_citations,
         )
     documents = tuple(
@@ -3741,8 +4144,6 @@ def render_archive(
         if "acceptance" not in record and "acceptance" in previous:
             merged["acceptance"] = previous["acceptance"]
         latest_tasks[task_id] = merged
-    decisions = [record for record in records if record.get("type") == "decision"]
-    activated = started.get("writer_contract") == WRITER_CONTRACT
     raw_lines = journal_raw_lines(journal_raw)
     gates = [
         record
@@ -3787,6 +4188,31 @@ def render_archive(
                 "",
             ]
         )
+
+    if lifecycle_decisions:
+        lines.extend(["## Lifecycle metadata", ""])
+        for decision in lifecycle_decisions:
+            lines.extend(
+                [
+                    f"### {display(decision.get('id'))}",
+                    "",
+                    "Lifecycle event: writer contract activation",
+                    "",
+                    f"Resolution: {display(decision.get('resolution'))}",
+                    "",
+                    f"Writer contract: {display(decision.get('writer_contract'))}",
+                    "",
+                    f"Receipt origin size: {display(decision.get('receipt_origin_size'))}",
+                    "",
+                    "Receipt origin SHA-256: "
+                    f"{display(decision.get('receipt_origin_sha256'))}",
+                    "",
+                    f"Run ID: {display(decision.get('run_id'))}",
+                    "",
+                    f"Recorded at: {display(decision.get('recorded_at'))}",
+                    "",
+                ]
+            )
 
     lines.extend(["## Decisions", ""])
     if not decisions:
@@ -3921,7 +4347,7 @@ def render_archive(
             check = gate.get("check")
             line = record_line_number(gate)
             binding = bindings.get(line or -1)
-            if activated:
+            if id(gate) in activated_record_ids:
                 if binding is None:
                     authoritative_discrepancy("structured_chain_mismatch")
                 source = binding.get("source_record")
@@ -4077,7 +4503,7 @@ def legacy_closing_mode(
     except ArchiveRefusal as exc:
         raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL) from exc
     if (
-        started.get("writer_contract") == WRITER_CONTRACT
+        journal_engine.writer_contract_active(target_records)
         or started.get("run_id") != target_run_dir.name
         or closed.get("judgment") != "passed"
         or not target_records
@@ -4134,7 +4560,7 @@ def legacy_closing_mode(
         valid = bool(
             len(starts) == 1
             and starts[0].get("run_id") == recovery_run_id
-            and starts[0].get("writer_contract") == WRITER_CONTRACT
+            and journal_engine.writer_contract_active(recovery_records)
             and isinstance(start_scope, list)
             and all(isinstance(item, str) and item for item in start_scope)
             and not any(
@@ -4169,6 +4595,8 @@ def legacy_closing_mode(
             )
             try:
                 for index, proposed in enumerate(canonical_records):
+                    if journal_engine._writer_activation_marker(proposed):
+                        continue
                     journal_engine._validate_proposed_record(
                         proposed,
                         run_id=recovery_run_id,
@@ -4244,11 +4672,18 @@ def _render_archive_candidate(
     """Read, replay, and render exact candidate bytes without destination mutation."""
 
     try:
-        records, journal_raw = stable_journal_snapshot(run_dir)
+        records, journal_raw, journal_snapshot = (
+            stable_archive_journal_snapshot(run_dir)
+        )
     except ArchiveRefusal as exc:
         if legacy_recovered_head is not None or legacy_approval is not None:
             raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL) from exc
         raise
+    activation_snapshot = (
+        journal_snapshot
+        if isinstance(journal_snapshot, ActivationReceiptSnapshot)
+        else None
+    )
     relative = f".forge/history/runs/{run_dir.name}.md"
     started = only_record(records, "run_started")
     closed = only_record(records, "run_closed")
@@ -4279,7 +4714,12 @@ def _render_archive_candidate(
     if not is_passing_gated_payload(post_close):
         raise ArchiveRefusal("forge: archive refused — post-close gated validation did not pass")
     audit_fragment = run_audit(run_dir, dispense_targets, dispense_reason)
-    fresh_pre_close = recompute_pre_close_validation(run_dir, records)
+    fresh_pre_close = recompute_pre_close_validation(
+        run_dir,
+        records,
+        journal_raw,
+        activation_snapshot,
+    )
     if not is_passing_gated_payload(fresh_pre_close) or embedded_pre_close != fresh_pre_close:
         raise ArchiveRefusal(
             "forge: archive refused — pre-close gated validation is stale or does not match journal"
@@ -4289,8 +4729,15 @@ def _render_archive_candidate(
         raise ArchiveRefusal(
             "forge: archive refused — post-close gated validation is stale or does not match journal"
         )
-    activated = started.get("writer_contract") == WRITER_CONTRACT
-    required_ids = binding_chain_ids(records, activated)
+    activated = journal_engine.writer_contract_active(records)
+    activated_record_ids, _activation_origin = activated_record_partition(
+        records, journal_raw, activated
+    )
+    required_ids = binding_chain_ids(
+        records,
+        activated,
+        activated_record_ids=activated_record_ids,
+    )
     if not activated:
         try:
             decoded_journal = journal_raw.decode("utf-8")
@@ -4300,16 +4747,29 @@ def _render_archive_candidate(
     package = capture_archive_chain_package(
         repo,
         run_dir,
-        records,
+        [record for record in records if id(record) in activated_record_ids]
+        if activated
+        else records,
         required_ids,
         activated=activated,
     )
-    bindings = resolve_archive_bindings(repo, run_dir, records, package, activated)
+    bindings = resolve_archive_bindings(
+        repo,
+        run_dir,
+        records,
+        package,
+        activated,
+        activated_record_ids=activated_record_ids,
+    )
     discrepancies = [
-        *legacy_discrepancies(records, activated),
+        *legacy_discrepancies(
+            records,
+            activated,
+            activated_record_ids=activated_record_ids,
+        ),
         *tombstone_discrepancies(package, records),
     ]
-    decisions = [record for record in records if record.get("type") == "decision"]
+    decisions, _lifecycle_decisions = archive_decision_records(records)
     documents = basis_documents(
         repo,
         run_dir,
@@ -4335,12 +4795,11 @@ def _render_archive_candidate(
     recheck_chain_package(package)
     recheck_captured_ingest_packages(package)
     recheck_basis_documents(documents)
-    try:
-        final_journal = journal_engine._stable_journal_read(run_dir / "journal.jsonl")
-    except (OSError, RuntimeError, ValueError, journal_engine.CoordinationRefusal):
-        authoritative_discrepancy("snapshot_changed")
-    if final_journal != journal_raw:
-        authoritative_discrepancy("snapshot_changed")
+    recheck_archive_journal_snapshot(
+        run_dir,
+        journal_raw,
+        journal_snapshot,
+    )
     return encoded
 
 

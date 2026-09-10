@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import runpy
 import subprocess
 import sys
 import textwrap
@@ -29,6 +30,7 @@ CLI = load_script("forge_cli_merge_adapter_tests", CLI_PATH)
 CORE = package_module("chain_core")  # cli split phase 2b: canonical chain-core module
 RUNTIME = package_module("runtime")  # cli split phase 2a: canonical patch seam for runtime controls
 ENGINE = package_module("engine")  # revision 10: canonical review-transport controls
+APP = package_module("app")
 FIXTURE_SUPPORT = load_script(
     "forge_cli_merge_adapter_fixture_support",
     ROOT / "tests" / "test_cli_chain.py",
@@ -891,6 +893,345 @@ class MergeGateAdapterTests(MergeAdapterFixture):
             self.base,
         )
 
+    def test_bound_mutation_runner_receives_owner_and_exact_run_binding(self) -> None:
+        _admission, _generation, _store, _engine, outcome, calls = self.verify_chain(
+            bound=True
+        )
+
+        self.assertTrue(outcome.ok)
+        scoped = [
+            (argv, kwargs)
+            for argv, kwargs in calls
+            if len(argv) > 1 and Path(argv[1]).name == "run-scoped-mutation.py"
+        ]
+        self.assertEqual(len(scoped), 1)
+        argv, kwargs = scoped[0]
+        self.assertEqual(
+            argv[-6:],
+            [
+                "--repository",
+                str(self.repo.resolve()),
+                "--run-id",
+                self.run_id,
+                "--task",
+                self.task_id,
+            ],
+        )
+        self.assertNotIn("--journal", argv)
+        self.assertNotIn("--defer-journal", argv)
+        self.assertEqual(kwargs["env"]["FORGE_SESSION_PID"], str(os.getpid()))
+        ordinary_children = [
+            kwargs["env"]
+            for child_argv, kwargs in calls
+            if kwargs.get("env") is not None
+            and not (
+                len(child_argv) > 1
+                and Path(child_argv[1]).name == "run-scoped-mutation.py"
+            )
+        ]
+        self.assertTrue(ordinary_children)
+        self.assertTrue(
+            all("FORGE_SESSION_PID" not in environment for environment in ordinary_children)
+        )
+
+    def test_unbound_mutation_runner_does_not_receive_owner_or_run_identity(self) -> None:
+        _admission, _generation, _store, _engine, outcome, calls = self.verify_chain()
+
+        self.assertTrue(outcome.ok)
+        scoped = [
+            (argv, kwargs)
+            for argv, kwargs in calls
+            if len(argv) > 1 and Path(argv[1]).name == "run-scoped-mutation.py"
+        ]
+        self.assertEqual(len(scoped), 1)
+        argv, kwargs = scoped[0]
+        self.assertNotIn("--repository", argv)
+        self.assertNotIn("--run-id", argv)
+        self.assertNotIn("--task", argv)
+        self.assertNotIn("FORGE_SESSION_PID", kwargs["env"])
+
+    def test_bound_epoch_mutation_retains_owner_and_wires_deferred_transform(self) -> None:
+        engine = CLI.MergeEngine(self.context(chain_id=self.chain_id))
+        suite = [{"kind": "scoped-mutation", "id": "scoped-mutation"}]
+        plan = {
+            "status": "sealed",
+            "cursor": 0,
+            "suite": suite,
+            "suite_digest": digest(CORE.canonical_bytes(suite)),
+            "seal_event_digest": "1" * 64,
+            "generation_digest": "2" * 64,
+            "policy_digest": "3" * 64,
+        }
+        state = {
+            "chain_id": self.chain_id,
+            "candidate": {
+                "remote_tip": self.base,
+                "candidate_head": self.candidate_head,
+                "generation_digest": "2" * 64,
+            },
+            "integration": {
+                "epoch": {
+                    "intent_digest": "4" * 64,
+                    "operation_nonce": "5" * 32,
+                    "gate_plan": plan,
+                }
+            },
+            "run_binding": {
+                "run_id": self.run_id,
+                "task_id": self.task_id,
+            },
+        }
+        repository = CLI.Repository(self.repo)
+        budget = mock.Mock()
+        captured: dict[str, object] = {}
+
+        class EpochInvocation(RuntimeError):
+            pass
+
+        def capture(_lock, **kwargs):
+            captured.update(kwargs)
+            raise EpochInvocation("captured epoch mutation")
+
+        with mock.patch.object(
+            engine,
+            "_run_candidate_observation_locked",
+            return_value=(state, object()),
+        ), mock.patch.object(
+            APP,
+            "_observe_current_merge_candidate",
+            return_value=(repository, object(), ("src/app.py",)),
+        ), mock.patch.object(
+            ENGINE, "_require_active_merge_epoch"
+        ), mock.patch.object(
+            ENGINE, "_merge_epoch_suite", return_value=suite
+        ), mock.patch.object(
+            ENGINE,
+            "_merge_run_directory",
+            return_value=(
+                self.repo.resolve(),
+                self.repo / ".codex-orchestrator" / "runs" / self.run_id,
+            ),
+        ), mock.patch.object(
+            CORE, "run_fenced_command", side_effect=capture
+        ), self.assertRaisesRegex(EpochInvocation, "captured epoch mutation"):
+            engine._run_epoch_suite(
+                state,
+                mock.sentinel.lock,
+                mock.sentinel.lease,
+                budget,
+            )
+
+        self.assertEqual(
+            captured["argv"],
+            [
+                sys.executable,
+                str(self.helpers / "run-scoped-mutation.py"),
+                "--base",
+                self.base,
+                "--head",
+                self.candidate_head,
+                "--repository",
+                str(self.repo.resolve()),
+                "--run-id",
+                self.run_id,
+                "--task",
+                self.task_id,
+                "--defer-journal",
+            ],
+        )
+        self.assertEqual(
+            captured["env"]["FORGE_SESSION_PID"], str(os.getpid())
+        )
+        self.assertTrue(callable(captured.get("result_transform")))
+        raw = mock.sentinel.raw_mutation_result
+        with mock.patch.object(
+            APP, "_persist_deferred_mutation_result", return_value=raw
+        ) as persist:
+            self.assertIs(captured["result_transform"](raw), raw)
+        persist.assert_called_once_with(
+            raw,
+            repository=self.repo.resolve(),
+            run_id=self.run_id,
+            task=self.task_id,
+            base=self.base,
+            head=self.candidate_head,
+        )
+        budget.consume.assert_called_once_with("suites")
+
+    def test_deferred_mutation_persists_reentrantly_without_changing_public_fact(self) -> None:
+        self.open_run()
+        batch, builders, journal_module = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / self.run_id
+        journal_path = run_dir / "journal.jsonl"
+        ledger_path = run_dir / journal_module.BATCH_RECEIPTS_NAME
+        receipt_count = len(ledger_path.read_text(encoding="utf-8").splitlines())
+        runner = runpy.run_path(str(ROOT / "scripts/forge/run-scoped-mutation.py"))
+        record = runner["verification_record"](
+            task=self.task_id,
+            scope="python",
+            result="passed",
+            check="true",
+            observation="tool=mutmut; scope=python; outcome=completed",
+        )
+        request = runner["mutation_journal_request"](
+            repository=self.repo,
+            run_id=self.run_id,
+            base=self.base,
+            head=self.candidate_head,
+            record=record,
+        )
+        evidence = {
+            "type": "mutation_evidence",
+            "criterion": record["criterion"],
+            "result": record["result"],
+            "check": record["check"],
+            "observation": record["observation"],
+        }
+        public_output = (runner["json_text"](evidence) + "\n").encode("utf-8")
+        sideband = (
+            runner["MUTATION_JOURNAL_SIDEBAND_PREFIX"]
+            + runner["json_text"](
+                request,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        raw = CORE.FencedProcessResult(
+            argv=["python3", "run-scoped-mutation.py"],
+            returncode=0,
+            duration_seconds=0.01,
+            output=public_output + sideband,
+            output_digest=digest(public_output + sideband),
+            timed_out=False,
+            output_limit=False,
+            launch_failed=False,
+            group_survived=False,
+            authorized=True,
+            fence_digest="1" * 64,
+            fence_inode=1,
+        )
+
+        with batch.batch_lock(run_dir, create=False):
+            first = APP._persist_deferred_mutation_result(
+                raw,
+                repository=self.repo,
+                run_id=self.run_id,
+                task=self.task_id,
+                base=self.base,
+                head=self.candidate_head,
+            )
+            journal_after_first = journal_path.read_bytes()
+            ledger_after_first = ledger_path.read_bytes()
+            repeated = APP._persist_deferred_mutation_result(
+                raw,
+                repository=self.repo,
+                run_id=self.run_id,
+                task=self.task_id,
+                base=self.base,
+                head=self.candidate_head,
+            )
+
+        self.assertEqual(first.output, public_output)
+        self.assertEqual(first.output_digest, digest(public_output))
+        self.assertEqual(first.returncode, raw.returncode)
+        self.assertEqual(first.timed_out, raw.timed_out)
+        self.assertEqual(first.output_limit, raw.output_limit)
+        self.assertEqual(repeated.output, public_output)
+        self.assertEqual(journal_path.read_bytes(), journal_after_first)
+        self.assertEqual(ledger_path.read_bytes(), ledger_after_first)
+        self.assertEqual(
+            len(ledger_path.read_text(encoding="utf-8").splitlines()),
+            receipt_count + 1,
+        )
+        state = journal_module._scan_run(run_dir)
+        mutation_records = [
+            item
+            for item in state.records
+            if item.get("type") == "verification"
+            and item.get("criterion") == "mutation: python"
+        ]
+        self.assertEqual(len(mutation_records), 1)
+        self.assertEqual(mutation_records[0]["id"], "check-01")
+        self.assertFalse(first.timed_out or first.output_limit or first.launch_failed)
+
+        journal_before_refusal = journal_path.read_bytes()
+        ledger_before_refusal = ledger_path.read_bytes()
+        existing_refusal = (
+            "forge: journal append refused — owner record missing or malformed for run "
+            + self.run_id
+        )
+        with mock.patch.object(
+            builders,
+            "verification_add",
+            side_effect=RuntimeError(existing_refusal),
+        ), batch.batch_lock(run_dir, create=False):
+            advisory = APP._persist_deferred_mutation_result(
+                raw,
+                repository=self.repo,
+                run_id=self.run_id,
+                task=self.task_id,
+                base=self.base,
+                head=self.candidate_head,
+            )
+        self.assertEqual(
+            advisory.output,
+            public_output
+            + (existing_refusal + "\n").encode()
+            + (
+                "forge: scoped mutation journal persistence unavailable — advisory "
+                "evidence emitted only\n"
+            ).encode(),
+        )
+        self.assertEqual(advisory.output_digest, digest(advisory.output))
+        self.assertEqual(advisory.returncode, raw.returncode)
+        self.assertEqual(advisory.timed_out, raw.timed_out)
+        self.assertEqual(advisory.output_limit, raw.output_limit)
+        self.assertEqual(advisory.launch_failed, raw.launch_failed)
+        self.assertEqual(advisory.group_survived, raw.group_survived)
+        self.assertEqual(journal_path.read_bytes(), journal_before_refusal)
+        self.assertEqual(ledger_path.read_bytes(), ledger_before_refusal)
+
+    def test_deferred_mutation_advisory_stays_within_fenced_output_cap(self) -> None:
+        prefix = APP._MUTATION_JOURNAL_SIDEBAND_PREFIX
+        public_output = b"x" * (RUNTIME.OUTPUT_CAP_BYTES - len(prefix) - 1) + b"\n"
+        raw_output = public_output + prefix
+        self.assertEqual(len(raw_output), RUNTIME.OUTPUT_CAP_BYTES)
+        raw = CORE.FencedProcessResult(
+            argv=["python3", "run-scoped-mutation.py"],
+            returncode=0,
+            duration_seconds=0.01,
+            output=raw_output,
+            output_digest=digest(raw_output),
+            timed_out=False,
+            output_limit=True,
+            launch_failed=False,
+            group_survived=False,
+            authorized=True,
+            fence_digest="1" * 64,
+            fence_inode=1,
+        )
+
+        transformed = APP._persist_deferred_mutation_result(
+            raw,
+            repository=self.repo,
+            run_id=self.run_id,
+            task=self.task_id,
+            base=self.base,
+            head=self.candidate_head,
+        )
+
+        advisory = (APP._MUTATION_PERSISTENCE_ADVISORY + "\n").encode()
+        self.assertEqual(len(transformed.output), RUNTIME.OUTPUT_CAP_BYTES)
+        self.assertTrue(transformed.output.endswith(advisory))
+        self.assertNotIn(prefix, transformed.output)
+        self.assertEqual(transformed.output_digest, digest(transformed.output))
+        self.assertTrue(transformed.output_limit)
+        self.assertEqual(transformed.returncode, raw.returncode)
+        self.assertEqual(transformed.launch_failed, raw.launch_failed)
+        self.assertEqual(transformed.group_survived, raw.group_survived)
+
     def test_failed_gate_is_durable_remote_safe_and_resumable(self) -> None:
         admission, generation = self.admission_and_generation()
         store, _state = self.create_chain(admission, generation)
@@ -973,6 +1314,128 @@ class MergeGateAdapterTests(MergeAdapterFixture):
         ):
             replayed = store.load(self.chain_id)
         self.assertEqual(replayed, attached)
+
+    def test_bound_receipted_mutation_preserves_gate_three_evidence_and_disposition(
+        self,
+    ) -> None:
+        _admission, _generation, store, engine, _outcome, _calls = self.verify_chain(
+            bound=True
+        )
+        engine.review_request()
+        request = store.load(self.chain_id)["review"]["request"]
+        verdict = self.write_verdict("merge-mutation-pass.txt", "PASS", request)
+        engine.review_attach(str(verdict))
+
+        _batch, _builders, journal_module = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / self.run_id
+        journal_path = run_dir / "journal.jsonl"
+        ledger_path = run_dir / journal_module.BATCH_RECEIPTS_NAME
+        events_path = store.events_path(self.chain_id)
+        state_path = store.state_path(self.chain_id)
+        chain_before = store.load(self.chain_id)
+        self.assertEqual(chain_before["state"], "authorized")
+        journal_before = journal_path.read_bytes()
+        ledger_before = ledger_path.read_bytes()
+        events_before = events_path.read_bytes()
+        state_before = state_path.read_bytes()
+        review_package = run_dir / str(request["package"])
+        review_package_before = review_package.read_bytes()
+        gate_three_before = [
+            copy.deepcopy(record)
+            for record in journal_module._scan_run(run_dir).records
+            if record.get("type") == "verification"
+            and record.get("criterion") == journal_module.GATE_3_CRITERION
+        ]
+        self.assertEqual(len(gate_three_before), 1)
+
+        runner = runpy.run_path(str(ROOT / "scripts/forge/run-scoped-mutation.py"))
+        record = runner["verification_record"](
+            task=self.task_id,
+            scope="python",
+            result="passed",
+            check="true",
+            observation="tool=mutmut; scope=python; outcome=completed",
+        )
+        mutation_request = runner["mutation_journal_request"](
+            repository=self.repo,
+            run_id=self.run_id,
+            base=self.base,
+            head=self.candidate_head,
+            record=record,
+        )
+        evidence = {
+            "type": "mutation_evidence",
+            "criterion": record["criterion"],
+            "result": record["result"],
+            "check": record["check"],
+            "observation": record["observation"],
+        }
+        public_output = (runner["json_text"](evidence) + "\n").encode("utf-8")
+        sideband = (
+            runner["MUTATION_JOURNAL_SIDEBAND_PREFIX"]
+            + runner["json_text"](
+                mutation_request,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        raw = CORE.FencedProcessResult(
+            argv=["python3", "run-scoped-mutation.py"],
+            returncode=0,
+            duration_seconds=0.01,
+            output=public_output + sideband,
+            output_digest=digest(public_output + sideband),
+            timed_out=False,
+            output_limit=False,
+            launch_failed=False,
+            group_survived=False,
+            authorized=True,
+            fence_digest="1" * 64,
+            fence_inode=1,
+        )
+
+        transformed = APP._persist_deferred_mutation_result(
+            raw,
+            repository=self.repo,
+            run_id=self.run_id,
+            task=self.task_id,
+            base=self.base,
+            head=self.candidate_head,
+        )
+
+        self.assertEqual(transformed.output, public_output)
+        journal_after = journal_path.read_bytes()
+        ledger_after = ledger_path.read_bytes()
+        mutation_batch = journal_after[len(journal_before) :]
+        receipt_suffix = ledger_after[len(ledger_before) :]
+        self.assertTrue(mutation_batch.endswith(b"\n"))
+        self.assertTrue(receipt_suffix.endswith(b"\n"))
+        self.assertEqual(len(mutation_batch.splitlines()), 1)
+        self.assertEqual(len(receipt_suffix.splitlines()), 1)
+        persisted = json.loads(mutation_batch)
+        receipt = json.loads(receipt_suffix)
+        self.assertEqual(persisted["id"], "check-06")
+        self.assertEqual(persisted["criterion"], "mutation: python")
+        self.assertEqual(receipt["schema"], journal_module.BATCH_RECEIPT_SCHEMA)
+        self.assertEqual(receipt["base_size"], len(journal_before))
+        self.assertEqual(receipt["record_count"], 1)
+        self.assertEqual(receipt["batch_sha256"], digest(mutation_batch))
+        self.assertEqual(receipt["journal_size"], len(journal_after))
+        self.assertEqual(receipt["journal_sha256"], digest(journal_after))
+
+        gate_three_after = [
+            record
+            for record in journal_module._scan_run(run_dir).records
+            if record.get("type") == "verification"
+            and record.get("criterion") == journal_module.GATE_3_CRITERION
+        ]
+        self.assertEqual(gate_three_after, gate_three_before)
+        self.assertEqual(events_path.read_bytes(), events_before)
+        self.assertEqual(state_path.read_bytes(), state_before)
+        self.assertEqual(store.load(self.chain_id), chain_before)
+        self.assertEqual(review_package.read_bytes(), review_package_before)
 
     def test_run_bound_block_records_failed_gate_three_fact(self) -> None:
         _admission, _generation, _store, engine, _outcome, _calls = self.verify_chain(

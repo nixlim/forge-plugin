@@ -490,6 +490,255 @@ def assert_fresh_reviewer_operator_skip_contract(spec: str, commit: str) -> None
             raise AssertionError(marker)
 
 
+def assert_writer_activation_repair_mutation_spec_contract(spec: str) -> None:
+    dm001 = spec.split("**DM-001**", maxsplit=1)[1].split(
+        "**DM-002**", maxsplit=1
+    )[0]
+    dm012 = spec.split("**DM-012**", maxsplit=1)[1].split(
+        "**DM-013**", maxsplit=1
+    )[0]
+    fr011 = spec.split("- **FR-011**", maxsplit=1)[1].split(
+        "- **FR-012**", maxsplit=1
+    )[0]
+    fr019 = spec.split("- **FR-019**", maxsplit=1)[1].split(
+        "### Level B gate enforcement", maxsplit=1
+    )[0]
+    fr120 = spec.split("- **FR-120**", maxsplit=1)[1].split(
+        "- **FR-121**", maxsplit=1
+    )[0]
+    fr142 = spec.split("- **FR-142**", maxsplit=1)[1].split(
+        "- **FR-143**", maxsplit=1
+    )[0]
+    api = spec.split(
+        "### Revision-9 typed journal builders and batch transaction", maxsplit=1
+    )[1].split("### `forge-gate-binding", maxsplit=1)[0]
+    errors = spec.split("## 9. Error Contract", maxsplit=1)[1].split(
+        "## Behavioral Scenarios", maxsplit=1
+    )[0]
+    test_matrix = spec.split("## 11. Testing Requirements", maxsplit=1)[1].split(
+        "## 12. Success Criteria", maxsplit=1
+    )[0]
+    sc027 = spec.split("- **SC-027**", maxsplit=1)[1].split(
+        "- **SC-028**", maxsplit=1
+    )[0]
+    trace = spec.split("## 13. Traceability Matrix", maxsplit=1)[1].split(
+        "## 14. Task Decomposition Guidance", maxsplit=1
+    )[0]
+
+    marker_match = re.search(
+        r"reserved builder-owned `decision`:\n\n```json\n(.*?)\n```",
+        dm001,
+        flags=re.DOTALL,
+    )
+    if marker_match is None:
+        raise AssertionError("DM-001 activation marker")
+    marker = json.loads(marker_match.group(1))
+    if list(marker) != [
+        "type",
+        "id",
+        "resolution",
+        "writer_contract",
+        "receipt_origin_size",
+        "receipt_origin_sha256",
+        "run_id",
+        "recorded_at",
+    ]:
+        raise AssertionError("DM-001 exact activation marker keys")
+    if marker["type"] != "decision" or marker["id"] != "decision-NN":
+        raise AssertionError("DM-001 activation marker identity")
+    expected_marker_values = {
+        "resolution": "writer-contract-activated: forge-journal-binding/1",
+        "writer_contract": "forge-journal-binding/1",
+    }
+    for key, expected in expected_marker_values.items():
+        if marker[key] != expected:
+            raise AssertionError(f"DM-001 activation marker {key}")
+
+    required_by_section = {
+        "DM-001": (
+            (
+                "Following FR-016's existing decision-as-mode-marker precedent",
+                "`id` is allocated normally as `decision-NN`",
+                "nonnegative JSON integer (not Boolean)",
+                "authenticates the exact immutable journal prefix",
+                "selected receipt origin is the activation cutoff",
+                "exactly one marker and exactly one authenticating ordinary receipt",
+                "partial, duplicate, malformed, unreceipted, or legacy-prefix-mismatched",
+            ),
+            dm001,
+        ),
+        "DM-012": (
+            (
+                "optional first-use preamble",
+                "included in `record_count`, `batch_digest`, the exact intent batch bytes",
+                "same ordinary receipt as the adopting records",
+                "reserve that run's first typed use until the exact batch drains",
+            ),
+            dm012,
+        ),
+        "FR-011": (
+            (
+                "opening `run_started.writer_contract`",
+                "exactly one DM-001 activation decision",
+                "authenticated legacy-prefix digest",
+                "remain read-only",
+                "never inject a marker, repair coverage, replay a batch",
+            ),
+            fr011,
+        ),
+        "FR-019": (
+            (
+                "known optional nonnegative JSON integer (not Boolean)",
+                "first typed mutation of a legacy-opened run MUST have the builder prepend",
+                "Shape-only marker recognition",
+                "every persisted activation classification MUST authenticate",
+                "selected origin is exactly zero for a typed-opened run",
+                "`N >= 1` complete canonical",
+                "`record_count` is `N`",
+                "MUST NOT invoke the normal append path, reapply that batch",
+                "using internal request verb `journal batch-recover`",
+                "unlinks the intent and fsyncs the directory last",
+                "forge: journal append refused — activated writer requires typed builder",
+                "raw `run close`, `run retire`, and `run readmit` MUST complete",
+                "exact batch → registry → journal order",
+                "Retrospective commit- and merge-chain ingest",
+                "project this batch-owned marker before allocating",
+                "forge: journal batch refused — another intent is pending",
+                "forge: journal batch recovery refused — journal diverged from intent",
+                "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; retire the run and open a successor with --successor-of, or run journal batch-recover if the trailing records were written by an interrupted typed batch",
+                "legacy raw append retains its compatibility behavior",
+            ),
+            fr019,
+        ),
+        "FR-120": (
+            (
+                "allocates its ordinary `decision-NN` and `recorded_at`",
+                "A caller MUST NOT author, request, copy, or select that marker",
+            ),
+            fr120,
+        ),
+        "FR-142": (
+            (
+                "typed `builders.verification_add`",
+                '"schema":"forge-scoped-mutation-journal/1"',
+                '"repository":<repository>,"run_id":<run-id>,"task":<task>',
+                '"base":<base>,"head":<head>,"criterion":<criterion>',
+                '"result":<result>,"check":<check>',
+                '"truncated_observation":<truncated-observation>,"evidence":<evidence>',
+                "stable `FORGE_SESSION_PID` remains available to the trusted runner",
+                "untrusted mutation `bash -c` child MUST remove `FORGE_SESSION_PID`",
+                "MUST NOT call `append_owned_record` or any raw append fallback",
+                "forge: scoped mutation journal persistence unavailable — advisory evidence emitted only",
+                "preserves exit 0",
+                "remain non-gating",
+            ),
+            fr142,
+        ),
+        "section 8": (
+            (
+                "Typed `run-open` is the canonical opening surface",
+                "record-JSON coordination forms remain legacy/migration-only",
+                "implicitly prepends DM-001's activation decision",
+                "one intent, `batch_sha256`, `record_count`, and ordinary receipt",
+                "one authenticated interior gap containing `N >= 1`",
+                "never reapplies its batch or receipt",
+            ),
+            api,
+        ),
+        "SC-027": (
+            (
+                "first typed use of a legacy-opened run",
+                "authenticated nonzero legacy origin",
+                "interior `N >= 1` record gap",
+                "spent intent's batch and receipt are never reapplied",
+                "typed `verification_add` with a deterministic key",
+                "persistence refusal remains evidence-only without raw fallback",
+            ),
+            sc027,
+        ),
+        "traceability": (
+            (
+                "Legacy first typed use activates atomically",
+                "One proven N-record gap plus spent intent recovers without reapplication",
+                "deterministic mutation receipt/owner scrub",
+            ),
+            trace,
+        ),
+    }
+    for section_name, (required, section) in required_by_section.items():
+        for marker_text in required:
+            if marker_text not in section:
+                raise AssertionError(f"{section_name}: {marker_text}")
+
+    control_sets = (
+        (
+            "WRITER_ACTIVATION_CONTROLS",
+            (
+                "marker-injection",
+                "marker-recognition",
+                "receipt-origin",
+                "recovery-extension",
+            ),
+        ),
+        (
+            "BATCH_GAP_REPAIR_CONTROLS",
+            (
+                "canonical-gap-receipt",
+                "legacy-record-membership",
+                "multi-record-gap",
+            ),
+        ),
+        (
+            "MUTATION_JOURNAL_CONTROLS",
+            ("typed-builder", "deterministic-key", "owner-scrub"),
+        ),
+    )
+    for name, members in control_sets:
+        declaration = re.search(
+            rf"`{name}` set is exactly ([^.]+)\.", spec
+        )
+        if declaration is None:
+            raise AssertionError(name)
+        if re.findall(r"`([^`]+)`", declaration.group(1)) != list(members):
+            raise AssertionError(f"{name} exact members")
+        if not all(member in test_matrix for member in members):
+            raise AssertionError(f"{name} test matrix")
+
+    run_open_row = next(
+        line for line in api.splitlines() if line.startswith("| `run-open` |")
+    )
+    if "accepts no `--record-json`" not in run_open_row:
+        raise AssertionError("typed run-open rejects raw input")
+    repair_refusal_row = next(
+        line for line in errors.splitlines() if line.startswith("| Proposed repair is ")
+    )
+    if "multi-record" in repair_refusal_row:
+        raise AssertionError("canonical multi-record gap must not be refused")
+    for unsafe_shape in (
+        "leading",
+        "trailing",
+        "overlapping",
+        "multiple",
+        "noncanonical",
+        "tampered",
+    ):
+        if unsafe_shape not in repair_refusal_row:
+            raise AssertionError(f"repair refusal: {unsafe_shape}")
+
+    legacy_adoption_refusal_row = next(
+        line
+        for line in errors.splitlines()
+        if line.startswith("| An unactivated legacy receipt ledger ")
+    )
+    for required in (
+        "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; retire the run and open a successor with --successor-of, or run journal batch-recover if the trailing records were written by an interrupted typed batch",
+        "legacy raw append and lifecycle compatibility remain available",
+        "typed `run-open --successor-of`",
+    ):
+        if required not in legacy_adoption_refusal_row:
+            raise AssertionError(f"legacy adoption refusal: {required}")
+
+
 class DocumentationContractTests(unittest.TestCase):
     def test_skills_are_not_duplicated_by_command_stubs(self) -> None:
         self.assertEqual(list((ROOT / "commands").glob("*.md")), [])
@@ -622,6 +871,7 @@ class DocumentationContractTests(unittest.TestCase):
             "forge: guard-denied-commands policy malformed — repair committed forge-project.md",
             "forge: operator-denied command — <reason>",
             "add no FR-220 reason-code member",
+            "do not alter any FR-221 denial literal",
             "Fast-marker policy-continuity comparison MUST include",
         ):
             with self.subTest(disabled=control):
@@ -652,6 +902,36 @@ class DocumentationContractTests(unittest.TestCase):
                 mutated = spec.replace(control, "DISABLED_CONTROL")
                 with self.assertRaises(AssertionError):
                     assert_candidate_v2_spec_contract(mutated)
+
+    def test_writer_activation_repair_and_mutation_spec_contract_survives_mutation(
+        self,
+    ) -> None:
+        spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+        assert_writer_activation_repair_mutation_spec_contract(spec)
+
+        for control in (
+            "writer-contract-activated: forge-journal-binding/1",
+            "marker-injection",
+            "marker-recognition",
+            "receipt-origin",
+            "recovery-extension",
+            "canonical-gap-receipt",
+            "legacy-record-membership",
+            "multi-record-gap",
+            "typed-builder",
+            "deterministic-key",
+            "owner-scrub",
+            "raw `run close`, `run retire`, and `run readmit` MUST complete",
+            "exact batch → registry → journal order",
+            "Retrospective commit- and merge-chain ingest",
+            "project this batch-owned marker before allocating",
+            "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; retire the run and open a successor with --successor-of, or run journal batch-recover if the trailing records were written by an interrupted typed batch",
+            "legacy raw append retains its compatibility behavior",
+        ):
+            with self.subTest(disabled=control):
+                mutated = spec.replace(control, "DISABLED_CONTROL")
+                with self.assertRaises(AssertionError):
+                    assert_writer_activation_repair_mutation_spec_contract(mutated)
 
     def test_fresh_reviewer_operator_skip_contract_survives_mutation(self) -> None:
         spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
@@ -809,8 +1089,23 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("Do not create the run unless both exclude checks succeed", workflow)
         self.assertLess(
             workflow.index("git check-ignore -q"),
-            workflow.index("use `run-open` to atomically create ownership plus `run_started`"),
+            workflow.index(
+                'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" run-open'
+            ),
         )
+        typed_open = workflow.split(
+            "Open the run only through the typed builder", maxsplit=1
+        )[1].split("Add `--successor-of", maxsplit=1)[0]
+        for argument in (
+            '--repo "$REPO"',
+            "--run-id <run-id>",
+            "--idempotency-key <64-lowercase-hex>",
+            "--goal <concise-original-goal>",
+            "--plugin-ref <plugin-ref>",
+            "--scope <pathspec>",
+        ):
+            self.assertIn(argument, typed_open)
+        self.assertNotIn("--record-json", typed_open)
         records = jsonl_records(contract)
         run_started = next(record for record in records if record["type"] == "run_started")
         self.assertTrue(Path(run_started["repo"]).is_absolute())
@@ -962,7 +1257,9 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("scope overlap between <new-run-id> and open run <open-run-id>", workflow)
         self.assertIn("use `run-retire", workflow)
         self.assertIn("--successor-of <predecessor>", workflow)
-        self.assertIn("journal-append", workflow)
+        self.assertIn("journal task-start", workflow)
+        self.assertIn("journal task-finish", workflow)
+        self.assertNotIn("append them through `journal-append`", workflow)
         disabled = workflow.replace("Disjoint open runs may proceed concurrently", "", 1)
         self.assertNotIn("Disjoint open runs may proceed concurrently", disabled)
 

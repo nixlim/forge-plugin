@@ -16,6 +16,64 @@ def compact(text: str) -> str:
     return " ".join(text.split())
 
 
+def assert_typed_workflow_journal_contract(
+    test_case: unittest.TestCase, text: str
+) -> None:
+    normalized = compact(text)
+    typed_open = text.split(
+        "Open the run only through the typed builder", maxsplit=1
+    )[1].split("Add `--successor-of", maxsplit=1)[0]
+    for marker in (
+        "codex_orch_tools.py\" run-open",
+        '--repo "$REPO"',
+        "--run-id <run-id>",
+        "--idempotency-key <64-lowercase-hex>",
+        "--goal <concise-original-goal>",
+        "--plugin-ref <plugin-ref>",
+        "--scope <pathspec>",
+    ):
+        test_case.assertIn(marker, typed_open)
+    test_case.assertNotIn("--record-json", typed_open)
+
+    for marker in (
+        "`run-readmit --repo",
+        "`journal task-start`",
+        "`journal task-finish`",
+        "`journal execution-start`",
+        "`journal execution-result`",
+        "`journal verification-add`",
+        "`journal decision-add`",
+        "`journal ingest-chain`",
+        "close with typed `run-close`",
+        "typed `run-close --repo",
+        "--judgment passed|blocked",
+        "--summary <summary>",
+    ):
+        test_case.assertIn(marker, normalized)
+
+    for forbidden in (
+        "Append every later record only with `journal-append",
+        "append them through `journal-append`",
+        "`journal-append` for every record",
+        "--run-id <run-id> --record-json <file>",
+    ):
+        test_case.assertNotIn(forbidden, text)
+
+    compatibility_paragraphs = [
+        compact(paragraph).casefold()
+        for paragraph in text.split("\n\n")
+        if "--record-json" in paragraph or "journal-append" in paragraph
+    ]
+    test_case.assertTrue(compatibility_paragraphs)
+    for paragraph in compatibility_paragraphs:
+        test_case.assertIn("legacy/migration", paragraph)
+        test_case.assertIn("activated", paragraph)
+        test_case.assertTrue(
+            "never" in paragraph or "cannot" in paragraph,
+            "raw compatibility text must prohibit activated/canonical use",
+        )
+
+
 def frontmatter(text: str) -> tuple[dict[str, str], list[str]]:
     if not text.startswith("---\n"):
         raise AssertionError("missing frontmatter")
@@ -248,6 +306,31 @@ class GovernanceRuleContentTests(unittest.TestCase):
 
 
 class GovernanceDoctrineContentTests(unittest.TestCase):
+    def test_workflow_uses_typed_run_open_and_typed_journal_verbs(self) -> None:
+        assert_typed_workflow_journal_contract(self, WORKFLOW)
+
+    def test_typed_workflow_journal_controls_survive_in_memory_mutation(self) -> None:
+        for marker in (
+            "codex_orch_tools.py\" run-open",
+            "--idempotency-key <64-lowercase-hex>",
+            "`run-readmit --repo",
+            "`journal task-start`",
+            "`journal task-finish`",
+            "`journal execution-start`",
+            "`journal execution-result`",
+            "`journal verification-add`",
+            "`journal decision-add`",
+            "`journal ingest-chain`",
+            "close with typed\n`run-close`",
+            "legacy/migration surfaces only",
+            "cannot turn the raw form into an activated opening",
+        ):
+            with self.subTest(disabled_control=marker):
+                self.assertIn(marker, WORKFLOW)
+                mutant = WORKFLOW.replace(marker, "DISABLED_CONTROL")
+                with self.assertRaises(AssertionError):
+                    assert_typed_workflow_journal_contract(self, mutant)
+
     def test_twice_consecutive_verification_is_in_both_skills(self) -> None:
         for name, text in (("workflow", WORKFLOW), ("orchestrate", ORCHESTRATE)):
             normalized = compact(text)

@@ -759,6 +759,7 @@ class FreshReviewerCLIGateTests(FreshReviewerCLIFixture):
                 repository,
             ),
             _scan_run=lambda _run_dir: fake_run,
+            _writer_contract_active=lambda _records: True,
         )
 
         with mock.patch.object(
@@ -828,6 +829,7 @@ class FreshReviewerCLIGateTests(FreshReviewerCLIFixture):
                 repository,
             ),
             _scan_run=lambda _run_dir: fake_run,
+            _writer_contract_active=lambda _records: True,
         )
 
         with mock.patch.object(

@@ -6641,6 +6641,31 @@ def _merge_ingest_record_templates(
     return tuple(templates)
 
 
+def _ingest_allocation_records(
+    canonical_repository: Path, run_state: Any
+) -> list[dict[str, object]]:
+    """Project the batch-owned activation marker before ingest ID allocation."""
+
+    batch, builders, journal = runtime._coordination_modules()
+    if journal._writer_contract_active(run_state.records):
+        return list(run_state.records)
+    preamble = batch.prepare_outbox_records(
+        canonical_repository, run_state, ()
+    )
+    projected_state = batch._state_with_activation_preamble(
+        run_state, preamble
+    )
+    if (
+        len(preamble) != 1
+        or not journal._writer_activation_marker(preamble[0])
+        or not journal._writer_activation_id_is_allocated(
+            projected_state.records, preamble[0]
+        )
+    ):
+        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    return list(projected_state.records)
+
+
 def _verify_and_build_merge_ingest_records(
     *,
     canonical_repository: Path,
@@ -7113,7 +7138,9 @@ def _verify_and_build_merge_ingest_records(
         (event, prior, event_state, (), str(event["digest"]))
         for event, prior, event_state in events
     )
-    projected = list(proof_records)
+    projected = _ingest_allocation_records(
+        canonical_repository, run_state
+    )
     records: list[dict[str, object]] = []
     selected_digests: list[str] = []
     covered_gates: set[str] = set()
@@ -7926,7 +7953,9 @@ def _verify_and_build_ingest_records(
     if selected_digests != outcome_map["event_digests"]:
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
 
-    projected = list(proof_records)
+    projected = _ingest_allocation_records(
+        canonical_repository, run_state
+    )
     records: list[dict[str, object]] = []
     captured_citations = [
         captured_paths["state_file"],
@@ -7957,6 +7986,7 @@ def _verify_and_build_ingest_records(
             event_name,
             details,
             str(event["digest"]),
+            retrospective_ingest=True,
         )
         for generated_record in generated:
             record = copy.deepcopy(generated_record)

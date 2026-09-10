@@ -36,33 +36,8 @@ repository-relative Git pathspecs. Exclude transient Forge and run state (`.forg
 `.codex-orchestrator/**`, and `.worktrees/**`). Use the stable live `FORGE_SESSION_PID` injected by
 the long-lived harness; it must identify one live same-host owner in this PID namespace, and every
 fresh tool shell must inherit it unchanged. Never export or substitute shell `$$`, `$PPID`, or any
-transient tool-process PID as the identity. Every run-coordination operation and journal append
-must retain that same value.
-
-Open the run only through `${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py run-open`, passing
-`--repo "$REPO"`, `--run-id <run-id>`, one `--scope <pathspec>` for every declared pathspec, and a
-`--record-json` file containing the proposed `run_started` object. The command atomically creates
-the owner sidecar with `run_started`, reconciles `.forge/tmp/run-registry.json`, and admits this run
-when its scope is disjoint from every open run. It prints one exact
-`forge: new run refused — scope overlap between <new-run-id> and open run <open-run-id>` line for
-each conflict in bytewise run-ID order. Missing, malformed, ambiguous, or unregistered open-run
-state refuses exactly `forge: new run refused — run registry unavailable`. Never bypass either
-refusal by manually creating a run directory or appending a journal line.
-
-Disjoint open runs may proceed concurrently. Before adding a task, ensure every `task.files`
-pathspec is contained by its admitted run scope; re-declare the complete admitted set first, under
-the same registry lock, with `run-readmit --repo "$REPO" --run-id <run-id>
---idempotency-key <64-hex> --scope <pathspec> ...` (the typed builder requires the key).
-Use `--replace` only when intentionally replacing the previously admitted set.
-Append every later record only with `journal-append --repo "$REPO" --run-id <run-id>
---record-json <file>`, which proves the current PID/host owner before every write. A different live
-owner, or a missing/malformed owner after `run_started`, is a hard refusal and leaves the journal
-byte-identical.
-
-If immutable journal damage requires a successor, never rewrite journal history: retain the run,
-stop all mutation, and use `run-retire --repo "$REPO" --run-id <predecessor>` first. Then start the
-user-designated successor with `run-open ... --successor-of <predecessor>`. Scope reuse is legal
-only after that locked, non-mutating retirement and never over a foreign live predecessor owner.
+transient tool-process PID as the identity. Every run-coordination operation and typed journal
+mutation must retain that same value.
 
 From the target Git worktree, exclude run data locally before creating it:
 
@@ -79,12 +54,61 @@ git branch --show-current
 git status --short --untracked-files=all
 ```
 
-Use only this local exclude; do not edit the tracked `.gitignore`. Record the concise original goal,
-`REPO`, full starting HEAD, attached branch when the branch output is nonempty, and exact status
-lines as `goal`, `repo`, `repo_head`, optional `repo_branch`, and `repo_status` in `run_started`.
+Use only this local exclude; do not edit the tracked `.gitignore`.
 Do not create the run unless both exclude checks succeed. Initially dirty paths are pre-existing
 user work; if planned work overlaps them, use an isolated clean worktree or get user direction
 rather than claiming those changes.
+
+Open the run only through the typed builder, with a fresh caller-stable idempotency key:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" run-open \
+  --repo "$REPO" \
+  --run-id <run-id> \
+  --idempotency-key <64-lowercase-hex> \
+  --goal <concise-original-goal> \
+  --plugin-ref <plugin-ref> \
+  --scope <pathspec> [--scope <pathspec> ...]
+```
+
+Add `--successor-of <predecessor>` only for the user-designated successor case below. The builder
+injects the `run_started` timestamp, repository facts, canonical scope, and
+`writer_contract: "forge-journal-binding/1"`; callers never author those fields as JSON. It
+atomically creates the owner sidecar with `run_started`, reconciles
+`.forge/tmp/run-registry.json`, and admits this run when its scope is disjoint from every open run.
+It prints one exact
+`forge: new run refused — scope overlap between <new-run-id> and open run <open-run-id>` line for
+each conflict in bytewise run-ID order. Missing, malformed, ambiguous, or unregistered open-run
+state refuses exactly `forge: new run refused — run registry unavailable`. Never bypass either
+refusal by manually creating a run directory or appending a journal line.
+
+The `run-open --record-json`, `journal-append --record-json`, and `run-close --record-json` forms
+are legacy/migration surfaces only, never the canonical workflow. A contract-less
+`run_started` opened that way is legacy and remains legacy until its first typed
+mutation atomically prepends the builder-owned activation decision. A caller-supplied
+`writer_contract` cannot turn the raw form into an activated opening; use typed `run-open` with its
+mandatory `--idempotency-key` and builder-injected fields.
+
+Disjoint open runs may proceed concurrently. Before adding a task, ensure every `task.files`
+pathspec is contained by its admitted run scope; re-declare the complete admitted set first, under
+the same registry lock, with `run-readmit --repo "$REPO" --run-id <run-id>
+--idempotency-key <64-hex> --scope <pathspec> ...` (the typed builder requires the key).
+Use `--replace` only when intentionally replacing the previously admitted set.
+Append every later record only with the corresponding typed builder: `journal task-start`,
+`journal task-finish`, `journal execution-start`, `journal execution-result`,
+`journal verification-add`, `journal decision-add`, or `journal ingest-chain`; close with typed
+`run-close`. Pass `--repo "$REPO"`, `--run-id <run-id>`, and a fresh caller-stable
+`--idempotency-key <64-lowercase-hex>` to every directly invoked mutation, reusing that key only
+for an identical retry. The builders allocate IDs/timestamps, validate the complete projected
+journal, and prove the current PID/host owner before every write. `journal batch-recover` is the
+sole keyless recovery command and never starts a new batch. A different live owner, or a
+missing/malformed owner after `run_started`, is a hard refusal and leaves the journal
+byte-identical.
+
+If immutable journal damage requires a successor, never rewrite journal history: retain the run,
+stop all mutation, and use `run-retire --repo "$REPO" --run-id <predecessor>` first. Then start the
+user-designated successor with `run-open ... --successor-of <predecessor>`. Scope reuse is legal
+only after that locked, non-mutating retirement and never over a foreign live predecessor owner.
 
 ## Forge Governance Doctrine
 
@@ -92,9 +116,11 @@ rather than claiming those changes.
 
 - **Journal integrity (FR-120).** Record every full SHA from observed command output such as
   `git rev-parse HEAD`, never from memory. Correct an error by appending a later entry that names
-  the correction; never rewrite history. Execution IDs are strings shaped `execution-NN`. The
-  fields `acceptance`, `files`, `repo_status`, `basis`, `evidence`, `caveats`, `files_changed`,
-  `risks`, and `follow_ups` are arrays, including when empty or containing one item.
+  the correction; never rewrite history. Use only typed builders: they allocate IDs and timestamps,
+  and on legacy first use they alone construct the activation decision and its authenticated
+  receipt origin. Execution IDs are strings shaped `execution-NN`. The fields `acceptance`,
+  `files`, `repo_status`, `basis`, `evidence`, `caveats`, `files_changed`, `risks`, and
+  `follow_ups` are arrays, including when empty or containing one item.
 - **Verification integrity (FR-121–FR-123).** After any defect fix, the affected end-to-end
   verification must pass twice consecutively before task completion, recorded as two separate
   `verification` entries. Re-measure any timing or benchmark result obtained during detected
@@ -117,8 +143,8 @@ rather than claiming those changes.
 
 1. Inspect the repository and user context to understand the goal and relevant constraints.
 2. Perform Run Initialization and use `run-open` to atomically create ownership plus `run_started`
-   with the concise original goal, absolute repository path, captured Git baseline, plugin ref,
-   available Claude and Codex versions, and the declared admitted scope.
+   with the concise original goal, derived absolute repository path and Git baseline, plugin ref,
+   declared admitted scope, and builder-injected writer contract.
 3. Claude turns the goal into a concrete plan with expected deliverables, acceptance criteria,
    risks, and verification paths.
 4. Ask Codex to review Claude's plan when a second opinion materially reduces risk; record that
@@ -129,8 +155,8 @@ rather than claiming those changes.
    references both plan paths in `decision.basis`, and finalizes the plan.
 <!-- forge: modified from upstream — overlapping ownership always serializes (FR-130) -->
 5. Split the finalized plan into active `task` entries with goals, acceptance criteria, and
-   admitted-scope-contained `files`; append them through `journal-append`. Serialize every overlap
-   in files, contracts, or shared resources;
+   admitted-scope-contained `files`; append each through typed `journal task-start` with a fresh
+   idempotency key. Serialize every overlap in files, contracts, or shared resources;
    isolated worktrees support concurrent tasks only when their ownership is disjoint.
 <!-- forge: modified from upstream — fail closed at the run-lifecycle launch boundary (FR-033/092) -->
 6. For each task, use the orchestrate skill to assign a fresh Codex implementer, capture its
@@ -145,9 +171,9 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"
    If it reports a halt, launch no new work, perform no reintegration, report the sentinel, and
    wait. Agents never create, delete, or bypass halt sentinels without explicit user direction.
    Repeat focused fix or review cycles as needed.
-7. Record only consequential resolutions or user dependencies as `decision`. Use
-   `journal-append` for every record; append a terminal `task` only after its acceptance criteria
-   have been evaluated.
+7. Record only consequential resolutions or user dependencies as `decision`. Use typed
+   `journal decision-add` for each such record and typed `journal task-finish` only after the
+   task's acceptance criteria have been evaluated.
    When correcting a journal citation, preserve the original entry and append an owned `decision`
    whose `resolution` begins exactly `citation-correction:`. Put one directive per following line:
    `<decision-id> basis[<n>]: <corrected-path>` or
@@ -168,11 +194,11 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" validate --gates \
 10. Resolve omissions that can be corrected by appending, and inspect every non-passing
     verification. Never rewrite journal history. If a duplicate identity or another structural
     conflict cannot be corrected by appending, retain the run and start a successor as defined by
-    the orchestration contract and locked retirement above. Otherwise use `run-close --repo
-    "$REPO" --run-id <run-id> --record-json <file>` to append one final `run_closed` entry with
-    `judgment: passed|blocked`, unresolved risks, and follow-ups; its `validation` field embeds the
-    pre-close payload verbatim. An absent `profile: "gates"` in that payload means the gated close
-    was skipped.
+    the orchestration contract and locked retirement above. Otherwise use typed `run-close --repo
+    "$REPO" --run-id <run-id> --idempotency-key <64-lowercase-hex> --judgment passed|blocked
+    --summary <summary> [--risk <risk> ...] [--follow-up <item> ...]` to append one final
+    `run_closed` entry. The builder injects its `validation` field from the pre-close payload verbatim.
+    An absent `profile: "gates"` in that payload means the gated close was skipped.
 11. After `run_closed`, run the post-close gates check and persist its exact JSON stdout for the
     archive renderer. Do not reconstruct that payload from the journal or from memory:
 

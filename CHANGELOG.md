@@ -10,6 +10,41 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Mixed-mode journal wedge (bead forge-plugin-kk5, GH#17, GH#18; operator rulings:
+  fix the bug with no new verb, and activate in place): a run opened in legacy mode
+  and adopted by typed verbs is now ACTIVATED on its first typed use by an appended,
+  authenticated `writer-contract-activated` decision written atomically with the
+  adopting batch (allocated `decision-NN`, reserved resolution literal,
+  `writer_contract`, `receipt_origin_size`/`receipt_origin_sha256`); both activation
+  predicates recognise opening or decision activation; receipt-chain validation is
+  anchored on the authenticated adoption origin; raw lifecycle writers (append,
+  readmit, close, retire) share the first-use guard against a pending
+  activation-bearing outbox; `journal batch-recover` repairs one interior
+  N-record receipt gap with a single spanning repair receipt, reconciles a spent
+  intent without re-applying it, activates a pre-fix legacy-adopted ledger, and
+  accepts legacy-written gap records that carry no `run_id` — proven against a
+  golden fixture written by the pre-fix code; retrospective ingest can be a legacy
+  run's first typed use (shared decision-numbering projection); the scoped-mutation
+  runner persists through the typed receipted writer with a deterministic
+  idempotency key, never a raw fallback, with an advisory diagnostic on refusal,
+  and the merge adapter passes owner identity to the runner while scrubbing it
+  from the mutation child; the archive renderer and commitment audit classify
+  adopted runs through the shared classifier and render the activation decision
+  as lifecycle metadata; the workflow skill documents the typed `run-open` as
+  canonical. The first-use reservation scan replays only chains bound to the
+  current run, warns and skips unreplayable unrelated history, and byte-bounds
+  every chain read (state 1 MiB, events 8 MiB, event-one 64 KiB); the raw
+  lifecycle guard refuses only on a pending first-use intent or an
+  activation-bearing outbox, so raw `run retire`/`run close` of an unactivated
+  legacy run with a stale receipt ledger still work and retire → successor stays
+  open; typed first use on such a run refuses with a new legible literal
+  (`legacy receipt ledger does not reach journal EOF`) naming the remedy; global
+  reconciliation no longer refuses unrelated `run-open` while an adopted run is
+  mid-batch or torn. Spec: DM-001, DM-012, FR-011, FR-016, FR-019 (multi-record
+  repair, stale-ledger refusal), FR-120, FR-142, §8, refusal matrix, SC-027
+  (Revision 14). Disable-in-memory registries `WRITER_ACTIVATION_CONTROLS`,
+  `BATCH_GAP_REPAIR_CONTROLS` (`legacy-record-membership`, `multi-record-gap`),
+  `MUTATION_JOURNAL_CONTROLS`.
 - Guard hook latency (bead forge-plugin-kc9, CI red at 18bbe01): the PreToolUse guard
   now resolves the committed guard-denied-commands rules before direct-invocation
   parsing and runs the Bash-accurate lexer only when denied rules exist, removing
