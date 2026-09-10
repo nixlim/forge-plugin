@@ -6908,6 +6908,21 @@ print("committed")
         ledger_path = run_dir / journal.BATCH_RECEIPTS_NAME
         intent_path = run_dir / journal.BATCH_INTENT_NAME
         registry_path = repo / ".forge/tmp/run-registry.json"
+        restored_chains_root = builders.chain_storage_root(repo)
+        real_realpath = os.path.realpath
+
+        def reject_recorded_realpath(path, *args, **kwargs):
+            if os.fspath(path) == os.fspath(recorded_repo):
+                self.fail(
+                    "restored golden fixture resolved its recorded host path: "
+                    f"{recorded_repo}"
+                )
+            return real_realpath(path, *args, **kwargs)
+
+        def restored_chain_storage_root(repository: Path) -> Path:
+            self.assertEqual(Path(repository), recorded_repo)
+            return restored_chains_root
+
         journal_before = journal_path.read_bytes()
         ledger_before = ledger_path.read_bytes()
         registry_before = registry_path.read_bytes()
@@ -6935,6 +6950,12 @@ print("committed")
             journal, "_session_owner", return_value=archived_owner
         ), mock.patch.object(
             batch, "_read_only_session_owner", return_value=archived_owner
+        ), mock.patch.object(
+            builders,
+            "chain_storage_root",
+            side_effect=restored_chain_storage_root,
+        ) as chain_storage_resolver, mock.patch(
+            "os.path.realpath", side_effect=reject_recorded_realpath
         ):
             recovered = batch.recover_batch(repo, run_id)
             self.assertTrue(recovered.repeated)
@@ -7009,6 +7030,7 @@ print("committed")
                 follow_ups=[],
             )
             self.assertEqual(closed.records[0]["type"], "run_closed")
+            self.assertGreater(chain_storage_resolver.call_count, 0)
 
         final_records, final_issues = journal.read_journal(journal_path)
         self.assertEqual(final_issues, [])

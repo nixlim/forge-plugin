@@ -10,6 +10,12 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- CI red at e7813cc (bead forge-plugin-eh2): the golden pre-fix wedge recovery test
+  resolved the fixture's recorded host repository path through the terminal chain guard,
+  so it errored on the GitHub runner where that path does not exist; the test now maps
+  the archived chain authority to the restored temporary repository and fails loudly if
+  the recorded host path is ever resolved. Fixture bytes and recovery assertions are
+  unchanged.
 - Mixed-mode journal wedge (bead forge-plugin-kk5, GH#17, GH#18; operator rulings:
   fix the bug with no new verb, and activate in place): a run opened in legacy mode
   and adopted by typed verbs is now ACTIVATED on its first typed use by an appended,
