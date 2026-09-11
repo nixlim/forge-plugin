@@ -8,6 +8,8 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-09-11
+
 ### Changed
 
 - Stack-validations grammar legibility (bead forge-plugin-28y, GH#12(f), GH#19): a
