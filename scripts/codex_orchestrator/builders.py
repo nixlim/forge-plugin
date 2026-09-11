@@ -6200,6 +6200,19 @@ def _verify_receipted_batch(
         raise _binding_replay_refusal() from exc
 
 
+ReceiptVerifier = Callable[
+    [
+        Path,
+        str,
+        dict[str, object],
+        dict[str, object],
+        tuple[dict[str, object], ...],
+        dict[str, object],
+    ],
+    None,
+]
+
+
 def _candidate_binding_for_state(
     family: str, state: dict[str, object]
 ) -> dict[str, object] | None:
@@ -6927,6 +6940,7 @@ def _resolve_binding_from_descriptor(
     allow_pending: bool = False,
     validate_lineage: bool = True,
     verify_external: bool = True,
+    receipt_verifier: ReceiptVerifier | None = None,
     ownership_summary: bool = False,
     tombstone_candidate: object | None = None,
     resolve_tombstone: bool = True,
@@ -7059,7 +7073,12 @@ def _resolve_binding_from_descriptor(
             if replayed_state is None:
                 raise _binding_replay_refusal()
             if verify_external:
-                _verify_receipted_batch(
+                verifier = (
+                    receipt_verifier
+                    if receipt_verifier is not None
+                    else _verify_receipted_batch
+                )
+                verifier(
                     repository,
                     chain_id,
                     replayed_state,

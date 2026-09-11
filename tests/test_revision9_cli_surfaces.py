@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import warnings
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest import mock
@@ -521,6 +522,11 @@ class Revision9CoordinationSeamTests(unittest.TestCase):
 
     def test_registration_installs_exact_identities_and_is_idempotent(self) -> None:
         batch, builders, _journal = CLI._coordination_modules()
+        original_scanner = getattr(
+            builders,
+            "_FORGE_CLI_ORIGINAL_ACTIVATION_SCANNER",
+            builders._require_no_pending_activation_outbox,
+        )
         with mock.patch.object(
             builders, "MERGE_TRANSITION_REDUCER", None
         ), mock.patch.object(
@@ -534,20 +540,33 @@ class Revision9CoordinationSeamTests(unittest.TestCase):
             "_FORGE_CLI_CHAIN_CAPABILITIES_LOCK",
             threading.Lock(),
             create=True,
+        ), mock.patch.object(
+            builders,
+            "_require_no_pending_activation_outbox",
+            original_scanner,
         ):
             CLI.register_coordination_seams()
             self.assertIs(builders.MERGE_TRANSITION_REDUCER, CLI.reduce_merge_event)
             self.assertIs(builders._INGEST_PROOF_VERIFIER, CLI._ingest_proof_verifier)
             self.assertIs(batch._CHAIN_BATCH_AUTHORIZER, CLI._authorize_chain_batch)
+            self.assertIs(
+                builders._require_no_pending_activation_outbox,
+                CORE._require_no_pending_chain_activation_outbox,
+            )
             CLI.register_coordination_seams()
             self.assertIs(builders.MERGE_TRANSITION_REDUCER, CLI.reduce_merge_event)
             self.assertIs(builders._INGEST_PROOF_VERIFIER, CLI._ingest_proof_verifier)
             self.assertIs(batch._CHAIN_BATCH_AUTHORIZER, CLI._authorize_chain_batch)
+            self.assertIs(
+                builders._require_no_pending_activation_outbox,
+                CORE._require_no_pending_chain_activation_outbox,
+            )
 
         for callback in (
             CLI.reduce_merge_event,
             CLI._ingest_proof_verifier,
             CLI._authorize_chain_batch,
+            CORE._require_no_pending_chain_activation_outbox,
         ):
             self.assertIs(getattr(callback, "_forge_cli_revision9_seam", None), True)
 
@@ -1843,10 +1862,14 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             "_ingest_allocation_records",
             side_effect=lambda _repository, state: list(state.records),
         ) as disabled_projection, mock.patch.object(
+            CORE,
+            "register_activation_reservation_seam",
+            return_value=None,
+        ) as disabled_registration, mock.patch.object(
             _builders,
-            "_activation_event_one_has_current_binding_authority",
-            return_value=False,
-        ) as disabled_authority, mock.patch.object(
+            "_require_no_pending_activation_outbox",
+            return_value=None,
+        ) as disabled_reservation, mock.patch.object(
             _builders,
             "_resolve_binding_from_descriptor",
             wraps=_builders._resolve_binding_from_descriptor,
@@ -1863,13 +1886,10 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             )
 
         self.assertGreaterEqual(disabled_projection.call_count, 1)
-        disabled_authority.assert_called()
+        disabled_registration.assert_called()
+        disabled_reservation.assert_called()
         resolver.assert_not_called()
-        self.assertEqual(
-            stderr.getvalue(),
-            "forge: warning — skipped unreadable chain "
-            f"{prepared.chain_id} while enumerating commit chains\n",
-        )
+        self.assertEqual(stderr.getvalue(), "")
         refused = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 1, refused)
         self.assertEqual(refused["reason_code"], "ingest-proof-invalid")
@@ -2134,6 +2154,847 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(journal_path.read_bytes(), journal_before)
         self.assertEqual(receipts_path.read_bytes(), receipts_before)
         self.assertFalse((prepared.run_dir / journal.BATCH_INTENT_NAME).exists())
+
+    def test_lockless_legacy_bound_chain_activates_and_lands_cleanly(self) -> None:
+        run_id = "run-20260910-lockless-bound-start"
+        self.open_run_and_task(run_id, legacy=True)
+        _batch, builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+        intent_path = run_dir / journal.BATCH_INTENT_NAME
+        journal_path = run_dir / "journal.jsonl"
+        journal_before = journal_path.read_bytes()
+        self.assertFalse(lock_path.exists())
+        self.assertFalse(receipts_path.exists())
+        self.change("src/app.py", "VALUE = 2\n")
+
+        exit_code, started = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+
+        self.assertEqual(exit_code, 0, started)
+        self.assertTrue(started["ok"])
+        self.assertTrue(lock_path.is_file())
+        self.assertFalse(receipts_path.exists())
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        chain_id = str(started["chain_id"])
+        state = self.state(chain_id)
+        self.assertEqual(state["run_binding"]["run_id"], run_id)
+        self.assertEqual(state["run_binding"]["task_id"], "task-01")
+
+        exit_code, verified = self.invoke_cli(
+            "--chain-id", chain_id, "verify"
+        )
+        self.assertEqual(exit_code, 0, verified)
+        self.assertEqual(verified["state"], "reviewing")
+        self.assertIsNone(self.state(chain_id)["journal_outbox"])
+        self.assertFalse(intent_path.exists())
+
+        records, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        normalized = self.normalized_journal_records(records)
+        markers = [
+            record
+            for record in normalized
+            if journal._writer_activation_marker(record)
+        ]
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0]["id"], "decision-01")
+        self.assertEqual(markers[0]["receipt_origin_size"], len(journal_before))
+        self.assertEqual(
+            markers[0]["receipt_origin_sha256"],
+            hashlib.sha256(journal_before).hexdigest(),
+        )
+        receipts = [
+            json.loads(line) for line in receipts_path.read_bytes().splitlines()
+        ]
+        self.assertGreaterEqual(len(receipts), 1)
+        self.assertEqual(
+            len(
+                [
+                    receipt
+                    for receipt in receipts
+                    if receipt["base_size"] == len(journal_before)
+                ]
+            ),
+            1,
+        )
+        self.assertEqual(receipts[0]["base_size"], len(journal_before))
+        self.assertEqual(receipts[0]["record_count"], 2)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            exit_code, requested = self.invoke_cli(
+                "--chain-id", chain_id, "review", "request"
+            )
+        self.assertEqual(exit_code, 0, requested)
+        request = self.state(chain_id)["review"]["request"]
+        self.wait_for_review_completion(request)
+        exit_code, reviewed = self.invoke_cli(
+            "--chain-id",
+            chain_id,
+            "review",
+            "collect",
+        )
+        self.assertEqual(exit_code, 0, reviewed)
+        self.assertEqual(reviewed["state"], "authorized")
+        self.assertIsNone(self.state(chain_id)["journal_outbox"])
+
+        exit_code, finalized = self.invoke_cli(
+            "--chain-id",
+            chain_id,
+            "commit",
+            "finalize",
+            "--message",
+            "land receipt-less legacy first use",
+        )
+        self.assertEqual(exit_code, 0, finalized)
+        self.assertEqual(finalized["state"], "closed")
+        self.assertIsNone(self.state(chain_id)["journal_outbox"])
+        self.assertFalse(intent_path.exists())
+
+        with self.cli_process_context():
+            finished = builders.task_finish(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-finish"),
+                task="task-01",
+                status="complete",
+            )
+        self.assertFalse(finished.repeated)
+        final_records, final_issues = journal.read_journal(journal_path)
+        self.assertEqual(final_issues, [])
+        self.assertEqual(
+            len(
+                [
+                    record
+                    for record in final_records
+                    if journal._writer_activation_marker(record)
+                ]
+            ),
+            1,
+        )
+
+    def test_lockless_bound_start_refuses_nonexistent_run_without_creating_it(
+        self,
+    ) -> None:
+        run_id = "run-20260910-lockless-missing"
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        self.change("src/app.py", "VALUE = 2\n")
+
+        exit_code, refused = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "run-task-binding-invalid")
+        self.assertEqual(
+            refused["message"],
+            "forge: commit start refused — run/task binding is invalid",
+        )
+        self.assertEqual(
+            refused["observed"],
+            f"forge: journal append refused — run {run_id} does not exist",
+        )
+        self.assertFalse(run_dir.exists())
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
+
+    def test_lockless_bound_start_halt_precedes_stable_lock_creation(self) -> None:
+        run_id = "run-20260910-lockless-halted-start"
+        self.open_run_and_task(run_id, legacy=True)
+        _batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        journal_path = run_dir / "journal.jsonl"
+        chain_root = self.repo / ".forge" / "chains"
+        journal_before = journal_path.read_bytes()
+        chain_entries_before = tuple(
+            sorted(
+                path.relative_to(chain_root).as_posix()
+                for path in chain_root.rglob("*")
+            )
+        ) if chain_root.is_dir() else ()
+        index_before = self.git("diff", "--cached", "--binary")
+        (self.helpers / "check-halt.sh").write_text(
+            "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+        )
+        self.change("src/app.py", "VALUE = 2\n")
+
+        exit_code, refused = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "halt-engaged")
+        self.assertEqual(
+            refused["message"], "operator halt check refused state mutation"
+        )
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertEqual(self.git("diff", "--cached", "--binary"), index_before)
+        self.assertEqual(
+            tuple(
+                sorted(
+                    path.relative_to(chain_root).as_posix()
+                    for path in chain_root.rglob("*")
+                )
+            ) if chain_root.is_dir() else (),
+            chain_entries_before,
+        )
+
+    def test_start_lock_disappearance_never_recreates_before_halt(self) -> None:
+        run_id = "run-20260910-start-lock-disappearance"
+        self.open_run_and_task(run_id, legacy=True)
+        _batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        lock_path.write_bytes(b"")
+        journal_path = run_dir / "journal.jsonl"
+        journal_before = journal_path.read_bytes()
+        original_lstat = os.lstat
+        disappeared = False
+
+        def disappear_after_observation(path: object, *args: object, **kwargs: object):
+            nonlocal disappeared
+            observed = original_lstat(path, *args, **kwargs)
+            if (
+                not disappeared
+                and os.path.abspath(os.fspath(path))
+                == os.path.abspath(os.fspath(lock_path))
+            ):
+                lock_path.unlink()
+                disappeared = True
+            return observed
+
+        (self.helpers / "check-halt.sh").write_text(
+            "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
+        )
+        self.change("src/app.py", "VALUE = 2\n")
+        with mock.patch.object(
+            CORE.os, "lstat", side_effect=disappear_after_observation
+        ):
+            exit_code, refused = self.invoke_cli(
+                "--run-id",
+                run_id,
+                "commit",
+                "start",
+                "--paths",
+                "src/app.py",
+                "--task",
+                "task-01",
+            )
+
+        self.assertTrue(disappeared)
+        self.assertEqual(exit_code, 2, refused)
+        self.assertEqual(refused["reason_code"], "frozen-chain")
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
+        self.assertFalse(
+            any((self.repo / ".forge" / "chains").glob("c-*.json"))
+        )
+
+    def test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing(
+        self,
+    ) -> None:
+        run_id = "run-20260910-legacy-chain-bootstrap-disabled"
+        self.open_run_and_task(run_id, legacy=True)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+        self.change("src/app.py", "VALUE = 2\n")
+        exit_code, started = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+        self.assertEqual(exit_code, 0, started)
+        chain_id = str(started["chain_id"])
+        state_path = self.repo / ".forge" / "chains" / f"{chain_id}.json"
+        events_path = (
+            self.repo / ".forge" / "chains" / f"{chain_id}.events.jsonl"
+        )
+        journal_path = run_dir / "journal.jsonl"
+        intent_path = run_dir / journal.BATCH_INTENT_NAME
+        state_before = state_path.read_bytes()
+        events_before = events_path.read_bytes()
+        journal_before = journal_path.read_bytes()
+        self.assertEqual(self.state(chain_id)["state"], "verifying")
+        self.assertIsNone(self.state(chain_id)["journal_outbox"])
+
+        with mock.patch.object(
+            batch,
+            "_ensure_receipt_ledger",
+            side_effect=journal.CoordinationRefusal(journal.BATCH_DIVERGED),
+        ) as disabled_bootstrap:
+            exit_code, refused = self.invoke_cli(
+                "--chain-id", chain_id, "verify"
+            )
+
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "binding-invalid")
+        self.assertEqual(refused["message"], journal.INVALID_JOURNAL_RECORD)
+        disabled_bootstrap.assert_called_once()
+        self.assertFalse(receipts_path.exists())
+        self.assertFalse(intent_path.exists())
+        self.assertEqual(state_path.read_bytes(), state_before)
+        self.assertEqual(events_path.read_bytes(), events_before)
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertEqual(self.state(chain_id)["state"], "verifying")
+        self.assertIsNone(self.state(chain_id)["journal_outbox"])
+
+        exit_code, verified = self.invoke_cli(
+            "--chain-id", chain_id, "verify"
+        )
+        self.assertEqual(exit_code, 0, verified)
+        self.assertEqual(verified["state"], "reviewing")
+        self.assertIsNone(self.state(chain_id)["journal_outbox"])
+        self.assertFalse(intent_path.exists())
+        records, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        markers = [
+            record
+            for record in records
+            if journal._writer_activation_marker(record)
+        ]
+        self.assertEqual(len(markers), 1)
+        receipts = [
+            json.loads(line) for line in receipts_path.read_bytes().splitlines()
+        ]
+        self.assertEqual(receipts[0]["base_size"], len(journal_before))
+        self.assertEqual(receipts[0]["record_count"], 2)
+
+    def test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory(
+        self,
+    ) -> None:
+        run_id = "run-20260910-legacy-chain-prevalidation-disabled"
+        self.open_run_and_task(run_id, legacy=True)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+        intent_path = run_dir / journal.BATCH_INTENT_NAME
+        journal_path = run_dir / "journal.jsonl"
+        self.change("src/app.py", "VALUE = 2\n")
+        exit_code, started = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+        self.assertEqual(exit_code, 0, started)
+        chain_id = str(started["chain_id"])
+        state_path = self.repo / ".forge" / "chains" / f"{chain_id}.json"
+        events_path = (
+            self.repo / ".forge" / "chains" / f"{chain_id}.events.jsonl"
+        )
+        state_before = state_path.read_bytes()
+        events_before = events_path.read_bytes()
+        journal_before = journal_path.read_bytes()
+
+        with mock.patch.object(
+            CORE, "_prevalidate_chain_batch_carrier", return_value=None
+        ) as disabled_prevalidation, mock.patch.object(
+            batch,
+            "_ensure_receipt_ledger",
+            side_effect=journal.CoordinationRefusal(journal.BATCH_DIVERGED),
+        ) as disabled_bootstrap:
+            exit_code, refused = self.invoke_cli(
+                "--chain-id", chain_id, "verify"
+            )
+
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "binding-invalid")
+        self.assertEqual(refused["message"], journal.INVALID_JOURNAL_RECORD)
+        disabled_prevalidation.assert_called_once()
+        disabled_bootstrap.assert_called_once()
+        self.assertNotEqual(state_path.read_bytes(), state_before)
+        self.assertNotEqual(events_path.read_bytes(), events_before)
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertFalse(receipts_path.exists())
+        self.assertFalse(intent_path.exists())
+        pending_state = self.state(chain_id)
+        self.assertEqual(pending_state["state"], "verifying")
+        self.assertIsInstance(pending_state["journal_outbox"], dict)
+        carrier = self.events(chain_id)[-1]
+        self.assertEqual(carrier["payload"]["event"], "step_recorded")
+        self.assertIsInstance(
+            carrier["payload"]["details"].get("journal_batch"), dict
+        )
+
+    def test_commit_activation_rejects_event_one_rebinding_before_replay(
+        self,
+    ) -> None:
+        run_id = "run-20260910-commit-event-one-rebound"
+        self.open_run_and_task(run_id)
+        _batch, builders, journal = CLI._coordination_modules()
+        self.change("src/app.py", "VALUE = 2\n")
+        exit_code, started = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+        self.assertEqual(exit_code, 0, started)
+        chain_id = str(started["chain_id"])
+        state = self.state(chain_id)
+        expected = state["run_binding"]
+        self.assertIsInstance(expected, dict)
+        assert isinstance(expected, dict)
+        rebound = copy.deepcopy(expected)
+        rebound["policy_digest"] = key("foreign-event-one-policy")
+        chains_root = builders.chain_storage_root(self.repo)
+        descriptor, _observation = journal._open_bound_directory(chains_root)
+        try:
+            with mock.patch.object(
+                builders,
+                "_activation_event_one_binding_authority",
+                return_value=("commit", rebound),
+            ), mock.patch.object(
+                builders,
+                "_resolve_binding_from_descriptor",
+                side_effect=AssertionError(
+                    "commit replay ran before event-one binding rejection"
+                ),
+            ) as resolver, self.assertRaises(journal.CoordinationRefusal):
+                CORE._resolve_chain_activation_snapshot(
+                    self.repo.resolve(),
+                    descriptor,
+                    chain_id,
+                    allow_pending=True,
+                    validate_lineage=True,
+                    expected_binding=expected,
+                )
+            resolver.assert_not_called()
+        finally:
+            os.close(descriptor)
+
+    def test_lockless_bound_start_refuses_foreign_owner_without_creating_lock(
+        self,
+    ) -> None:
+        run_id = "run-20260910-lockless-foreign-owner"
+        self.open_run_and_task(run_id, legacy=True)
+        _batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        owner_path = run_dir / "owner"
+        foreign_owner = (
+            b"pid: 42\n"
+            b"host: remote-host\n"
+            b"started_at: 2026-08-13T00:00:00Z\n"
+        )
+        owner_path.write_bytes(foreign_owner)
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        self.change("src/app.py", "VALUE = 2\n")
+
+        exit_code, refused = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "run-task-binding-invalid")
+        self.assertEqual(
+            refused["message"],
+            "forge: commit start refused — run/task binding is invalid",
+        )
+        self.assertEqual(
+            refused["observed"],
+            f"forge: journal append refused — run {run_id} has live owner "
+            "42@remote-host",
+        )
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(owner_path.read_bytes(), foreign_owner)
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
+
+    def test_lockless_bound_start_refuses_other_worktree_without_creating_lock(
+        self,
+    ) -> None:
+        run_id = "run-20260910-lockless-other-repository"
+        self.open_run_and_task(run_id, legacy=True)
+        _batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        other = self.temp_root / "other-worktree"
+        self.git("worktree", "add", "--quiet", "--detach", str(other), "HEAD")
+        (other / "src" / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+        exit_code, refused = self.invoke_cli_at(
+            other,
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+
+        self.assertEqual(exit_code, 1, refused)
+        self.assertEqual(refused["reason_code"], "run-task-binding-invalid")
+        self.assertEqual(
+            refused["message"],
+            "forge: commit start refused — run/task binding is invalid",
+        )
+        self.assertEqual(refused["observed"], journal.REGISTRY_UNAVAILABLE)
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(
+            self.git_at(other, "diff", "--cached", "--name-only"), ""
+        )
+
+    def test_lockless_bound_start_creation_control_is_load_bearing(self) -> None:
+        run_id = "run-20260910-lockless-disabled-creation"
+        self.open_run_and_task(run_id, legacy=True)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        original_batch_lock = batch.batch_lock
+        requested: list[bool] = []
+
+        @contextlib.contextmanager
+        def disabled_creation(*args: object, **kwargs: object):
+            requested.append(bool(kwargs.get("create")))
+            with original_batch_lock(*args, **{**kwargs, "create": False}) as locked:
+                yield locked
+
+        self.change("src/app.py", "VALUE = 2\n")
+        with mock.patch.object(
+            batch, "batch_lock", side_effect=disabled_creation
+        ):
+            exit_code, refused = self.invoke_cli(
+                "--run-id",
+                run_id,
+                "commit",
+                "start",
+                "--paths",
+                "src/app.py",
+                "--task",
+                "task-01",
+            )
+
+        self.assertEqual(requested, [True])
+        self.assertEqual(exit_code, 2, refused)
+        self.assertEqual(refused["reason_code"], "frozen-chain")
+        self.assertEqual(
+            refused["message"],
+            journal.BATCH_DIVERGED
+            + "; chain frozen pending status/abort, never a guessed recovery",
+        )
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
+
+    def test_lockless_chain_batch_creation_revalidates_in_lock_order(self) -> None:
+        run_id = "run-20260910-lockless-validation-order"
+        self.open_run_and_task(run_id, legacy=True)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        original_batch_lock = batch.batch_lock
+        original_registry_lock = journal._registry_lock
+        original_locked_journal = journal._locked_journal
+        active = {"batch": 0, "registry": 0, "journal": 0}
+        events: list[str] = []
+
+        @contextlib.contextmanager
+        def observed_batch_lock(*args: object, **kwargs: object):
+            outer = active["batch"] == 0
+            with original_batch_lock(*args, **kwargs) as locked:
+                if outer:
+                    active["batch"] += 1
+                    events.append("batch-enter")
+                try:
+                    yield locked
+                finally:
+                    if outer:
+                        events.append("batch-exit")
+                        active["batch"] -= 1
+
+        @contextlib.contextmanager
+        def observed_registry_lock(*args: object, **kwargs: object):
+            phase = "mutation" if active["batch"] else "prevalidation"
+            self.assertEqual(active["registry"], 0)
+            self.assertEqual(active["journal"], 0)
+            events.append(f"{phase}-registry-enter")
+            with original_registry_lock(*args, **kwargs) as locked:
+                active["registry"] += 1
+                try:
+                    yield locked
+                finally:
+                    active["registry"] -= 1
+                    events.append(f"{phase}-registry-exit")
+
+        @contextlib.contextmanager
+        def observed_locked_journal(*args: object, **kwargs: object):
+            phase = "mutation" if active["batch"] else "prevalidation"
+            self.assertEqual(active["registry"], 1)
+            self.assertEqual(active["journal"], 0)
+            events.append(f"{phase}-journal-enter")
+            with original_locked_journal(*args, **kwargs) as locked:
+                active["journal"] += 1
+                try:
+                    yield locked
+                finally:
+                    active["journal"] -= 1
+                    events.append(f"{phase}-journal-exit")
+
+        with self.cli_process_context(), mock.patch.object(
+            batch, "batch_lock", side_effect=observed_batch_lock
+        ), mock.patch.object(
+            journal, "_registry_lock", side_effect=observed_registry_lock
+        ), mock.patch.object(
+            journal, "_locked_journal", side_effect=observed_locked_journal
+        ):
+            with CORE._chain_batch_lock(
+                run_dir,
+                self.repo.resolve(),
+                run_id,
+                create=True,
+            ):
+                self.assertEqual(active, {"batch": 1, "registry": 0, "journal": 0})
+
+        self.assertEqual(
+            events,
+            [
+                "prevalidation-registry-enter",
+                "prevalidation-journal-enter",
+                "prevalidation-journal-exit",
+                "prevalidation-registry-exit",
+                "batch-enter",
+                "mutation-registry-enter",
+                "mutation-journal-enter",
+                "mutation-journal-exit",
+                "mutation-registry-exit",
+                "batch-exit",
+            ],
+        )
+        self.assertEqual(active, {"batch": 0, "registry": 0, "journal": 0})
+        self.assertTrue((run_dir / journal.BATCH_LOCK_NAME).is_file())
+
+    def test_existing_chain_batch_lock_skips_creation_only_validation(self) -> None:
+        run_id = "run-20260910-existing-lock-no-create-validation"
+        self.open_run_and_task(run_id)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        original_batch_lock = batch.batch_lock
+        lock_before = lock_path.stat()
+        requested: list[bool] = []
+        before_create = mock.Mock(
+            side_effect=AssertionError("existing lock ran pre-create callback")
+        )
+
+        @contextlib.contextmanager
+        def observed_batch_lock(*args: object, **kwargs: object):
+            requested.append(bool(kwargs.get("create")))
+            with original_batch_lock(*args, **kwargs) as locked:
+                yield locked
+
+        with self.cli_process_context(), mock.patch.object(
+            batch, "batch_lock", side_effect=observed_batch_lock
+        ), mock.patch.object(
+            CORE,
+            "_validate_chain_batch_target",
+            side_effect=AssertionError("existing lock was revalidated"),
+        ) as validator:
+            with CORE._chain_batch_lock(
+                run_dir,
+                self.repo.resolve(),
+                run_id,
+                create=True,
+                before_create=before_create,
+            ):
+                pass
+
+        self.assertEqual(requested, [False])
+        validator.assert_not_called()
+        before_create.assert_not_called()
+        lock_after = lock_path.stat()
+        self.assertEqual(
+            (lock_after.st_dev, lock_after.st_ino),
+            (lock_before.st_dev, lock_before.st_ino),
+        )
+
+    def test_existing_locked_bound_start_succeeds_without_session_pid(self) -> None:
+        run_id = "run-20260910-existing-lock-no-session-pid"
+        self.open_run_and_task(run_id)
+        self.change("src/app.py", "VALUE = 2\n")
+        environment = self.revision9_environment()
+        environment.pop("FORGE_SESSION_PID", None)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with mock.patch.dict(
+            os.environ, environment, clear=True
+        ), mock.patch.object(
+            RUNTIME, "SCRIPT_DIR", self.helpers
+        ), mock.patch.object(
+            RUNTIME, "PLUGIN_ROOT", ROOT
+        ), mock.patch.object(
+            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            exit_code = CLI.main(
+                [
+                    "--json",
+                    "--repo",
+                    str(self.repo),
+                    "--run-id",
+                    run_id,
+                    "commit",
+                    "start",
+                    "--paths",
+                    "src/app.py",
+                    "--task",
+                    "task-01",
+                ]
+            )
+
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(stdout.getvalue().count("\n"), 1)
+        started = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0, started)
+        self.assertTrue(started["ok"])
+
+    def test_existing_locked_bound_start_preserves_foreign_owner_behavior(
+        self,
+    ) -> None:
+        run_id = "run-20260910-existing-lock-foreign-owner"
+        self.open_run_and_task(run_id)
+        _batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        owner_path = run_dir / "owner"
+        self.assertTrue(lock_path.is_file())
+        owner_path.write_bytes(
+            b"pid: 42\n"
+            b"host: remote-host\n"
+            b"started_at: 2026-08-13T00:00:00Z\n"
+        )
+        self.change("src/app.py", "VALUE = 2\n")
+
+        exit_code, started = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+
+        self.assertEqual(exit_code, 0, started)
+        self.assertTrue(started["ok"])
+
+    def test_lockless_merge_start_binding_creates_stable_batch_lock(
+        self,
+    ) -> None:
+        run_id = "run-20260910-lockless-merge-start-binding"
+        self.open_run_and_task(run_id, legacy=True)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        original_batch_lock = batch.batch_lock
+        requested: list[bool] = []
+
+        @contextlib.contextmanager
+        def observed_batch_lock(*args: object, **kwargs: object):
+            requested.append(bool(kwargs.get("create")))
+            with original_batch_lock(*args, **kwargs) as locked:
+                yield locked
+
+        with self.cli_process_context(), mock.patch.object(
+            batch, "batch_lock", side_effect=observed_batch_lock
+        ):
+            snapshot = CORE._prove_merge_run_task_binding(
+                self.repo.resolve(),
+                CLI.Repository(self.repo).common_root(),
+                run_id,
+                "task-01",
+                key("lockless-read-only-policy"),
+                create_batch_lock=True,
+            )
+
+        self.assertEqual(requested, [True])
+        self.assertEqual(snapshot.binding["run_id"], run_id)
+        self.assertEqual(snapshot.binding["task_id"], "task-01")
+        self.assertTrue(lock_path.is_file())
+
+    def test_lockless_read_only_binding_validator_does_not_create_batch_lock(
+        self,
+    ) -> None:
+        run_id = "run-20260910-lockless-read-only-validator"
+        self.open_run_and_task(run_id, legacy=True)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        original_batch_lock = batch.batch_lock
+        requested: list[bool] = []
+
+        @contextlib.contextmanager
+        def observed_batch_lock(*args: object, **kwargs: object):
+            requested.append(bool(kwargs.get("create")))
+            with original_batch_lock(*args, **kwargs) as locked:
+                yield locked
+
+        with self.cli_process_context(), mock.patch.object(
+            batch, "batch_lock", side_effect=observed_batch_lock
+        ), self.assertRaises(CLI.Refusal) as raised:
+            CORE._prove_merge_run_task_binding(
+                self.repo.resolve(),
+                CLI.Repository(self.repo).common_root(),
+                run_id,
+                "task-01",
+                key("lockless-read-only-policy"),
+            )
+
+        self.assertEqual(requested, [False])
+        self.assertEqual(
+            raised.exception.message,
+            "forge: merge start refused — run/task binding is invalid",
+        )
+        self.assertEqual(raised.exception.observed, journal.BATCH_DIVERGED)
+        self.assertFalse(lock_path.exists())
 
     def test_bound_start_persists_exact_immutable_binding(self) -> None:
         run_id = "run-20260828-cli-binding"

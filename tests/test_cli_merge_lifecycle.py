@@ -1220,6 +1220,922 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
         )
         self.assertEqual(state["run"], self.run_id)
 
+    def test_lockless_legacy_run_bound_start_creates_and_uses_batch_lock(
+        self,
+    ) -> None:
+        _batch, _builders, journal = CLI._coordination_modules()
+        journal.open_run(
+            self.repo,
+            self.run_id,
+            ["src/**"],
+            {
+                "type": "run_started",
+                "recorded_at": "2026-09-10T12:00:00Z",
+                "run_id": self.run_id,
+                "goal": "Exercise lockless legacy merge start",
+                "repo": str(self.repo.resolve()),
+                "repo_head": self.git("rev-parse", "HEAD"),
+                "repo_status": self.git("status", "--short").splitlines(),
+                "plugin_ref": "forge-merge-adapter-test",
+            },
+        )
+        journal.append_run_record(
+            self.repo,
+            self.run_id,
+            {
+                "type": "task",
+                "recorded_at": "2026-09-10T12:01:00Z",
+                "run_id": self.run_id,
+                "id": self.task_id,
+                "status": "active",
+                "goal": "Bind one merge chain",
+                "acceptance": ["Merge start creates the validated stable lock"],
+                "files": ["src/app.py"],
+            },
+        )
+        run_dir = (
+            self.repo / ".codex-orchestrator" / "runs" / self.run_id
+        )
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        self.assertTrue(lock_path.is_file())
+        lock_path.unlink()
+        self.assertFalse(lock_path.exists())
+        self.assertFalse(receipts_path.exists())
+
+        engine = CLI.MergeEngine(self.context(run_id=self.run_id))
+        outcome = engine.start_chain(
+            str(self.worktree),
+            task=self.task_id,
+            remote_tip=self.base,
+        )
+
+        state = engine.store.load(str(outcome.chain_id))
+        self.assertTrue(lock_path.is_file())
+        self.assertFalse(receipts_path.exists())
+        self.assertEqual(
+            state["run_binding"],
+            {
+                "run_id": self.run_id,
+                "task_id": self.task_id,
+                "repository": str(self.repo.resolve()),
+                "policy_digest": state["policy_source"]["digest"],
+            },
+        )
+        self.assertIsNone(state["journal_outbox"])
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+
+        verifier = CLI.MergeEngine(
+            self.context(chain_id=str(outcome.chain_id))
+        )
+        verified = verifier.verify()
+        self.assertTrue(verified.ok)
+        state = verifier.store.load(str(outcome.chain_id))
+        self.assertEqual(state["state"], "reviewing")
+        self.assertIsNone(state["journal_outbox"])
+        self.assertTrue(receipts_path.is_file())
+        records, issues = journal.read_journal(run_dir / "journal.jsonl")
+        self.assertEqual(issues, [])
+        self.assertEqual(
+            len(
+                [
+                    record
+                    for record in records
+                    if journal._writer_activation_marker(record)
+                ]
+            ),
+            1,
+        )
+        receipts = [
+            json.loads(line) for line in receipts_path.read_bytes().splitlines()
+        ]
+        self.assertGreaterEqual(len(receipts), 1)
+        self.assertEqual(
+            len(
+                [
+                    receipt
+                    for receipt in receipts
+                    if receipt["base_size"] == len(journal_before)
+                ]
+            ),
+            1,
+        )
+        self.assertEqual(receipts[0]["base_size"], len(journal_before))
+        self.assertEqual(receipts[0]["record_count"], 2)
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+
+    def _leave_lockless_legacy_merge_outbox_pending(
+        self,
+    ) -> tuple[
+        object,
+        object,
+        object,
+        Path,
+        str,
+        dict[str, object],
+        dict[str, object],
+        tuple[dict[str, object], ...],
+    ]:
+        batch, builders, journal = CLI._coordination_modules()
+        journal.open_run(
+            self.repo,
+            self.run_id,
+            ["src/**"],
+            {
+                "type": "run_started",
+                "recorded_at": "2026-09-10T12:00:00Z",
+                "run_id": self.run_id,
+                "goal": "Exercise exact legacy merge authorization",
+                "repo": str(self.repo.resolve()),
+                "repo_head": self.git("rev-parse", "HEAD"),
+                "repo_status": self.git("status", "--short").splitlines(),
+                "plugin_ref": "forge-merge-adapter-test",
+            },
+        )
+        journal.append_run_record(
+            self.repo,
+            self.run_id,
+            {
+                "type": "task",
+                "recorded_at": "2026-09-10T12:01:00Z",
+                "run_id": self.run_id,
+                "id": self.task_id,
+                "status": "active",
+                "goal": "Bind one exact merge carrier",
+                "acceptance": ["The carrier is authorized byte exactly"],
+                "files": ["src/app.py"],
+            },
+        )
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / self.run_id
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        self.assertTrue(lock_path.is_file())
+        lock_path.unlink()
+        engine = CLI.MergeEngine(self.context(run_id=self.run_id))
+        started = engine.start_chain(
+            str(self.worktree),
+            task=self.task_id,
+            remote_tip=self.base,
+        )
+        chain_id = str(started.chain_id)
+        captured: dict[str, object] = {}
+
+        class StopAfterCarrier(BaseException):
+            pass
+
+        def stop_after_carrier(
+            state: dict[str, object],
+            pending: dict[str, object],
+            records: tuple[dict[str, object], ...],
+        ) -> dict[str, object]:
+            captured["state"] = copy.deepcopy(state)
+            captured["pending"] = copy.deepcopy(pending)
+            captured["records"] = tuple(copy.deepcopy(records))
+            raise StopAfterCarrier
+
+        with mock.patch.object(
+            CORE,
+            "_drain_chain_batch_capability",
+            side_effect=stop_after_carrier,
+        ), self.assertRaises(StopAfterCarrier):
+            CLI.MergeEngine(self.context(chain_id=chain_id)).verify()
+
+        state = captured["state"]
+        pending = captured["pending"]
+        records = captured["records"]
+        self.assertIsInstance(state, dict)
+        self.assertIsInstance(pending, dict)
+        self.assertIsInstance(records, tuple)
+        assert isinstance(state, dict)
+        assert isinstance(pending, dict)
+        assert isinstance(records, tuple)
+        self.assertEqual(engine.store.load(chain_id), state)
+        self.assertEqual(state["journal_outbox"], pending)
+        self.assertTrue(records)
+        self.assertFalse((run_dir / journal.BATCH_RECEIPTS_NAME).exists())
+        return (
+            batch,
+            builders,
+            journal,
+            run_dir,
+            chain_id,
+            state,
+            pending,
+            records,
+        )
+
+    def _create_receipted_bound_merge_predecessor(
+        self,
+    ) -> tuple[object, object, Path, str]:
+        batch, builders, journal = CLI._coordination_modules()
+        run_id = "run-20260910-receipted-merge-predecessor"
+        task_id = "task-receipted-merge-predecessor"
+        builders.run_open(
+            self.repo,
+            run_id,
+            idempotency_key=hashlib.sha256(b"predecessor-run-open").hexdigest(),
+            goal="Create a receipt-authenticated merge predecessor",
+            scope=["src/**"],
+            plugin_ref="forge-merge-adapter-test",
+        )
+        builders.task_start(
+            self.repo,
+            run_id,
+            idempotency_key=hashlib.sha256(b"predecessor-task-start").hexdigest(),
+            task=task_id,
+            goal="Release a receipt-authenticated predecessor",
+            acceptance=["The released merge remains receipt-authenticated"],
+            files=["src/app.py"],
+        )
+        started = CLI.MergeEngine(self.context(run_id=run_id)).start_chain(
+            str(self.worktree),
+            task=task_id,
+            remote_tip=self.base,
+        )
+        chain_id = str(started.chain_id)
+        engine = CLI.MergeEngine(self.context(chain_id=chain_id))
+        verified = engine.verify()
+        self.assertTrue(verified.ok)
+        aborted = engine.abort("release the receipt-authenticated predecessor")
+        self.assertTrue(aborted.ok)
+        state = engine.store.load(chain_id)
+        self.assertEqual(state["state"], "aborted")
+        self.assertIsNone(state["journal_outbox"])
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        self.assertTrue((run_dir / journal.BATCH_RECEIPTS_NAME).is_file())
+        return batch, journal, run_dir, chain_id
+
+    def test_legacy_merge_authority_binds_full_state_outbox_and_records(
+        self,
+    ) -> None:
+        (
+            _batch,
+            _builders,
+            journal,
+            run_dir,
+            chain_id,
+            state,
+            pending,
+            records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        events_path = self.repo / ".forge/chains" / f"{chain_id}.events.jsonl"
+        state_path = self.repo / ".forge/chains" / f"{chain_id}.json"
+        chain_before = (events_path.read_bytes(), state_path.read_bytes())
+
+        changed_binding_state = copy.deepcopy(state)
+        changed_binding = changed_binding_state["run_binding"]
+        assert isinstance(changed_binding, dict)
+        changed_binding["policy_digest"] = hashlib.sha256(
+            b"foreign-policy"
+        ).hexdigest()
+
+        changed_pending_state = copy.deepcopy(state)
+        changed_pending = copy.deepcopy(pending)
+        changed_pending["idempotency_key"] = hashlib.sha256(
+            b"foreign-outbox"
+        ).hexdigest()
+        changed_pending_state["journal_outbox"] = changed_pending
+
+        changed_records = tuple(copy.deepcopy(records))
+        changed_records[1]["recorded_at"] = "2026-09-10T12:59:59Z"
+        changed_batch = b"".join(
+            journal._journal_line(record) for record in changed_records
+        )
+        changed_record_pending = copy.deepcopy(pending)
+        changed_record_pending["batch_digest"] = hashlib.sha256(
+            changed_batch
+        ).hexdigest()
+        changed_record_state = copy.deepcopy(state)
+        changed_record_state["journal_outbox"] = changed_record_pending
+
+        cases = (
+            (changed_binding_state, pending, records),
+            (changed_pending_state, changed_pending, records),
+            (changed_record_state, changed_record_pending, changed_records),
+        )
+        for candidate_state, candidate_pending, candidate_records in cases:
+            with self.subTest(
+                mutation=(
+                    candidate_state["run_binding"],
+                    candidate_pending,
+                    candidate_records,
+                )
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                journal.INVALID_JOURNAL_RECORD,
+            ):
+                CORE._drain_chain_batch_capability(
+                    candidate_state,
+                    candidate_pending,
+                    candidate_records,
+                )
+            self.assertFalse(
+                (run_dir / journal.BATCH_RECEIPTS_NAME).exists()
+            )
+            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+            self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+            self.assertEqual(
+                (events_path.read_bytes(), state_path.read_bytes()), chain_before
+            )
+
+    def test_legacy_merge_authorization_rechecks_exact_chain_bytes(
+        self,
+    ) -> None:
+        (
+            batch,
+            _builders,
+            journal,
+            run_dir,
+            chain_id,
+            state,
+            pending,
+            records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        state_path = self.repo / ".forge/chains" / f"{chain_id}.json"
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        original_snapshot = CORE._resolve_chain_activation_snapshot
+        snapshot_calls = 0
+
+        def substitute_after_first_snapshot(*args: object, **kwargs: object):
+            nonlocal snapshot_calls
+            selected_call = kwargs.get("validate_lineage") is True
+            if selected_call:
+                snapshot_calls += 1
+            snapshot = original_snapshot(*args, **kwargs)
+            if selected_call and snapshot_calls == 1:
+                state_path.write_bytes(state_path.read_bytes() + b" ")
+            return snapshot
+
+        with mock.patch.object(
+            CORE,
+            "_resolve_chain_activation_snapshot",
+            side_effect=substitute_after_first_snapshot,
+        ), mock.patch.object(
+            batch, "_ensure_receipt_ledger", wraps=batch._ensure_receipt_ledger
+        ) as ensure, self.assertRaisesRegex(
+            journal.CoordinationRefusal,
+            journal.INVALID_JOURNAL_RECORD,
+        ):
+            CORE._drain_chain_batch_capability(state, pending, records)
+
+        self.assertGreaterEqual(snapshot_calls, 2)
+        ensure.assert_not_called()
+        self.assertFalse((run_dir / journal.BATCH_RECEIPTS_NAME).exists())
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+
+    def test_legacy_merge_tail_record_comparison_is_load_bearing(self) -> None:
+        (
+            _batch,
+            _builders,
+            journal,
+            run_dir,
+            _chain_id,
+            state,
+            pending,
+            records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        original_snapshot = CORE._resolve_chain_activation_snapshot
+
+        def replace_authenticated_tail(*args: object, **kwargs: object):
+            snapshot = original_snapshot(*args, **kwargs)
+            changed = tuple(copy.deepcopy(snapshot.tail_records))
+            changed[1]["recorded_at"] = "2026-09-10T12:59:59Z"
+            return CORE._ChainActivationSnapshot(
+                family=snapshot.family,
+                state=snapshot.state,
+                raw_events=snapshot.raw_events,
+                raw_state=snapshot.raw_state,
+                tail_records=changed,
+                tail_source_event_digest=snapshot.tail_source_event_digest,
+            )
+
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        with mock.patch.object(
+            CORE,
+            "_resolve_chain_activation_snapshot",
+            side_effect=replace_authenticated_tail,
+        ), self.assertRaisesRegex(
+            journal.CoordinationRefusal,
+            journal.INVALID_JOURNAL_RECORD,
+        ):
+            CORE._drain_chain_batch_capability(state, pending, records)
+
+        self.assertFalse((run_dir / journal.BATCH_RECEIPTS_NAME).exists())
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+
+    def test_post_ledger_lineage_recheck_is_load_bearing(self) -> None:
+        (
+            _batch,
+            builders,
+            journal,
+            run_dir,
+            _chain_id,
+            state,
+            pending,
+            records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+        original_lineage = CORE._validate_chain_activation_lineage
+        lineage_calls = 0
+
+        def fail_third_lineage(*args: object, **kwargs: object) -> None:
+            nonlocal lineage_calls
+            lineage_calls += 1
+            if lineage_calls == 3:
+                raise builders._binding_replay_refusal()
+            original_lineage(*args, **kwargs)
+
+        with mock.patch.object(
+            CORE,
+            "_validate_chain_activation_lineage",
+            side_effect=fail_third_lineage,
+        ), self.assertRaisesRegex(
+            journal.CoordinationRefusal,
+            journal.INVALID_JOURNAL_RECORD,
+        ):
+            CORE._drain_chain_batch_capability(state, pending, records)
+
+        self.assertEqual(lineage_calls, 3)
+        self.assertEqual(
+            (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(), b""
+        )
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+
+    def test_additive_activation_lineage_is_routed_and_rejects_a_fork(
+        self,
+    ) -> None:
+        (
+            _batch,
+            builders,
+            journal,
+            _run_dir,
+            chain_id,
+            state,
+            _pending,
+            _records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        chains_root = self.repo / ".forge/chains"
+        descriptor, observation = journal._open_bound_directory(chains_root)
+        try:
+            with mock.patch.object(
+                CORE,
+                "_validate_chain_activation_lineage",
+                side_effect=builders._binding_replay_refusal(),
+            ) as lineage:
+                with self.assertRaises(journal.CoordinationRefusal):
+                    CORE._resolve_chain_activation_snapshot(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        allow_pending=True,
+                        validate_lineage=True,
+                    )
+                lineage.assert_called_once()
+                CORE._resolve_chain_activation_snapshot(
+                    self.repo.resolve(),
+                    descriptor,
+                    chain_id,
+                    allow_pending=True,
+                    validate_lineage=False,
+                )
+                lineage.assert_called_once()
+
+            worktree = state["worktree"]
+            assert isinstance(worktree, dict)
+            identity = {
+                name: worktree[name]
+                for name in ("path", "git_dir", "common_dir")
+            }
+            sibling_id = "c-2026-09-10T125959Z-acde"
+            raw_events = (
+                chains_root / f"{chain_id}.events.jsonl"
+            ).read_bytes()
+            raw_state = (chains_root / f"{chain_id}.json").read_bytes()
+
+            def summary(selected: str) -> dict[str, object]:
+                return {
+                    "family": "merge",
+                    "chain_id": selected,
+                    "identity": copy.deepcopy(identity),
+                    "claim_status": "owned",
+                    "predecessor_chain_id": None,
+                    "predecessor_release_digest": None,
+                    "acquired": True,
+                    "released_digest": None,
+                    "terminal": False,
+                    "snapshot_event_digest": hashlib.sha256(
+                        selected.encode("utf-8")
+                    ).hexdigest(),
+                    "snapshot_state": {"chain_id": selected},
+                }
+
+            summaries = {
+                chain_id: summary(chain_id),
+                sibling_id: summary(sibling_id),
+            }
+            summaries[chain_id]["snapshot_event_digest"] = hashlib.sha256(
+                raw_events
+            ).hexdigest()
+            summaries[chain_id]["snapshot_state"] = copy.deepcopy(state)
+            with mock.patch.object(
+                builders,
+                "_activation_chain_names",
+                return_value=(f"{chain_id}.json", f"{sibling_id}.json"),
+            ), mock.patch.object(
+                CORE,
+                "_chain_activation_ownership_summary",
+                side_effect=lambda _repo, _descriptor, selected, **_kwargs: (
+                    copy.deepcopy(summaries[selected])
+                ),
+            ), self.assertRaises(journal.CoordinationRefusal):
+                CORE._validate_chain_activation_lineage(
+                    self.repo.resolve(),
+                    descriptor,
+                    chain_id,
+                    state,
+                    raw_events=raw_events,
+                    raw_state=raw_state,
+                )
+        finally:
+            os.close(descriptor)
+        self.assertEqual(
+            journal._file_observation(os.lstat(chains_root)), observation
+        )
+
+    def test_activation_reservation_uses_event_one_before_materialized_state(
+        self,
+    ) -> None:
+        (
+            _batch,
+            builders,
+            journal,
+            run_dir,
+            chain_id,
+            _state,
+            _pending,
+            _records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        state_path = self.repo / ".forge/chains" / f"{chain_id}.json"
+        original = state_path.read_bytes()
+        journal_before = (run_dir / "journal.jsonl").read_bytes()
+
+        with self.assertRaisesRegex(
+            journal.CoordinationRefusal, builders.JOURNAL_OUTBOX_PENDING
+        ):
+            CORE._require_no_pending_chain_activation_outbox(
+                self.repo.resolve(), self.run_id
+            )
+
+        for attack in ("missing", "rebound"):
+            state_path.write_bytes(original)
+            if attack == "missing":
+                state_path.unlink()
+            else:
+                rebound = json.loads(original)
+                rebound_binding = rebound["run_binding"]
+                assert isinstance(rebound_binding, dict)
+                rebound_binding["run_id"] = "run-20260910-foreign-owner"
+                state_path.write_bytes(CLI.canonical_bytes(rebound) + b"\n")
+            with self.subTest(attack=attack), self.assertRaisesRegex(
+                journal.CoordinationRefusal, journal.BATCH_DIVERGED
+            ):
+                CORE._require_no_pending_chain_activation_outbox(
+                    self.repo.resolve(), self.run_id
+                )
+            self.assertEqual(
+                (run_dir / "journal.jsonl").read_bytes(), journal_before
+            )
+        state_path.write_bytes(original)
+
+    def test_pending_additive_carrier_reserves_every_typed_first_use(self) -> None:
+        (
+            _batch,
+            builders,
+            journal,
+            run_dir,
+            chain_id,
+            _state,
+            _pending,
+            _records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        journal_path = run_dir / "journal.jsonl"
+        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+        intent_path = run_dir / journal.BATCH_INTENT_NAME
+        events_path = self.repo / ".forge/chains" / f"{chain_id}.events.jsonl"
+        state_path = self.repo / ".forge/chains" / f"{chain_id}.json"
+        before = (
+            journal_path.read_bytes(),
+            events_path.read_bytes(),
+            state_path.read_bytes(),
+        )
+        original_scanner = builders._FORGE_CLI_ORIGINAL_ACTIVATION_SCANNER
+
+        with mock.patch.object(
+            builders,
+            "_require_no_pending_activation_outbox",
+            original_scanner,
+        ), mock.patch.object(
+            CORE,
+            "register_activation_reservation_seam",
+            wraps=CORE.register_activation_reservation_seam,
+        ) as register, self.assertRaisesRegex(
+            journal.CoordinationRefusal,
+            builders.JOURNAL_OUTBOX_PENDING,
+        ):
+            builders.task_finish(
+                self.repo,
+                self.run_id,
+                idempotency_key=hashlib.sha256(
+                    b"direct-builder-competing-first-use"
+                ).hexdigest(),
+                task=self.task_id,
+                status="complete",
+            )
+        self.assertGreaterEqual(register.call_count, 1)
+        self.assertEqual(
+            (
+                journal_path.read_bytes(),
+                events_path.read_bytes(),
+                state_path.read_bytes(),
+            ),
+            before,
+        )
+        self.assertFalse(receipts_path.exists())
+        self.assertFalse(intent_path.exists())
+
+        tools = Path(__file__).resolve().parents[1] / "scripts/codex_orch_tools.py"
+        completed = subprocess.run(
+            [
+                os.sys.executable,
+                str(tools),
+                "journal",
+                "task-finish",
+                "--repo",
+                str(self.repo.resolve()),
+                "--run-id",
+                self.run_id,
+                "--idempotency-key",
+                hashlib.sha256(b"cli-competing-first-use").hexdigest(),
+                "--task",
+                self.task_id,
+                "--status",
+                "complete",
+            ],
+            cwd=self.repo,
+            env=dict(os.environ),
+            check=False,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(completed.stdout, "")
+        self.assertEqual(completed.stderr, builders.JOURNAL_OUTBOX_PENDING + "\n")
+        self.assertEqual(
+            (
+                journal_path.read_bytes(),
+                events_path.read_bytes(),
+                state_path.read_bytes(),
+            ),
+            before,
+        )
+        self.assertFalse(receipts_path.exists())
+        self.assertFalse(intent_path.exists())
+
+    def test_activation_lineage_binds_selected_summary_to_outer_snapshot(
+        self,
+    ) -> None:
+        (
+            _batch,
+            builders,
+            journal,
+            _run_dir,
+            chain_id,
+            state,
+            _pending,
+            _records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        chains_root = self.repo / ".forge/chains"
+        descriptor, _observation = journal._open_bound_directory(chains_root)
+        try:
+            raw_events = (
+                chains_root / f"{chain_id}.events.jsonl"
+            ).read_bytes()
+            raw_state = (chains_root / f"{chain_id}.json").read_bytes()
+            summary = CORE._chain_activation_ownership_summary(
+                self.repo.resolve(), descriptor, chain_id
+            )
+            changed_state = copy.deepcopy(state)
+            changed_state["last_event_at"] = "2026-09-10T12:59:59Z"
+            summary["snapshot_state"] = changed_state
+            original_read = builders._read_regular_bytes_at
+            summary_selected = False
+
+            def select_changed_summary(
+                _repo: Path,
+                _descriptor: int,
+                selected: str,
+                **_kwargs: object,
+            ) -> dict[str, object]:
+                nonlocal summary_selected
+                self.assertEqual(selected, chain_id)
+                summary_selected = True
+                return copy.deepcopy(summary)
+
+            def read_changed_snapshot(
+                selected_descriptor: int,
+                name: str,
+                **kwargs: object,
+            ) -> bytes:
+                if summary_selected and name == f"{chain_id}.json":
+                    return CLI.canonical_bytes(changed_state) + b"\n"
+                return original_read(selected_descriptor, name, **kwargs)
+
+            with mock.patch.object(
+                CORE,
+                "_chain_activation_ownership_summary",
+                side_effect=select_changed_summary,
+            ), mock.patch.object(
+                builders,
+                "_read_regular_bytes_at",
+                side_effect=read_changed_snapshot,
+            ), self.assertRaises(journal.CoordinationRefusal):
+                CORE._validate_chain_activation_lineage(
+                    self.repo.resolve(),
+                    descriptor,
+                    chain_id,
+                    state,
+                    raw_events=raw_events,
+                    raw_state=raw_state,
+                )
+        finally:
+            os.close(descriptor)
+
+    def test_activation_lineage_refuses_chain_inserted_after_snapshot(
+        self,
+    ) -> None:
+        (
+            _batch,
+            builders,
+            journal,
+            _run_dir,
+            chain_id,
+            state,
+            _pending,
+            _records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+        chains_root = self.repo / ".forge/chains"
+        descriptor, _observation = journal._open_bound_directory(chains_root)
+        try:
+            raw_events = (
+                chains_root / f"{chain_id}.events.jsonl"
+            ).read_bytes()
+            raw_state = (chains_root / f"{chain_id}.json").read_bytes()
+            initial = builders._activation_chain_names(descriptor)
+            inserted_id = "c-2026-09-10T125958Z-acde"
+            scans = 0
+
+            def changing_names(_descriptor: int) -> tuple[str, ...]:
+                nonlocal scans
+                scans += 1
+                if scans == 1:
+                    return initial
+                return (
+                    *initial,
+                    f"{inserted_id}.json",
+                    f"{inserted_id}.events.jsonl",
+                )
+
+            with mock.patch.object(
+                builders,
+                "_activation_chain_names",
+                side_effect=changing_names,
+            ), self.assertRaises(journal.CoordinationRefusal):
+                CORE._validate_chain_activation_lineage(
+                    self.repo.resolve(),
+                    descriptor,
+                    chain_id,
+                    state,
+                    raw_events=raw_events,
+                    raw_state=raw_state,
+                )
+            self.assertEqual(scans, 2)
+        finally:
+            os.close(descriptor)
+
+    def test_bound_activation_lineage_accepts_an_unbound_additive_predecessor(
+        self,
+    ) -> None:
+        first = CLI.MergeEngine(self.context()).start_chain(
+            str(self.worktree), remote_tip=self.base
+        )
+        CLI.MergeEngine(
+            self.context(chain_id=str(first.chain_id))
+        ).abort("release the unbound predecessor")
+
+        (
+            _batch,
+            _builders,
+            journal,
+            run_dir,
+            _chain_id,
+            state,
+            pending,
+            records,
+        ) = self._leave_lockless_legacy_merge_outbox_pending()
+
+        receipt = CORE._drain_chain_batch_capability(state, pending, records)
+        self.assertEqual(receipt["idempotency_key"], pending["idempotency_key"])
+        persisted = [
+            json.loads(line)
+            for line in (run_dir / journal.BATCH_RECEIPTS_NAME)
+            .read_bytes()
+            .splitlines()
+        ]
+        self.assertEqual(len(persisted), 1)
+        self.assertEqual(persisted[0]["record_count"], len(records))
+
+    def test_bound_activation_lineage_authenticates_foreign_run_receipts(
+        self,
+    ) -> None:
+        _batch, journal, _predecessor_run, predecessor = (
+            self._create_receipted_bound_merge_predecessor()
+        )
+        _batch, builders, _journal = CLI._coordination_modules()
+        chains_root = self.repo / ".forge/chains"
+        descriptor, _observation = journal._open_bound_directory(chains_root)
+        try:
+            with mock.patch.object(
+                builders,
+                "_verify_receipted_batch",
+                side_effect=AssertionError(
+                    "sibling replay nested the canonical run lock"
+                ),
+            ):
+                summary = CORE._chain_activation_ownership_summary(
+                    self.repo.resolve(), descriptor, predecessor
+                )
+        finally:
+            os.close(descriptor)
+        self.assertEqual(summary["chain_id"], predecessor)
+        self.assertEqual(summary["family"], "merge")
+        self.assertIs(summary["terminal"], True)
+
+    def test_bound_activation_lineage_refuses_missing_predecessor_receipts(
+        self,
+    ) -> None:
+        _batch, journal, predecessor_run, _predecessor = (
+            self._create_receipted_bound_merge_predecessor()
+        )
+        (predecessor_run / journal.BATCH_RECEIPTS_NAME).unlink()
+        chains_root = self.repo / ".forge/chains"
+        descriptor, _observation = journal._open_bound_directory(chains_root)
+        try:
+            with self.assertRaises(journal.CoordinationRefusal):
+                CORE._chain_activation_ownership_summary(
+                    self.repo.resolve(), descriptor, _predecessor
+                )
+        finally:
+            os.close(descriptor)
+
+    def test_bound_activation_lineage_rechecks_foreign_receipt_snapshot(
+        self,
+    ) -> None:
+        batch, journal, predecessor_run, predecessor = (
+            self._create_receipted_bound_merge_predecessor()
+        )
+        receipts_path = predecessor_run / journal.BATCH_RECEIPTS_NAME
+        original_receipts = receipts_path.read_bytes()
+        original_loader = batch._load_receipts_for_chain_replay
+        mutated = False
+
+        def mutate_after_load(locked: object):
+            nonlocal mutated
+            result = original_loader(locked)
+            if not mutated:
+                mutated = True
+                receipts_path.write_bytes(original_receipts + b" ")
+            return result
+
+        chains_root = self.repo / ".forge/chains"
+        descriptor, _observation = journal._open_bound_directory(chains_root)
+        try:
+            with mock.patch.object(
+                batch,
+                "_load_receipts_for_chain_replay",
+                side_effect=mutate_after_load,
+            ), self.assertRaises(journal.CoordinationRefusal):
+                CORE._chain_activation_ownership_summary(
+                    self.repo.resolve(), descriptor, predecessor
+                )
+        finally:
+            os.close(descriptor)
+        self.assertTrue(mutated)
+
     def test_run_bound_start_publishes_exact_scope_sidecar_and_proof(self) -> None:
         with mock.patch.object(
             CORE, "run_fenced_command", wraps=CLI.run_fenced_command
@@ -3065,9 +3981,9 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             original_common = CLI.acquire_common_lock
 
             @contextlib.contextmanager
-            def tracked_outer(binding):
+            def tracked_outer(binding, *, create=True):
                 nonlocal journal_depth
-                with original_outer(binding):
+                with original_outer(binding, create=create):
                     journal_depth += 1
                     try:
                         yield
@@ -4215,6 +5131,60 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(result, 1)
         self.assertEqual(after, before)
         self.assertIn("invalid CLI invocation", stdout.getvalue())
+
+    def test_dormant_admission_does_not_create_lock_for_legacy_run(self) -> None:
+        _batch, _builders, journal = CLI._coordination_modules()
+        journal.open_run(
+            self.repo,
+            self.run_id,
+            ["src/**"],
+            {
+                "type": "run_started",
+                "recorded_at": "2026-09-10T12:00:00Z",
+                "run_id": self.run_id,
+                "goal": "Keep dormant merge admission read-only",
+                "repo": str(self.repo.resolve()),
+                "repo_head": self.git("rev-parse", "HEAD"),
+                "repo_status": self.git("status", "--short").splitlines(),
+                "plugin_ref": "forge-merge-adapter-test",
+            },
+        )
+        journal.append_run_record(
+            self.repo,
+            self.run_id,
+            {
+                "type": "task",
+                "recorded_at": "2026-09-10T12:01:00Z",
+                "run_id": self.run_id,
+                "id": self.task_id,
+                "status": "active",
+                "goal": "Prove dormant admission creates nothing",
+                "acceptance": ["No stable batch lock is created"],
+                "files": ["src/app.py"],
+            },
+        )
+        run_dir = (
+            self.repo / ".codex-orchestrator" / "runs" / self.run_id
+        )
+        lock_path = run_dir / journal.BATCH_LOCK_NAME
+        lock_path.unlink()
+        self.assertFalse(lock_path.exists())
+        before = tuple(CLI.MergeChainStore(self.repo).list_ids(family="merge"))
+
+        engine = CLI.MergeEngine(self.context(run_id=self.run_id))
+        with self.assertRaises(CLI.Refusal) as caught:
+            engine.start(str(self.worktree), task=self.task_id)
+
+        self.assertEqual(
+            caught.exception.reason_code,
+            CLI.V2ReasonCode.RUN_TASK_BINDING_INVALID,
+        )
+        self.assertEqual(caught.exception.observed, journal.BATCH_DIVERGED)
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(
+            tuple(CLI.MergeChainStore(self.repo).list_ids(family="merge")),
+            before,
+        )
 
     def test_activation_does_not_change_commit_family_grammar(self) -> None:
         argv = ["commit", "start", "--paths", "src/app.py", "--declare-tier", "hard"]

@@ -546,8 +546,9 @@ def prepare_merge_admission(
     declared_tier: str | None,
     *,
     task: str | None = None,
+    create_run_lock: bool = False,
 ) -> engine.MergeAdmission:
-    """Prove the read-only half of FR-231 without activating merge routing."""
+    """Prove FR-231 admission, reserving only an opted-in start run lock."""
 
     chain_core._require_merge_adapter_control("admission-and-generation")
     chain_core._require_merge_adapter_control("halt")
@@ -715,6 +716,7 @@ def prepare_merge_admission(
             ctx.options.run_id,
             task,
             policy.digest,
+            create_batch_lock=create_run_lock,
         )
     return engine.MergeAdmission(
         repository=main.root,
@@ -3060,7 +3062,11 @@ class MergeEngine:
                 observed=self.ctx.options.chain_id,
             )
         admission = prepare_merge_admission(
-            self.ctx, worktree, declared_tier, task=task
+            self.ctx,
+            worktree,
+            declared_tier,
+            task=task,
+            create_run_lock=True,
         )
         self._prepare_bootstrap_git_no_lazy_fetch_qualification(
             admission,

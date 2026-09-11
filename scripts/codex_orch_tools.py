@@ -17,6 +17,7 @@ from codex_orchestrator import batch, builders
 from codex_orchestrator.journal import (
     CoordinationRefusal,
     INVALID_JOURNAL_RECORD,
+    LEGACY_RUN_OPEN_NOTICE,
     append_run_record,
     close_run,
     open_run,
@@ -279,6 +280,13 @@ def _typed_main(argv: list[str]) -> int:
             raise CoordinationRefusal(
                 "forge: journal builder refused — repository must be absolute"
             )
+        # forge: modified from upstream — typed builders share the current
+        # additive-aware first-use reservation scanner with commit/merge CLI.
+        # The import is delayed so raw compatibility commands keep their small
+        # journal-only surface and this entry point remains independently usable.
+        from forge_cli import chain_core
+
+        chain_core.register_coordination_seams()
         if args.command == "run-open":
             outcome = builders.run_open(
                 repo,
@@ -411,6 +419,20 @@ def _coordination_main(argv: list[str]) -> int:
                 _record(args.record_json),
                 successor_of=args.successor_of,
             )
+            # forge: modified from upstream — the legacy advisory belongs to
+            # the raw CLI surface, never to programmatic journal callers.
+            diagnostic = sys.stderr
+            if diagnostic is not None:
+                try:
+                    print(
+                        LEGACY_RUN_OPEN_NOTICE,
+                        file=diagnostic,
+                        flush=True,
+                    )
+                except Exception:
+                    # A missing diagnostic stream cannot turn a durable open
+                    # into a reported failure or fall back to stdout.
+                    pass
             print(target)
         elif args.command == "journal-append":
             append_run_record(repo, args.run_id, _record(args.record_json))

@@ -172,6 +172,10 @@ BATCH_PENDING = "forge: journal batch refused — another intent is pending"
 BATCH_DIVERGED = (
     "forge: journal batch recovery refused — journal diverged from intent"
 )
+LEGACY_RUN_OPEN_NOTICE = (
+    "forge: notice — run opened in legacy mode (no writer_contract); its first "
+    "typed mutation will activate it in place; prefer typed run-open"
+)
 LEGACY_ACTIVATION_LEDGER_INCOMPLETE = (
     "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; "
     "retire the run and open a successor with --successor-of, or run journal "
@@ -203,6 +207,24 @@ def _mark_batch_lock(run_dir: Path, *, held: bool) -> None:
     key = os.path.abspath(os.fspath(run_dir))
     locks = _held_batch_locks()
     if held:
+        # forge: modified from upstream — every typed mutation enters here
+        # under its stable outer lock, including direct builder callers.  Bind
+        # legacy first-use reservation to the current commit/merge grammars
+        # before the lock becomes visible to journal mutation code.
+        try:
+            from forge_cli import chain_core
+        except ModuleNotFoundError as exc:
+            # Minimal upstream-only fixture installations contain no Forge CLI
+            # and cannot produce its additive merge grammar.
+            if exc.name != "forge_cli":
+                raise CoordinationRefusal(BATCH_DIVERGED) from exc
+        except ImportError as exc:
+            raise CoordinationRefusal(BATCH_DIVERGED) from exc
+        else:
+            try:
+                chain_core.register_activation_reservation_seam()
+            except (AttributeError, RuntimeError) as exc:
+                raise CoordinationRefusal(BATCH_DIVERGED) from exc
         locks.add(key)
     else:
         locks.discard(key)
@@ -6233,6 +6255,15 @@ def _claim_open_stage_owner(
     return canonical[1], canonical[0]
 
 
+def _raw_open_writer_contract_supplied(
+    candidate: dict[str, object], open_batch: _ValidatedOpenBatch | None
+) -> bool:
+    return "writer_contract" in candidate and (
+        not isinstance(open_batch, _ValidatedOpenBatch)
+        or open_batch.authority is not _OPEN_BATCH_AUTHORITY
+    )
+
+
 def open_run(
     repo: Path,
     run_id: str,
@@ -6249,12 +6280,12 @@ def open_run(
     activated_candidate = candidate.get("writer_contract") == WRITER_CONTRACT
     if _batch_intent is not None or _batch_receipt is not None:
         raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
-    if activated_candidate and (
-        not isinstance(_batch, _ValidatedOpenBatch)
-        or _batch.authority is not _OPEN_BATCH_AUTHORITY
-    ):
+    if _raw_open_writer_contract_supplied(candidate, _batch):
         raise CoordinationRefusal(
-            "forge: journal append refused — activated writer requires typed builder"
+            "forge: run open refused — writer_contract is builder-injected; use typed "
+            "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
+            "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
+            "--scope <pathspec>"
         )
     if not activated_candidate and _batch is not None:
         raise CoordinationRefusal(INVALID_JOURNAL_RECORD)

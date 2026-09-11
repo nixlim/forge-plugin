@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import contextmanager, nullcontext, redirect_stderr
+from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -28,7 +28,9 @@ UNREPLAYABLE_CHAIN_FIXTURE = (
 )
 
 sys.path.insert(0, str(ROOT / "scripts"))
+import codex_orch_tools as ORCH_TOOLS  # noqa: E402
 from codex_orchestrator import batch, builders, journal  # noqa: E402
+from forge_cli import chain_core as CHAIN_CORE  # noqa: E402
 
 
 JOURNAL_FIXTURE_SHA256 = (
@@ -4159,13 +4161,16 @@ print("committed")
         }
         if successor_of is not None:
             record["successor_of"] = successor_of
-        journal.open_run(
-            repo,
-            run_id,
-            ["src/**"] if scope is None else scope,
-            record,
-            successor_of=successor_of,
-        )
+        captured = io.StringIO()
+        with redirect_stderr(captured):
+            journal.open_run(
+                repo,
+                run_id,
+                ["src/**"] if scope is None else scope,
+                record,
+                successor_of=successor_of,
+            )
+        self.assertEqual(captured.getvalue(), "")
 
     @staticmethod
     def _activation_markers(
@@ -4689,6 +4694,432 @@ print("committed")
         assert isinstance(binding, dict)
         return source_digest, str(binding["binding_id"]), records
 
+    def _rewrite_commit_events(
+        self,
+        repo: Path,
+        chain_id: str,
+        events: list[dict[str, object]],
+    ) -> None:
+        previous = "0" * 64
+        for sequence, event in enumerate(events, start=1):
+            event["sequence"] = sequence
+            event["prev_digest"] = previous
+            unsigned = {
+                name: value for name, value in event.items() if name != "digest"
+            }
+            event["digest"] = journal._sha256(
+                journal._canonical_json_bytes(unsigned)
+            )
+            previous = str(event["digest"])
+        (
+            builders.chain_storage_root(repo) / f"{chain_id}.events.jsonl"
+        ).write_bytes(
+            b"".join(
+                journal._canonical_json_bytes(event) + b"\n"
+                for event in events
+            )
+        )
+
+    def test_commit_sibling_receipt_request_authentication_is_load_bearing(
+        self,
+    ) -> None:
+        run_id = "run-20260910-commit-sibling-receipt"
+        chain_id = "c-2026-09-10T050000Z-b101"
+        with self.api_environment():
+            self._legacy_receipted_chain_case(
+                self.repo,
+                run_id,
+                chain_id=chain_id,
+                scope="src/**",
+                task_file="src/example.py",
+            )
+            chains_root = builders.chain_storage_root(self.repo)
+            run_dir = self.run_dir(self.repo, run_id)
+            events_path = chains_root / f"{chain_id}.events.jsonl"
+            state_path = chains_root / f"{chain_id}.json"
+            journal_path = run_dir / "journal.jsonl"
+            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+            descriptor, _observation = journal._open_bound_directory(chains_root)
+            try:
+                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
+                    self.repo.resolve()
+                )
+                with mock.patch.object(
+                    builders,
+                    "_verify_receipted_batch",
+                    side_effect=AssertionError(
+                        "commit sibling replay nested the canonical run lock"
+                    ),
+                ) as default_verifier:
+                    summary = CHAIN_CORE._chain_activation_ownership_summary(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        receipt_verifier=verifier,
+                    )
+                default_verifier.assert_not_called()
+                self.assertEqual(summary["family"], "commit")
+                self.assertEqual(
+                    summary["snapshot_state"]["chain_id"], chain_id
+                )
+
+                receipt = json.loads(receipts_path.read_bytes())
+                receipt["request_sha256"] = key("forged-commit-request")
+                receipts_path.write_bytes(
+                    journal._canonical_json_bytes(receipt) + b"\n"
+                )
+                events = [
+                    json.loads(line)
+                    for line in events_path.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                ]
+                acknowledgement = events[-1]["payload"]["details"]
+                assert isinstance(acknowledgement, dict)
+                acknowledgement["receipt_digest"] = journal._sha256(
+                    journal._canonical_json_bytes(receipt) + b"\n"
+                )
+                self._rewrite_commit_events(self.repo, chain_id, events)
+                unchanged = (
+                    state_path.read_bytes(),
+                    events_path.read_bytes(),
+                    journal_path.read_bytes(),
+                    receipts_path.read_bytes(),
+                )
+
+                with mock.patch.object(
+                    builders,
+                    "_verify_receipted_batch",
+                    side_effect=AssertionError(
+                        "commit sibling replay nested the canonical run lock"
+                    ),
+                ) as default_verifier, self.assertRaises(
+                    journal.CoordinationRefusal
+                ) as raised:
+                    CHAIN_CORE._chain_activation_ownership_summary(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        receipt_verifier=(
+                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+                                self.repo.resolve()
+                            )
+                        ),
+                    )
+                self.assertEqual(
+                    str(raised.exception),
+                    str(builders._binding_replay_refusal()),
+                )
+                default_verifier.assert_not_called()
+                self.assertEqual(
+                    (
+                        state_path.read_bytes(),
+                        events_path.read_bytes(),
+                        journal_path.read_bytes(),
+                        receipts_path.read_bytes(),
+                    ),
+                    unchanged,
+                )
+
+                with mock.patch.object(
+                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
+                    "__call__",
+                    return_value=None,
+                ) as disabled_receipt_auth, mock.patch.object(
+                    builders,
+                    "_verify_receipted_batch",
+                    side_effect=AssertionError(
+                        "commit sibling replay nested the canonical run lock"
+                    ),
+                ) as default_verifier:
+                    admitted = CHAIN_CORE._chain_activation_ownership_summary(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        receipt_verifier=(
+                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+                                self.repo.resolve()
+                            )
+                        ),
+                    )
+                disabled_receipt_auth.assert_called_once()
+                default_verifier.assert_not_called()
+                self.assertEqual(admitted["family"], "commit")
+                self.assertEqual(
+                    admitted["snapshot_state"]["chain_id"], chain_id
+                )
+                self.assertEqual(
+                    (
+                        state_path.read_bytes(),
+                        events_path.read_bytes(),
+                        journal_path.read_bytes(),
+                        receipts_path.read_bytes(),
+                    ),
+                    unchanged,
+                )
+            finally:
+                os.close(descriptor)
+
+    def test_commit_sibling_carried_binding_authentication_is_load_bearing(
+        self,
+    ) -> None:
+        run_id = "run-20260910-commit-sibling-binding"
+        chain_id = "c-2026-09-10T050001Z-b102"
+        with self.api_environment():
+            self._legacy_receipted_chain_case(
+                self.repo,
+                run_id,
+                chain_id=chain_id,
+                scope="src/**",
+                task_file="src/example.py",
+            )
+            chains_root = builders.chain_storage_root(self.repo)
+            run_dir = self.run_dir(self.repo, run_id)
+            events_path = chains_root / f"{chain_id}.events.jsonl"
+            state_path = chains_root / f"{chain_id}.json"
+            journal_path = run_dir / "journal.jsonl"
+            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+            events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+            ]
+            carrier = next(
+                event
+                for event in events
+                if isinstance(event["payload"]["details"], dict)
+                and "journal_batch" in event["payload"]["details"]
+            )
+            details = carrier["payload"]["details"]
+            assert isinstance(details, dict)
+            journal_batch = details["journal_batch"]
+            assert isinstance(journal_batch, dict)
+            records = journal_batch["records"]
+            assert isinstance(records, list)
+            record = records[-1]
+            assert isinstance(record, dict)
+            binding = record["binding"]
+            assert isinstance(binding, dict)
+            candidate = binding["candidate"]
+            assert isinstance(candidate, dict)
+            candidate["value"] = key("forged-commit-candidate")
+            binding_preimage = {
+                name: value for name, value in binding.items() if name != "binding_id"
+            }
+            binding["binding_id"] = journal._sha256(
+                journal._canonical_json_bytes(binding_preimage)
+            )
+            self.assertTrue(journal._binding_shape_valid(binding, record=record))
+            batch_bytes = b"".join(
+                journal._journal_line(item) for item in records
+            )
+            forged_batch_digest = journal._sha256(batch_bytes)
+            journal_batch["batch_digest"] = forged_batch_digest
+            carrier_state = carrier["payload"]["state"]
+            assert isinstance(carrier_state, dict)
+            carrier_outbox = carrier_state["journal_outbox"]
+            assert isinstance(carrier_outbox, dict)
+            carrier_outbox["batch_digest"] = forged_batch_digest
+            acknowledgement = events[-1]["payload"]["details"]
+            assert isinstance(acknowledgement, dict)
+            acknowledgement["batch_digest"] = forged_batch_digest
+            self._rewrite_commit_events(self.repo, chain_id, events)
+            unchanged = (
+                state_path.read_bytes(),
+                events_path.read_bytes(),
+                journal_path.read_bytes(),
+                receipts_path.read_bytes(),
+            )
+            descriptor, _observation = journal._open_bound_directory(chains_root)
+            original_matcher = builders._binding_matches_source_fact
+            try:
+                with mock.patch.object(
+                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
+                    "__call__",
+                    return_value=None,
+                ) as receipt_auth, mock.patch.object(
+                    builders,
+                    "_verify_receipted_batch",
+                    side_effect=AssertionError(
+                        "commit sibling replay nested the canonical run lock"
+                    ),
+                ) as default_verifier, mock.patch.object(
+                    builders,
+                    "_binding_matches_source_fact",
+                    wraps=original_matcher,
+                ) as matcher, self.assertRaises(
+                    journal.CoordinationRefusal
+                ) as raised:
+                    CHAIN_CORE._chain_activation_ownership_summary(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        receipt_verifier=(
+                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+                                self.repo.resolve()
+                            )
+                        ),
+                    )
+                self.assertEqual(
+                    str(raised.exception),
+                    str(builders._binding_replay_refusal()),
+                )
+                receipt_auth.assert_not_called()
+                default_verifier.assert_not_called()
+                matcher.assert_called_once()
+                self.assertEqual(
+                    (
+                        state_path.read_bytes(),
+                        events_path.read_bytes(),
+                        journal_path.read_bytes(),
+                        receipts_path.read_bytes(),
+                    ),
+                    unchanged,
+                )
+
+                with mock.patch.object(
+                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
+                    "__call__",
+                    return_value=None,
+                ) as receipt_auth, mock.patch.object(
+                    builders,
+                    "_verify_receipted_batch",
+                    side_effect=AssertionError(
+                        "commit sibling replay nested the canonical run lock"
+                    ),
+                ) as default_verifier, mock.patch.object(
+                    builders,
+                    "_binding_matches_source_fact",
+                    return_value=True,
+                ) as disabled_matcher:
+                    admitted = CHAIN_CORE._chain_activation_ownership_summary(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        receipt_verifier=(
+                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+                                self.repo.resolve()
+                            )
+                        ),
+                    )
+                receipt_auth.assert_called_once()
+                default_verifier.assert_not_called()
+                disabled_matcher.assert_called_once()
+                self.assertEqual(admitted["family"], "commit")
+                self.assertEqual(
+                    admitted["snapshot_state"]["chain_id"], chain_id
+                )
+                self.assertEqual(
+                    (
+                        state_path.read_bytes(),
+                        events_path.read_bytes(),
+                        journal_path.read_bytes(),
+                        receipts_path.read_bytes(),
+                    ),
+                    unchanged,
+                )
+            finally:
+                os.close(descriptor)
+
+    def test_commit_sibling_receipt_snapshot_recheck_is_load_bearing(
+        self,
+    ) -> None:
+        run_id = "run-20260910-commit-sibling-recheck"
+        chain_id = "c-2026-09-10T050002Z-b103"
+        with self.api_environment():
+            self._legacy_receipted_chain_case(
+                self.repo,
+                run_id,
+                chain_id=chain_id,
+                scope="src/**",
+                task_file="src/example.py",
+            )
+            chains_root = builders.chain_storage_root(self.repo)
+            run_dir = self.run_dir(self.repo, run_id)
+            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+            original_receipts = receipts_path.read_bytes()
+            events_path = chains_root / f"{chain_id}.events.jsonl"
+            state_path = chains_root / f"{chain_id}.json"
+            chain_before = (events_path.read_bytes(), state_path.read_bytes())
+            descriptor, _observation = journal._open_bound_directory(chains_root)
+            original_resolver = builders._resolve_binding_from_descriptor
+            try:
+                def mutate_after_resolve(*args: object, **kwargs: object):
+                    resolved = original_resolver(*args, **kwargs)
+                    receipts_path.write_bytes(original_receipts + b" ")
+                    return resolved
+
+                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
+                    self.repo.resolve()
+                )
+                with mock.patch.object(
+                    builders,
+                    "_resolve_binding_from_descriptor",
+                    side_effect=mutate_after_resolve,
+                ) as resolver, mock.patch.object(
+                    builders,
+                    "_verify_receipted_batch",
+                    side_effect=AssertionError(
+                        "commit sibling replay nested the canonical run lock"
+                    ),
+                ) as default_verifier, self.assertRaises(
+                    journal.CoordinationRefusal
+                ) as raised:
+                    CHAIN_CORE._resolve_chain_activation_snapshot(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        allow_pending=True,
+                        validate_lineage=False,
+                        receipt_verifier=verifier,
+                    )
+                self.assertEqual(
+                    str(raised.exception),
+                    str(builders._binding_replay_refusal()),
+                )
+                resolver.assert_called_once()
+                default_verifier.assert_not_called()
+                self.assertEqual(
+                    (events_path.read_bytes(), state_path.read_bytes()),
+                    chain_before,
+                )
+
+                receipts_path.write_bytes(original_receipts)
+                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
+                    self.repo.resolve()
+                )
+                with mock.patch.object(
+                    builders,
+                    "_resolve_binding_from_descriptor",
+                    side_effect=mutate_after_resolve,
+                ) as resolver, mock.patch.object(
+                    verifier, "recheck", return_value=None
+                ) as disabled_recheck, mock.patch.object(
+                    builders,
+                    "_verify_receipted_batch",
+                    side_effect=AssertionError(
+                        "commit sibling replay nested the canonical run lock"
+                    ),
+                ) as default_verifier:
+                    admitted = CHAIN_CORE._resolve_chain_activation_snapshot(
+                        self.repo.resolve(),
+                        descriptor,
+                        chain_id,
+                        allow_pending=True,
+                        validate_lineage=False,
+                        receipt_verifier=verifier,
+                    )
+                resolver.assert_called_once()
+                disabled_recheck.assert_called_once()
+                default_verifier.assert_not_called()
+                self.assertEqual(admitted.family, "commit")
+                self.assertEqual(admitted.state["chain_id"], chain_id)
+                self.assertEqual(
+                    (events_path.read_bytes(), state_path.read_bytes()),
+                    chain_before,
+                )
+            finally:
+                os.close(descriptor)
+
     def test_activation_scan_tolerates_unreplayable_unrelated_chain(self) -> None:
         warning = (
             "forge: warning — skipped unreadable chain "
@@ -5060,6 +5491,18 @@ print("committed")
                         builders._ACTIVATION_EVENTS_CAP_BYTES,
                     ),
                     (
+                        f"{chain_id}.events.jsonl",
+                        builders._ACTIVATION_EVENTS_CAP_BYTES,
+                    ),
+                    (
+                        f"{chain_id}.json",
+                        builders._ACTIVATION_STATE_CAP_BYTES,
+                    ),
+                    (
+                        f"{chain_id}.events.jsonl",
+                        builders._ACTIVATION_EVENTS_CAP_BYTES,
+                    ),
+                    (
                         f"{chain_id}.json",
                         builders._ACTIVATION_STATE_CAP_BYTES,
                     ),
@@ -5202,11 +5645,34 @@ print("committed")
                     if control_disabled
                     else nullcontext()
                 )
-                with mock.patch.object(
-                    builders,
-                    "_activation_chain_names",
-                    side_effect=names_with_bound_start,
-                ), stability_control as disabled_control:
+                registration_control = (
+                    mock.patch.object(
+                        CHAIN_CORE,
+                        "register_activation_reservation_seam",
+                        return_value=None,
+                    )
+                    if control_disabled
+                    else nullcontext()
+                )
+                scanner_control = (
+                    mock.patch.object(
+                        builders,
+                        "_require_no_pending_activation_outbox",
+                        builders._FORGE_CLI_ORIGINAL_ACTIVATION_SCANNER,
+                    )
+                    if control_disabled
+                    else nullcontext()
+                )
+                with (
+                    mock.patch.object(
+                        builders,
+                        "_activation_chain_names",
+                        side_effect=names_with_bound_start,
+                    ),
+                    stability_control as disabled_control,
+                    registration_control,
+                    scanner_control,
+                ):
                     if control_disabled:
                         outcome = self.start_task(repo, run_id)
                     else:
@@ -5443,7 +5909,7 @@ print("committed")
                 call.kwargs.get("verify_external")
                 for call in resolver.call_args_list
             ]
-            self.assertEqual(external_modes, [None, None])
+            self.assertEqual(external_modes, [True, True])
             for outcome in outcomes.values():
                 self.assertTrue(
                     journal._writer_activation_marker(outcome.records[0])
@@ -5801,12 +6267,17 @@ print("committed")
                 before_events = event_path.read_bytes()
 
                 with mock.patch.object(
+                    CHAIN_CORE,
+                    "register_activation_reservation_seam",
+                    return_value=None,
+                ) as disabled_registration, mock.patch.object(
                     builders,
                     "_require_no_pending_activation_outbox",
                     return_value=None,
                 ) as disabled_outbox_guard:
                     self._invoke_raw_lifecycle(repo, run_id, operation)
 
+                disabled_registration.assert_called()
                 disabled_outbox_guard.assert_called_once_with(
                     repo.resolve(), run_id
                 )
@@ -6141,29 +6612,162 @@ print("committed")
     def test_raw_open_cannot_supply_writer_contract_before_any_mutation(
         self,
     ) -> None:
-        repo, _ = self._new_repo("repo-raw-open-writer-contract")
-        run_id = "run-20260910-raw-open-writer-contract"
-        state_root = repo / ".codex-orchestrator"
-        registry = repo / ".forge/tmp/run-registry.json"
-        target = self.run_dir(repo, run_id)
-        self.assertFalse(state_root.exists())
-        self.assertFalse(registry.exists())
-        with self.api_environment(), self.assertRaisesRegex(
-            journal.CoordinationRefusal,
-            "forge: journal append refused — activated writer requires typed builder",
+        expected = (
+            "forge: run open refused — writer_contract is builder-injected; use typed "
+            "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
+            "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
+            "--scope <pathspec>"
+        )
+        for label, supplied_value in (
+            ("activation-value", journal.WRITER_CONTRACT),
+            ("attacker-value", "attacker-value"),
         ):
-            journal.open_run(
-                repo,
-                run_id,
-                ["src/**"],
+            with self.subTest(label=label):
+                repo, _ = self._new_repo(f"repo-raw-open-{label}")
+                run_id = f"run-20260910-raw-open-{label}"
+                state_root = repo / ".codex-orchestrator"
+                registry = repo / ".forge/tmp/run-registry.json"
+                target = self.run_dir(repo, run_id)
+                self.assertFalse(state_root.exists())
+                self.assertFalse(registry.exists())
+                with self.api_environment(), self.assertRaises(
+                    journal.CoordinationRefusal
+                ) as raised:
+                    journal.open_run(
+                        repo,
+                        run_id,
+                        ["src/**"],
+                        {
+                            "type": "run_started",
+                            "writer_contract": supplied_value,
+                        },
+                    )
+                self.assertEqual(str(raised.exception), expected)
+                self.assertFalse(state_root.exists())
+                self.assertFalse(registry.exists())
+                self.assertFalse(target.exists())
+
+    def test_raw_open_writer_contract_refusal_is_load_bearing(self) -> None:
+        run_id = "run-20260910-raw-open-refusal-disabled"
+        record = {
+            "type": "run_started",
+            "recorded_at": "2026-09-10T12:00:00Z",
+            "run_id": run_id,
+            "goal": "Prove the raw writer-contract refusal is load-bearing",
+            "repo": str(self.repo.resolve()),
+            "repo_head": self.head,
+            "repo_status": [],
+            "plugin_ref": "forge-test-revision-9",
+            "writer_contract": "attacker-value",
+        }
+        expected = (
+            "forge: journal append refused — invalid journal record: "
+            "run_started.writer_contract must be exactly forge-journal-binding/1"
+        )
+        with self.api_environment(), mock.patch.object(
+            journal, "_raw_open_writer_contract_supplied", return_value=False
+        ) as disabled_guard, mock.patch.object(
+            journal, "_resolve_repository", wraps=journal._resolve_repository
+        ) as repository_resolver, self.assertRaises(
+            journal.CoordinationRefusal
+        ) as raised:
+            journal.open_run(self.repo, run_id, ["src/**"], record)
+
+        self.assertEqual(str(raised.exception), expected)
+        disabled_guard.assert_called_once_with(record, None)
+        repository_resolver.assert_called_once_with(self.repo, "new run")
+        self.assertFalse(self.run_dir(self.repo, run_id).exists())
+
+    def test_legacy_open_without_stderr_never_falls_back_to_stdout(self) -> None:
+        run_id = "run-20260910-legacy-open-without-stderr"
+        record_path = Path(self.temporary.name) / "legacy-open-no-stderr.json"
+        record_path.write_text(
+            json.dumps(
                 {
                     "type": "run_started",
-                    "writer_contract": journal.WRITER_CONTRACT,
+                    "recorded_at": "2026-09-10T12:00:00Z",
+                    "run_id": run_id,
+                    "goal": "Keep an unavailable advisory stream off stdout",
+                    "repo": str(self.repo.resolve()),
+                    "repo_head": self.head,
+                    "repo_status": [],
+                    "plugin_ref": "forge-test-revision-9",
                 },
+                sort_keys=True,
             )
-        self.assertFalse(state_root.exists())
-        self.assertFalse(registry.exists())
-        self.assertFalse(target.exists())
+            + "\n",
+            encoding="utf-8",
+        )
+        captured_stdout = io.StringIO()
+        with self.api_environment(), mock.patch.object(
+            ORCH_TOOLS.sys, "stderr", None
+        ), redirect_stdout(captured_stdout):
+            exit_code = ORCH_TOOLS._coordination_main(
+                [
+                    "run-open",
+                    "--repo",
+                    str(self.repo),
+                    "--run-id",
+                    run_id,
+                    "--scope",
+                    "src/**",
+                    "--record-json",
+                    str(record_path),
+                ]
+            )
+        target = self.run_dir(self.repo, run_id)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured_stdout.getvalue(), str(target) + "\n")
+        self.assertTrue(target.is_dir())
+
+    def test_legacy_open_broken_stderr_never_changes_durable_success(self) -> None:
+        class BrokenDiagnostic:
+            def write(self, _value: str) -> int:
+                raise OSError("diagnostic stream unavailable")
+
+            def flush(self) -> None:
+                raise OSError("diagnostic stream unavailable")
+
+        run_id = "run-20260910-legacy-open-broken-stderr"
+        record_path = Path(self.temporary.name) / "legacy-open-broken-stderr.json"
+        record_path.write_text(
+            json.dumps(
+                {
+                    "type": "run_started",
+                    "recorded_at": "2026-09-10T12:00:00Z",
+                    "run_id": run_id,
+                    "goal": "Keep a broken advisory stream from changing success",
+                    "repo": str(self.repo.resolve()),
+                    "repo_head": self.head,
+                    "repo_status": [],
+                    "plugin_ref": "forge-test-revision-9",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        captured_stdout = io.StringIO()
+        with self.api_environment(), mock.patch.object(
+            ORCH_TOOLS.sys, "stderr", BrokenDiagnostic()
+        ), redirect_stdout(captured_stdout):
+            exit_code = ORCH_TOOLS._coordination_main(
+                [
+                    "run-open",
+                    "--repo",
+                    str(self.repo),
+                    "--run-id",
+                    run_id,
+                    "--scope",
+                    "src/**",
+                    "--record-json",
+                    str(record_path),
+                ]
+            )
+        target = self.run_dir(self.repo, run_id)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured_stdout.getvalue(), str(target) + "\n")
+        self.assertTrue(target.is_dir())
 
     def test_activation_outbox_reserves_first_use_then_drains_exact_batch(
         self,
@@ -8229,6 +8833,115 @@ print("committed")
             text=True,
             stdin=subprocess.DEVNULL,
         )
+
+    def test_cli_legacy_open_notice_is_stderr_only_and_typed_open_is_quiet(
+        self,
+    ) -> None:
+        refused_run_id = "run-20260910-cli-raw-contract-refused"
+        refused_path = Path(self.temporary.name) / "raw-contract-refused.json"
+        refused_path.write_text(
+            json.dumps(
+                {
+                    "type": "run_started",
+                    "recorded_at": "2026-09-10T11:59:59Z",
+                    "run_id": refused_run_id,
+                    "goal": "Prove raw activation is refused",
+                    "repo": str(self.repo.resolve()),
+                    "repo_head": self.head,
+                    "repo_status": [],
+                    "plugin_ref": "forge-test-revision-9",
+                    "writer_contract": journal.WRITER_CONTRACT,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        refused = self.command(
+            "run-open",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            refused_run_id,
+            "--scope",
+            "src/**",
+            "--record-json",
+            str(refused_path),
+        )
+        self.assertEqual(refused.returncode, 1)
+        self.assertEqual(refused.stdout, "")
+        self.assertEqual(
+            refused.stderr,
+            "forge: run open refused — writer_contract is builder-injected; use "
+            "typed run-open: codex_orch_tools.py run-open --repo <repo> --run-id "
+            "<id> --idempotency-key <64-hex> --goal <goal> --plugin-ref "
+            "<plugin-ref> --scope <pathspec>\n",
+        )
+        self.assertFalse(
+            self.run_dir(self.repo, refused_run_id).parent.parent.exists()
+        )
+
+        legacy_run_id = "run-20260910-cli-legacy-open-notice"
+        opening_path = Path(self.temporary.name) / "legacy-open-notice.json"
+        opening_path.write_text(
+            json.dumps(
+                {
+                    "type": "run_started",
+                    "recorded_at": "2026-09-10T12:00:00Z",
+                    "run_id": legacy_run_id,
+                    "goal": "Prove legacy opening diagnostics",
+                    "repo": str(self.repo.resolve()),
+                    "repo_head": self.head,
+                    "repo_status": [],
+                    "plugin_ref": "forge-test-revision-9",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        legacy = self.command(
+            "run-open",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            legacy_run_id,
+            "--scope",
+            "src/**",
+            "--record-json",
+            str(opening_path),
+        )
+        self.assertEqual(legacy.returncode, 0, legacy.stderr)
+        self.assertEqual(
+            legacy.stdout,
+            str(self.run_dir(self.repo, legacy_run_id)) + "\n",
+        )
+        self.assertEqual(
+            legacy.stderr,
+            "forge: notice — run opened in legacy mode (no writer_contract); its "
+            "first typed mutation will activate it in place; prefer typed run-open\n",
+        )
+
+        typed_run_id = "run-20260910-cli-typed-open-no-notice"
+        typed = self.command(
+            "run-open",
+            "--repo",
+            str(self.repo),
+            "--run-id",
+            typed_run_id,
+            "--idempotency-key",
+            key("cli-typed-open-no-notice"),
+            "--goal",
+            "Prove typed opening stays quiet",
+            "--scope",
+            "docs/**",
+            "--plugin-ref",
+            "forge-test-revision-9",
+        )
+        self.assertEqual(typed.returncode, 0, typed.stderr)
+        self.assertEqual(typed.stderr, "")
+        self.assertEqual(typed.stdout.count("\n"), 1)
+        self.assertIsInstance(json.loads(typed.stdout), dict)
 
     def test_cli_singleton_and_idempotency_key_diagnostics(self) -> None:
         base = [

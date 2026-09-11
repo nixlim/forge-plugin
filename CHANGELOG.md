@@ -10,6 +10,30 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Legacy-run opening legibility (beads forge-plugin-khu, forge-plugin-2ev; GH#14/#18
+  carve-out sharing GH#17's root): a `run-open --record-json` record that carries any
+  caller-authored `writer_contract` now refuses before any repository access with one
+  legible literal naming the typed `run-open` remedy (the shared activated-writer
+  literal is unchanged at its other sites); a contract-less raw open still opens a
+  legacy run and prints exactly one stderr notice that its first typed mutation will
+  activate it in place; the spec's FR-019 and §8 `run-open` row name the typed form
+  as canonical and the record-JSON form as legacy/migration-only, with the refusal in
+  the matrix and the docs-contract inventory.
+- Chain start on a lock-less legacy run (bead forge-plugin-ayk, review-final MINOR on
+  the GH#17 chain): a run-bound `commit start` for a legacy run written by 0.6.10 (no
+  `.journal-batch.lock`) refused with the frozen-chain divergence literal; the engine
+  and chain store now validate the run, repository and owner with the existing
+  predicates, create and acquire the stable batch lock, and revalidate under the
+  batch → registry → journal order; nonexistent, foreign-owned or wrong-repository
+  runs still refuse without creating a lock; read-only validators stay non-creating;
+  run-bound `merge start` uses the same validated creation. The first chain-outbox
+  drain then activates a never-typed legacy run in place through the Revision-14
+  machinery (activation marker, receipt ledger at the journal origin), so verify,
+  review, finalize and later typed mutations proceed; a refused drain leaves the
+  chain, its events and the run journal byte-identical with no pending outbox; the
+  activation-lineage scan keeps receipt and carried-binding authentication for
+  commit-chain siblings. The legacy-open notice is emitted by the raw CLI surface
+  only. FR-230 evidence re-minted (engine, chain-store and merge-adapter subjects).
 - CI red at e7813cc (bead forge-plugin-eh2): the golden pre-fix wedge recovery test
   resolved the fixture's recorded host repository path through the terminal chain guard,
   so it errored on the GitHub runner where that path does not exist; the test now maps

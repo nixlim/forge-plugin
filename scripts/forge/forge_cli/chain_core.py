@@ -5724,6 +5724,1156 @@ def _merge_transition_valid(
     return True
 
 
+@dataclasses.dataclass(frozen=True)
+class _ReceiptRunSnapshot:
+    """Exact run surfaces authenticated without nesting an exclusive run lock."""
+
+    run_dir: Path
+    run_observation: object
+    lock_observation: object
+    names: frozenset[str]
+    journal_exact: object
+    receipts_exact: object
+    intent_exact: object
+
+
+@contextlib.contextmanager
+def _chain_receipt_snapshot_lock(run_dir: Path) -> Iterable[object]:
+    """Reuse the current run lock or bind a foreign run by exact snapshots.
+
+    Lineage authorization already holds its target run's exclusive lock.  A
+    second flock on a sibling run would permit an A->B/B->A deadlock.  Foreign
+    descriptors therefore never flock; callers bracket every read with exact
+    file, directory, and stable-lock identity snapshots and refuse on change.
+    """
+
+    batch, _builders, journal = runtime._coordination_modules()
+    key = os.path.abspath(os.fspath(run_dir))
+    active = batch._active_locks().get(key)
+    if active is not None:
+        batch._validate_batch_lock(active)
+        batch._validate_no_orphan_intent_temporary(active)
+        try:
+            yield active
+        finally:
+            batch._validate_no_orphan_intent_temporary(active)
+            batch._validate_batch_lock(active)
+        return
+
+    run_descriptor: int | None = None
+    lock_descriptor: int | None = None
+    try:
+        run_descriptor, run_observation = journal._open_strict_batch_directory(
+            run_dir, refusal=journal.BATCH_DIVERGED
+        )
+        _lock_stat, lock_observation = batch._validate_named_file(
+            run_descriptor, journal.BATCH_LOCK_NAME
+        )
+        lock_descriptor = os.open(
+            journal.BATCH_LOCK_NAME,
+            batch._safe_open_flags(os.O_RDONLY, nonblocking=True),
+            dir_fd=run_descriptor,
+        )
+        if not batch._same(os.fstat(lock_descriptor), lock_observation):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        locked = batch.BatchLock(
+            run_dir,
+            run_descriptor,
+            lock_descriptor,
+            lock_observation,
+        )
+        if (
+            journal._file_observation(os.fstat(run_descriptor))
+            != run_observation
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+        batch._validate_batch_lock(locked)
+        batch._validate_no_orphan_intent_temporary(locked)
+        try:
+            yield locked
+        finally:
+            batch._validate_no_orphan_intent_temporary(locked)
+            batch._validate_batch_lock(locked)
+    except journal.CoordinationRefusal:
+        raise
+    except (FileNotFoundError, OSError) as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+    finally:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+        if run_descriptor is not None:
+            os.close(run_descriptor)
+
+
+def _receipt_run_snapshot(locked: object) -> _ReceiptRunSnapshot:
+    """Capture every run surface consulted by receipt replay."""
+
+    batch, _builders, journal = runtime._coordination_modules()
+    batch._validate_batch_lock(locked)
+    batch._validate_no_orphan_intent_temporary(locked)
+    journal_exact = batch._optional_exact_named_file(locked, "journal.jsonl")
+    if journal_exact is None:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    snapshot = _ReceiptRunSnapshot(
+        run_dir=locked.run_dir,
+        run_observation=journal._file_observation(
+            os.fstat(locked.run_descriptor)
+        ),
+        lock_observation=locked.lock_observation,
+        names=frozenset(os.listdir(locked.run_descriptor)),
+        journal_exact=journal_exact,
+        receipts_exact=batch._optional_exact_named_file(
+            locked, journal.BATCH_RECEIPTS_NAME
+        ),
+        intent_exact=batch._optional_exact_named_file(
+            locked, journal.BATCH_INTENT_NAME
+        ),
+    )
+    if frozenset(os.listdir(locked.run_descriptor)) != snapshot.names:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    batch._validate_no_orphan_intent_temporary(locked)
+    batch._validate_batch_lock(locked)
+    return snapshot
+
+
+class _ChainReceiptSnapshotVerifier:
+    """Authenticate every sibling receipt against one closed run snapshot."""
+
+    def __init__(self, repository: Path) -> None:
+        self.repository = repository
+        self._snapshots: dict[str, _ReceiptRunSnapshot] = {}
+
+    def __call__(
+        self,
+        repository: Path,
+        chain_id: str,
+        state: dict[str, object],
+        pending: dict[str, object],
+        carried_records: tuple[dict[str, object], ...],
+        acknowledgement: dict[str, object],
+    ) -> None:
+        batch, builders, journal = runtime._coordination_modules()
+        run_binding = state.get("run_binding")
+        if (
+            repository != self.repository
+            or not isinstance(run_binding, dict)
+            or not builders._run_binding_valid(run_binding)
+            or run_binding.get("repository") != str(self.repository)
+        ):
+            raise builders._binding_replay_refusal()
+        run_id = run_binding.get("run_id")
+        if not journal._valid_run_id(run_id):
+            raise builders._binding_replay_refusal()
+        assert isinstance(run_id, str)
+        run_dir = (
+            builders.chain_storage_root(self.repository).parents[1]
+            / ".codex-orchestrator"
+            / "runs"
+            / run_id
+        )
+        key = os.path.abspath(os.fspath(run_dir))
+        try:
+            with _chain_receipt_snapshot_lock(run_dir) as locked:
+                before = _receipt_run_snapshot(locked)
+                previous = self._snapshots.get(key)
+                if previous is not None and before != previous:
+                    raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+                receipts, loaded_raw, loaded_observation = (
+                    batch._load_receipts_for_chain_replay(locked)
+                )
+                loaded_exact = (
+                    None
+                    if loaded_observation is None
+                    else journal.ExactFile(loaded_raw, loaded_observation)
+                )
+                matches = [
+                    receipt
+                    for receipt in receipts
+                    if receipt.get("idempotency_key")
+                    == pending.get("idempotency_key")
+                ]
+                if len(matches) != 1:
+                    raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+                receipt = matches[0]
+                batch.validate_pending_outbox_receipt(pending, receipt)
+                _, request_digest = batch.normalized_request(
+                    self.repository,
+                    run_id,
+                    "chain outbox-drain",
+                    {
+                        "chain_id": chain_id,
+                        "source_event_digest": pending["source_event_digest"],
+                        "batch_digest": pending["batch_digest"],
+                        "record_count": pending["record_count"],
+                    },
+                )
+                journal_records = batch._verify_receipt_journal(
+                    locked, receipt, expected_journal=before.journal_exact
+                )
+                if (
+                    loaded_exact != before.receipts_exact
+                    or receipt.get("request_sha256") != request_digest
+                    or b"".join(
+                        journal._journal_line(record)
+                        for record in journal_records
+                    )
+                    != b"".join(
+                        journal._journal_line(record)
+                        for record in carried_records
+                    )
+                    or acknowledgement.get("receipt_digest")
+                    != journal._sha256(
+                        journal._canonical_json_bytes(receipt) + b"\n"
+                    )
+                    or _receipt_run_snapshot(locked) != before
+                ):
+                    raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+                self._snapshots[key] = before
+        except journal.CoordinationRefusal as exc:
+            raise builders._binding_replay_refusal() from exc
+        except (KeyError, MemoryError, OSError) as exc:
+            raise builders._binding_replay_refusal() from exc
+
+    def recheck(self) -> None:
+        """Prove all sibling run snapshots stayed exact through chain replay."""
+
+        _batch, builders, journal = runtime._coordination_modules()
+        try:
+            for snapshot in self._snapshots.values():
+                with _chain_receipt_snapshot_lock(snapshot.run_dir) as locked:
+                    if _receipt_run_snapshot(locked) != snapshot:
+                        raise journal.CoordinationRefusal(
+                            journal.BATCH_DIVERGED
+                        )
+        except journal.CoordinationRefusal as exc:
+            raise builders._binding_replay_refusal() from exc
+        except (MemoryError, OSError) as exc:
+            raise builders._binding_replay_refusal() from exc
+
+
+@dataclasses.dataclass(frozen=True)
+class _ChainActivationSnapshot:
+    """One bounded, event-authoritative chain projection and its carrier."""
+
+    family: str
+    state: dict[str, object]
+    raw_events: bytes
+    raw_state: bytes
+    tail_records: tuple[dict[str, object], ...]
+    tail_source_event_digest: str | None
+
+
+def _resolve_chain_activation_snapshot(
+    repository: Path,
+    chains_descriptor: int,
+    chain_id: str,
+    *,
+    allow_pending: bool,
+    validate_lineage: bool,
+    verify_external: bool = True,
+    state_cap: int | None = None,
+    events_cap: int | None = None,
+    expected_binding: Mapping[str, object] | None = None,
+    receipt_verifier: _ChainReceiptSnapshotVerifier | None = None,
+) -> _ChainActivationSnapshot:
+    """Replay one bound chain for first-use reservation or authorization.
+
+    The shared builder remains authoritative for commit and historical merge
+    histories.  Revision-10 additive merge histories use the DM-014 replay
+    owned by this module; the shared Revision-9 transition validator cannot
+    consume their additive compatibility projection.
+    """
+
+    _batch, builders, journal = runtime._coordination_modules()
+    effective_state_cap = (
+        builders._ACTIVATION_STATE_CAP_BYTES
+        if state_cap is None
+        else state_cap
+    )
+    effective_events_cap = (
+        builders._ACTIVATION_EVENTS_CAP_BYTES
+        if events_cap is None
+        else events_cap
+    )
+    authority = builders._activation_event_one_binding_authority(
+        chains_descriptor, chain_id
+    )
+    try:
+        raw_events = builders._read_regular_bytes_at(
+            chains_descriptor,
+            f"{chain_id}.events.jsonl",
+            cap=effective_events_cap,
+        )
+        try:
+            first_event = json.loads(raw_events.splitlines()[0].decode("utf-8"))
+        except (IndexError, UnicodeError, ValueError, RecursionError) as exc:
+            raise builders._binding_replay_refusal() from exc
+        merge_history = bool(
+            isinstance(first_event, dict)
+            and first_event.get("schema") == "forge-merge-event/1"
+        )
+        if expected_binding is not None and (
+            authority is None
+            or authority[0] != ("merge" if merge_history else "commit")
+            or authority[1] != dict(expected_binding)
+        ):
+            raise builders._binding_replay_refusal()
+        if merge_history:
+            authority_binding = authority[1] if authority is not None else None
+            if authority is not None and authority[0] != "merge":
+                raise builders._binding_replay_refusal()
+            replay = _replay_merge_event_bytes(
+                chain_id,
+                raw_events,
+                verify_receipts=verify_external,
+                receipt_repository=repository,
+                expected_run_binding=(
+                    dict(expected_binding)
+                    if expected_binding is not None
+                    else authority_binding
+                    if isinstance(authority_binding, Mapping)
+                    else None
+                ),
+                receipt_verifier=receipt_verifier,
+            )
+            if receipt_verifier is not None:
+                receipt_verifier.recheck()
+            if _merge_history_uses_additive_grammar(replay.events):
+                raw_state = builders._read_regular_bytes_at(
+                    chains_descriptor,
+                    f"{chain_id}.json",
+                    cap=effective_state_cap,
+                )
+                try:
+                    materialized = json.loads(raw_state.decode("utf-8"))
+                except (UnicodeError, ValueError, RecursionError) as exc:
+                    raise builders._binding_replay_refusal() from exc
+                if (
+                    raw_state != canonical_bytes(replay.state) + b"\n"
+                    or materialized != replay.state
+                ):
+                    raise builders._binding_replay_refusal()
+                replay_binding = replay.state.get("run_binding")
+                if expected_binding is not None:
+                    if (
+                        authority is None
+                        or not isinstance(replay_binding, dict)
+                        or replay_binding != dict(expected_binding)
+                        or authority_binding != replay_binding
+                    ):
+                        raise builders._binding_replay_refusal()
+                elif replay_binding is not None:
+                    if (
+                        not isinstance(replay_binding, dict)
+                        or not builders._run_binding_valid(replay_binding)
+                        or replay_binding.get("repository") != str(repository)
+                        or authority_binding != replay_binding
+                    ):
+                        raise builders._binding_replay_refusal()
+                elif authority is not None and authority_binding is not None:
+                    raise builders._binding_replay_refusal()
+                if (
+                    replay.state.get("journal_outbox") is not None
+                    and not allow_pending
+                ):
+                    raise journal.CoordinationRefusal(builders.JOURNAL_OUTBOX_PENDING)
+                if validate_lineage:
+                    _validate_chain_activation_lineage(
+                        repository,
+                        chains_descriptor,
+                        chain_id,
+                        replay.state,
+                        raw_events=raw_events,
+                        raw_state=raw_state,
+                    )
+                if (
+                    builders._read_regular_bytes_at(
+                        chains_descriptor,
+                        f"{chain_id}.events.jsonl",
+                        cap=effective_events_cap,
+                    )
+                    != raw_events
+                ):
+                    raise builders._binding_replay_refusal()
+                if receipt_verifier is not None:
+                    receipt_verifier.recheck()
+                tail = replay.entries[-1]
+                return _ChainActivationSnapshot(
+                    family="merge",
+                    state=copy.deepcopy(replay.state),
+                    raw_events=raw_events,
+                    raw_state=raw_state,
+                    tail_records=tuple(copy.deepcopy(tail[3])),
+                    tail_source_event_digest=tail[4],
+                )
+
+        builder_verify_external = verify_external and (
+            receipt_verifier is None or not merge_history
+        )
+        builder_receipt_verifier = (
+            receipt_verifier
+            if verify_external and not merge_history
+            else None
+        )
+        replayed = builders._resolve_binding_from_descriptor(
+            repository,
+            chains_descriptor,
+            chain_id,
+            ZERO_DIGEST,
+            expected_type=None,
+            expected_fields=None,
+            expected_run_id=None,
+            expected_task_id=None,
+            replay_only=True,
+            allow_pending=allow_pending,
+            validate_lineage=False,
+            verify_external=builder_verify_external,
+            receipt_verifier=builder_receipt_verifier,
+            resolve_tombstone=False,
+            state_cap=effective_state_cap,
+            events_cap=effective_events_cap,
+        )
+        rebound_events = builders._read_regular_bytes_at(
+            chains_descriptor,
+            f"{chain_id}.events.jsonl",
+            cap=effective_events_cap,
+        )
+        raw_state = builders._read_regular_bytes_at(
+            chains_descriptor,
+            f"{chain_id}.json",
+            cap=effective_state_cap,
+        )
+        family = replayed.get("kind")
+        binding = replayed.get("run_binding")
+        if (
+            raw_events != rebound_events
+            or raw_state != canonical_bytes(replayed) + b"\n"
+            or family not in {"commit", "merge"}
+            or (
+                authority is not None
+                and (authority[0] != family or authority[1] != binding)
+            )
+            or (binding is not None and authority is None)
+            or (
+                binding is not None
+                and (
+                    not isinstance(binding, dict)
+                    or not builders._run_binding_valid(binding)
+                    or binding.get("repository") != str(repository)
+                )
+            )
+            or (
+                expected_binding is not None
+                and (
+                    authority is None
+                    or binding != dict(expected_binding)
+                )
+            )
+        ):
+            raise builders._binding_replay_refusal()
+        try:
+            tail_event = json.loads(raw_events.splitlines()[-1].decode("utf-8"))
+        except (IndexError, UnicodeError, ValueError, RecursionError) as exc:
+            raise builders._binding_replay_refusal() from exc
+        if not isinstance(tail_event, dict):
+            raise builders._binding_replay_refusal()
+        tail_records, _tail_outbox, tail_source = builders._event_batch_records(
+            tail_event, str(family)
+        )
+        if family == "merge" and validate_lineage:
+            _validate_chain_activation_lineage(
+                repository,
+                chains_descriptor,
+                chain_id,
+                replayed,
+                raw_events=raw_events,
+                raw_state=raw_state,
+            )
+        if receipt_verifier is not None:
+            receipt_verifier.recheck()
+        return _ChainActivationSnapshot(
+            family=str(family),
+            state=copy.deepcopy(replayed),
+            raw_events=raw_events,
+            raw_state=raw_state,
+            tail_records=tuple(copy.deepcopy(tail_records)),
+            tail_source_event_digest=tail_source,
+        )
+    except journal.CoordinationRefusal:
+        raise
+    except (FrozenError, MemoryError, OSError) as exc:
+        raise builders._binding_replay_refusal() from exc
+
+
+def _resolve_chain_activation_projection(
+    repository: Path,
+    chains_descriptor: int,
+    chain_id: str,
+    *,
+    allow_pending: bool,
+    validate_lineage: bool,
+    verify_external: bool = True,
+    state_cap: int | None = None,
+    events_cap: int | None = None,
+    expected_binding: Mapping[str, object] | None = None,
+    receipt_verifier: _ChainReceiptSnapshotVerifier | None = None,
+) -> dict[str, object]:
+    """Return the state from one exact activation replay snapshot."""
+
+    return _resolve_chain_activation_snapshot(
+        repository,
+        chains_descriptor,
+        chain_id,
+        allow_pending=allow_pending,
+        validate_lineage=validate_lineage,
+        verify_external=verify_external,
+        state_cap=state_cap,
+        events_cap=events_cap,
+        expected_binding=expected_binding,
+        receipt_verifier=receipt_verifier,
+    ).state
+
+
+def _chain_activation_ownership_summary(
+    repository: Path,
+    chains_descriptor: int,
+    chain_id: str,
+    *,
+    receipt_verifier: _ChainReceiptSnapshotVerifier | None = None,
+) -> dict[str, object]:
+    """Return one bounded ownership summary through the current grammar."""
+
+    _batch, builders, _journal = runtime._coordination_modules()
+    owns_verifier = receipt_verifier is None
+    if receipt_verifier is None:
+        receipt_verifier = _ChainReceiptSnapshotVerifier(repository)
+    snapshot = _resolve_chain_activation_snapshot(
+        repository,
+        chains_descriptor,
+        chain_id,
+        allow_pending=True,
+        validate_lineage=False,
+        verify_external=True,
+        state_cap=builders._ACTIVATION_STATE_CAP_BYTES,
+        events_cap=builders._ACTIVATION_EVENTS_CAP_BYTES,
+        receipt_verifier=receipt_verifier,
+    )
+    if snapshot.family == "commit":
+        summary = {
+            "family": "commit",
+            "snapshot_event_digest": hashlib.sha256(
+                snapshot.raw_events
+            ).hexdigest(),
+            "snapshot_state": copy.deepcopy(snapshot.state),
+        }
+        if owns_verifier:
+            receipt_verifier.recheck()
+        return summary
+    try:
+        events = tuple(
+            json.loads(line.decode("utf-8"))
+            for line in snapshot.raw_events.splitlines(keepends=False)
+        )
+        if not all(isinstance(event, dict) for event in events):
+            raise ValueError("merge ownership event is not an object")
+        summary = builders._merge_ownership_summary(
+            chain_id,
+            snapshot.state,
+            events,
+            snapshot.raw_events,
+        )
+        if owns_verifier:
+            receipt_verifier.recheck()
+        return summary
+    except (
+        UnicodeError,
+        ValueError,
+        RecursionError,
+        MemoryError,
+        _journal.CoordinationRefusal,
+    ) as exc:
+        raise builders._binding_replay_refusal() from exc
+
+
+def _validate_chain_activation_lineage(
+    repository: Path,
+    chains_descriptor: int,
+    chain_id: str,
+    state: dict[str, object],
+    *,
+    raw_events: bytes,
+    raw_state: bytes,
+) -> None:
+    """Apply DM-014's bounded ownership graph to either merge grammar."""
+
+    _batch, builders, journal = runtime._coordination_modules()
+    current_worktree = builders._merge_worktree_claim(state)
+    if current_worktree is None:
+        raise builders._binding_replay_refusal()
+    current_identity = {
+        name: current_worktree[0][name]
+        for name in ("path", "git_dir", "common_dir")
+    }
+    try:
+        names = builders._activation_chain_names(chains_descriptor)
+    except OSError as exc:
+        raise builders._binding_replay_refusal() from exc
+    relevant_names = frozenset(
+        name
+        for name in names
+        if (
+            name.endswith(".events.jsonl")
+            and journal.CHAIN_ID_PATTERN.fullmatch(
+                name.removesuffix(".events.jsonl")
+            )
+            is not None
+        )
+        or (
+            name.endswith(".json")
+            and journal.CHAIN_ID_PATTERN.fullmatch(name.removesuffix(".json"))
+            is not None
+        )
+    )
+    chain_ids = sorted(
+        {
+            candidate_id
+            for name in relevant_names
+            for candidate_id in (
+                name.removesuffix(".events.jsonl")
+                if name.endswith(".events.jsonl")
+                else name.removesuffix(".json")
+                if name.endswith(".json")
+                else "",
+            )
+            if journal.CHAIN_ID_PATTERN.fullmatch(candidate_id) is not None
+        }
+    )
+    if chain_id not in chain_ids:
+        raise builders._binding_replay_refusal()
+    cap = len(chain_ids)
+    summaries: dict[str, dict[str, object]] = {}
+    snapshots: dict[str, dict[str, object]] = {}
+    receipt_verifier = _ChainReceiptSnapshotVerifier(repository)
+    for candidate_id in chain_ids:
+        try:
+            summary = _chain_activation_ownership_summary(
+                repository,
+                chains_descriptor,
+                candidate_id,
+                receipt_verifier=receipt_verifier,
+            )
+        except (journal.CoordinationRefusal, MemoryError) as exc:
+            raise builders._binding_replay_refusal() from exc
+        snapshots[candidate_id] = summary
+        if summary.get("family") == "commit":
+            continue
+        if summary.get("identity") == current_identity:
+            summaries[candidate_id] = summary
+    current = summaries.get(chain_id)
+    if (
+        current is None
+        or current.get("chain_id") != chain_id
+        or current.get("snapshot_event_digest")
+        != hashlib.sha256(raw_events).hexdigest()
+        or current.get("snapshot_state") != state
+        or canonical_bytes(current.get("snapshot_state")) + b"\n" != raw_state
+    ):
+        raise builders._binding_replay_refusal()
+    current_is_durable_predecessor = bool(
+        current.get("terminal") is True
+        and current.get("claim_status") == "released"
+    )
+
+    acquired = {
+        name: summary
+        for name, summary in summaries.items()
+        if summary.get("acquired") is True
+    }
+    children: dict[tuple[object, object], list[str]] = {}
+    for name, summary in acquired.items():
+        predecessor = (
+            summary.get("predecessor_chain_id"),
+            summary.get("predecessor_release_digest"),
+        )
+        children.setdefault(predecessor, []).append(name)
+        predecessor_chain, predecessor_digest = predecessor
+        if predecessor_chain is None:
+            if predecessor_digest is not None:
+                raise builders._binding_replay_refusal()
+            continue
+        predecessor_summary = acquired.get(str(predecessor_chain))
+        if not current_is_durable_predecessor and (
+            predecessor_summary is None
+            or predecessor_summary.get("released_digest") != predecessor_digest
+            or predecessor_summary.get("terminal") is not True
+            or predecessor_summary.get("claim_status") != "released"
+            or predecessor_summary.get("identity") != current_identity
+        ):
+            raise builders._binding_replay_refusal()
+
+    cursor: dict[str, object] | None = current
+    visited: set[str] = set()
+    for _ in range(cap + 1):
+        if cursor is None:
+            break
+        predecessor_chain = cursor.get("predecessor_chain_id")
+        predecessor_digest = cursor.get("predecessor_release_digest")
+        if predecessor_chain is None:
+            if predecessor_digest is not None:
+                raise builders._binding_replay_refusal()
+            cursor = None
+            break
+        if not isinstance(predecessor_chain, str) or predecessor_chain in visited:
+            raise builders._binding_replay_refusal()
+        visited.add(predecessor_chain)
+        predecessor = acquired.get(predecessor_chain)
+        if (
+            predecessor is None
+            or predecessor.get("released_digest") != predecessor_digest
+            or predecessor.get("terminal") is not True
+        ):
+            raise builders._binding_replay_refusal()
+        cursor = predecessor
+    if cursor is not None:
+        raise builders._binding_replay_refusal()
+
+    if not current_is_durable_predecessor:
+        if any(len(values) > 1 for values in children.values()):
+            raise builders._binding_replay_refusal()
+        others = {
+            name: value for name, value in acquired.items() if name != chain_id
+        }
+        parent_names = {
+            str(value.get("predecessor_chain_id"))
+            for value in others.values()
+            if value.get("predecessor_chain_id") is not None
+        }
+        tails = [
+            value
+            for name, value in others.items()
+            if name not in parent_names
+            and value.get("terminal") is True
+            and value.get("released_digest") is not None
+        ]
+        expected = (
+            (None, None)
+            if not others
+            else (
+                (tails[0].get("chain_id"), tails[0].get("released_digest"))
+                if len(tails) == 1
+                else None
+            )
+        )
+        observed = (
+            current.get("predecessor_chain_id"),
+            current.get("predecessor_release_digest"),
+        )
+        if expected is None or observed != expected:
+            raise builders._binding_replay_refusal()
+    else:
+        current_edge = (
+            current.get("predecessor_chain_id"),
+            current.get("predecessor_release_digest"),
+        )
+        terminal_siblings = [
+            name
+            for name in children.get(current_edge, [])
+            if name != chain_id
+            and acquired[name].get("terminal") is True
+            and acquired[name].get("claim_status") == "released"
+        ]
+        if terminal_siblings:
+            raise builders._binding_replay_refusal()
+
+    for candidate_id, snapshot in snapshots.items():
+        try:
+            raw_events = builders._read_regular_bytes_at(
+                chains_descriptor,
+                f"{candidate_id}.events.jsonl",
+                cap=builders._ACTIVATION_EVENTS_CAP_BYTES,
+            )
+            raw_state = builders._read_regular_bytes_at(
+                chains_descriptor,
+                f"{candidate_id}.json",
+                cap=builders._ACTIVATION_STATE_CAP_BYTES,
+            )
+        except (journal.CoordinationRefusal, MemoryError) as exc:
+            raise builders._binding_replay_refusal() from exc
+        if (
+            hashlib.sha256(raw_events).hexdigest()
+            != snapshot.get("snapshot_event_digest")
+            or raw_state
+            != canonical_bytes(snapshot.get("snapshot_state")) + b"\n"
+        ):
+            raise builders._binding_replay_refusal()
+    try:
+        final_names = builders._activation_chain_names(chains_descriptor)
+    except OSError as exc:
+        raise builders._binding_replay_refusal() from exc
+    final_relevant_names = frozenset(
+        name
+        for name in final_names
+        if (
+            name.endswith(".events.jsonl")
+            and journal.CHAIN_ID_PATTERN.fullmatch(
+                name.removesuffix(".events.jsonl")
+            )
+            is not None
+        )
+        or (
+            name.endswith(".json")
+            and journal.CHAIN_ID_PATTERN.fullmatch(name.removesuffix(".json"))
+            is not None
+        )
+    )
+    if final_relevant_names != relevant_names:
+        raise builders._binding_replay_refusal()
+    receipt_verifier.recheck()
+
+
+def _require_no_pending_chain_activation_outbox(
+    repository: Path, run_id: str
+) -> None:
+    """Reserve legacy first use across commit and additive merge outboxes."""
+
+    _batch, builders, journal = runtime._coordination_modules()
+    chains_root = builders.chain_storage_root(repository)
+    descriptor: int | None = None
+    try:
+        descriptor, root_observation = journal._open_bound_directory(chains_root)
+        names = builders._activation_chain_names(descriptor)
+        if (
+            journal._file_observation(os.fstat(descriptor)) != root_observation
+            or journal._file_observation(os.lstat(chains_root)) != root_observation
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    except FileNotFoundError:
+        return
+    except journal.CoordinationRefusal:
+        raise
+    except OSError as exc:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
+
+    try:
+        warned: set[str] = set()
+
+        def warn_unreadable(chain_id: str, family: str = "activation") -> None:
+            if chain_id in warned:
+                return
+            warned.add(chain_id)
+            print(
+                "forge: warning — skipped unreadable chain "
+                f"{chain_id} while enumerating {family} chains",
+                file=sys.stderr,
+            )
+
+        def bound_materialized_states(
+            observed_names: Iterable[str],
+        ) -> dict[str, object]:
+            state_ids = {
+                name[:-5]
+                for name in observed_names
+                if name.endswith(".json")
+                and journal.CHAIN_ID_PATTERN.fullmatch(name[:-5]) is not None
+            }
+            event_ids = {
+                name[: -len(".events.jsonl")]
+                for name in observed_names
+                if name.endswith(".events.jsonl")
+                and journal.CHAIN_ID_PATTERN.fullmatch(
+                    name[: -len(".events.jsonl")]
+                )
+                is not None
+            }
+            bound: dict[str, object] = {}
+            for chain_id in sorted(state_ids | event_ids, key=os.fsencode):
+                authority = (
+                    builders._activation_event_one_binding_authority(
+                        descriptor, chain_id
+                    )
+                    if chain_id in event_ids
+                    else None
+                )
+                authority_family, authority_binding = (
+                    authority if authority is not None else ("activation", None)
+                )
+                authority_targets_run = builders._activation_chain_bound_to_run(
+                    authority_binding, repository, run_id
+                )
+                if chain_id not in state_ids:
+                    if authority_targets_run:
+                        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+                    warn_unreadable(chain_id, authority_family)
+                    continue
+                try:
+                    state = builders._read_json_at(
+                        descriptor,
+                        f"{chain_id}.json",
+                        cap=builders._ACTIVATION_STATE_CAP_BYTES,
+                    )
+                except journal.CoordinationRefusal as exc:
+                    if authority_targets_run:
+                        raise journal.CoordinationRefusal(
+                            journal.BATCH_DIVERGED
+                        ) from exc
+                    warn_unreadable(chain_id, authority_family)
+                    continue
+                if not isinstance(state, dict):
+                    if authority_targets_run:
+                        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+                    warn_unreadable(chain_id)
+                    continue
+                family = (
+                    str(state["kind"])
+                    if state.get("kind") in {"commit", "merge"}
+                    else "activation"
+                )
+                binding = state.get("run_binding")
+                state_targets_run = builders._activation_chain_bound_to_run(
+                    binding, repository, run_id
+                )
+                if authority is None:
+                    if state_targets_run:
+                        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+                    warn_unreadable(chain_id, family)
+                    continue
+                if (
+                    family != authority_family
+                    or binding != authority_binding
+                ):
+                    if authority_targets_run or state_targets_run:
+                        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+                    warn_unreadable(chain_id, family)
+                    continue
+                if authority_targets_run:
+                    bound[chain_id] = copy.deepcopy(authority_binding)
+            return bound
+
+        bound = bound_materialized_states(names)
+        for chain_id in sorted(bound, key=os.fsencode):
+            binding = bound[chain_id]
+            try:
+                replayed = _resolve_chain_activation_projection(
+                    repository,
+                    descriptor,
+                    chain_id,
+                    allow_pending=True,
+                    validate_lineage=False,
+                    state_cap=builders._ACTIVATION_STATE_CAP_BYTES,
+                    events_cap=builders._ACTIVATION_EVENTS_CAP_BYTES,
+                    expected_binding=(
+                        binding if isinstance(binding, Mapping) else None
+                    ),
+                )
+            except (journal.CoordinationRefusal, MemoryError) as exc:
+                raise journal.CoordinationRefusal(
+                    journal.BATCH_DIVERGED
+                ) from exc
+            if replayed.get("run_binding") != binding:
+                raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+            if replayed.get("journal_outbox") is not None:
+                raise journal.CoordinationRefusal(
+                    builders.JOURNAL_OUTBOX_PENDING
+                )
+
+        final_names = builders._activation_chain_names(descriptor)
+        final_bound = bound_materialized_states(final_names)
+        required_artifacts = {
+            artifact
+            for chain_id in final_bound
+            for artifact in (
+                f"{chain_id}.json",
+                f"{chain_id}.events.jsonl",
+            )
+        }
+        if (
+            journal._file_observation(os.fstat(descriptor)) != root_observation
+            or journal._file_observation(os.lstat(chains_root)) != root_observation
+            or not builders._activation_bound_set_stable(bound, final_bound)
+            or not required_artifacts.issubset(final_names)
+        ):
+            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _prepare_merge_activation_preamble(
+    repository: Path, state: Any
+) -> tuple[dict[str, object], ...]:
+    """Construct one authenticated additive-merge first-use preamble."""
+
+    batch, builders, journal = runtime._coordination_modules()
+    run_dir = getattr(state, "run_dir", None)
+    active = batch._active_locks().get(os.path.abspath(os.fspath(run_dir)))
+    if active is None:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    if (
+        batch._validate_no_orphan_intent_temporary(active) is not None
+        or batch._load_intent(active) is not None
+    ):
+        raise journal.CoordinationRefusal(journal.BATCH_PENDING)
+    _require_no_pending_chain_activation_outbox(repository, state.run_id)
+    origin, origin_sha256 = batch._legacy_activation_origin_locked(active)
+    marker = builders._writer_activation_decision(
+        state,
+        receipt_origin_size=origin,
+        receipt_origin_sha256=origin_sha256,
+    )
+    return batch._activation_preamble_records(
+        active,
+        state,
+        repository,
+        (marker,),
+        carried=True,
+    )
+
+
+def _prevalidate_chain_batch_carrier(
+    state: Mapping[str, Any],
+    pending_outbox: Mapping[str, Any],
+    carried_records: Sequence[dict[str, Any]],
+) -> None:
+    """Validate and bootstrap one commit carrier before it becomes durable.
+
+    The outer run lock is already held by ``ChainStore.persist``.  Complete
+    every deterministic run/record check, then create and rebind a legacy
+    receipt ledger while the prospective event still exists only in memory.
+    The ordinary drain repeats these checks against the durable carrier.
+    """
+
+    batch, builders, journal = runtime._coordination_modules()
+    binding = state.get("run_binding")
+    records = tuple(carried_records)
+    if (
+        not isinstance(binding, Mapping)
+        or not builders._run_binding_valid(dict(binding))
+        or not records
+        or not all(isinstance(record, dict) for record in records)
+    ):
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    repository = Path(str(binding["repository"]))
+    run_id = str(binding["run_id"])
+    batch_bytes = b"".join(journal._journal_line(record) for record in records)
+    expected_outbox = {
+        "idempotency_key": pending_outbox.get("source_event_digest"),
+        "batch_digest": journal._sha256(batch_bytes),
+        "record_count": len(records),
+        "source_event_digest": pending_outbox.get("source_event_digest"),
+    }
+    if (
+        dict(pending_outbox) != expected_outbox
+        or state.get("journal_outbox") != expected_outbox
+    ):
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+
+    _canonical_repository, state_root = journal._resolve_repository(
+        repository, "journal batch"
+    )
+    run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
+    active = batch._active_locks().get(os.path.abspath(os.fspath(run_dir)))
+    if active is None:
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+
+    # Mirror execute_existing_batch's read-only schema/lifecycle phases before
+    # the carrier exists.  Binding authentication itself is supplied by the
+    # prospective event replay in ChainStore.persist below.
+    batch._validate_batch_lock(active)
+    batch._validate_no_orphan_intent_temporary(active)
+    if batch._load_intent(active) is not None:
+        raise journal.CoordinationRefusal(journal.BATCH_PENDING)
+    journal_exact = batch._optional_exact_named_file(active, "journal.jsonl")
+    if journal_exact is None:
+        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
+    run_state = journal._scan_run(
+        run_dir,
+        raw=journal_exact.payload,
+        directory_observation=journal._file_observation(
+            os.fstat(active.run_descriptor)
+        ),
+        journal_observation=journal_exact.observation,
+    )
+    if (
+        run_state.run_id != run_id
+        or binding.get("task_id") not in {
+            record.get("id")
+            for record in run_state.records
+            if record.get("type") == "task"
+            and record.get("status") == "active"
+        }
+        or journal._recorded_repository_root(
+            run_state.run_dir, state_root, records=run_state.records
+        )
+        != _canonical_repository
+    ):
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    batch._validate_target_lifecycle(run_state, close=False)
+    journal._classify_owner(
+        run_state,
+        batch._read_only_session_owner(),
+        adopt_missing=run_state.pre_coordination,
+    )
+    for record in records:
+        journal._validate_record_envelope(record)
+    batch._prevalidate_records(
+        _canonical_repository,
+        run_state,
+        records,
+        close=False,
+        defer_binding=True,
+    )
+
+    try:
+        if (
+            batch._activation_preamble_records(
+                active,
+                run_state,
+                _canonical_repository,
+                records,
+                carried=True,
+            )
+            != records
+        ):
+            raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+        receipts_exact = batch._optional_exact_named_file(
+            active, journal.BATCH_RECEIPTS_NAME
+        )
+        if receipts_exact is None:
+            if not batch._legacy_batch_first_use(active.run_descriptor):
+                raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+            created = batch._ensure_receipt_ledger(active)
+            receipts_exact = batch._optional_exact_named_file(
+                active, journal.BATCH_RECEIPTS_NAME
+            )
+            if receipts_exact != journal.ExactFile(b"", created):
+                raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+        _receipts, receipts_raw, receipts_observation = batch._load_receipts(
+            active
+        )
+        if (
+            receipts_exact
+            != journal.ExactFile(receipts_raw, receipts_observation)
+            or batch._optional_exact_named_file(active, "journal.jsonl")
+            != journal_exact
+            or batch._load_intent(active) is not None
+            or batch._activation_preamble_records(
+                active,
+                run_state,
+                _canonical_repository,
+                records,
+                carried=True,
+            )
+            != records
+        ):
+            raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+        batch._validate_no_orphan_intent_temporary(active)
+        batch._validate_batch_lock(active)
+    except (OSError, FrozenError, journal.CoordinationRefusal) as exc:
+        raise journal.CoordinationRefusal(
+            journal.INVALID_JOURNAL_RECORD
+        ) from exc
+
+
 def _authorize_chain_batch(**arguments: Any) -> object:
     """Exchange one process-local opaque capability for task-03 authority."""
 
@@ -5749,6 +6899,8 @@ def _authorize_chain_batch(**arguments: Any) -> object:
         "run_id",
         "task_id",
         "chain_id",
+        "run_binding",
+        "pending_outbox",
         "source_event_digest",
         "records",
     }
@@ -5766,59 +6918,166 @@ def _authorize_chain_batch(**arguments: Any) -> object:
 
     repository = Path(str(authority["repository"]))
     chain_id = str(authority["chain_id"])
+    run_binding = authority["run_binding"]
+    pending_outbox = authority["pending_outbox"]
+    records = tuple(authority["records"])
+    source_event_digest = authority["source_event_digest"]
+    if (
+        not isinstance(run_binding, dict)
+        or not builders._run_binding_valid(run_binding)
+        or run_binding
+        != {
+            "run_id": authority["run_id"],
+            "task_id": authority["task_id"],
+            "repository": str(repository),
+            "policy_digest": run_binding.get("policy_digest"),
+        }
+        or not isinstance(pending_outbox, dict)
+        or not isinstance(source_event_digest, str)
+        or journal.HEX_SHA256_PATTERN.fullmatch(source_event_digest) is None
+        or not records
+        or not all(isinstance(record, dict) for record in records)
+    ):
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+    batch_bytes = b"".join(journal._journal_line(record) for record in records)
+    expected_outbox = {
+        "idempotency_key": source_event_digest,
+        "batch_digest": journal._sha256(batch_bytes),
+        "record_count": len(records),
+        "source_event_digest": source_event_digest,
+    }
+    if pending_outbox != expected_outbox:
+        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+
     chains_root = _chain_storage_root(repository)
     chains_descriptor: int | None = None
     try:
         chains_descriptor, chains_observation = journal._open_bound_directory(
             chains_root
         )
-        replayed = builders._resolve_binding_from_descriptor(
-            repository,
-            chains_descriptor,
+        with builders._chain_event_lock(
+            chains_root,
             chain_id,
-            "0" * 64,
-            expected_type=None,
-            expected_fields=None,
-            expected_run_id=None,
-            expected_task_id=None,
-            replay_only=True,
-            allow_pending=True,
-        )
-        binding = replayed.get("run_binding")
-        pending = replayed.get("journal_outbox")
-        if (
-            not isinstance(binding, dict)
-            or binding.get("run_id") != authority["run_id"]
-            or binding.get("task_id") != authority["task_id"]
-            or binding.get("repository") != str(repository)
-            or not isinstance(pending, dict)
-            or pending.get("source_event_digest")
-            != authority["source_event_digest"]
-            or journal._file_observation(os.fstat(chains_descriptor))
-            != chains_observation
-            or journal._file_observation(os.lstat(chains_root))
-            != chains_observation
+            root_descriptor=chains_descriptor,
+            root_observation=chains_observation,
         ):
-            raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
+            snapshot = _resolve_chain_activation_snapshot(
+                repository,
+                chains_descriptor,
+                chain_id,
+                allow_pending=True,
+                validate_lineage=True,
+                state_cap=builders._ACTIVATION_STATE_CAP_BYTES,
+                events_cap=builders._ACTIVATION_EVENTS_CAP_BYTES,
+                expected_binding=run_binding,
+            )
+            if (
+                snapshot.state.get("run_binding") != run_binding
+                or snapshot.state.get("journal_outbox") != expected_outbox
+                or snapshot.tail_records != records
+                or snapshot.tail_source_event_digest != source_event_digest
+                or journal._file_observation(os.fstat(chains_descriptor))
+                != chains_observation
+                or journal._file_observation(os.lstat(chains_root))
+                != chains_observation
+            ):
+                raise journal.CoordinationRefusal(
+                    journal.INVALID_JOURNAL_RECORD
+                )
+
+            _canonical_repository, state_root = journal._resolve_repository(
+                repository, "journal batch"
+            )
+            run_dir = (
+                state_root
+                / ".codex-orchestrator"
+                / "runs"
+                / str(authority["run_id"])
+            )
+            active = batch._active_locks().get(
+                os.path.abspath(os.fspath(run_dir))
+            )
+            if active is None:
+                raise journal.CoordinationRefusal(
+                    journal.INVALID_JOURNAL_RECORD
+                )
+            journal_exact = batch._optional_exact_named_file(
+                active, "journal.jsonl"
+            )
+            receipts_exact = batch._optional_exact_named_file(
+                active, journal.BATCH_RECEIPTS_NAME
+            )
+            if journal_exact is None:
+                raise journal.CoordinationRefusal(
+                    journal.INVALID_JOURNAL_RECORD
+                )
+            state = journal._scan_run(run_dir, raw=journal_exact.payload)
+            if (
+                batch._activation_preamble_records(
+                    active,
+                    state,
+                    repository,
+                    records,
+                    carried=True,
+                )
+                != records
+            ):
+                raise journal.CoordinationRefusal(
+                    journal.INVALID_JOURNAL_RECORD
+                )
+            if receipts_exact is None:
+                if (
+                    not batch._legacy_batch_first_use(active.run_descriptor)
+                ):
+                    raise journal.CoordinationRefusal(
+                        journal.INVALID_JOURNAL_RECORD
+                    )
+                rebound_snapshot = _resolve_chain_activation_snapshot(
+                    repository,
+                    chains_descriptor,
+                    chain_id,
+                    allow_pending=True,
+                    validate_lineage=True,
+                    state_cap=builders._ACTIVATION_STATE_CAP_BYTES,
+                    events_cap=builders._ACTIVATION_EVENTS_CAP_BYTES,
+                    expected_binding=run_binding,
+                )
+                if rebound_snapshot != snapshot:
+                    raise journal.CoordinationRefusal(
+                        journal.INVALID_JOURNAL_RECORD
+                    )
+                created = batch._ensure_receipt_ledger(active)
+                receipts_exact = batch._optional_exact_named_file(
+                    active, journal.BATCH_RECEIPTS_NAME
+                )
+                rebound_journal = batch._optional_exact_named_file(
+                    active, "journal.jsonl"
+                )
+                final_snapshot = _resolve_chain_activation_snapshot(
+                    repository,
+                    chains_descriptor,
+                    chain_id,
+                    allow_pending=True,
+                    validate_lineage=True,
+                    state_cap=builders._ACTIVATION_STATE_CAP_BYTES,
+                    events_cap=builders._ACTIVATION_EVENTS_CAP_BYTES,
+                    expected_binding=run_binding,
+                )
+                if (
+                    receipts_exact != journal.ExactFile(b"", created)
+                    or rebound_journal != journal_exact
+                    or final_snapshot != snapshot
+                ):
+                    raise journal.CoordinationRefusal(
+                        journal.INVALID_JOURNAL_RECORD
+                    )
+    except (OSError, FrozenError, journal.CoordinationRefusal) as exc:
+        raise journal.CoordinationRefusal(
+            journal.INVALID_JOURNAL_RECORD
+        ) from exc
     finally:
         if chains_descriptor is not None:
             os.close(chains_descriptor)
-
-    _canonical_repository, state_root = journal._resolve_repository(
-        repository, "journal batch"
-    )
-    run_dir = state_root / ".codex-orchestrator" / "runs" / str(authority["run_id"])
-    active = batch._active_locks().get(os.path.abspath(os.fspath(run_dir)))
-    if active is None:
-        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-    journal_exact = batch._optional_exact_named_file(active, "journal.jsonl")
-    receipts_exact = batch._optional_exact_named_file(
-        active, journal.BATCH_RECEIPTS_NAME
-    )
-    if journal_exact is None or receipts_exact is None:
-        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-    records = tuple(authority["records"])
-    batch_bytes = b"".join(journal._journal_line(record) for record in records)
     _, request_sha256 = batch.normalized_request(
         repository,
         str(authority["run_id"]),
@@ -8066,10 +9325,38 @@ def _ingest_proof_verifier(
     return _verify_and_build_ingest_records(repository, run_id, inputs)
 
 
+def register_activation_reservation_seam() -> None:
+    """Install the grammar-aware first-use scanner without healing other seams."""
+
+    batch, builders, _journal = runtime._coordination_modules()
+    existing_scanner = builders._require_no_pending_activation_outbox
+    original_scanner = getattr(
+        builders, "_FORGE_CLI_ORIGINAL_ACTIVATION_SCANNER", None
+    )
+    if original_scanner is None:
+        if (
+            getattr(existing_scanner, "__name__", None)
+            != "_require_no_pending_activation_outbox"
+            or getattr(existing_scanner, "__module__", None)
+            != builders.__name__
+        ):
+            raise RuntimeError("activation reservation scanner registration conflict")
+        builders._FORGE_CLI_ORIGINAL_ACTIVATION_SCANNER = existing_scanner
+        original_scanner = existing_scanner
+    if existing_scanner is original_scanner:
+        builders._require_no_pending_activation_outbox = (
+            _require_no_pending_chain_activation_outbox
+        )
+    elif existing_scanner is not _require_no_pending_chain_activation_outbox:
+        raise RuntimeError("activation reservation scanner registration conflict")
+
+
 def register_coordination_seams() -> None:
     """Idempotently install task-04 authority in the shared task-03 modules."""
 
     batch, builders, _journal = runtime._coordination_modules()
+    register_activation_reservation_seam()
+
     existing_reducer = builders.MERGE_TRANSITION_REDUCER
     if existing_reducer is None:
         builders.register_merge_transition_reducer(reduce_merge_event)
@@ -8101,7 +9388,12 @@ def register_coordination_seams() -> None:
 # The Revision-9 seam marker rides on the callables themselves so the registrar above can
 # tell an already-installed forge seam from a foreign registration (moved here from the
 # shim in cli split phase 3; the shim no longer defines any seam callable).
-for _seam in (reduce_merge_event, _authorize_chain_batch, _ingest_proof_verifier):
+for _seam in (
+    reduce_merge_event,
+    _authorize_chain_batch,
+    _ingest_proof_verifier,
+    _require_no_pending_chain_activation_outbox,
+):
     setattr(_seam, "_forge_cli_revision9_seam", True)
 
 
@@ -8165,6 +9457,73 @@ def _coordination_refusal(exc: BaseException) -> Refusal | FrozenError:
         message,
         remediation="inspect the Revision-9 coordination proof and retry",
     )
+
+
+def _validate_chain_batch_target(
+    repository: Path,
+    run_id: str,
+) -> None:
+    """Re-prove the existing run/repository/owner tuple without mutating it."""
+
+    batch, _builders, journal = runtime._coordination_modules()
+    validated_run_id = journal._operation_run_id("journal append", run_id)
+    canonical_repository, state_root = journal._resolve_repository(
+        repository, "journal append"
+    )
+    with journal._registry_lock(state_root) as registry_lock:
+        view = journal._coordination_view(
+            state_root,
+            owner_target_ids=frozenset({validated_run_id}),
+            locked=registry_lock,
+        )
+        state = journal._target_state(view, validated_run_id, "journal append")
+        recorded_repository = journal._recorded_repository_root(
+            state.run_dir, state_root, records=state.records
+        )
+        if recorded_repository != canonical_repository:
+            raise journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE)
+        with journal._locked_journal(state) as locked:
+            journal._classify_owner(
+                state,
+                batch._read_only_session_owner(),
+                adopt_missing=state.pre_coordination,
+                locked=locked,
+            )
+
+
+@contextlib.contextmanager
+def _chain_batch_lock(
+    run_dir: Path,
+    repository: Path,
+    run_id: str,
+    *,
+    create: bool,
+    before_create: Callable[[], None] | None = None,
+) -> Iterable[None]:
+    """Conditionally create a mutation lock only around a validated run target."""
+
+    register_coordination_seams()
+    batch, _builders, journal = runtime._coordination_modules()
+    create_missing = False
+    if create:
+        try:
+            os.lstat(run_dir / journal.BATCH_LOCK_NAME)
+        except FileNotFoundError:
+            _validate_chain_batch_target(repository, run_id)
+            if before_create is not None:
+                before_create()
+            create_missing = True
+        except OSError:
+            # Let the stable batch-lock implementation classify every unsafe
+            # or unreadable existing topology with its established diagnostic.
+            pass
+    with batch.batch_lock(run_dir, create=create_missing):
+        if create_missing:
+            # Creation reserves only the stable outer lock. Every mutation
+            # that admitted this missing target re-proves it under the required
+            # batch -> registry -> journal order before any write is reached.
+            _validate_chain_batch_target(repository, run_id)
+        yield
 
 
 def iso_z(value: dt.datetime | None = None) -> str:
@@ -9034,6 +10393,9 @@ def _replay_merge_event_bytes(
     raw_events: bytes,
     *,
     verify_receipts: bool = True,
+    receipt_repository: Path | None = None,
+    expected_run_binding: Mapping[str, object] | None = None,
+    receipt_verifier: _ChainReceiptSnapshotVerifier | None = None,
 ) -> MergeReplayResult:
     """Replay DM-014 by composing the registered reducer and builder grammar."""
 
@@ -9142,8 +10504,22 @@ def _replay_merge_event_bytes(
                 ):
                     raise ValueError("merge receipt identity is invalid")
                 if verify_receipts:
-                    builders._verify_receipted_batch(
-                        Path(str(replayed["repository"])),
+                    if (
+                        expected_run_binding is not None
+                        and replayed.get("run_binding")
+                        != dict(expected_run_binding)
+                    ):
+                        raise ValueError(
+                            "merge receipt replay changed its run binding"
+                        )
+                    receipt_repository_value = (
+                        receipt_repository
+                        if receipt_repository is not None
+                        else Path(str(replayed["repository"]))
+                    )
+                    verifier = receipt_verifier or builders._verify_receipted_batch
+                    verifier(
+                        receipt_repository_value,
                         chain_id,
                         replayed,
                         pending_outbox,
@@ -9223,7 +10599,13 @@ def _replay_merge_event_bytes(
                 chain_id=chain_id,
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
-        for carried_record in records:
+        activation_preamble = (
+            records[:1]
+            if records
+            and _journal._writer_activation_candidate(records[0])
+            else ()
+        )
+        for carried_record in records[len(activation_preamble) :]:
             carried_binding = carried_record.get("binding")
             if not isinstance(
                 carried_binding, dict
@@ -9266,6 +10648,15 @@ def _replay_merge_event_bytes(
         if _merge_history_uses_additive_grammar(events)
         else copy.deepcopy(replayed)
     )
+    if (
+        expected_run_binding is not None
+        and replayed_state.get("run_binding") != dict(expected_run_binding)
+    ):
+        raise FrozenError(
+            "merge replay changed its immutable run binding",
+            chain_id=chain_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
     return MergeReplayResult(
         state=replayed_state,
         events=tuple(events),
@@ -9304,6 +10695,8 @@ def _drain_chain_batch_capability(
                 "run_id": str(binding["run_id"]),
                 "task_id": str(binding["task_id"]),
                 "chain_id": str(state["chain_id"]),
+                "run_binding": copy.deepcopy(dict(binding)),
+                "pending_outbox": copy.deepcopy(dict(pending_outbox)),
                 "source_event_digest": pending_outbox[
                     "source_event_digest"
                 ],
@@ -10599,7 +11992,13 @@ class ChainStore(_ChainStoragePrimitives):
                     pending_records = records
                 elif current.get("journal_outbox") != pending:
                     raise ValueError("event changed the pending outbox")
-                for record in records:
+                activation_preamble = (
+                    records[:1]
+                    if records
+                    and journal._writer_activation_candidate(records[0])
+                    else ()
+                )
+                for record in records[len(activation_preamble) :]:
                     record_binding = record.get("binding")
                     if (
                         not isinstance(record_binding, dict)
@@ -10649,7 +12048,13 @@ class ChainStore(_ChainStoragePrimitives):
                 if index != latest_record_index:
                     continue
                 appended_history = frozen_entries[: index + 1]
-                for record in records:
+                activation_preamble = (
+                    records[:1]
+                    if records
+                    and journal._writer_activation_candidate(records[0])
+                    else ()
+                )
+                for record in records[len(activation_preamble) :]:
                     record_binding = record.get("binding")
                     current_fact = bool(
                         isinstance(record_binding, dict)
@@ -10841,7 +12246,12 @@ class ChainStore(_ChainStoragePrimitives):
                 / str(binding["run_id"])
             )
             try:
-                with batch.batch_lock(run_dir, create=False):
+                with _chain_batch_lock(
+                    run_dir,
+                    Path(str(binding["repository"])),
+                    str(binding["run_id"]),
+                    create=True,
+                ):
                     self.persist(
                         state,
                         event,
@@ -10921,8 +12331,11 @@ class ChainStore(_ChainStoragePrimitives):
                         "record_count": len(carried_records),
                         "source_event_digest": source_event_digest,
                     }
-                    state["journal_outbox"] = copy.deepcopy(pending_outbox)
-                    payload["state"] = copy.deepcopy(state)
+                    prospective_state = copy.deepcopy(state)
+                    prospective_state["journal_outbox"] = copy.deepcopy(
+                        pending_outbox
+                    )
+                    payload["state"] = prospective_state
                     payload["details"] = {
                         **dict(details),
                         "source_event_digest": source_event_digest,
@@ -10935,6 +12348,20 @@ class ChainStore(_ChainStoragePrimitives):
                     }
                     unsigned["payload"] = payload
             record = {**unsigned, "digest": sha256_bytes(canonical_bytes(unsigned))}
+            if pending_outbox is not None:
+                assert isinstance(binding, Mapping)
+                prospective_events = (*existing, record)
+                self._validate_bound_event_history(
+                    chain_id, prospective_events, binding
+                )
+                prospective_state = record["payload"]["state"]
+                assert isinstance(prospective_state, Mapping)
+                _prevalidate_chain_batch_carrier(
+                    prospective_state,
+                    pending_outbox,
+                    carried_records,
+                )
+                state["journal_outbox"] = copy.deepcopy(pending_outbox)
             encoded = canonical_bytes(record) + b"\n"
             self._append_event_bytes(chain_id, encoded, initial=initial)
             self._atomic_state(state)
@@ -10972,7 +12399,12 @@ class ChainStore(_ChainStoragePrimitives):
                 / str(binding["run_id"])
             )
             try:
-                with batch.batch_lock(run_dir, create=False):
+                with _chain_batch_lock(
+                    run_dir,
+                    Path(str(binding["repository"])),
+                    str(binding["run_id"]),
+                    create=True,
+                ):
                     self._drain_pending_batch(
                         state,
                         pending_outbox,
@@ -11025,7 +12457,12 @@ class ChainStore(_ChainStoragePrimitives):
             / str(binding["run_id"])
         )
         try:
-            with batch.batch_lock(run_dir, create=False):
+            with _chain_batch_lock(
+                run_dir,
+                Path(str(binding["repository"])),
+                str(binding["run_id"]),
+                create=True,
+            ):
                 with self.event_lock(str(state["chain_id"])):
                     fresh = self._load_locked(str(state["chain_id"]))
                     current_pending = fresh.get("journal_outbox")
@@ -11106,7 +12543,7 @@ def _build_merge_chain_journal_records(
         )
     run_id = str(binding["run_id"])
     task_id = str(binding["task_id"])
-    _batch, builders, journal = runtime._coordination_modules()
+    batch, builders, journal = runtime._coordination_modules()
     _canonical_repository, state_root = journal._resolve_repository(
         repository, "journal batch"
     )
@@ -11150,7 +12587,16 @@ def _build_merge_chain_journal_records(
             chain_id=str(current.get("chain_id") or "") or None,
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    projected = list(run_state.records)
+    if not templates:
+        return ()
+    activation_preamble = (
+        ()
+        if journal._writer_contract_active(run_state.records)
+        else _prepare_merge_activation_preamble(
+            _canonical_repository, run_state
+        )
+    )
+    projected = [*run_state.records, *activation_preamble]
     records: list[dict[str, Any]] = []
     review_binding = builders._review_binding_for_state(current)
     for template, _gate_id in templates:
@@ -11181,15 +12627,15 @@ def _build_merge_chain_journal_records(
                     )
         records.append(record)
         projected.append(record)
-    if records:
-        _batch._prevalidate_records(
-            _canonical_repository,
-            run_state,
-            records,
-            close=False,
-            defer_binding=True,
-        )
-    return tuple(records)
+    carried_records = (*activation_preamble, *records)
+    batch._prevalidate_records(
+        _canonical_repository,
+        run_state,
+        carried_records,
+        close=False,
+        defer_binding=True,
+    )
+    return carried_records
 
 
 def _new_merge_record_is_current(
@@ -11266,7 +12712,7 @@ class MergeChainStore(_ChainStoragePrimitives):
 
     @contextlib.contextmanager
     def _journal_outer(
-        self, binding: Mapping[str, Any] | None
+        self, binding: Mapping[str, Any] | None, *, create: bool = True
     ) -> Iterable[None]:
         if not isinstance(binding, Mapping):
             yield
@@ -11280,7 +12726,12 @@ class MergeChainStore(_ChainStoragePrimitives):
             / str(binding["run_id"])
         )
         try:
-            with batch.batch_lock(run_dir, create=False):
+            with _chain_batch_lock(
+                run_dir,
+                Path(str(binding["repository"])),
+                str(binding["run_id"]),
+                create=create,
+            ):
                 yield
         except journal.CoordinationRefusal as exc:
             raise _coordination_refusal(exc) from exc
@@ -11460,7 +12911,8 @@ class MergeChainStore(_ChainStoragePrimitives):
             )
         binding = preliminary.state.get("run_binding")
         with self._journal_outer(
-            binding if isinstance(binding, Mapping) else None
+            binding if isinstance(binding, Mapping) else None,
+            create=False,
         ):
             return self._load_with_outer(chain_id, session=session)
 
@@ -11597,7 +13049,13 @@ class MergeChainStore(_ChainStoragePrimitives):
                     source_event_digest,
                 ),
             )
-            for record in records:
+            activation_preamble = (
+                records[:1]
+                if records
+                and _journal._writer_activation_candidate(records[0])
+                else ()
+            )
+            for record in records[len(activation_preamble) :]:
                 record_binding = record.get("binding")
                 if (
                     not isinstance(record_binding, dict)
@@ -16505,11 +17963,18 @@ def _prove_merge_run_task_binding(
     run_id: str,
     task_id: str,
     policy_digest: str,
+    *,
+    create_batch_lock: bool = False,
 ) -> MergeRunTaskSnapshot:
     batch, _builders, journal = runtime._coordination_modules()
     run_dir = common_root / ".codex-orchestrator" / "runs" / run_id
     try:
-        with batch.batch_lock(run_dir, create=False):
+        with _chain_batch_lock(
+            run_dir,
+            repository,
+            run_id,
+            create=create_batch_lock,
+        ):
             run_state = journal._scan_run(run_dir)
             opening = run_state.records[0] if run_state.records else None
             if (

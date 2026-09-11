@@ -1838,6 +1838,16 @@ def _new_state(
     return chain_core.validate_state(state, chain_id)
 
 
+def _commit_start_binding_refusal(exc: BaseException) -> Refusal:
+    return Refusal(
+        V2ReasonCode.RUN_TASK_BINDING_INVALID,
+        "forge: commit start refused — run/task binding is invalid",
+        expected="matching repository, active task, admitted paths, and committed policy",
+        observed=str(exc),
+        remediation="inspect the named run/task and retry the exact paired start",
+    )
+
+
 def _prove_run_task_binding(
     ctx: chain_core.CommandContext,
     run_id: str,
@@ -1893,13 +1903,7 @@ def _prove_run_task_binding(
                 ):
                     raise ValueError(f"path {path} is outside admitted scope")
     except (OSError, RuntimeError, ValueError, journal.CoordinationRefusal) as exc:
-        raise Refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: commit start refused — run/task binding is invalid",
-            expected="matching repository, active task, admitted paths, and committed policy",
-            observed=str(exc),
-            remediation="inspect the named run/task and retry the exact paired start",
-        ) from exc
+        raise _commit_start_binding_refusal(exc) from exc
     return {
         "run_id": run_id,
         "task_id": task_id,
@@ -4507,7 +4511,20 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
             )
             try:
                 retry = False
-                with batch.batch_lock(run_dir, create=False):
+                create_run_lock = method.__name__ == "start"
+                with chain_core._chain_batch_lock(
+                    run_dir,
+                    self.ctx.repo.root,
+                    run_id,
+                    create=create_run_lock,
+                    # A stable legacy-run lock is a durable mutation.  Keep
+                    # FR-210's halt proof on the helper's authoritative
+                    # create-missing edge. Engine.start repeats it after
+                    # serialization so a halt engaged during acquisition wins.
+                    before_create=(
+                        (lambda: _run_halt(self.ctx)) if create_run_lock else None
+                    ),
+                ):
                     with self.ctx.store.admission_lock(self.ctx.repo.root):
                         if _command_run_lock_id(self, method.__name__) != run_id:
                             retry = True
@@ -4516,6 +4533,11 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
                 if retry:
                     continue
             except journal.CoordinationRefusal as exc:
+                if (
+                    method.__name__ == "start"
+                    and str(exc) != journal.BATCH_DIVERGED
+                ):
+                    raise _commit_start_binding_refusal(exc) from exc
                 raise chain_core._coordination_refusal(exc) from exc
         raise FrozenError(
             "chain identity did not stabilize for journal-outer serialization",

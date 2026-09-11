@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 import unittest
@@ -491,6 +492,16 @@ def assert_fresh_reviewer_operator_skip_contract(spec: str, commit: str) -> None
 
 
 def assert_writer_activation_repair_mutation_spec_contract(spec: str) -> None:
+    run_open_refusal = (
+        "forge: run open refused — writer_contract is builder-injected; use typed "
+        "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
+        "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
+        "--scope <pathspec>"
+    )
+    legacy_open_notice = (
+        "forge: notice — run opened in legacy mode (no writer_contract); its first "
+        "typed mutation will activate it in place; prefer typed run-open"
+    )
     dm001 = spec.split("**DM-001**", maxsplit=1)[1].split(
         "**DM-002**", maxsplit=1
     )[0]
@@ -599,6 +610,10 @@ def assert_writer_activation_repair_mutation_spec_contract(spec: str) -> None:
                 "using internal request verb `journal batch-recover`",
                 "unlinks the intent and fsyncs the directory last",
                 "forge: journal append refused — activated writer requires typed builder",
+                "Supplying any caller-authored `writer_contract` through the record-JSON surface",
+                run_open_refusal,
+                legacy_open_notice,
+                "never emits that advisory on stdout or for a typed opening",
                 "raw `run close`, `run retire`, and `run readmit` MUST complete",
                 "exact batch → registry → journal order",
                 "Retrospective commit- and merge-chain ingest",
@@ -638,6 +653,8 @@ def assert_writer_activation_repair_mutation_spec_contract(spec: str) -> None:
             (
                 "Typed `run-open` is the canonical opening surface",
                 "record-JSON coordination forms remain legacy/migration-only",
+                legacy_open_notice,
+                "never on stdout and never for typed open",
                 "implicitly prepends DM-001's activation decision",
                 "one intent, `batch_sha256`, `record_count`, and ordinary receipt",
                 "one authenticated interior gap containing `N >= 1`",
@@ -707,8 +724,28 @@ def assert_writer_activation_repair_mutation_spec_contract(spec: str) -> None:
     run_open_row = next(
         line for line in api.splitlines() if line.startswith("| `run-open` |")
     )
-    if "accepts no `--record-json`" not in run_open_row:
-        raise AssertionError("typed run-open rejects raw input")
+    for required in (
+        "Canonical typed form",
+        "separately retained `--record-json` form is legacy/migration-only",
+        "accepts no caller-authored `writer_contract`",
+        "activates in place on its first typed use",
+    ):
+        if required not in run_open_row:
+            raise AssertionError(f"run-open forms: {required}")
+    raw_open_refusal_row = next(
+        line
+        for line in errors.splitlines()
+        if line.startswith(
+            "| Legacy/migration `run-open --record-json` supplies any caller-authored "
+        )
+    )
+    for required in (
+        run_open_refusal,
+        "no owner, journal, registry, intent, or receipt mutation",
+        "exact FR-019 legacy-mode stderr advisory",
+    ):
+        if required not in raw_open_refusal_row:
+            raise AssertionError(f"raw run-open refusal: {required}")
     repair_refusal_row = next(
         line for line in errors.splitlines() if line.startswith("| Proposed repair is ")
     )
@@ -925,6 +962,10 @@ class DocumentationContractTests(unittest.TestCase):
             "exact batch → registry → journal order",
             "Retrospective commit- and merge-chain ingest",
             "project this batch-owned marker before allocating",
+            "Supplying any caller-authored `writer_contract` through the record-JSON surface",
+            "forge: run open refused — writer_contract is builder-injected; use typed run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> --idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> --scope <pathspec>",
+            "forge: notice — run opened in legacy mode (no writer_contract); its first typed mutation will activate it in place; prefer typed run-open",
+            "separately retained `--record-json` form is legacy/migration-only",
             "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; retire the run and open a successor with --successor-of, or run journal batch-recover if the trailing records were written by an interrupted typed batch",
             "legacy raw append retains its compatibility behavior",
         ):
@@ -932,6 +973,32 @@ class DocumentationContractTests(unittest.TestCase):
                 mutated = spec.replace(control, "DISABLED_CONTROL")
                 with self.assertRaises(AssertionError):
                     assert_writer_activation_repair_mutation_spec_contract(mutated)
+
+    def test_run_open_refusal_source_literal_inventory(self) -> None:
+        source = (
+            ROOT / "scripts/codex_orchestrator/journal.py"
+        ).read_text(encoding="utf-8")
+        literals = [
+            node.value
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        run_open_refusal = (
+            "forge: run open refused — writer_contract is builder-injected; use typed "
+            "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
+            "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
+            "--scope <pathspec>"
+        )
+        shared_refusal = (
+            "forge: journal append refused — activated writer requires typed builder"
+        )
+        legacy_open_notice = (
+            "forge: notice — run opened in legacy mode (no writer_contract); its first "
+            "typed mutation will activate it in place; prefer typed run-open"
+        )
+        self.assertEqual(literals.count(run_open_refusal), 1)
+        self.assertEqual(literals.count(shared_refusal), 9)
+        self.assertEqual(literals.count(legacy_open_notice), 1)
 
     def test_fresh_reviewer_operator_skip_contract_survives_mutation(self) -> None:
         spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")

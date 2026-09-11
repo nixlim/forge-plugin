@@ -869,8 +869,8 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
             side_effect=lambda _repository, state: list(state.records),
         ) as disabled_projection, mock.patch.object(
             builders,
-            "_activation_event_one_has_current_binding_authority",
-            return_value=False,
+            "_activation_event_one_binding_authority",
+            return_value=None,
         ) as disabled_authority, mock.patch.object(
             builders,
             "_resolve_binding_from_descriptor",
