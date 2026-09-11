@@ -10,6 +10,16 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Stack-validations grammar legibility (bead forge-plugin-28y, GH#12(f), GH#19): a
+  committed Stack Validations region that is present but holds no fenced shell cell
+  (the prose shape `/forge:init` 0.6.x emitted) now refuses with its own literal naming
+  the region and the required grammar instead of the sentinel's `not configured — run
+  /forge:init`; the same literal surfaces on the fresh-reviewer-evals applicability
+  reparse; `/forge:init` pins one fenced `bash`/`sh` cell per detected stack category
+  and runs an isolated parser-only self-check with the same grammar so it cannot leave
+  a prose region behind. Executable policy stays fenced; prose is not accepted. Spec:
+  DM-003, FR-061, FR-080, refusal matrix. FR-230 evidence re-minted (policy and
+  fresh-evals subjects).
 - Legacy-run opening legibility (beads forge-plugin-khu, forge-plugin-2ev; GH#14/#18
   carve-out sharing GH#17's root): a `run-open --record-json` record that carries any
   caller-authored `writer_contract` now refuses before any repository access with one

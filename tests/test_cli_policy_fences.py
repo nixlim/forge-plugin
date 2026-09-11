@@ -99,6 +99,10 @@ NESTED_GATE1 = (
     "  ```"
 )
 FLAT_STACK = "```bash\ntrue\n```"
+STACK_FENCE_ERROR = (
+    "forge: stack-validations region present but contains no fenced shell cell — "
+    "write one fenced ```bash or ```sh cell per stack category (see /forge:init)"
+)
 
 
 def policy(gate1: str, stack: str = FLAT_STACK) -> bytes:
@@ -261,16 +265,44 @@ class ParsePolicyTests(unittest.TestCase):
         parsed = CLI.parse_policy("c" * 40, policy(FLAT_GATE1, stack))
         self.assertEqual(parsed.stack_commands, ["python3 -m compileall -q .", "true"])
 
+    def test_present_prose_stack_region_has_fence_specific_refusal(self) -> None:
+        prose = (
+            "1. Python tests: `python3 -m unittest`\n"
+            "2. Shell checks: `bash -n scripts/*.sh`"
+        )
+        with self.assertRaises(CLI.PolicyError) as caught:
+            CLI.parse_policy("d" * 40, policy(FLAT_GATE1, prose))
+        self.assertEqual(str(caught.exception), STACK_FENCE_ERROR)
+
+    def test_empty_and_sentinel_stack_regions_keep_not_configured_literal(self) -> None:
+        expected = "forge: stack-validations not configured — run /forge:init"
+        for label, body in (
+            ("empty", " \n"),
+            ("sentinel", "<!-- forge-init: fill stack validations -->\nprose"),
+        ):
+            with self.subTest(label=label):
+                with self.assertRaises(CLI.PolicyError) as caught:
+                    CLI.parse_policy("e" * 40, policy(FLAT_GATE1, body))
+                self.assertEqual(str(caught.exception), expected)
+
+    def test_stack_fence_distinction_control_disabled_in_memory_accepts_prose(self) -> None:
+        prose = "1. Python tests: `python3 -m unittest`"
+        with mock.patch.object(
+            POLICY, "_parse_stack_validations", lambda body: [body.strip()]
+        ):
+            parsed = CLI.parse_policy("f" * 40, policy(FLAT_GATE1, prose))
+        self.assertEqual(parsed.stack_commands, [prose])
+
     def test_misaligned_gate1_is_policy_error(self) -> None:
         gate1 = "  ```bash\n  echo one\n echo two\n  ```"
         with self.assertRaises(CLI.PolicyError) as caught:
-            CLI.parse_policy("d" * 40, policy(gate1))
+            CLI.parse_policy("1" * 40, policy(gate1))
         self.assertEqual(str(caught.exception), "forge: executable policy row malformed")
 
     def test_two_gate1_cells_still_refused(self) -> None:
         gate1 = "  ```bash\n  true\n  ```\n\n```bash\ntrue\n```"
         with self.assertRaises(CLI.PolicyError) as caught:
-            CLI.parse_policy("e" * 40, policy(gate1))
+            CLI.parse_policy("2" * 40, policy(gate1))
         self.assertEqual(
             str(caught.exception), "gate1-test-command must contain exactly one shell cell"
         )
@@ -280,7 +312,7 @@ class ParsePolicyTests(unittest.TestCase):
         # nested cell no longer equals the flat cell, so a regression that
         # short-circuits the helper cannot pass the equivalence test above.
         with mock.patch.object(POLICY, "_dedent_fenced_cell", lambda cell, prefix: cell):
-            nested = CLI.parse_policy("f" * 40, policy(NESTED_GATE1))
+            nested = CLI.parse_policy("3" * 40, policy(NESTED_GATE1))
         self.assertNotEqual(nested.gate1, FLAT_CELL)
         self.assertTrue(nested.gate1.startswith("  "))
 

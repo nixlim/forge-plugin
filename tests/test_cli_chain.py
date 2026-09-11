@@ -152,6 +152,11 @@ No additional denied commands configured.
 <!-- FORGE:REGION guard-denied-commands END -->
 """
 
+STACK_FENCE_ERROR = (
+    "forge: stack-validations region present but contains no fenced shell cell — "
+    "write one fenced ```bash or ```sh cell per stack category (see /forge:init)"
+)
+
 
 RISK_TIER_HELPER = r"""
 import argparse
@@ -781,6 +786,35 @@ class ForgeCLIChainTests(ForgeCLIFixture):
             "committed policy is unreadable: nested Forge region marker",
         )
         self.assertEqual(envelope["observed"], "nested Forge region marker")
+
+    def test_prose_stack_region_is_specific_policy_unreadable_refusal(self) -> None:
+        fenced = (
+            "```bash\n"
+            'python3 "$FORGE_CLI_SCRIPTS_DIR/gate.py" stack:python "$@"\n'
+            "```"
+        )
+        malformed = POLICY.replace(
+            fenced,
+            "1. Python tests: `python3 -m unittest`",
+            1,
+        )
+        (self.repo / "forge-project.md").write_text(malformed, encoding="utf-8")
+        self.git("add", "--", "forge-project.md")
+        self.git("commit", "--quiet", "-m", "prose stack validation policy")
+        relative = "README.md"
+        (self.repo / relative).write_text("changed\n", encoding="utf-8")
+
+        result, envelope = self.cli(
+            "commit", "start", "--paths", relative, expected=1
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(envelope["reason_code"], "policy-unreadable")
+        self.assertEqual(
+            envelope["message"],
+            "committed policy is unreadable: " + STACK_FENCE_ERROR,
+        )
+        self.assertEqual(envelope["observed"], STACK_FENCE_ERROR)
 
     def test_module_import_is_safe_and_status_json_is_one_exact_envelope(self) -> None:
         import_cwd = self.temp_root / "import-cwd"

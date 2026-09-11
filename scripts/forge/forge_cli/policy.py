@@ -81,6 +81,12 @@ class PolicyError(ValueError):
     pass
 
 
+STACK_VALIDATIONS_FENCE_ERROR = (
+    "forge: stack-validations region present but contains no fenced shell cell — "
+    "write one fenced ```bash or ```sh cell per stack category (see /forge:init)"
+)
+
+
 def _parse_regions_for_orders(
     raw: bytes, accepted_orders: set[tuple[str, ...]]
 ) -> dict[str, str]:
@@ -288,6 +294,15 @@ def _fenced_shell_cells(body: str) -> list[str]:
     return cells
 
 
+def _parse_stack_validations(body: str) -> list[str]:
+    """Require executable stack policy without conflating prose with an unfilled region."""
+
+    cells = _fenced_shell_cells(body)
+    if not cells:
+        raise PolicyError(STACK_VALIDATIONS_FENCE_ERROR)
+    return cells
+
+
 def _split_markdown_row(line: str) -> list[str] | None:
     stripped = line.strip()
     if not stripped.startswith("|") or not stripped.endswith("|"):
@@ -403,9 +418,7 @@ def parse_policy(sha: str, raw: bytes) -> Policy:
     gate_cells = _fenced_shell_cells(regions["gate1-test-command"])
     if len(gate_cells) != 1:
         raise PolicyError("gate1-test-command must contain exactly one shell cell")
-    stack_cells = _fenced_shell_cells(regions["stack-validations"])
-    if not stack_cells:
-        raise PolicyError("forge: stack-validations not configured — run /forge:init")
+    stack_cells = _parse_stack_validations(regions["stack-validations"])
     reviewer_eval_triggers: tuple[tuple[str, tuple[str, ...]], ...] = ()
     reviewer_eval_region_digest: str | None = None
     reviewer_eval_trigger_error: str | None = structural_trigger_error

@@ -28,7 +28,12 @@ from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 from forge_cli import candidate as candidate_module
 from forge_cli import runtime
 from forge_cli.envelope import FrozenError, Refusal
-from forge_cli.policy import Policy, PolicyError, parse_policy
+from forge_cli.policy import (
+    STACK_VALIDATIONS_FENCE_ERROR,
+    Policy,
+    PolicyError,
+    parse_policy,
+)
 
 
 SCHEMA = "forge-fresh-reviewer-evals/1"
@@ -506,7 +511,13 @@ def derive_trigger(
         try:
             canonical_policy = parse_policy(policy.sha, authenticated_policy)
         except (PolicyError, UnicodeError) as exc:
-            raise FreshEvalError("authenticated trigger policy is malformed") from exc
+            reason = (
+                STACK_VALIDATIONS_FENCE_ERROR
+                if isinstance(exc, PolicyError)
+                and str(exc) == STACK_VALIDATIONS_FENCE_ERROR
+                else "authenticated trigger policy is malformed"
+            )
+            raise FreshEvalError(reason) from exc
         if (
             canonical_policy.reviewer_eval_triggers
             != policy.reviewer_eval_triggers

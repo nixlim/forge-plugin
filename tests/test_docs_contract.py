@@ -777,6 +777,56 @@ def assert_writer_activation_repair_mutation_spec_contract(spec: str) -> None:
 
 
 class DocumentationContractTests(unittest.TestCase):
+    def test_stack_validation_fence_refusal_and_init_grammar_are_pinned(self) -> None:
+        diagnostic = (
+            "forge: stack-validations region present but contains no fenced shell cell — "
+            "write one fenced ```bash or ```sh cell per stack category (see /forge:init)"
+        )
+        spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+        init_skill = (ROOT / "skills/init/SKILL.md").read_text(encoding="utf-8")
+        template = (ROOT / "system/template/forge-project.md").read_text(
+            encoding="utf-8"
+        )
+        policy_source = (ROOT / "scripts/forge/forge_cli/policy.py").read_text(
+            encoding="utf-8"
+        )
+        literals = [
+            node.value
+            for node in ast.walk(ast.parse(policy_source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+
+        fr061 = next(line for line in spec.splitlines() if "**FR-061**" in line)
+        refusal_row = next(
+            line
+            for line in spec.splitlines()
+            if line.startswith(
+                "| Present `stack-validations` region with no fenced shell cell |"
+            )
+        )
+        self.assertIn(diagnostic, fr061)
+        self.assertIn(diagnostic, refusal_row)
+        self.assertEqual(literals.count(diagnostic), 1)
+        self.assertIn(
+            'raise PolicyError(f"forge: {required} not configured — run /forge:init")',
+            policy_source,
+        )
+        self.assertIn(
+            "exactly one nonempty fenced ```bash or ```sh cell per",
+            template,
+        )
+        for marker in (
+            "write exactly one nonempty, NUL-free",
+            "Immediately precede each fence with",
+            "from forge_cli.policy import PolicyError, parse_policy",
+            'parse_policy("init-candidate", Path(sys.argv[2]).read_bytes())',
+            'python3 -I -B - "${CLAUDE_PLUGIN_ROOT}" forge-project.md',
+            "repeat Phase 3's exact parser-only candidate self-check",
+            diagnostic,
+        ):
+            with self.subTest(init_marker=marker):
+                self.assertIn(marker, init_skill)
+
     def test_skills_are_not_duplicated_by_command_stubs(self) -> None:
         self.assertEqual(list((ROOT / "commands").glob("*.md")), [])
 

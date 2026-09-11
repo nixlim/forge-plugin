@@ -310,6 +310,14 @@ repository has no changelog gate, fill `changelog-policy` with exactly:
 No changelog gate is configured for this repository.
 ```
 
+When filling an unconfigured `stack-validations` region, write exactly one nonempty, NUL-free
+fenced `bash` or `sh` shell cell per detected stack category. Immediately precede each fence with
+that category's exact backtick-quoted key from the `file-categories` table; inline-backtick
+commands and prose lists are not executable cells and never satisfy the fence grammar. Keep the
+complete logical command for that category inside its single fence so the shared policy runner can
+pass it unchanged as one `bash -c` argv element. The runtime parser checks the executable-fence
+boundary; this Phase-3 comparison against `file-categories` checks the stronger init output shape.
+
 For every detected stack, fill `mutation-testing` with either one executable row in this exact
 shape or the exact fallback sentence below. The timeout is a positive ASCII base-10 count of
 seconds; use 600 seconds only when carrying a legacy row whose timeout cell is absent.
@@ -396,6 +404,39 @@ only the dependency-manifest block inside `risk-tiers` and a noncanonical
 `reviewer-facing-eval-triggers` body. It then refreshes the AGENTS splice from the now-current full
 `forge-project.md`. Verify the splice interior equals the complete rendered file, the CLAUDE import
 occurs once, and content outside the AGENTS markers still matches its pre-init bytes.
+
+Before any policy command or Phase 4 work, run this parser-only self-check over the post-installer
+candidate. It deliberately uses the same `parse_policy` and `_fenced_shell_cells` grammar as the
+gate and fresh-reviewer applicability paths, but it does not execute a policy cell:
+
+```bash
+python3 -I -B - "${CLAUDE_PLUGIN_ROOT}" forge-project.md <<'PY'
+import sys
+from pathlib import Path
+
+plugin_root = Path(sys.argv[1])
+sys.path.insert(0, str(plugin_root / "scripts" / "forge"))
+
+from forge_cli.policy import PolicyError, parse_policy
+
+try:
+    parse_policy("init-candidate", Path(sys.argv[2]).read_bytes())
+except (OSError, UnicodeError, PolicyError) as exc:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(1)
+PY
+```
+
+`-I` is required so repository-controlled Python startup modules and environment path injection
+cannot execute before the trusted parser path is selected. Require exit 0. A present
+`stack-validations` region with prose or inline-backtick commands but no
+fenced shell cell must exit 1 with exactly this one-line diagnostic:
+
+```text
+forge: stack-validations region present but contains no fenced shell cell — write one fenced ```bash or ```sh cell per stack category (see /forge:init)
+```
+
+Do not continue, render a manifest, or leave that prose body as completed init output.
 
 Never run the assembled commands from the working-tree candidate. If Phase 0 found a committed
 `HEAD:forge-project.md`, calibrate only that committed policy in an isolated clean checkout of the
@@ -503,8 +544,8 @@ Treat the complete init output as a control-class change.
 
    A match means at least one region is unfilled and blocks completion. Also repeat the fixed
    `mutation-testing`, `invariants`, and `reviewer-facing-eval-triggers` structural validation from
-   Phase 3 and verify again that the AGENTS splice interior equals the full rendered
-   `forge-project.md`.
+   Phase 3, repeat Phase 3's exact parser-only candidate self-check, and verify again that the AGENTS
+   splice interior equals the full rendered `forge-project.md`.
 
    On migration, also require the collision-free report named in Phase 1 to exist and be included in
    the frozen candidate, and enumerate its facts from the live disk again. Refuse to continue if it

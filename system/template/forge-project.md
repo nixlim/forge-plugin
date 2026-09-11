@@ -90,11 +90,12 @@ project-equivalent CI paths; project rows may extend but never narrow the built-
 ## Stack Validations
 
 <!-- FORGE:REGION stack-validations BEGIN -->
-<!-- forge-init: replace this sentinel with executable validation commands keyed to every stack
-category in file-categories, adopting existing CI, lint, format, type, build, and test commands. -->
+<!-- forge-init: replace this sentinel with exactly one nonempty fenced ```bash or ```sh cell per
+detected stack category; immediately precede each fence with that category's exact backtick-quoted
+file-categories table key, and adopt existing CI, lint, format, type, build, and test commands. -->
 
 No stack validations are configured. Stack-code changes fail closed until `/forge:init` fills this
-region.
+region with one fenced shell cell per detected stack category.
 <!-- FORGE:REGION stack-validations END -->
 
 ## Gate 1 Test Command

@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "forge" / "install.sh"
 DCG_CONFIGURATOR = ROOT / "scripts" / "forge" / "configure-dcg.sh"
 TEMPLATE = ROOT / "system" / "template" / "forge-project.md"
+INIT_SKILL = (ROOT / "skills" / "init" / "SKILL.md").read_text(encoding="utf-8")
 UPSTREAM_RULES_FIXTURE = ROOT / "tests" / "fixtures" / "upstream-forge.rules"
 VENDORED_UPSTREAM_RULES = ROOT / ".upstream/forge/system/template/.codex/rules/forge.rules"
 BEGIN = "<!-- FORGE:BEGIN -->"
@@ -38,6 +39,10 @@ REGION_ORDER = (
     "trigger-paths",
     "reviewer-facing-eval-triggers",
     "guard-denied-commands",
+)
+STACK_FENCE_ERROR = (
+    "forge: stack-validations region present but contains no fenced shell cell — "
+    "write one fenced ```bash or ```sh cell per stack category (see /forge:init)"
 )
 
 
@@ -92,6 +97,31 @@ def init_phase(document: str, number: int) -> str:
     if match is None:
         raise AssertionError(f"missing Phase {number}")
     return match.group(0)
+
+
+def init_policy_self_check_cell(skill: str = INIT_SKILL) -> str:
+    phase3 = init_phase(skill, 3)
+    anchor = "Before any policy command or Phase 4 work, run this parser-only self-check"
+    _before, separator, after = phase3.partition(anchor)
+    if not separator:
+        raise AssertionError("init policy self-check is missing or misplaced")
+    match = re.search(r"```bash\n(.*?)\n```", after, flags=re.DOTALL)
+    if match is None:
+        raise AssertionError("init policy self-check has no executable cell")
+    return match.group(1)
+
+
+def run_init_policy_self_check(
+    repository: Path, *, cell: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", cell or init_policy_self_check_cell()],
+        cwd=repository,
+        env={**os.environ, "CLAUDE_PLUGIN_ROOT": str(ROOT)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def canonical_reviewer_eval_table() -> str:
@@ -1047,6 +1077,80 @@ exit 97
 
 
 class InstallerPayloadContractTests(unittest.TestCase):
+    def test_init_policy_self_check_accepts_fences_and_refuses_prose(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="forge-init-policy-check-") as temporary:
+            repository = Path(temporary)
+            policy_path = repository / "forge-project.md"
+            valid = (ROOT / "forge-project.md").read_text(encoding="utf-8")
+            policy_path.write_text(valid, encoding="utf-8")
+
+            accepted = run_init_policy_self_check(repository)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertEqual(accepted.stdout, "")
+            self.assertEqual(accepted.stderr, "")
+
+            marker = repository / "inline-prose-must-not-run"
+            prose = replace_region(
+                valid,
+                "stack-validations",
+                f"\n1. Python: `touch {marker}`\n2. Tests: `python3 -m unittest`\n",
+            )
+            policy_path.write_text(prose, encoding="utf-8")
+            refused = run_init_policy_self_check(repository)
+
+            self.assertEqual(refused.returncode, 1)
+            self.assertEqual(refused.stdout, "")
+            self.assertEqual(refused.stderr, STACK_FENCE_ERROR + "\n")
+            self.assertFalse(marker.exists())
+
+    def test_init_policy_self_check_control_disabled_in_memory_accepts_prose(self) -> None:
+        cell = init_policy_self_check_cell()
+        parse_call = 'parse_policy("init-candidate", Path(sys.argv[2]).read_bytes())'
+        self.assertEqual(cell.count(parse_call), 1)
+        self.assertIn("from forge_cli.policy import PolicyError, parse_policy", cell)
+
+        with tempfile.TemporaryDirectory(prefix="forge-init-policy-mutant-") as temporary:
+            repository = Path(temporary)
+            valid = (ROOT / "forge-project.md").read_text(encoding="utf-8")
+            prose = replace_region(
+                valid,
+                "stack-validations",
+                "\n1. Python tests: `python3 -m unittest`\n",
+            )
+            (repository / "forge-project.md").write_text(prose, encoding="utf-8")
+
+            real = run_init_policy_self_check(repository, cell=cell)
+            disabled = cell.replace(parse_call, "Path(sys.argv[2]).read_bytes()", 1)
+            bypassed = run_init_policy_self_check(repository, cell=disabled)
+
+        self.assertEqual(real.returncode, 1)
+        self.assertEqual(real.stderr, STACK_FENCE_ERROR + "\n")
+        self.assertEqual(bypassed.returncode, 0, bypassed.stderr)
+
+    def test_init_policy_self_check_isolates_python_startup(self) -> None:
+        cell = init_policy_self_check_cell()
+        self.assertIn('python3 -I -B - "${CLAUDE_PLUGIN_ROOT}"', cell)
+
+        with tempfile.TemporaryDirectory(prefix="forge-init-policy-isolated-") as temporary:
+            repository = Path(temporary)
+            marker = repository / "startup-module-ran"
+            (repository / "forge-project.md").write_bytes(
+                (ROOT / "forge-project.md").read_bytes()
+            )
+            (repository / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            result = run_init_policy_self_check(repository)
+            startup_ran = marker.exists()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertFalse(startup_ran)
+
     def test_installer_region_inventory_has_current_and_exact_migration_shapes(self) -> None:
         installer = INSTALLER.read_text(encoding="utf-8")
         match = re.search(r"my @required = qw\((.*?)\n\s*\);", installer, re.DOTALL)

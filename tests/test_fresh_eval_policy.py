@@ -17,6 +17,20 @@ from tests._fresh_eval_support import (
 )
 
 
+STACK_FENCE_ERROR = (
+    "forge: stack-validations region present but contains no fenced shell cell — "
+    "write one fenced ```bash or ```sh cell per stack category (see /forge:init)"
+)
+
+
+def policy_with_stack_region(raw: bytes, body: bytes) -> bytes:
+    begin = b"<!-- FORGE:REGION stack-validations BEGIN -->\n"
+    end = b"<!-- FORGE:REGION stack-validations END -->"
+    before, remainder = raw.split(begin, 1)
+    _old_body, after = remainder.split(end, 1)
+    return before + begin + body + end + after
+
+
 class ReviewerEvalTriggerGrammarTests(unittest.TestCase):
     def test_exact_closed_table_parses_in_normative_order(self) -> None:
         self.assertEqual(
@@ -194,6 +208,38 @@ class ReviewerEvalTriggerGrammarTests(unittest.TestCase):
             POLICY, "_parse_regions_with_trigger_defect", strict_only
         ), self.assertRaises(POLICY.PolicyError):
             POLICY.parse_policy("a" * 40, malformed)
+
+    def test_authenticated_stack_fence_reparse_preserves_fresh_error_reason(self) -> None:
+        with FreshEvalRepo() as repository:
+            malformed_raw = policy_with_stack_region(
+                repository.policy.raw,
+                b"1. Python tests: `python3 -m unittest`\n",
+            )
+            repository.write("forge-project.md", malformed_raw)
+            repository.git("add", "--", "forge-project.md")
+            repository.git("commit", "-qm", "malformed stack validation policy")
+            repository.stage_append("rules/review-constitution.md")
+            snapshot = repository.snapshot()
+            malformed_policy = dataclasses.replace(
+                repository.policy,
+                sha=str(snapshot.base_commit_oid),
+                raw=malformed_raw,
+                digest=sha256(malformed_raw),
+            )
+
+            with self.assertRaises(FRESH.FreshEvalError) as caught:
+                FRESH.derive_trigger(
+                    repository.context,
+                    malformed_policy,
+                    snapshot.state_record(),
+                    snapshot.paths,
+                )
+
+        self.assertEqual(caught.exception.reason, STACK_FENCE_ERROR)
+        self.assertEqual(
+            str(caught.exception),
+            "forge: fresh reviewer eval evidence invalid: " + STACK_FENCE_ERROR,
+        )
 
 
 class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
