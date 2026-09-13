@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts/forge/cli.py"
 
 
-from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_policy_fence_tests", CLI_PATH)
@@ -359,9 +359,7 @@ class HelpTextTests(unittest.TestCase):
         arguments = (["--help"], ["gate", "--help"], ["gate", "run", "--help"])
         expected = [self._help(list(argv)) for argv in arguments]
 
-        with mock.patch.object(
-            CLI.chain_core,
-            "FRESH_REVIEWER_EVALS_GATE",
+        with patch_chain_core("FRESH_REVIEWER_EVALS_GATE",
             "disabled-fresh-gate-identifier",
         ):
             observed = [self._help(list(argv)) for argv in arguments]

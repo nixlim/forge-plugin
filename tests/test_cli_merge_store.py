@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core  # shared loader
 
 
 CLI = load_script("forge_cli_merge_store_tests", CLI_PATH)
@@ -683,9 +683,7 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
             CLI._REQUIRED_MERGE_STORE_CONTROLS,
         )
         for control in sorted(CLI._REQUIRED_MERGE_STORE_CONTROLS):
-            with self.subTest(control=control), mock.patch.object(
-                CORE,
-                "MERGE_STORE_CONTROLS",
+            with self.subTest(control=control), patch_chain_core("MERGE_STORE_CONTROLS",
                 CLI._REQUIRED_MERGE_STORE_CONTROLS - {control},
             ), self.assertRaises(CLI.FrozenError):
                 CLI._require_merge_store_control(control)
@@ -1008,9 +1006,7 @@ class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 raise RuntimeError("simulated drain crash")
 
             self.boundaries.clear()
-            with mock.patch.object(
-                CORE,
-                "_drain_chain_batch_capability",
+            with patch_chain_core("_drain_chain_batch_capability",
                 side_effect=crash_after_persistence,
             ), self.assertRaisesRegex(RuntimeError, "simulated drain crash"):
                 self.transition(
@@ -1071,8 +1067,7 @@ class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             self.assertEqual(carried["record_count"], 1)
 
             self.boundaries.clear()
-            with mock.patch.object(
-                CORE, "_drain_chain_batch_capability", wraps=original_drain
+            with patch_chain_core("_drain_chain_batch_capability", wraps=original_drain
             ):
                 recovered = store.recover_pending_outbox(
                     self.chain_id, session="bound-merge-session"

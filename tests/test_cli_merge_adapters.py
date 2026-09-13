@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_merge_adapter_tests", CLI_PATH)
@@ -784,9 +784,7 @@ class MergeAdmissionAdapterTests(MergeAdapterFixture):
             ),
         }
         for control, call in calls.items():
-            with self.subTest(control=control), mock.patch.object(
-                CORE,
-                "MERGE_ADAPTER_CONTROLS",
+            with self.subTest(control=control), patch_chain_core("MERGE_ADAPTER_CONTROLS",
                 CLI.MERGE_ADAPTER_CONTROLS - {control},
             ), self.assertRaisesRegex(
                 CLI.FrozenError,
@@ -1011,8 +1009,7 @@ class MergeGateAdapterTests(MergeAdapterFixture):
                 self.repo.resolve(),
                 self.repo / ".codex-orchestrator" / "runs" / self.run_id,
             ),
-        ), mock.patch.object(
-            CORE, "run_fenced_command", side_effect=capture
+        ), patch_chain_core("run_fenced_command", side_effect=capture
         ), self.assertRaisesRegex(EpochInvocation, "captured epoch mutation"):
             engine._run_epoch_suite(
                 state,

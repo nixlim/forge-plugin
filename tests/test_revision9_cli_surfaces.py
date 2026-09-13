@@ -38,7 +38,7 @@ ENVELOPE_KEYS = {
 }
 
 
-from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_revision9_cli_surface_tests", CLI_PATH)
@@ -1941,8 +1941,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         )
         self.assertTrue(changed["ok"])
 
-        with mock.patch.object(
-            CORE, "_committed_changelog_output_paths", return_value=frozenset()
+        with patch_chain_core("_committed_changelog_output_paths", return_value=frozenset()
         ):
             exit_code, refused = self.invoke_cli(
                 "--chain-id", chain_id, "gate", "run", "gate-1"
@@ -2410,9 +2409,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         receipts_after = receipts_path.read_bytes()
         intent_path = prepared.run_dir / journal.BATCH_INTENT_NAME
         self.assertFalse(intent_path.exists())
-        with mock.patch.object(
-            CORE,
-            "_verify_and_build_ingest_records",
+        with patch_chain_core("_verify_and_build_ingest_records",
             side_effect=AssertionError("receipted retry attempted re-proof"),
         ) as verifier, mock.patch.object(
             _builders,
@@ -2603,13 +2600,9 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with mock.patch.object(
-            CORE,
-            "_ingest_allocation_records",
+        with patch_chain_core("_ingest_allocation_records",
             side_effect=lambda _repository, state: list(state.records),
-        ) as disabled_projection, mock.patch.object(
-            CORE,
-            "register_activation_reservation_seam",
+        ) as disabled_projection, patch_chain_core("register_activation_reservation_seam",
             return_value=None,
         ) as disabled_registration, mock.patch.object(
             _builders,
@@ -2826,12 +2819,9 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 original_require(name, completed_proofs)
 
             enabled = frozenset(proof_order) - {control}
-            with self.subTest(control=control), mock.patch.object(
-                CORE, "INGEST_PROOF_CONTROLS", enabled
-            ), mock.patch.object(
-                CORE, "_REQUIRED_INGEST_PROOF_CONTROLS", enabled
-            ), mock.patch.object(
-                CORE, "_require_ingest_proof", side_effect=track_boundary
+            with self.subTest(control=control), patch_chain_core("INGEST_PROOF_CONTROLS", enabled
+            ), patch_chain_core("_REQUIRED_INGEST_PROOF_CONTROLS", enabled
+            ), patch_chain_core("_require_ingest_proof", side_effect=track_boundary
             ), self.assertRaises(
                 journal.CoordinationRefusal
             ) as raised:
@@ -2881,8 +2871,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             observed.append((name, tuple(completed_proofs or ())))
             original_require(name, completed_proofs)
 
-        with mock.patch.object(
-            CORE, "_require_ingest_proof", side_effect=track_boundary
+        with patch_chain_core("_require_ingest_proof", side_effect=track_boundary
         ), self.assertRaises(journal.CoordinationRefusal) as raised:
             CLI._verify_and_build_ingest_records(
                 self.repo, prepared.run_id, prepared.verifier_inputs
@@ -3268,8 +3257,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         events_before = events_path.read_bytes()
         journal_before = journal_path.read_bytes()
 
-        with mock.patch.object(
-            CORE, "_prevalidate_chain_batch_carrier", return_value=None
+        with patch_chain_core("_prevalidate_chain_batch_carrier", return_value=None
         ) as disabled_prevalidation, mock.patch.object(
             batch,
             "_ensure_receipt_ledger",
@@ -3578,9 +3566,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
         with self.cli_process_context(), mock.patch.object(
             batch, "batch_lock", side_effect=observed_batch_lock
-        ), mock.patch.object(
-            CORE,
-            "_validate_chain_batch_target",
+        ), patch_chain_core("_validate_chain_batch_target",
             side_effect=AssertionError("existing lock was revalidated"),
         ) as validator:
             with CORE._chain_batch_lock(

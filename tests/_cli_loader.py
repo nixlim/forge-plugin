@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import pkgutil
 import sys
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT / "scripts" / "forge"
@@ -69,3 +71,69 @@ def package_module(name: str) -> ModuleType:
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     return importlib.import_module(f"forge_cli.{name}")
+
+
+def _chain_core_modules() -> list[ModuleType]:
+    """The canonical ``forge_cli.chain_core`` module plus, once it is a package, every
+    submodule of it (imported so their globals exist), root first."""
+
+    root = package_module("chain_core")
+    modules = [root]
+    for info in pkgutil.iter_modules(getattr(root, "__path__", [])):
+        modules.append(importlib.import_module(f"forge_cli.chain_core.{info.name}"))
+    return modules
+
+
+class _ChainCorePatch:
+    """``mock.patch.object`` applied to every module of ``forge_cli.chain_core`` that
+    binds ``name``, so one test patch keeps intercepting a control after it moves out of
+    the package root: the root binding receives the patch first (its replacement value
+    is what ``with ... as m`` yields, exactly as ``mock.patch.object`` does), and every
+    submodule that also binds the name is patched with that same object. A name the root
+    does not bind is refused, like ``mock.patch.object`` without ``create=True``."""
+
+    def __init__(self, name: str, args: tuple, kwargs: dict) -> None:
+        self._name = name
+        self._args = args
+        self._kwargs = kwargs
+        self._active: list = []
+
+    def __enter__(self):
+        root, *rest = _chain_core_modules()
+        if self._name not in vars(root):
+            raise AttributeError(f"forge_cli.chain_core has no attribute {self._name!r}")
+        first = mock.patch.object(root, self._name, *self._args, **self._kwargs)
+        value = first.__enter__()
+        self._active.append(first)
+        try:
+            for module in rest:
+                if self._name in vars(module):
+                    extra = mock.patch.object(module, self._name, value)
+                    extra.__enter__()
+                    self._active.append(extra)
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return value
+
+    def __exit__(self, *exc_info) -> None:
+        while self._active:
+            self._active.pop().__exit__(*exc_info)
+
+    def start(self):
+        """Activate like ``mock.patch.object(...).start()``; pair with :meth:`stop`."""
+
+        return self.__enter__()
+
+    def stop(self) -> None:
+        self.__exit__(None, None, None)
+
+
+def patch_chain_core(name: str, /, *args, **kwargs) -> _ChainCorePatch:
+    """Patch ``name`` on the canonical ``forge_cli.chain_core`` module and on every
+    package submodule that binds it (see :class:`_ChainCorePatch`); a context manager
+    with the ``mock.patch.object(package_module("chain_core"), name, ...)`` signature.
+    Use it for every patch of a chain-core control so tests are indifferent to which
+    file inside the package a control lives in."""
+
+    return _ChainCorePatch(name, args, kwargs)

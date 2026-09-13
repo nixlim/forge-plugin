@@ -26,7 +26,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 CHAIN_ID = "c-2026-08-29T120000Z-abcd"
 
 
-from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_common_lock_tests", CLI_PATH)
@@ -735,9 +735,7 @@ class FencedProcessTests(unittest.TestCase):
             CLI.merge_gate_intent_digest(**values),
             hashlib.sha256(CLI.canonical_bytes(preimage)).hexdigest(),
         )
-        with mock.patch.object(
-            CORE,
-            "COMMON_LOCK_CONTROLS",
+        with patch_chain_core("COMMON_LOCK_CONTROLS",
             CLI.COMMON_LOCK_CONTROLS - {"fence-intent-revalidation"},
         ), self.assertRaises(CLI.FrozenError):
             CLI.merge_gate_intent_digest(**values)
@@ -791,13 +789,9 @@ class FencedProcessTests(unittest.TestCase):
                         raise FileExistsError
                     return real_publish(*args, **kwargs)
 
-                with mock.patch.object(
-                    CORE,
-                    "_spawn_blocked_fence_child",
+                with patch_chain_core("_spawn_blocked_fence_child",
                     side_effect=capture_ack_deadline,
-                ), mock.patch.object(
-                    CORE,
-                    "_publish_fence",
+                ), patch_chain_core("_publish_fence",
                     side_effect=collide_once,
                 ):
                     second = CLI.run_fenced_command(
@@ -861,18 +855,12 @@ class FencedProcessTests(unittest.TestCase):
                             else OSError("transient publication failure")
                         )
 
-                        with mock.patch.object(
-                            CORE, "COMMON_LOCK_TIMEOUT_SECONDS", 0.1
-                        ), mock.patch.object(
-                            CORE,
-                            "_spawn_blocked_fence_child",
+                        with patch_chain_core("COMMON_LOCK_TIMEOUT_SECONDS", 0.1
+                        ), patch_chain_core("_spawn_blocked_fence_child",
                             side_effect=spawn_attempt,
-                        ) as spawn, mock.patch.object(
-                            CORE,
-                            "_publish_fence",
+                        ) as spawn, patch_chain_core("_publish_fence",
                             side_effect=publication_error,
-                        ) as publish, mock.patch.object(
-                            CORE, "_stop_unstarted_child", return_value=True
+                        ) as publish, patch_chain_core("_stop_unstarted_child", return_value=True
                         ):
                             with self.assertRaises(CLI.CommonLockUnavailable):
                                 CLI.run_fenced_command(
@@ -922,11 +910,8 @@ class FencedProcessTests(unittest.TestCase):
                 raise OSError("slow acknowledgement failure")
 
             try:
-                with mock.patch.object(
-                    CORE, "COMMON_LOCK_TIMEOUT_SECONDS", 0.1
-                ), mock.patch.object(
-                    CORE,
-                    "_spawn_blocked_fence_child",
+                with patch_chain_core("COMMON_LOCK_TIMEOUT_SECONDS", 0.1
+                ), patch_chain_core("_spawn_blocked_fence_child",
                     side_effect=slow_failure,
                 ) as spawn:
                     with self.assertRaises(CLI.CommonLockUnavailable):
@@ -965,9 +950,7 @@ class FencedProcessTests(unittest.TestCase):
             lock._clock = retry_clock
             lock._sleeper = retry_clock.sleep
             try:
-                with mock.patch.object(
-                    CORE,
-                    "_spawn_blocked_fence_child",
+                with patch_chain_core("_spawn_blocked_fence_child",
                     side_effect=ChildProcessError("unreaped blocked child"),
                 ) as spawn:
                     with self.assertRaisesRegex(
@@ -1010,12 +993,9 @@ class FencedProcessTests(unittest.TestCase):
                 exec_error_descriptor=224,
             )
             try:
-                with mock.patch.object(
-                    CORE, "_spawn_blocked_fence_child", return_value=child
-                ), mock.patch.object(
-                    CORE, "_publish_fence", side_effect=RuntimeError("unexpected")
-                ), mock.patch.object(
-                    CORE, "_stop_unstarted_child", return_value=False
+                with patch_chain_core("_spawn_blocked_fence_child", return_value=child
+                ), patch_chain_core("_publish_fence", side_effect=RuntimeError("unexpected")
+                ), patch_chain_core("_stop_unstarted_child", return_value=False
                 ) as stop:
                     with self.assertRaises(CLI.CommonLockUnavailable):
                         CLI.run_fenced_command(
@@ -1040,9 +1020,7 @@ class FencedProcessTests(unittest.TestCase):
 
     def test_blocked_child_pipe_setup_and_failed_ack_cleanup_are_bounded(self) -> None:
         closed: list[int] = []
-        with mock.patch.object(
-            CORE,
-            "_pipe_cloexec",
+        with patch_chain_core("_pipe_cloexec",
             side_effect=[(201, 202), (203, 204), OSError("descriptor pressure")],
         ), mock.patch.object(CLI.os, "close", side_effect=closed.append):
             with self.assertRaisesRegex(OSError, "descriptor pressure"):
@@ -1059,14 +1037,11 @@ class FencedProcessTests(unittest.TestCase):
         closed.clear()
         pipe_pairs = [(211, 212), (213, 214), (215, 216), (217, 218)]
         clock = FakeClock()
-        with mock.patch.object(
-            CORE, "_pipe_cloexec", side_effect=pipe_pairs
+        with patch_chain_core("_pipe_cloexec", side_effect=pipe_pairs
         ), mock.patch.object(CLI.os, "fork", return_value=219), mock.patch.object(
             CLI.os, "close", side_effect=closed.append
-        ), mock.patch.object(
-            CORE, "_read_child_ack", side_effect=OSError("ack failed")
-        ), mock.patch.object(
-            CORE, "_wait_for_child_exit", side_effect=[False, False]
+        ), patch_chain_core("_read_child_ack", side_effect=OSError("ack failed")
+        ), patch_chain_core("_wait_for_child_exit", side_effect=[False, False]
         ), mock.patch.object(CLI.os, "kill") as kill_child:
             with self.assertRaisesRegex(ChildProcessError, "could not be reaped"):
                 CLI._spawn_blocked_fence_child(
@@ -1097,18 +1072,15 @@ class FencedProcessTests(unittest.TestCase):
                         failed_once = True
                         raise OSError("injected parent close failure")
 
-                with mock.patch.object(
-                    CORE, "_pipe_cloexec", side_effect=pipe_pairs
+                with patch_chain_core("_pipe_cloexec", side_effect=pipe_pairs
                 ), mock.patch.object(
                     CLI.os, "fork", return_value=239
                 ), mock.patch.object(
                     CLI.os, "close", side_effect=fail_selected_close
-                ), mock.patch.object(
-                    CORE, "_read_child_ack", return_value=(239, 239)
+                ), patch_chain_core("_read_child_ack", return_value=(239, 239)
                 ) as read_ack, mock.patch.object(
                     CLI.os, "getpgid", return_value=239
-                ), mock.patch.object(
-                    CORE, "_wait_for_child_exit", return_value=True
+                ), patch_chain_core("_wait_for_child_exit", return_value=True
                 ) as wait_for_exit:
                     with self.assertRaisesRegex(
                         OSError, "injected parent close failure"
@@ -1135,8 +1107,7 @@ class FencedProcessTests(unittest.TestCase):
             common = Path(temporary)
             canonical, descriptor = CLI._open_owned_directory(common)
             try:
-                with mock.patch.object(
-                    CORE, "_write_all", side_effect=OSError("write failed")
+                with patch_chain_core("_write_all", side_effect=OSError("write failed")
                 ):
                     with self.assertRaisesRegex(OSError, "write failed"):
                         CLI._create_private_record_at(
@@ -1244,9 +1215,7 @@ class FencedProcessTests(unittest.TestCase):
 
             fence_path = common / CLI.COMMON_LOCK_INFLIGHT_NAME
             try:
-                with mock.patch.object(
-                    CORE,
-                    "_read_owned_record_at",
+                with patch_chain_core("_read_owned_record_at",
                     side_effect=replace_before_first_canonical_read,
                 ):
                     with self.assertRaises(CLI._PublicationCleanupFailure):
@@ -1322,8 +1291,7 @@ class FencedProcessTests(unittest.TestCase):
         )
         clock = FakeClock()
         closed: list[int] = []
-        with mock.patch.object(
-            CORE, "_waitpid_nohang", return_value=(False, None)
+        with patch_chain_core("_waitpid_nohang", return_value=(False, None)
         ), mock.patch.object(CLI.os, "killpg") as kill_group, mock.patch.object(
             CLI.os, "close", side_effect=closed.append
         ):
@@ -1413,13 +1381,9 @@ class FencedProcessTests(unittest.TestCase):
                     CLI.os, "read", side_effect=continuous_read
                 ), mock.patch.object(
                     CLI.os, "close", side_effect=closed.append
-                ), mock.patch.object(
-                    CORE,
-                    "_waitpid_nohang",
+                ), patch_chain_core("_waitpid_nohang",
                     return_value=(True, 0) if normal_exit else (False, None),
-                ), mock.patch.object(
-                    CORE,
-                    "_terminate_fenced_group",
+                ), patch_chain_core("_terminate_fenced_group",
                     return_value=(None, True),
                 ):
                     result = CLI._collect_fenced_child(
@@ -1582,15 +1546,11 @@ class FencedProcessTests(unittest.TestCase):
                 )
             )
 
-            with mock.patch.object(
-                CORE,
-                "_inspect_common_lock_fd",
+            with patch_chain_core("_inspect_common_lock_fd",
                 side_effect=AssertionError(
                     "ordinary acquisition must not inspect a fenced owner"
                 ),
-            ), mock.patch.object(
-                CORE,
-                "_read_fence_for_recovery",
+            ), patch_chain_core("_read_fence_for_recovery",
                 side_effect=AssertionError(
                     "ordinary acquisition must not read the fence"
                 ),
@@ -2150,9 +2110,7 @@ class WrapperAndDormancyTests(unittest.TestCase):
             init_repo(repository)
             stdout = io.StringIO()
             stderr = io.StringIO()
-            with mock.patch.object(
-                CORE,
-                "acquire_common_lock",
+            with patch_chain_core("acquire_common_lock",
                 side_effect=AssertionError("dormant lock was reached"),
             ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 exit_code = CLI.main(
@@ -2165,9 +2123,7 @@ class WrapperAndDormancyTests(unittest.TestCase):
             self.assertEqual(envelope["message"], "no commit chain exists for this worktree")
 
             stdout = io.StringIO()
-            with mock.patch.object(
-                CORE,
-                "acquire_common_lock",
+            with patch_chain_core("acquire_common_lock",
                 side_effect=AssertionError("dormant lock was reached"),
             ), contextlib.redirect_stdout(stdout):
                 exit_code = CLI.main(
@@ -2186,9 +2142,7 @@ class WrapperAndDormancyTests(unittest.TestCase):
 
     def test_each_new_control_is_independently_fail_closed_in_memory(self) -> None:
         for control in sorted(CLI._REQUIRED_COMMON_LOCK_CONTROLS):
-            with self.subTest(control=control), mock.patch.object(
-                CORE,
-                "COMMON_LOCK_CONTROLS",
+            with self.subTest(control=control), patch_chain_core("COMMON_LOCK_CONTROLS",
                 CLI._REQUIRED_COMMON_LOCK_CONTROLS - {control},
             ), self.assertRaises(CLI.FrozenError):
                 CLI._require_common_lock_control(control)

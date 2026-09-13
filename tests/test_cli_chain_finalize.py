@@ -22,7 +22,7 @@ CLI_PATH = ROOT / "scripts/forge/cli.py"
 CHAIN_ID = "c-2026-08-21T120000Z-0001"
 
 
-from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_chain_finalize_tests", CLI_PATH)
@@ -460,8 +460,7 @@ class FinalizeCheckTests(FinalizeFixture):
         self.state["tier"]["control"] = True
         candidate = self.state["candidate"]["sha256"]
 
-        with mock.patch.object(
-            CLI.chain_core, "_fresh_reviewer_evals_required", return_value=True
+        with patch_chain_core("_fresh_reviewer_evals_required", return_value=True
         ):
             required = CLI._required_steps(self.context, self.state)
             self.assertEqual(
@@ -511,8 +510,7 @@ class FinalizeCheckTests(FinalizeFixture):
         ]
         self.persist()
 
-        with mock.patch.object(
-            CLI.chain_core, "_fresh_reviewer_evals_required", return_value=True
+        with patch_chain_core("_fresh_reviewer_evals_required", return_value=True
         ):
             skipped = self.engine.skip(
                 "fresh-reviewer-evals",
@@ -546,8 +544,7 @@ class FinalizeCheckTests(FinalizeFixture):
         self.state["authorization"] = {}
         self.persist()
 
-        with mock.patch.object(
-            CLI.chain_core, "_fresh_reviewer_evals_required", return_value=True
+        with patch_chain_core("_fresh_reviewer_evals_required", return_value=True
         ), self.assertRaises(CLI.Refusal) as caught:
             self.engine.gate_run("fresh-reviewer-evals")
 

@@ -34,7 +34,7 @@ ENVELOPE_KEYS = {
 }
 
 
-from tests._cli_loader import load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core  # shared loader
 
 
 CLI = load_script("forge_revision9_ingest_negative_cli", CLI_PATH)
@@ -910,8 +910,7 @@ class Revision9IngestPredicateNegativeTests(
             configured_changelog=True,
         )
 
-        with mock.patch.object(
-            CORE, "_committed_changelog_output_paths", return_value=frozenset()
+        with patch_chain_core("_committed_changelog_output_paths", return_value=frozenset()
         ):
             self.assert_ingest_refusal(prepared, "scope-membership")
 

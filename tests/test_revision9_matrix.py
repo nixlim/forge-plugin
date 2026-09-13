@@ -20,7 +20,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 ARCHIVE_PATH = ROOT / "scripts" / "forge" / "archive-run.py"
 
 
-from tests._cli_loader import load_cached as load_module, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_cached as load_module, package_module, patch_chain_core  # cli split phase 0: one shared loader
 
 
 def canonical(value: object) -> bytes:
@@ -863,9 +863,7 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
         )
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with mock.patch.object(
-            CORE,
-            "_ingest_allocation_records",
+        with patch_chain_core("_ingest_allocation_records",
             side_effect=lambda _repository, state: list(state.records),
         ) as disabled_projection, mock.patch.object(
             builders,

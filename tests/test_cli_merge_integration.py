@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import test_cli_merge_adapters as ADAPTERS
-from tests._cli_loader import package_module
+from tests._cli_loader import package_module, patch_chain_core
 
 
 CLI = ADAPTERS.CLI
@@ -252,14 +252,10 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             mock.patch.object(
                 RUNTIME, "COMMAND_TIMEOUT_SECONDS", self._PROCESS_TIMEOUT_SECONDS
             ),
-            mock.patch.object(
-                CORE,
-                "_merge_transition_valid",
+            patch_chain_core("_merge_transition_valid",
                 new=capture_transition_context,
             ),
-            mock.patch.object(
-                CORE,
-                "_replay_merge_event_bytes",
+            patch_chain_core("_replay_merge_event_bytes",
                 new=cached_unbound_replay,
             ),
             mock.patch.object(
@@ -267,11 +263,9 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 "_prepare_event",
                 new=cache_prepared_unbound_event,
             ),
-            mock.patch.object(
-                CORE, "acquire_common_lock", new=bounded_common_lock
+            patch_chain_core("acquire_common_lock", new=bounded_common_lock
             ),
-            mock.patch.object(
-                CORE, "acquire_chain_lease", new=bounded_chain_lease
+            patch_chain_core("acquire_chain_lease", new=bounded_chain_lease
             ),
         )
         for patcher in patches:
@@ -441,8 +435,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 moved = True
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=move_during_observation
+        with patch_chain_core("run_fenced_command", side_effect=move_during_observation
         ):
             parked = engine.finalize()
         self.assertTrue(parked.ok)
@@ -524,8 +517,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 )
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=advance_before_first_push
+        with patch_chain_core("run_fenced_command", side_effect=advance_before_first_push
         ):
             moved = engine.finalize()
         moved_state = store.load(chain_id)
@@ -584,8 +576,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             candidate_observations[key] = copy.deepcopy(evidence)
             return current, evidence
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=complete_gate_without_process
+        with patch_chain_core("run_fenced_command", side_effect=complete_gate_without_process
         ), mock.patch.object(
             engine,
             "_run_candidate_observation_locked",
@@ -644,8 +635,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original_observation(*args, **kwargs)
 
         patches = (
-            mock.patch.object(
-                CORE, "run_fenced_command", side_effect=advance_before_second_push
+            patch_chain_core("run_fenced_command", side_effect=advance_before_second_push
             ),
             mock.patch.object(
                 engine,
@@ -836,8 +826,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 return result
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=fail_first_conflict_read
+        with patch_chain_core("run_fenced_command", side_effect=fail_first_conflict_read
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.finalize()
         current = store.load(str(authorized["chain_id"]))
@@ -918,8 +907,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         self.assertNotEqual(remote_before.returncode, 0)
 
         starter = CLI.MergeEngine(self.context())
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_bootstrap_fetch
+        with patch_chain_core("run_fenced_command", side_effect=record_bootstrap_fetch
         ), self.assertRaises(CLI.Refusal) as caught:
             starter.start_chain(str(self.worktree))
 
@@ -989,9 +977,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 deleted = True
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        with patch_chain_core("run_fenced_command",
             side_effect=delete_before_final_observation,
         ):
             parked = engine.finalize()
@@ -1067,8 +1053,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         chain_id = str(authorized["chain_id"])
         events_before = self.events(store, chain_id)
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=delete_after_final_read
+        with patch_chain_core("run_fenced_command", side_effect=delete_after_final_read
         ):
             finalized = engine.finalize()
 
@@ -1182,8 +1167,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             operations.append(operation)
             return result
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=reject_then_delete
+        with patch_chain_core("run_fenced_command", side_effect=reject_then_delete
         ):
             parked = engine.finalize()
 
@@ -1217,8 +1201,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         def crash() -> None:
-            with mock.patch.object(
-                CORE, "run_fenced_command", side_effect=kill_after_intent
+            with patch_chain_core("run_fenced_command", side_effect=kill_after_intent
             ):
                 engine.finalize()
 
@@ -1547,15 +1530,11 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                     )
 
                 original_bounded = CLI.run_bounded
-                with mock.patch.object(
-                    CORE,
-                    "run_fenced_command",
+                with patch_chain_core("run_fenced_command",
                     side_effect=AssertionError(
                         "scope release recovery reran a fenced Git child"
                     ),
-                ) as fenced, mock.patch.object(
-                    CORE,
-                    "acquire_common_lock",
+                ) as fenced, patch_chain_core("acquire_common_lock",
                     side_effect=AssertionError(
                         "scope release recovery acquired the common lock"
                     ),
@@ -1649,9 +1628,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         first_id = str(authorized["chain_id"])
         park_release(engine, store, "free lease fast path")
-        with mock.patch.object(
-            CORE,
-            "acquire_common_lock",
+        with patch_chain_core("acquire_common_lock",
             side_effect=AssertionError("free pending release acquired common lock"),
         ) as free_common:
             free_recovery = engine.recover()
@@ -1762,10 +1739,8 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
             for index in range(2)
         ]
-        with mock.patch.object(
-            CORE, "acquire_common_lock", side_effect=record_common
-        ), mock.patch.object(
-            CORE, "acquire_chain_lease", side_effect=record_chain
+        with patch_chain_core("acquire_common_lock", side_effect=record_common
+        ), patch_chain_core("acquire_chain_lease", side_effect=record_chain
         ):
             for thread in threads:
                 thread.start()
@@ -1927,8 +1902,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 raise GateStartBoundary("park before the first sealed gate")
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=park_before_first_gate
+        with patch_chain_core("run_fenced_command", side_effect=park_before_first_gate
         ), self.assertRaisesRegex(GateStartBoundary, "first sealed gate"):
             engine.finalize()
         prepared = store.load(str(authorized["chain_id"]))
@@ -1941,8 +1915,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         def crash() -> None:
-            with mock.patch.object(
-                CORE, "run_fenced_command", side_effect=kill_before_gate_record
+            with patch_chain_core("run_fenced_command", side_effect=kill_before_gate_record
             ):
                 engine.recover()
 
@@ -2000,8 +1973,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                     )
             return result
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=mutate_after_first_gate
+        with patch_chain_core("run_fenced_command", side_effect=mutate_after_first_gate
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.finalize()
 
@@ -2039,9 +2011,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                     )
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        with patch_chain_core("run_fenced_command",
             side_effect=park_before_post_observation,
         ), self.assertRaisesRegex(
             PostObservationBoundary, "before post observation"
@@ -2060,9 +2030,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         def crash() -> None:
-            with mock.patch.object(
-                CORE,
-                "run_fenced_command",
+            with patch_chain_core("run_fenced_command",
                 side_effect=kill_before_post_observation,
             ):
                 engine.recover()
@@ -2115,7 +2083,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 return result
             return original(lock, **kwargs)
 
-        with mock.patch.object(CORE, "run_fenced_command", side_effect=fail_first_push):
+        with patch_chain_core("run_fenced_command", side_effect=fail_first_push):
             with self.assertRaises(CLI.Refusal) as first:
                 engine.finalize()
             self.assertEqual(first.exception.reason_code, CLI.V2ReasonCode.PUSH_FAILED)
@@ -2124,9 +2092,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             self.assertEqual(failed["state"], "pushing")
             self.assertEqual(failed["integration"]["condition"], "push-failed")
             before_retry = store.events_path(str(authorized["chain_id"])).read_bytes()
-            with mock.patch.object(
-                CORE,
-                "MERGE_INTEGRATION_CONTROLS",
+            with patch_chain_core("MERGE_INTEGRATION_CONTROLS",
                 CLI.MERGE_INTEGRATION_CONTROLS - {"push-retry"},
             ), self.assertRaisesRegex(
                 CLI.FrozenError,
@@ -2232,8 +2198,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             kwargs["persist_result"](result)
             return result
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=fail_push_without_remote_effect
+        with patch_chain_core("run_fenced_command", side_effect=fail_push_without_remote_effect
         ), self.assertRaises(CLI.Refusal) as failed:
             engine.finalize()
         self.assertEqual(failed.exception.reason_code, CLI.V2ReasonCode.PUSH_FAILED)
@@ -2254,8 +2219,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_recovery_observation
+        ), patch_chain_core("run_fenced_command", side_effect=record_recovery_observation
         ):
             observed = engine.recover()
         observed_state = store.load(str(authorized["chain_id"]))
@@ -2307,9 +2271,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                     history=history,
                 )
             target_reached = True
-            with mock.patch.object(
-                CORE,
-                "MERGE_INTEGRATION_CONTROLS",
+            with patch_chain_core("MERGE_INTEGRATION_CONTROLS",
                 CLI.MERGE_INTEGRATION_CONTROLS
                 - {"observation-first-recovery"},
             ), self.assertRaisesRegex(
@@ -2327,9 +2289,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 )
             return False
 
-        with mock.patch.object(
-            CORE,
-            "_merge_transition_valid",
+        with patch_chain_core("_merge_transition_valid",
             new=disable_observation_control_only_at_target,
         ), self.assertRaisesRegex(
             CLI.FrozenError,
@@ -2352,8 +2312,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_abort_observation
+        ), patch_chain_core("run_fenced_command", side_effect=record_abort_observation
         ):
             outcome = engine.abort("authoritatively not landed")
 
@@ -2515,9 +2474,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             kwargs["persist_result"](result)
             return result
 
-        with mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        with patch_chain_core("run_fenced_command",
             side_effect=complete_gate_without_process,
         ), mock.patch.object(
             engine,
@@ -2576,9 +2533,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 raise FreshEpochPushBoundary("fresh H3 reached push boundary")
             return complete_gate_without_process(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        with patch_chain_core("run_fenced_command",
             side_effect=stop_after_durable_push_intent,
         ), mock.patch.object(
             engine,
@@ -2663,8 +2618,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_observation_children
+        ), patch_chain_core("run_fenced_command", side_effect=record_observation_children
         ), mock.patch.object(
             engine,
             "_begin_epoch",
@@ -2749,9 +2703,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ), patch_chain_core("run_fenced_command",
             side_effect=persist_unavailable_observation,
         ), mock.patch.object(
             engine,
@@ -2836,8 +2788,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_observation
+        ), patch_chain_core("run_fenced_command", side_effect=record_observation
         ), mock.patch.object(
             engine,
             "_begin_epoch",
@@ -2960,9 +2911,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             RUNTIME,
             "run_bounded",
             side_effect=AssertionError("inactive containment prefix launched a child"),
-        ) as bounded, mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ) as bounded, patch_chain_core("run_fenced_command",
             side_effect=AssertionError("inactive containment prefix launched a fence"),
         ) as fenced, mock.patch.object(
             engine,
@@ -3041,9 +2990,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             RUNTIME,
             "run_bounded",
             side_effect=AssertionError("forged inactive observation launched a child"),
-        ) as bounded, mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ) as bounded, patch_chain_core("run_fenced_command",
             side_effect=AssertionError("forged inactive observation launched a fence"),
         ) as fenced, mock.patch.object(
             engine,
@@ -3150,9 +3097,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             RUNTIME,
             "run_bounded",
             side_effect=AssertionError("forged unavailable observation launched a child"),
-        ) as bounded, mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ) as bounded, patch_chain_core("run_fenced_command",
             side_effect=AssertionError("forged unavailable observation launched a fence"),
         ) as fenced, mock.patch.object(
             engine,
@@ -3203,9 +3148,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         for child, launch in launchers.items():
             with self.subTest(child=child), mock.patch.object(
                 RUNTIME, "utc_now", return_value=future
-            ), mock.patch.object(
-                CORE,
-                "run_fenced_command",
+            ), patch_chain_core("run_fenced_command",
                 side_effect=AssertionError(f"inactive epoch launched the {child} child"),
             ) as fenced, self.assertRaises(CLI.Refusal) as caught:
                 launch()
@@ -3258,9 +3201,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             engine,
             "_prepare_git_no_lazy_fetch_qualification",
             side_effect=AssertionError("inactive pre-push recovery qualified Git"),
-        ) as qualification, mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ) as qualification, patch_chain_core("run_fenced_command",
             side_effect=AssertionError("inactive pre-push recovery launched a child"),
         ) as fenced, mock.patch.object(
             engine,
@@ -3327,9 +3268,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             RUNTIME,
             "run_bounded",
             side_effect=AssertionError("hostile inactive prefix launched a child"),
-        ) as bounded, mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ) as bounded, patch_chain_core("run_fenced_command",
             side_effect=AssertionError("hostile inactive prefix launched a fence"),
         ) as fenced, self.assertRaisesRegex(
             CLI.FrozenError,
@@ -3468,17 +3407,13 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         with mock.patch.object(
             RUNTIME, "utc_now", side_effect=selected_now
-        ), mock.patch.object(
-            CORE,
-            "acquire_common_lock",
+        ), patch_chain_core("acquire_common_lock",
             side_effect=acquire_across_inactivity_boundary,
         ), mock.patch.object(
             RUNTIME,
             "run_bounded",
             side_effect=bounded_before_deadline,
-        ) as bounded, mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ) as bounded, patch_chain_core("run_fenced_command",
             side_effect=AssertionError("deadline crossing launched a fenced child"),
         ) as fenced, mock.patch.object(
             engine,
@@ -3522,8 +3457,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_historical_observation
+        ), patch_chain_core("run_fenced_command", side_effect=record_historical_observation
         ):
             recovered = engine.recover()
 
@@ -3611,9 +3545,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         future = CLI.parse_time("2999-01-01T00:00:00Z")
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ), patch_chain_core("run_fenced_command",
             side_effect=record_only_initial_historical_observation,
         ), mock.patch.object(
             store,
@@ -3682,17 +3614,13 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ), patch_chain_core("run_fenced_command",
             side_effect=record_only_initial_historical_observation,
         ), mock.patch.object(
             store,
             "transition_locked",
             side_effect=stop_after("ownership_released"),
-        ), mock.patch.object(
-            CORE,
-            "acquire_common_lock",
+        ), patch_chain_core("acquire_common_lock",
             side_effect=AssertionError(
                 "releasing recovery acquired the common lock"
             ),
@@ -3741,17 +3669,13 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         with mock.patch.object(
             RUNTIME, "utc_now", return_value=future
-        ), mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ), patch_chain_core("run_fenced_command",
             side_effect=record_only_initial_historical_observation,
         ), mock.patch.object(
             ENGINE,
             "_remove_merge_claim",
             side_effect=fail_terminal_tombstone_collection,
-        ), mock.patch.object(
-            CORE,
-            "acquire_common_lock",
+        ), patch_chain_core("acquire_common_lock",
             side_effect=AssertionError(
                 "released recovery acquired the common lock"
             ),
@@ -3839,8 +3763,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 raise PushStartBoundary("park after the durable push intent")
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=park_before_push
+        with patch_chain_core("run_fenced_command", side_effect=park_before_push
         ), self.assertRaisesRegex(PushStartBoundary, "durable push intent"):
             engine.finalize()
         prepared = store.load(str(authorized["chain_id"]))
@@ -4025,8 +3948,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 moved = True
             return original_fenced(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=move_during_first_observation
+        with patch_chain_core("run_fenced_command", side_effect=move_during_first_observation
         ):
             deferred = engine.finalize()
         moved_state = engine.store.load(str(started.chain_id))
@@ -4055,8 +3977,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         with mock.patch.object(
             RUNTIME, "run_bounded", side_effect=record_mode_read
-        ), mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_push_child
+        ), patch_chain_core("run_fenced_command", side_effect=record_push_child
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.finalize()
         parked = engine.store.load(str(started.chain_id))
@@ -4136,8 +4057,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
         with mock.patch.object(
             RUNTIME, "run_bounded", side_effect=unsupported
-        ), mock.patch.object(
-            CORE, "acquire_common_lock", wraps=CLI.acquire_common_lock
+        ), patch_chain_core("acquire_common_lock", wraps=CLI.acquire_common_lock
         ) as acquire, self.assertRaises(CLI.Refusal) as caught:
             engine.finalize()
         self.assertEqual(
@@ -4223,8 +4143,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             side_effect=drifting_identity,
         ), mock.patch.object(
             RUNTIME, "run_bounded", side_effect=bounded
-        ), mock.patch.object(
-            CORE, "acquire_common_lock", wraps=CLI.acquire_common_lock
+        ), patch_chain_core("acquire_common_lock", wraps=CLI.acquire_common_lock
         ) as acquire, self.assertRaises(CLI.Refusal) as caught:
             engine.recover()
         self.assertEqual(identity_calls, 3)
@@ -4259,9 +4178,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
     def test_invalid_final_mode_control_is_load_bearing_at_push_boundary(self) -> None:
         engine, store, authorized = self.authorize()
         before = store.events_path(str(authorized["chain_id"])).read_bytes()
-        with mock.patch.object(
-            CORE,
-            "MERGE_INTEGRATION_CONTROLS",
+        with patch_chain_core("MERGE_INTEGRATION_CONTROLS",
             CLI.MERGE_INTEGRATION_CONTROLS - {"final-intended-head-mode"},
         ), mock.patch.object(
             ENGINE, "_qualify_git_no_lazy_fetch"
@@ -4290,8 +4207,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 actions.append(kwargs["env"].get("GIT_REFLOG_ACTION"))
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_reflog_action
+        with patch_chain_core("run_fenced_command", side_effect=record_reflog_action
         ):
             with self.assertRaises(CLI.Refusal) as caught:
                 engine.finalize()
@@ -4306,8 +4222,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
         self.assertEqual(actions, [expected_action])
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_reflog_action
+        with patch_chain_core("run_fenced_command", side_effect=record_reflog_action
         ):
             recovered = engine.recover(abort_rebase=True)
         restored = store.load(str(authorized["chain_id"]))
@@ -4530,13 +4445,9 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             ("--abort-rebase", {"abort_rebase": True}),
         )
         for flag, arguments in modes:
-            with self.subTest(flag=flag), mock.patch.object(
-                CORE,
-                "_REQUIRED_MERGE_INTEGRATION_CONTROLS",
+            with self.subTest(flag=flag), patch_chain_core("_REQUIRED_MERGE_INTEGRATION_CONTROLS",
                 CLI._REQUIRED_MERGE_INTEGRATION_CONTROLS - {control},
-            ), mock.patch.object(
-                CORE,
-                "MERGE_INTEGRATION_CONTROLS",
+            ), patch_chain_core("MERGE_INTEGRATION_CONTROLS",
                 CLI.MERGE_INTEGRATION_CONTROLS - {control},
             ), mock.patch.object(
                 engine,
@@ -4571,8 +4482,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         def crash() -> None:
-            with mock.patch.object(
-                CORE, "run_fenced_command", side_effect=kill_before_rebase_child
+            with patch_chain_core("run_fenced_command", side_effect=kill_before_rebase_child
             ):
                 engine.finalize()
 
@@ -4593,9 +4503,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             for event in self.events(store, str(authorized["chain_id"]))
         )
         before_events = store.events_path(str(authorized["chain_id"])).read_bytes()
-        with mock.patch.object(
-            CORE,
-            "MERGE_INTEGRATION_CONTROLS",
+        with patch_chain_core("MERGE_INTEGRATION_CONTROLS",
             CLI.MERGE_INTEGRATION_CONTROLS - {"observation-first-recovery"},
         ), self.assertRaisesRegex(
             CLI.FrozenError,
@@ -4632,8 +4540,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         def crash() -> None:
-            with mock.patch.object(
-                CORE, "run_fenced_command", side_effect=kill_before_rebase_child
+            with patch_chain_core("run_fenced_command", side_effect=kill_before_rebase_child
             ):
                 engine.finalize()
 
@@ -4690,8 +4597,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 return result
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=timeout_branch_observation
+        with patch_chain_core("run_fenced_command", side_effect=timeout_branch_observation
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.finalize()
         current = store.load(str(authorized["chain_id"]))
@@ -4807,8 +4713,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 mutation_argv.append(argv)
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_mutation_children
+        with patch_chain_core("run_fenced_command", side_effect=record_mutation_children
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.recover(continue_rebase=True, paths=["src/app.py"])
         current = store.load(str(authorized["chain_id"]))
@@ -4846,8 +4751,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 self.git_at(self.worktree, "add", "src/post-stage-contaminant.py")
             return result
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=contaminate_after_stage
+        with patch_chain_core("run_fenced_command", side_effect=contaminate_after_stage
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.recover(continue_rebase=True, paths=["src/app.py"])
         current = store.load(str(authorized["chain_id"]))
@@ -4878,8 +4782,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return result
 
         def crash() -> None:
-            with mock.patch.object(
-                CORE, "run_fenced_command", side_effect=kill_after_stage
+            with patch_chain_core("run_fenced_command", side_effect=kill_after_stage
             ):
                 engine.recover(continue_rebase=True, paths=["src/app.py"])
 
@@ -4895,7 +4798,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 calls.append(argv)
             return original(lock, **kwargs)
 
-        with mock.patch.object(CORE, "run_fenced_command", side_effect=record_resume):
+        with patch_chain_core("run_fenced_command", side_effect=record_resume):
             recovered = engine.recover()
         self.assertTrue(recovered.ok)
         self.assertEqual(calls, [["git", "rebase", "--continue"]])
@@ -4939,8 +4842,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 return result
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=timeout_continue
+        with patch_chain_core("run_fenced_command", side_effect=timeout_continue
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.recover(continue_rebase=True, paths=["src/app.py"])
         current = store.load(str(authorized["chain_id"]))
@@ -4999,7 +4901,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 observation_calls.append((kwargs.get("operation"), tuple(argv)))
             return original(lock, **kwargs)
 
-        with mock.patch.object(CORE, "run_fenced_command", side_effect=record_calls):
+        with patch_chain_core("run_fenced_command", side_effect=record_calls):
             outcome = engine.recover(continue_rebase=True, paths=["src/app.py"])
         self.assertTrue(outcome.ok)
         self.assertEqual(len(calls), 2)
@@ -5048,9 +4950,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         chain_id = str(authorized["chain_id"])
         before_events = store.events_path(chain_id).read_bytes()
         before_index = (Path(str(store.load(chain_id)["worktree"]["git_dir"])) / "index").read_bytes()
-        with mock.patch.object(
-            CORE,
-            "MERGE_INTEGRATION_CONTROLS",
+        with patch_chain_core("MERGE_INTEGRATION_CONTROLS",
             CLI.MERGE_INTEGRATION_CONTROLS - {"conflict-continue-contract"},
         ), self.assertRaisesRegex(
             CLI.FrozenError,
@@ -5119,7 +5019,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 calls.append(argv)
             return original(lock, **kwargs)
 
-        with mock.patch.object(CORE, "run_fenced_command", side_effect=record_literal_add):
+        with patch_chain_core("run_fenced_command", side_effect=record_literal_add):
             recovered = engine.recover(continue_rebase=True, paths=[relative])
         self.assertTrue(recovered.ok)
         self.assertEqual(
@@ -5165,8 +5065,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             kwargs["persist_result"](result)
             return result
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=timed_out_after_git_started
+        with patch_chain_core("run_fenced_command", side_effect=timed_out_after_git_started
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.finalize()
         current = store.load(str(authorized["chain_id"]))
@@ -5229,9 +5128,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
 
         before_retry = store.events_path(str(authorized["chain_id"])).read_bytes()
-        with mock.patch.object(
-            CORE,
-            "MERGE_INTEGRATION_CONTROLS",
+        with patch_chain_core("MERGE_INTEGRATION_CONTROLS",
             CLI.MERGE_INTEGRATION_CONTROLS
             - {"successor-ancestry-observation"},
         ), self.assertRaisesRegex(
@@ -5251,8 +5148,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_second_epoch
+        with patch_chain_core("run_fenced_command", side_effect=record_second_epoch
         ):
             finalized = engine.finalize()
         pushed = store.load(str(authorized["chain_id"]))
@@ -5400,7 +5296,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             calls.append((kwargs.get("operation"), list(kwargs.get("argv", ()))))
             return original(lock, **kwargs)
 
-        with mock.patch.object(CORE, "run_fenced_command", side_effect=record):
+        with patch_chain_core("run_fenced_command", side_effect=record):
             recovered = engine.recover()
         self.assertTrue(recovered.ok)
         self.assertFalse(any(operation == "fetch" for operation, _argv in calls))
@@ -5438,8 +5334,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         def crash() -> None:
-            with mock.patch.object(
-                CORE, "run_fenced_command", side_effect=kill_before_ancestry
+            with patch_chain_core("run_fenced_command", side_effect=kill_before_ancestry
             ):
                 engine.recover()
 
@@ -5450,14 +5345,10 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(intent["phase"], "intent")
 
         before = store.events_path(chain_id).read_bytes()
-        with mock.patch.object(
-            CORE,
-            "_REQUIRED_MERGE_INTEGRATION_CONTROLS",
+        with patch_chain_core("_REQUIRED_MERGE_INTEGRATION_CONTROLS",
             CLI._REQUIRED_MERGE_INTEGRATION_CONTROLS
             - {"successor-ancestry-observation"},
-        ), mock.patch.object(
-            CORE,
-            "MERGE_INTEGRATION_CONTROLS",
+        ), patch_chain_core("MERGE_INTEGRATION_CONTROLS",
             CLI.MERGE_INTEGRATION_CONTROLS
             - {"successor-ancestry-observation"},
         ), self.assertRaisesRegex(
@@ -5473,7 +5364,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             calls.append((kwargs.get("operation"), list(kwargs.get("argv", ()))))
             return original(lock, **kwargs)
 
-        with mock.patch.object(CORE, "run_fenced_command", side_effect=record):
+        with patch_chain_core("run_fenced_command", side_effect=record):
             recovered = engine.recover()
         self.assertTrue(recovered.ok)
         self.assertFalse(any(operation == "fetch" for operation, _argv in calls))
@@ -5552,7 +5443,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             calls.append((kwargs.get("operation"), list(kwargs.get("argv", ()))))
             return original(lock, **kwargs)
 
-        with mock.patch.object(CORE, "run_fenced_command", side_effect=record):
+        with patch_chain_core("run_fenced_command", side_effect=record):
             recovered = engine.recover()
         self.assertTrue(recovered.ok)
         self.assertFalse(any(operation == "fetch" for operation, _argv in calls))
@@ -5666,8 +5557,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return original(lock, **kwargs)
 
         before_steps = json.loads(json.dumps(authorized["steps"]))
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=move_during_final_observation
+        with patch_chain_core("run_fenced_command", side_effect=move_during_final_observation
         ):
             parked = engine.finalize()
         carried = store.load(str(authorized["chain_id"]))
@@ -5719,8 +5609,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_second_epoch
+        with patch_chain_core("run_fenced_command", side_effect=record_second_epoch
         ):
             integrated = engine.finalize()
         reviewing = store.load(str(authorized["chain_id"]))
@@ -6025,9 +5914,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                     advanced = True
                 return candidate_or_gate(lock, **kwargs)
 
-            with mock.patch.object(
-                CORE,
-                "run_fenced_command",
+            with patch_chain_core("run_fenced_command",
                 side_effect=advance_before_observation,
             ), mock.patch.object(
                 engine,
@@ -6136,9 +6023,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 raise RearmedPushBoundary("re-armed epoch reached push")
             return candidate_or_gate(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        with patch_chain_core("run_fenced_command",
             side_effect=stop_rearmed_epoch_at_push,
         ), mock.patch.object(
             engine,
@@ -6283,8 +6168,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         first_thread = threading.Thread(
             target=first_contender, name="merge-finalize-first", daemon=True
         )
-        with mock.patch.object(
-            CORE, "acquire_common_lock", new=synchronized_acquire
+        with patch_chain_core("acquire_common_lock", new=synchronized_acquire
         ), mock.patch.object(
             first_engine,
             "_run_candidate_observation_locked",
@@ -6388,9 +6272,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return acquire(*args, **kwargs)
 
         try:
-            with mock.patch.object(
-                CORE,
-                "acquire_common_lock",
+            with patch_chain_core("acquire_common_lock",
                 side_effect=acquire_with_injected_budget,
             ), self.assertRaises(CLI.CommonLockUnavailable) as caught:
                 engine.finalize()
@@ -6516,25 +6398,15 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return True
 
         started_at = time.monotonic()
-        with mock.patch.object(
-            CORE,
-            "acquire_common_lock",
+        with patch_chain_core("acquire_common_lock",
             side_effect=acquire_with_one_clock,
-        ), mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        ), patch_chain_core("run_fenced_command",
             side_effect=run_real_until_target,
-        ), mock.patch.object(
-            CORE,
-            "_spawn_blocked_fence_child",
+        ), patch_chain_core("_spawn_blocked_fence_child",
             side_effect=spawn_target_child,
-        ), mock.patch.object(
-            CORE,
-            "_publish_fence",
+        ), patch_chain_core("_publish_fence",
             side_effect=collide_target_publication,
-        ), mock.patch.object(
-            CORE,
-            "_stop_unstarted_child",
+        ), patch_chain_core("_stop_unstarted_child",
             side_effect=stop_target_child,
         ), self.assertRaises(CLI.CommonLockUnavailable) as caught:
             engine.finalize()
@@ -6633,9 +6505,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         engine, store, authorized = self.authorize()
         before = store.events_path(str(authorized["chain_id"])).read_bytes()
         for control in sorted(CLI._REQUIRED_MERGE_INTEGRATION_CONTROLS):
-            with self.subTest(control=control), mock.patch.object(
-                CORE,
-                "MERGE_INTEGRATION_CONTROLS",
+            with self.subTest(control=control), patch_chain_core("MERGE_INTEGRATION_CONTROLS",
                 CLI.MERGE_INTEGRATION_CONTROLS - {control},
             ), self.assertRaisesRegex(
                 CLI.FrozenError,
@@ -6657,8 +6527,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
             return original(*args, **kwargs, boundary=boundary)
 
-        with mock.patch.object(
-            CORE, "acquire_common_lock", side_effect=fail_final_release
+        with patch_chain_core("acquire_common_lock", side_effect=fail_final_release
         ), self.assertRaises(CLI.CommonLockReleaseFailure) as caught:
             engine.finalize()
         retained = store.load(str(authorized["chain_id"]))
@@ -6697,8 +6566,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
             return result
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=capture_cleanup_results
+        with patch_chain_core("run_fenced_command", side_effect=capture_cleanup_results
         ), mock.patch.object(
             CLI.MergeEngine,
             "_head_contained",
@@ -6991,8 +6859,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             store._read_replay_locked(chain_id)
         with mock.patch.object(
             store, "_read_root_bytes", return_value=result_disabled_raw
-        ), mock.patch.object(
-            CORE, "_merge_cleanup_step_result_valid", return_value=True
+        ), patch_chain_core("_merge_cleanup_step_result_valid", return_value=True
         ):
             self.assertEqual(
                 store._read_replay_locked(chain_id).state["state"], "pushed"
@@ -7016,8 +6883,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             store._read_replay_locked(chain_id)
         with mock.patch.object(
             store, "_read_root_bytes", return_value=close_disabled_raw
-        ), mock.patch.object(
-            CORE, "_merge_release_preconditions_valid", return_value=True
+        ), patch_chain_core("_merge_release_preconditions_valid", return_value=True
         ):
             admitted = store._read_replay_locked(chain_id).state
             self.assertEqual(admitted["state"], "pushed")
@@ -7058,8 +6924,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
 
             return delegated
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=record_cleanup_children
+        with patch_chain_core("run_fenced_command", side_effect=record_cleanup_children
         ), mock.patch.object(
             store,
             "transition_locked",
@@ -7104,13 +6969,9 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
         self.assertFalse(self.worktree.exists())
 
-        with mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        with patch_chain_core("run_fenced_command",
             side_effect=AssertionError("pending cleanup reran a fenced child"),
-        ) as releasing_children, mock.patch.object(
-            CORE,
-            "acquire_common_lock",
+        ) as releasing_children, patch_chain_core("acquire_common_lock",
             side_effect=AssertionError(
                 "releasing cleanup acquired the common lock"
             ),
@@ -7137,13 +6998,9 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             release_intent["digest"],
         )
 
-        with mock.patch.object(
-            CORE,
-            "run_fenced_command",
+        with patch_chain_core("run_fenced_command",
             side_effect=AssertionError("released cleanup reran a fenced child"),
-        ) as released_children, mock.patch.object(
-            CORE,
-            "acquire_common_lock",
+        ) as released_children, patch_chain_core("acquire_common_lock",
             side_effect=AssertionError(
                 "released cleanup acquired the common lock"
             ),
@@ -7254,8 +7111,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             {"common_dir": str(self.repo), "detail": "injected pre-fence failure"}
         )
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=unavailable
+        with patch_chain_core("run_fenced_command", side_effect=unavailable
         ), self.assertRaises(CLI.CommonLockUnavailable):
             engine.cleanup_chain()
 
@@ -7382,8 +7238,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 return result
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=fail_first_branch_delete
+        with patch_chain_core("run_fenced_command", side_effect=fail_first_branch_delete
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.cleanup_chain()
         interrupted = store.load(chain_id)
@@ -7433,8 +7288,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=capture_retry
+        with patch_chain_core("run_fenced_command", side_effect=capture_retry
         ):
             recovered = engine.cleanup_chain()
         closed = store.load(chain_id)
@@ -7600,9 +7454,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 kwargs["boundary"] = boundary
                 return self._original_common_lock(*args, **kwargs)
 
-            with mock.patch.object(
-                CORE,
-                "acquire_common_lock",
+            with patch_chain_core("acquire_common_lock",
                 side_effect=crashing_common_lock,
             ):
                 engine.cleanup_chain()
@@ -7653,8 +7505,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             )
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=capture_retry
+        with patch_chain_core("run_fenced_command", side_effect=capture_retry
         ):
             cleaned = engine.cleanup_chain()
         closed_events = self.events(store, chain_id)
@@ -7718,9 +7569,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 kwargs["boundary"] = boundary
                 return self._original_common_lock(*args, **kwargs)
 
-            with mock.patch.object(
-                CORE,
-                "acquire_common_lock",
+            with patch_chain_core("acquire_common_lock",
                 side_effect=crashing_common_lock,
             ):
                 CLI.MergeEngine(
@@ -7757,8 +7606,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             retried_argv.append(list(kwargs.get("argv", ())))
             return original(lock, **kwargs)
 
-        with mock.patch.object(
-            CORE, "run_fenced_command", side_effect=capture_retry
+        with patch_chain_core("run_fenced_command", side_effect=capture_retry
         ):
             cleaned = engine.cleanup_chain()
         closed = store.load(chain_id)
@@ -7894,9 +7742,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 RUNTIME,
                 "run_bounded",
                 side_effect=AssertionError("bounded child ran after cap"),
-            ) as bounded, mock.patch.object(
-                CORE,
-                "run_fenced_command",
+            ) as bounded, patch_chain_core("run_fenced_command",
                 side_effect=AssertionError("fenced child ran after cap"),
             ) as fenced, self.assertRaises(CLI.Refusal) as caught:
                 call()

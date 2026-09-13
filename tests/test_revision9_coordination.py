@@ -17,6 +17,8 @@ from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_st
 from pathlib import Path
 from unittest import mock
 
+from tests._cli_loader import patch_chain_core  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "scripts/codex_orch_tools.py"
@@ -5646,9 +5648,7 @@ print("committed")
                     else nullcontext()
                 )
                 registration_control = (
-                    mock.patch.object(
-                        CHAIN_CORE,
-                        "register_activation_reservation_seam",
+                    patch_chain_core("register_activation_reservation_seam",
                         return_value=None,
                     )
                     if control_disabled
@@ -6266,9 +6266,7 @@ print("committed")
                 before_state = state_path.read_bytes()
                 before_events = event_path.read_bytes()
 
-                with mock.patch.object(
-                    CHAIN_CORE,
-                    "register_activation_reservation_seam",
+                with patch_chain_core("register_activation_reservation_seam",
                     return_value=None,
                 ) as disabled_registration, mock.patch.object(
                     builders,
