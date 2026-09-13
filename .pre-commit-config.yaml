@@ -1,0 +1,25 @@
+# Guardrails (installed 2026-09-13 by /refactor-python:guardrails).
+# Setup: pip install --user pre-commit ruff import-linter && pre-commit install
+# Runs: ruff lint + format, the vendored file-size budget, and import contracts.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7   # keep in sync with the ruff pin in .github/workflows/guardrails.yml
+    hooks:
+      # Lint only: no --fix and no ruff-format. The repository is not
+      # ruff-formatted, and a hook that silently rewrites gated candidates would
+      # bypass the Forge commit chain. Format/fix changes stay explicit edits.
+      - id: ruff-check
+  - repo: local
+    hooks:
+      - id: max-file-length
+        name: python file size budget (code lines)
+        entry: python3 scripts/check_file_length.py --baseline .refactor-baseline.json
+        language: system
+        types: [python]
+        pass_filenames: true
+      - id: import-linter
+        name: import boundaries
+        entry: env PYTHONPATH=scripts:scripts/forge lint-imports
+        language: system
+        pass_filenames: false
+        files: \.py$

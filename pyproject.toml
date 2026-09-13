@@ -9,9 +9,174 @@ requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "alexzh3" }]
 
+# ---------------------------------------------------------------------------
+# Guardrails (installed 2026-09-13 by /refactor-python:guardrails).
+# Thresholds are deliberate; raise one only with a comment here explaining why.
+# Companion checks: scripts/check_file_length.py (500 code lines per file, with
+# .refactor-baseline.json grandfathering) and [tool.importlinter] below.
+# ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+extend-exclude = [".worktrees", ".codex-orchestrator", "upstream", ".forge", "tests/replay"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+# PLR0904 and PLR1702 are preview rules; explicit-preview-rules keeps every
+# other preview rule off so the prefixes (E, F, ...) select only stable rules.
+preview = true
+explicit-preview-rules = true
+select = ["E", "F", "I", "B", "UP", "C90", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702"]
+ignore = []
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-statements = 50
+max-args = 6
+max-branches = 12
+max-returns = 6
+max-public-methods = 20
+max-nested-blocks = 4
+
+# Grandfathered violations, generated per file from `ruff check` on
+# 2026-09-13 (473 file/rule pairs across 90 files). Each entry lists only the
+# rules that file already violated, so a new file gets the full rule set and an
+# existing file gets no new exemptions. TODO: when a file is split or cleaned,
+# delete its entry (or the codes it no longer trips) so the ratchet only tightens.
+[tool.ruff.lint.per-file-ignores]
+"scripts/check_file_length.py" = ["B007", "E501", "PLR0911", "PLR1702"]
+"scripts/codex_orch_tools.py" = ["C901", "I001", "PLR0912", "PLR0915"]
+"scripts/codex_orchestrator/batch.py" = ["B904", "C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
+"scripts/codex_orchestrator/builders.py" = ["B904", "C901", "E501", "F821", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
+"scripts/codex_orchestrator/events.py" = ["C901", "PLR0912", "PLR1702"]
+"scripts/codex_orchestrator/journal.py" = ["B013", "B904", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/codex_orchestrator/monitor.py" = ["C901", "PLR0911"]
+"scripts/forge/archive-run.py" = ["B010", "B904", "B905", "C901", "E402", "E501", "F841", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/audit-commitments.py" = ["B905", "C901", "I001", "PLR0912"]
+"scripts/forge/check-test-quality.py" = ["C901", "PLR0911", "PLR0912"]
+"scripts/forge/cli.py" = ["F401", "I001", "UP035"]
+"scripts/forge/commitment_paths.py" = ["C901", "I001", "PLR0911", "PLR0912"]
+"scripts/forge/emit-decision-event.py" = ["C901", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702"]
+"scripts/forge/forge_cli/app.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F401", "F811", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/chain_core.py" = ["B010", "B904", "B905", "C901", "E501", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP022", "UP035", "UP037"]
+"scripts/forge/forge_cli/engine.py" = ["B904", "B905", "C901", "E501", "F811", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
+"scripts/forge/forge_cli/envelope.py" = ["PLR0913", "UP035"]
+"scripts/forge/forge_cli/fresh_evals.py" = ["B905", "C901", "E501", "F401", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
+"scripts/forge/forge_cli/policy.py" = ["B904", "C901", "I001", "UP035"]
+"scripts/forge/forge_cli/runtime.py" = ["C901", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/fr223_eval.py" = ["C901", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/journal-patterns.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/learn-proposals-locked.py" = ["I001", "UP035"]
+"scripts/forge/learn-proposals.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/migrate-upstream.py" = ["B007", "B023", "C901", "E501", "F821", "I001", "PLR0912", "PLR0913", "PLR0915", "UP012"]
+"scripts/forge/risk_tier.py" = ["B905", "C901", "E501", "F401", "I001", "PLR0911", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/run-scoped-mutation.py" = ["C901", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP022"]
+"system/fr223/bang-bypass-probe/pretool_hook.py" = ["I001"]
+"system/fr223/bang-bypass-probe/probe.py" = ["I001", "PLR0911", "UP035"]
+"tests/_fresh_eval_support.py" = ["F401", "I001", "PLR0913", "UP012", "UP022", "UP035", "UP037"]
+"tests/test_archive_run.py" = ["E501", "I001", "PLR0904", "PLR0915"]
+"tests/test_audit_commitments.py" = ["B023", "PLR0904", "PLR1702", "UP012"]
+"tests/test_candidate_identity.py" = ["E501", "I001", "PLR0904", "UP022"]
+"tests/test_cli_chain.py" = ["E501", "I001", "PLR0904", "PLR0915"]
+"tests/test_cli_chain_finalize.py" = ["C901", "E402", "E501", "F401", "F841", "I001"]
+"tests/test_cli_common_lock.py" = ["B023", "C901", "E402", "E501", "E731", "F401", "I001", "PLR0904", "PLR0915", "PLR1702", "UP022"]
+"tests/test_cli_hook_integration.py" = ["E501", "I001", "PLR0904", "PLR0913"]
+"tests/test_cli_loader.py" = ["B009", "E501"]
+"tests/test_cli_merge_adapters.py" = ["E402", "E501", "F401", "I001", "PLR0915"]
+"tests/test_cli_merge_integration.py" = ["B023", "B905", "C901", "E501", "F841", "I001", "PLR0904", "PLR0913", "PLR0915"]
+"tests/test_cli_merge_lifecycle.py" = ["B023", "C901", "E501", "F401", "I001", "PLR0904", "PLR0915"]
+"tests/test_cli_merge_store.py" = ["E402", "F401", "I001", "PLR0915"]
+"tests/test_cli_phase0_contracts.py" = ["B009", "E402", "E501", "I001"]
+"tests/test_cli_policy_fences.py" = ["E402", "E501", "F401", "I001"]
+"tests/test_cli_runtime.py" = ["B023", "I001", "UP035"]
+"tests/test_commit_and_region_template.py" = ["E501", "I001", "PLR0915"]
+"tests/test_commit_guard.py" = ["E501", "PLR0904", "PLR0913", "UP012"]
+"tests/test_commitment_paths.py" = ["E402", "E501"]
+"tests/test_d13_concurrency.py" = ["B905", "E501", "I001", "PLR0913", "PLR0915", "UP022"]
+"tests/test_d14_journal_confinement.py" = ["I001", "UP022"]
+"tests/test_d14_learn_concurrency.py" = ["B905", "E501", "F401", "I001", "UP012"]
+"tests/test_docs_contract.py" = ["C901", "E501", "PLR0904", "PLR0912"]
+"tests/test_drift_check.py" = ["E501", "I001", "PLR0904", "UP022"]
+"tests/test_e2e_smoke.py" = ["E501", "PLR0913", "PLR0915"]
+"tests/test_evals.py" = ["E501", "I001", "PLR0904"]
+"tests/test_fr223_v2_byte_pins.py" = ["I001"]
+"tests/test_fr223_v2_hook.py" = ["E501", "I001", "PLR0915"]
+"tests/test_fr223_v3_hook.py" = ["I001"]
+"tests/test_fr230_phase3_manifest.py" = ["B023", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"tests/test_fresh_eval_policy.py" = ["E501", "I001"]
+"tests/test_fresh_reviewer_cli.py" = ["B023", "C901", "I001", "UP012"]
+"tests/test_fresh_reviewer_evals.py" = ["B023", "B905", "C901", "I001", "PLR0904", "PLR0912", "PLR0915", "PLR1702", "UP012", "UP022"]
+"tests/test_gate1_shard_cell.py" = ["E501"]
+"tests/test_governance_content.py" = ["E501"]
+"tests/test_governance_scripts.py" = ["B905", "E501", "I001", "PLR0904"]
+"tests/test_installer.py" = ["E501", "F841", "PLR0904", "PLR0915"]
+"tests/test_invariant_guard.py" = ["PLR0904"]
+"tests/test_journal_patterns.py" = ["E501", "F401", "I001", "PLR0904", "UP022"]
+"tests/test_learn_proposals.py" = ["E501", "I001", "PLR0904", "PLR0915", "UP012", "UP022", "UP035"]
+"tests/test_learn_skill.py" = ["E501"]
+"tests/test_migration.py" = ["E501", "I001", "PLR0904", "PLR0915", "UP012"]
+"tests/test_monitor.py" = ["PLR0904"]
+"tests/test_mutation_runner.py" = ["PLR0904", "PLR0913"]
+"tests/test_repo_conformance.py" = ["C901", "PLR0904", "PLR0912"]
+"tests/test_report_skill.py" = ["E501"]
+"tests/test_revision10_review_transport.py" = ["B023", "E402", "I001", "PLR1702"]
+"tests/test_revision8_coordination.py" = ["B023", "C901", "I001", "PLR0904", "PLR0912", "PLR0915", "PLR1702", "UP012"]
+"tests/test_revision9_archive.py" = ["C901", "I001", "PLR0904", "PLR0915"]
+"tests/test_revision9_cli_surfaces.py" = ["B023", "E402", "E501", "F401", "I001", "PLR0904", "PLR0915", "PLR1702"]
+"tests/test_revision9_coordination.py" = ["B023", "B905", "C901", "E501", "E702", "E731", "F841", "I001", "PLR0904", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012"]
+"tests/test_revision9_ingest_negatives.py" = ["C901", "E402", "F401", "I001", "PLR0904", "PLR0915"]
+"tests/test_revision9_matrix.py" = ["E402", "E501", "F401", "I001", "PLR0913", "PLR0915", "UP012"]
+"tests/test_revision9_reason_codes.py" = ["I001"]
+"tests/test_revision9_terminal_races.py" = ["C901", "E402", "E501", "F401", "I001", "PLR0904", "PLR0912", "PLR0913", "PLR0915", "PLR1702"]
+"tests/test_risk_tier.py" = ["E501", "I001", "PLR0904"]
+"tests/test_run_coordination.py" = ["E402", "E501", "PLR0904", "PLR1702"]
+"tests/test_test_quality.py" = ["PLR0904"]
+"tests/test_validation.py" = ["E501", "PLR0904"]
+"tests/test_worktree_merge_skill.py" = ["E501", "PLR0904"]
+
+# Import boundaries. Run: PYTHONPATH=scripts:scripts/forge lint-imports
+# (the two root packages are loaded by path, not installed; see tests/_cli_loader.py).
+[tool.importlinter]
+root_packages = ["forge_cli", "codex_orchestrator"]
+include_external_packages = false
+
+# forge_cli layering, top to bottom, as documented in docs/specs/forge-plugin-spec.md
+# section 5 (app -> engine -> chain_core -> fresh_evals -> leaf modules).
+[[tool.importlinter.contracts]]
+name = "forge_cli layers"
+type = "layers"
+layers = [
+    "forge_cli.app",
+    "forge_cli.engine",
+    "forge_cli.chain_core",
+    "forge_cli.fresh_evals",
+    "forge_cli.candidate | forge_cli.runtime | forge_cli.policy | forge_cli.envelope",
+]
+# Pre-existing cycle (2026-09-13): runtime.py:74 lazily imports codex_orchestrator,
+# whose builders/journal lazily import forge_cli.candidate/fresh_evals/policy/
+# chain_core, which closes an indirect cycle back into the upper layers. Ignored so
+# the contract checks direct layering. TODO: remove once that seam is untangled.
+ignore_imports = [
+    "forge_cli.runtime -> codex_orchestrator.batch",
+    "forge_cli.runtime -> codex_orchestrator.builders",
+    "forge_cli.runtime -> codex_orchestrator.journal",
+]
+
+# codex_orchestrator must not depend on forge_cli at module import time. The four
+# function-level imports below are pre-existing lazy cross-links (2026-09-13); they
+# are ignored here so the contract tracks today's shape. TODO: remove each ignore
+# once the cross-link is gone (runtime.py:74 is the mirror-image lazy import from
+# forge_cli into codex_orchestrator; it is not covered by this contract).
+[[tool.importlinter.contracts]]
+name = "codex_orchestrator does not import forge_cli"
+type = "forbidden"
+source_modules = ["codex_orchestrator"]
+forbidden_modules = ["forge_cli"]
+ignore_imports = [
+    "codex_orchestrator.builders -> forge_cli.candidate",
+    "codex_orchestrator.builders -> forge_cli.fresh_evals",
+    "codex_orchestrator.builders -> forge_cli.policy",
+    "codex_orchestrator.journal -> forge_cli.chain_core",
+]

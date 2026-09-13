@@ -1,3 +1,20 @@
+## File & module size (enforced by tooling; see scripts/check_file_length.py, pyproject.toml)
+
+- No Python file over 500 code lines. If an edit would push a file over budget, STOP and
+  split it first with `/refactor-python:split-module <file>`, then make the change.
+- Files listed in `.refactor-baseline.json` are grandfathered: they may shrink, never grow.
+- Functions: complexity ≤ 10, ≤ 50 statements, ≤ 6 args (ruff C901 / PLR09xx). Existing
+  violations are listed per file under `[tool.ruff.lint.per-file-ignores]`; never add to
+  that list, and delete an entry when you clean or split its file.
+- Module boundaries are contracts in `[tool.importlinter]` (pyproject.toml); a new
+  cross-package import that breaks a contract is a design decision, not a fix. Raise it
+  instead of adding the import or an `ignore_imports` line.
+- Before finishing any task run:
+  `ruff check scripts tests system/fr223 && git ls-files -z "*.py" | xargs -0 python3 scripts/check_file_length.py && PYTHONPATH=scripts:scripts/forge lint-imports`
+  A failure is a blocker, not a warning. `pre-commit run --all-files` runs the same checks.
+- Refactor-only commits are prefixed `refactor(<area>):` and contain no behavior changes,
+  and still go through the Forge commit chain like every other commit.
+
 <!-- FORGE:BEGIN -->
 # Forge Plugin Project Instructions
 
