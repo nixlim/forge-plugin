@@ -22,3 +22,6 @@ __pycache__/
 /AGENT_HALT
 /AGENT_HALT_*
 *.local.md
+
+# split-module gate log (written by verify.sh in every checkout; never a source path)
+.refactor-gate.log
