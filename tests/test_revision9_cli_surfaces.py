@@ -673,6 +673,92 @@ class Revision9CoordinationSeamTests(unittest.TestCase):
         )
         built.prepare_outbox_records.assert_not_called()
 
+    def test_retrospective_multicell_stack_never_uses_live_deferral(self) -> None:
+        repository = Path("/fixture/revision9/retrospective-stack")
+        run_id = "run-20260913-retrospective-stack-builder"
+        chain_id = "c-2026-09-13T120000Z-cafe"
+        candidate = key("retrospective-stack-candidate")
+        facts = [
+            {
+                "batch_id": "batch-retrospective",
+                "candidate": candidate,
+                "cell_count": 2,
+                "cell_index": index,
+                "command_argv": [f"cell-{index}"],
+                "result": "passed",
+            }
+            for index in (1, 2)
+        ]
+        state = {
+            "chain_id": chain_id,
+            "candidate": {"sha256": candidate},
+            "run_binding": {
+                "run_id": run_id,
+                "task_id": "task-01",
+                "repository": str(repository),
+                "policy_digest": key("retrospective-stack-policy"),
+            },
+            "steps": {"stack:python": facts},
+        }
+        run_state = SimpleNamespace(
+            records=[{"type": "task", "id": "task-01", "status": "active"}]
+        )
+        builders = SimpleNamespace(
+            _allocate_id=lambda _records, _kind: "check-01",
+            _with_derived=lambda record, selected_run: {
+                **record,
+                "run_id": selected_run,
+            },
+        )
+        journal = SimpleNamespace(
+            _resolve_repository=lambda selected, _operation: (
+                selected,
+                selected,
+            ),
+            _scan_run=lambda _run_dir: run_state,
+            _writer_contract_active=lambda _records: True,
+        )
+
+        with mock.patch.object(
+            RUNTIME,
+            "_coordination_modules",
+            return_value=(SimpleNamespace(), builders, journal),
+        ), mock.patch.object(
+            ENGINE, "_passed_stack_cell_is_intermediate", return_value=True
+        ) as live_deferral:
+            records_per_cell = [
+                CLI._build_chain_journal_records(
+                    repository,
+                    state,
+                    "step_recorded",
+                    {
+                        "step_id": "stack:python",
+                        "run": index,
+                        "result": "passed",
+                    },
+                    key(f"retrospective-stack-event-{index}"),
+                    retrospective_ingest=True,
+                )
+                for index in (1, 2)
+            ]
+
+        live_deferral.assert_not_called()
+        self.assertEqual([len(records) for records in records_per_cell], [1, 1])
+        self.assertEqual(
+            [records[0]["check"] for records in records_per_cell],
+            ["cell-1", "cell-2"],
+        )
+        self.assertEqual(
+            [
+                records[0]["binding"]["source_record"]["event_digest"]
+                for records in records_per_cell
+            ],
+            [
+                key("retrospective-stack-event-1"),
+                key("retrospective-stack-event-2"),
+            ],
+        )
+
     def test_live_first_use_outbox_builds_marker_then_source_bound_record(
         self,
     ) -> None:
@@ -1336,6 +1422,510 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.git("add", "--", "forge-project.md", "CHANGELOG.md")
         self.git("commit", "--quiet", "-m", "configure changelog gate")
 
+    def start_bound_multicell_stack_chain(
+        self, run_id: str, *, cell_count: int = 2
+    ) -> str:
+        policy = CLI_FIXTURE_SUPPORT.policy_with_changelog()
+        first_cell = (
+            "```bash\n"
+            'python3 "$FORGE_CLI_SCRIPTS_DIR/gate.py" stack:python "$@"\n'
+            "```"
+        )
+        self.assertGreaterEqual(cell_count, 2)
+        cells = [first_cell]
+        cells.extend(
+            "```bash\n"
+            f'python3 "$FORGE_CLI_SCRIPTS_DIR/gate.py" stack:python-cell-{index} "$@"\n'
+            "```"
+            for index in range(2, cell_count + 1)
+        )
+        self.assertEqual(policy.count(first_cell), 1)
+        (self.repo / "forge-project.md").write_text(
+            policy.replace(first_cell, "\n".join(cells), 1),
+            encoding="utf-8",
+        )
+        (self.repo / "CHANGELOG.md").write_text("# Changes\n", encoding="utf-8")
+        self.git("add", "--", "forge-project.md", "CHANGELOG.md")
+        self.git("commit", "--quiet", "-m", "configure two-cell stack")
+
+        self.open_run_and_task(
+            run_id,
+            scope=("src/**", "CHANGELOG.md"),
+            files=("src/app.py", "CHANGELOG.md"),
+        )
+        self.change("src/app.py", "VALUE = 2\n")
+        exit_code, started = self.invoke_cli(
+            "--run-id",
+            run_id,
+            "commit",
+            "start",
+            "--paths",
+            "src/app.py",
+            "--task",
+            "task-01",
+        )
+        self.assertEqual(exit_code, 0, started)
+        return str(started["chain_id"])
+
+    def test_bound_multicell_stack_journals_one_completed_batch(self) -> None:
+        run_id = "run-20260913-bound-multicell-stack"
+        chain_id = self.start_bound_multicell_stack_chain(run_id)
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        journal_path = run_dir / "journal.jsonl"
+        receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+
+        exit_code, verified = self.invoke_cli(
+            "--chain-id", chain_id, "verify"
+        )
+
+        self.assertEqual(exit_code, 0, verified)
+        self.assertEqual(
+            verified["message"],
+            "all required mechanical verification steps are complete",
+        )
+        self.assertEqual(verified["state"], "reviewing")
+        state = self.state(chain_id)
+        stack_batches = {
+            step_id: facts
+            for step_id, facts in state["steps"].items()
+            if step_id.startswith("stack:")
+        }
+        self.assertEqual(set(stack_batches), {"stack:docs", "stack:python"})
+        for facts in stack_batches.values():
+            self.assertEqual(len(facts), 2)
+            self.assertEqual(
+                {fact["batch_id"] for fact in facts}, {facts[-1]["batch_id"]}
+            )
+            self.assertEqual(
+                [
+                    (fact["cell_index"], fact["cell_count"], fact["result"])
+                    for fact in facts
+                ],
+                [(1, 2, "passed"), (2, 2, "passed")],
+            )
+        gate_lines = self.gate_lines()
+        first_cell = gate_lines.index("stack:python")
+        self.assertEqual(
+            gate_lines[first_cell : first_cell + 4],
+            [
+                "stack:python",
+                "stack:python-cell-2",
+                "stack:python",
+                "stack:python-cell-2",
+            ],
+        )
+
+        events = self.events(chain_id)
+        self.assertEqual(
+            events[-1]["payload"]["event"], "mechanical_verification_complete"
+        )
+        stack_events = [
+            event
+            for event in events
+            if event["payload"]["event"] == "step_recorded"
+            and event["payload"]["details"].get("step_id") in stack_batches
+        ]
+        self.assertEqual(len(stack_events), 4)
+        stack_carriers = [
+            event
+            for event in stack_events
+            if "journal_batch" in event["payload"]["details"]
+        ]
+        self.assertEqual(len(stack_carriers), 2)
+
+        records, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        stack_verifications = [
+            record
+            for record in records
+            if record.get("type") == "verification"
+            and str(record.get("criterion", "")).startswith("gate-2: stack:")
+        ]
+        self.assertEqual(
+            [record["criterion"] for record in stack_verifications],
+            ["gate-2: stack:docs", "gate-2: stack:python"],
+        )
+
+        with self.cli_process_context(), batch.batch_lock(
+            run_dir, create=False
+        ) as locked:
+            receipts, _raw_receipts, _observation = (
+                batch._load_receipts_for_chain_replay(locked)
+            )
+        for carrier in stack_carriers:
+            carrier_details = carrier["payload"]["details"]
+            step_id = carrier_details["step_id"]
+            self.assertEqual(carrier_details["run"], 2)
+            matching_verifications = [
+                record
+                for record in stack_verifications
+                if record["criterion"] == f"gate-2: {step_id}"
+            ]
+            self.assertEqual(len(matching_verifications), 1)
+            stack_verification = matching_verifications[0]
+            self.assertEqual(stack_verification["result"], "passed")
+            source_digest = stack_verification["binding"]["source_record"][
+                "event_digest"
+            ]
+            self.assertEqual(
+                carrier_details["source_event_digest"], source_digest
+            )
+            source_fact = carrier["payload"]["state"]["steps"][step_id][1]
+            self.assertEqual(
+                {
+                    "batch_id": source_fact["batch_id"],
+                    "cell_count": source_fact["cell_count"],
+                    "cell_index": source_fact["cell_index"],
+                },
+                {
+                    "batch_id": stack_batches[step_id][-1]["batch_id"],
+                    "cell_count": 2,
+                    "cell_index": 2,
+                },
+            )
+            matching_receipts = [
+                receipt
+                for receipt in receipts
+                if receipt.get("idempotency_key") == source_digest
+            ]
+            self.assertEqual(len(matching_receipts), 1)
+            self.assertEqual(
+                matching_receipts[0]["batch_sha256"],
+                carrier_details["journal_batch"]["batch_digest"],
+            )
+            self.assertEqual(matching_receipts[0]["record_count"], 1)
+
+        snapshot_paths = (
+            self.state_path(chain_id),
+            self.events_path(chain_id),
+            journal_path,
+            receipts_path,
+            self.gate_log,
+        )
+        before_noop = tuple(path.read_bytes() for path in snapshot_paths)
+        exit_code, noop = self.invoke_cli("--chain-id", chain_id, "verify")
+        self.assertEqual(exit_code, 0, noop)
+        self.assertEqual(
+            noop["message"], "mechanical verification already complete; no-op"
+        )
+        self.assertEqual(noop["state"], "reviewing")
+        self.assertEqual(
+            tuple(path.read_bytes() for path in snapshot_paths), before_noop
+        )
+
+    def test_bound_multicell_stack_failure_journals_failed_cell_and_stops(
+        self,
+    ) -> None:
+        run_id = "run-20260913-bound-multicell-stack-failure"
+        chain_id = self.start_bound_multicell_stack_chain(run_id, cell_count=3)
+        gate_helper = self.helpers / "gate.py"
+        original_gate_helper = gate_helper.read_text(encoding="utf-8")
+        gate_helper.write_text(
+            original_gate_helper
+            + '\nif step == "stack:python-cell-2":\n    raise SystemExit(7)\n',
+            encoding="utf-8",
+        )
+        batch, _builders, journal = CLI._coordination_modules()
+        run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
+        journal_path = run_dir / "journal.jsonl"
+
+        exit_code, failed = self.invoke_cli("--chain-id", chain_id, "verify")
+
+        self.assertEqual(exit_code, 1, failed)
+        self.assertEqual(failed["reason_code"], "evidence-incomplete")
+        self.assertEqual(failed["message"], "gate stack:docs cell 2 did not pass")
+        self.assertEqual(failed["state"], "verifying")
+        state = self.state(chain_id)
+        stack_facts = state["steps"]["stack:docs"]
+        self.assertNotIn("stack:python", state["steps"])
+        self.assertEqual(
+            [
+                (fact["cell_index"], fact["cell_count"], fact["result"])
+                for fact in stack_facts
+            ],
+            [(1, 3, "passed"), (2, 3, "failed")],
+        )
+        self.assertEqual(
+            {fact["batch_id"] for fact in stack_facts},
+            {stack_facts[-1]["batch_id"]},
+        )
+        self.assertEqual(
+            [
+                line
+                for line in self.gate_lines()
+                if line.startswith("stack:python")
+            ],
+            ["stack:python", "stack:python-cell-2"],
+        )
+
+        events = self.events(chain_id)
+        self.assertFalse(
+            any(
+                event["payload"]["event"] == "mechanical_verification_complete"
+                for event in events
+            )
+        )
+        stack_carriers = [
+            event
+            for event in events
+            if event["payload"]["event"] == "step_recorded"
+            and event["payload"]["details"].get("step_id") == "stack:docs"
+            and "journal_batch" in event["payload"]["details"]
+        ]
+        self.assertEqual(len(stack_carriers), 1)
+        carrier_details = stack_carriers[0]["payload"]["details"]
+        self.assertEqual(
+            (carrier_details["run"], carrier_details["result"]), (2, "failed")
+        )
+
+        records, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        stack_verifications = [
+            record
+            for record in records
+            if record.get("type") == "verification"
+            and record.get("criterion") == "gate-2: stack:docs"
+        ]
+        self.assertEqual(len(stack_verifications), 1)
+        self.assertEqual(stack_verifications[0]["result"], "failed")
+        source_digest = stack_verifications[0]["binding"]["source_record"][
+            "event_digest"
+        ]
+        self.assertEqual(carrier_details["source_event_digest"], source_digest)
+        source_fact = stack_carriers[0]["payload"]["state"]["steps"][
+            "stack:docs"
+        ][1]
+        self.assertEqual(
+            {
+                "batch_id": source_fact["batch_id"],
+                "cell_count": source_fact["cell_count"],
+                "cell_index": source_fact["cell_index"],
+                "result": source_fact["result"],
+            },
+            {
+                "batch_id": stack_facts[-1]["batch_id"],
+                "cell_count": 3,
+                "cell_index": 2,
+                "result": "failed",
+            },
+        )
+
+        with self.cli_process_context(), batch.batch_lock(
+            run_dir, create=False
+        ) as locked:
+            receipts, _raw_receipts, _observation = (
+                batch._load_receipts_for_chain_replay(locked)
+            )
+        matching_receipts = [
+            receipt
+            for receipt in receipts
+            if receipt.get("idempotency_key") == source_digest
+        ]
+        self.assertEqual(len(matching_receipts), 1)
+        self.assertEqual(
+            matching_receipts[0]["batch_sha256"],
+            carrier_details["journal_batch"]["batch_digest"],
+        )
+        self.assertEqual(matching_receipts[0]["record_count"], 1)
+
+        failed_candidate = self.state(chain_id)["candidate"]["authorization_id"]
+        gate_helper.write_text(original_gate_helper, encoding="utf-8")
+        self.change("src/app.py", "VALUE = 3\n")
+        exit_code, restaged = self.invoke_cli(
+            "--chain-id",
+            chain_id,
+            "commit",
+            "restage",
+            "--paths",
+            "src/app.py",
+        )
+        self.assertEqual(exit_code, 0, restaged)
+        self.assertEqual(restaged["state"], "verifying")
+        restaged_candidate = self.state(chain_id)["candidate"][
+            "authorization_id"
+        ]
+        self.assertNotEqual(restaged_candidate, failed_candidate)
+
+        exit_code, recovered = self.invoke_cli(
+            "--chain-id", chain_id, "verify"
+        )
+
+        self.assertEqual(exit_code, 0, recovered)
+        self.assertEqual(
+            recovered["message"],
+            "all required mechanical verification steps are complete",
+        )
+        self.assertEqual(recovered["state"], "reviewing")
+        recovered_state = self.state(chain_id)
+        recovered_candidate = recovered_state["candidate"]["authorization_id"]
+        self.assertNotEqual(recovered_candidate, failed_candidate)
+        recovered_stack_batches = {
+            step_id: facts
+            for step_id, facts in recovered_state["steps"].items()
+            if step_id.startswith("stack:")
+        }
+        self.assertEqual(
+            set(recovered_stack_batches), {"stack:docs", "stack:python"}
+        )
+        for facts in recovered_stack_batches.values():
+            self.assertEqual(
+                [
+                    (
+                        fact["cell_index"],
+                        fact["cell_count"],
+                        fact["result"],
+                        fact["candidate"],
+                    )
+                    for fact in facts
+                ],
+                [
+                    (1, 3, "passed", recovered_candidate),
+                    (2, 3, "passed", recovered_candidate),
+                    (3, 3, "passed", recovered_candidate),
+                ],
+            )
+
+        recovered_events = self.events(chain_id)
+        self.assertEqual(
+            sum(
+                event["payload"]["event"] == "mechanical_verification_complete"
+                for event in recovered_events
+            ),
+            1,
+        )
+        recovered_carriers = [
+            event
+            for event in recovered_events
+            if event["payload"]["event"] == "step_recorded"
+            and event["payload"]["details"].get("step_id")
+            in {"stack:docs", "stack:python"}
+            and "journal_batch" in event["payload"]["details"]
+        ]
+        self.assertEqual(len(recovered_carriers), 3)
+        self.assertEqual(
+            [
+                (
+                    event["payload"]["details"]["step_id"],
+                    event["payload"]["details"]["result"],
+                    event["payload"]["details"]["run"],
+                )
+                for event in recovered_carriers
+            ],
+            [
+                ("stack:docs", "failed", 2),
+                ("stack:docs", "passed", 3),
+                ("stack:python", "passed", 3),
+            ],
+        )
+
+        recovered_records, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        recovered_stack_verifications = [
+            record
+            for record in recovered_records
+            if record.get("type") == "verification"
+            and record.get("criterion")
+            in {"gate-2: stack:docs", "gate-2: stack:python"}
+        ]
+        self.assertEqual(
+            [
+                (
+                    record["criterion"],
+                    record["result"],
+                    record["binding"]["candidate"]["value"][
+                        "authorization_id"
+                    ],
+                )
+                for record in recovered_stack_verifications
+            ],
+            [
+                ("gate-2: stack:docs", "failed", failed_candidate),
+                ("gate-2: stack:docs", "passed", recovered_candidate),
+                ("gate-2: stack:python", "passed", recovered_candidate),
+            ],
+        )
+        self.assertEqual(
+            sum(
+                record["result"] == "passed"
+                and record["binding"]["candidate"]["value"][
+                    "authorization_id"
+                ]
+                == failed_candidate
+                for record in recovered_stack_verifications
+            ),
+            0,
+        )
+
+        with self.cli_process_context(), batch.batch_lock(
+            run_dir, create=False
+        ) as locked:
+            recovered_receipts, _raw_receipts, _observation = (
+                batch._load_receipts_for_chain_replay(locked)
+            )
+        source_digests = [
+            event["payload"]["details"]["source_event_digest"]
+            for event in recovered_carriers
+        ]
+        self.assertEqual(len(source_digests), len(set(source_digests)))
+        for carrier, record in zip(
+            recovered_carriers, recovered_stack_verifications, strict=True
+        ):
+            details = carrier["payload"]["details"]
+            self.assertEqual(
+                record["binding"]["source_record"]["event_digest"],
+                details["source_event_digest"],
+            )
+            matching = [
+                receipt
+                for receipt in recovered_receipts
+                if receipt.get("idempotency_key")
+                == details["source_event_digest"]
+            ]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(
+                matching[0]["batch_sha256"],
+                details["journal_batch"]["batch_digest"],
+            )
+            self.assertEqual(matching[0]["record_count"], 1)
+
+    def test_bound_multicell_stack_journal_deferral_is_load_bearing(self) -> None:
+        run_id = "run-20260913-bound-multicell-stack-disabled"
+        chain_id = self.start_bound_multicell_stack_chain(run_id)
+
+        with mock.patch.object(
+            ENGINE, "_passed_stack_cell_is_intermediate", return_value=False
+        ) as disabled_deferral:
+            exit_code, frozen = self.invoke_cli(
+                "--chain-id", chain_id, "verify"
+            )
+
+        self.assertEqual(exit_code, 2, frozen)
+        status = f"forge status --chain-id {chain_id}"
+        self.assertEqual(
+            frozen,
+            {
+                "chain_id": chain_id,
+                "evidence_refs": [],
+                "expected": "digest-valid reconstructible chain state",
+                "message": (
+                    "bound chain event replay failed; chain frozen pending "
+                    "status/abort, never a guessed recovery"
+                ),
+                "next_required_step": status,
+                "observed": "carried binding fact is stale",
+                "ok": False,
+                "reason_code": "frozen-chain",
+                "remediation": status,
+                "schema": "forge-cli/2",
+                "state": None,
+            },
+        )
+        disabled_deferral.assert_called_once()
+        self.assertNotIn("stack:python", self.state(chain_id)["steps"])
+        self.assertIn("stack:python", self.gate_lines())
+        self.assertNotIn("stack:python-cell-2", self.gate_lines())
+
     def test_bound_changelog_output_is_committed_policy_machinery(self) -> None:
         self.configure_changelog_gate()
         run_id = "run-20260831-bound-changelog-output"
@@ -1471,15 +2061,43 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         install_captures: bool,
         mechanical_skip: bool = False,
         legacy_run: bool = False,
+        multicell_stack: bool = False,
     ) -> SimpleNamespace:
         """Finalize a native unbound chain and capture its exact live package."""
 
+        source_path = "docs/guide.md"
+        source_scope = ("docs/**",)
+        source_content = f"# Retrospective source for {run_id}\n"
+        if multicell_stack:
+            self.assertFalse(mechanical_skip)
+            policy = (self.repo / "forge-project.md").read_text(encoding="utf-8")
+            first_cell = (
+                "```bash\n"
+                'python3 "$FORGE_CLI_SCRIPTS_DIR/gate.py" stack:python "$@"\n'
+                "```"
+            )
+            second_cell = (
+                "```bash\n"
+                'python3 "$FORGE_CLI_SCRIPTS_DIR/gate.py" '
+                'stack:python-cell-2 "$@"\n'
+                "```"
+            )
+            self.assertEqual(policy.count(first_cell), 1)
+            (self.repo / "forge-project.md").write_text(
+                policy.replace(first_cell, f"{first_cell}\n{second_cell}", 1),
+                encoding="utf-8",
+            )
+            self.git("add", "--", "forge-project.md")
+            self.git("commit", "--quiet", "-m", "configure retrospective stack")
+            source_path = "src/app.py"
+            source_scope = ("src/**",)
+            source_content = "VALUE = 2\n"
         self.change(
-            "docs/guide.md",
-            f"# Retrospective source for {run_id}\n",
+            source_path,
+            source_content,
         )
         exit_code, started = self.invoke_cli(
-            "commit", "start", "--paths", "docs/guide.md"
+            "commit", "start", "--paths", source_path
         )
         self.assertEqual(exit_code, 0, started)
         self.assertEqual(started["schema"], "forge-cli/1")
@@ -1506,7 +2124,23 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 "--chain-id", chain_id, "verify"
             )
             self.assertEqual(exit_code, 0, verified)
-            self.assertEqual(verified["state"], "authorized")
+            self.assertEqual(
+                verified["state"], "reviewing" if multicell_stack else "authorized"
+            )
+            if multicell_stack:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", ResourceWarning)
+                    exit_code, requested = self.invoke_cli(
+                        "--chain-id", chain_id, "review", "request"
+                    )
+                self.assertEqual(exit_code, 0, requested)
+                request = self.state(chain_id)["review"]["request"]
+                self.wait_for_review_completion(request)
+                exit_code, collected = self.invoke_cli(
+                    "--chain-id", chain_id, "review", "collect"
+                )
+                self.assertEqual(exit_code, 0, collected)
+                self.assertEqual(collected["state"], "authorized")
             exit_code, finalized = self.invoke_cli(
                 "--chain-id",
                 chain_id,
@@ -1524,7 +2158,10 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         events_raw = self.events_path(chain_id).read_bytes()
         self.assertEqual(materialized["kind"], "commit")
         self.assertEqual(materialized["state"], "closed")
-        self.assertEqual(materialized["tier"]["effective"], "fast")
+        self.assertEqual(
+            materialized["tier"]["effective"],
+            "standard" if multicell_stack else "fast",
+        )
         self.assertIsNone(materialized["run_binding"])
         self.assertIsNone(materialized["journal_outbox"])
         self.assertEqual(
@@ -1556,7 +2193,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             )
             self.assertIn("operator_skip", selected_identities)
             self.assertNotIn("assertion-sensor", selected_identities)
-        else:
+        elif not multicell_stack:
             self.assertEqual(
                 selected_identities,
                 (
@@ -1570,6 +2207,8 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                     "commit_produced",
                 ),
             )
+        else:
+            self.assertEqual(selected_identities.count("stack:python"), 2)
         outcome_map = {
             "schema": "forge-chain-ingest-outcome-map/1",
             "chain_id": chain_id,
@@ -1595,8 +2234,8 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
 
         self.open_run_and_task(
             run_id,
-            scope=("docs/**",),
-            files=("docs/guide.md",),
+            scope=source_scope,
+            files=(source_path,),
             legacy=legacy_run,
         )
         with self.cli_process_context():
@@ -1790,6 +2429,113 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(journal_path.read_bytes(), journal_after)
         self.assertEqual(receipts_path.read_bytes(), receipts_after)
         self.assertFalse(intent_path.exists())
+
+    def test_real_unbound_multicell_stack_ingest_keeps_every_head_record(
+        self,
+    ) -> None:
+        prepared = self.prepare_unbound_fast_ingest(
+            "run-20260913-cli-ingest-multicell-stack",
+            install_captures=False,
+            multicell_stack=True,
+        )
+        _batch, _builders, journal = CLI._coordination_modules()
+        journal_path = prepared.run_dir / "journal.jsonl"
+        records_before, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        normalized_before = self.normalized_journal_records(records_before)
+        stack_events = [
+            event
+            for event in prepared.events
+            if event["digest"] in prepared.selected_digests
+            and event["payload"]["event"] == "step_recorded"
+            and event["payload"]["details"].get("step_id") == "stack:python"
+        ]
+        self.assertEqual(
+            [event["payload"]["details"]["run"] for event in stack_events],
+            [1, 2],
+        )
+
+        exit_code, ingested = self.invoke_cli(*prepared.ingest_argv)
+
+        self.assertEqual(exit_code, 0, ingested)
+        self.assertEqual(ingested["state"], "closed")
+        records_after, issues = journal.read_journal(journal_path)
+        self.assertEqual(issues, [])
+        normalized_after = self.normalized_journal_records(records_after)
+        appended = normalized_after[len(normalized_before) :]
+        stack_records = [
+            record
+            for record in appended
+            if record.get("type") == "verification"
+            and record.get("criterion") == "gate-2: stack:python"
+        ]
+        self.assertEqual(len(stack_records), 2)
+
+        expected_records = []
+        expected_ids = ("check-03", "check-04")
+        candidate = prepared.materialized["candidate"]
+        for event, check_id in zip(stack_events, expected_ids, strict=True):
+            payload = event["payload"]
+            details = payload["details"]
+            fact = payload["state"]["steps"]["stack:python"][
+                details["run"] - 1
+            ]
+            transcript = str(fact["transcript"])
+            transcript_bytes = (self.repo / transcript).read_bytes()
+            transcript_digest = hashlib.sha256(transcript_bytes).hexdigest()
+            captured_transcript = (
+                f"captured/sha256/{transcript_digest}/events.jsonl"
+            )
+            source_record = {
+                "chain_id": prepared.chain_id,
+                "event_digest": event["digest"],
+            }
+            binding_preimage = {
+                "schema": "forge-gate-binding/1",
+                "source_record": source_record,
+                "candidate": {
+                    "kind": "git-tree-candidate-v2",
+                    "value": {
+                        "authorization_id": candidate["authorization_id"],
+                        "object_format": candidate["object_format"],
+                        "tree_oid": candidate["tree_oid"],
+                    },
+                },
+                "review": None,
+            }
+            expected_records.append(
+                {
+                    "type": "verification",
+                    "id": check_id,
+                    "task": "task-01",
+                    "criterion": "gate-2: stack:python",
+                    "method": "Forge CLI commit chain",
+                    "check": " ".join(fact["command_argv"]),
+                    "result": "passed",
+                    "observation": (
+                        "Forge CLI recorded stack:python result passed"
+                    ),
+                    "evidence": [captured_transcript],
+                    "run_id": prepared.run_id,
+                    "recorded_at": payload["at"],
+                    "binding": {
+                        **binding_preimage,
+                        "binding_id": hashlib.sha256(
+                            CLI.canonical_bytes(binding_preimage)
+                        ).hexdigest(),
+                    },
+                }
+            )
+            self.assertEqual(
+                (prepared.run_dir / captured_transcript).read_bytes(),
+                transcript_bytes,
+            )
+
+        self.assertEqual(stack_records, expected_records)
+        self.assertEqual(
+            [CLI.canonical_bytes(record) + b"\n" for record in stack_records],
+            [CLI.canonical_bytes(record) + b"\n" for record in expected_records],
+        )
 
     def test_legacy_run_ingest_first_typed_use_activates_once_and_is_receipted(
         self,

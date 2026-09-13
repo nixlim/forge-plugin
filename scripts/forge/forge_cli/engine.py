@@ -1428,6 +1428,21 @@ def _binding_for_commit_event(
     return {**preimage, "binding_id": sha256_bytes(chain_core.canonical_bytes(preimage))}
 
 
+def _passed_stack_cell_is_intermediate(fact: Mapping[str, Any]) -> bool:
+    """Identify a passed cell that a live bound batch must defer."""
+
+    batch_id = fact.get("batch_id")
+    cell_index = fact.get("cell_index")
+    cell_count = fact.get("cell_count")
+    return bool(
+        isinstance(batch_id, str)
+        and batch_id
+        and type(cell_index) is int
+        and type(cell_count) is int
+        and 0 < cell_index < cell_count
+    )
+
+
 def _build_chain_journal_records(
     repository: Path,
     state: Mapping[str, Any],
@@ -1497,6 +1512,13 @@ def _build_chain_journal_records(
         fact = runs[run_number - 1]
         result = fact.get("result")
         if result not in {"passed", "failed"} or details.get("result") != result:
+            return ()
+        if (
+            not retrospective_ingest
+            and result == "passed"
+            and step_id.startswith("stack:")
+            and _passed_stack_cell_is_intermediate(fact)
+        ):
             return ()
         criterion = (
             f"gate-1: {step_id}"
