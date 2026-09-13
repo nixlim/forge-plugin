@@ -61,6 +61,9 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/app.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F401", "F811", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
 "scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/chain_core.py" = ["B010", "B904", "B905", "C901", "E501", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP022", "UP035", "UP037"]
+# Transitional (split of chain_core.py into a package, 2026-09-13): moved code keeps its
+# grandfathered codes until each new module is cleaned. TODO: narrow per module after the split.
+"scripts/forge/forge_cli/chain_core/**" = ["B010", "B904", "B905", "C901", "E501", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP022", "UP035", "UP037"]
 "scripts/forge/forge_cli/engine.py" = ["B904", "B905", "C901", "E501", "F811", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
 "scripts/forge/forge_cli/envelope.py" = ["PLR0913", "UP035"]
 "scripts/forge/forge_cli/fresh_evals.py" = ["B905", "C901", "E501", "F401", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]

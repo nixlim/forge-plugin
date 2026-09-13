@@ -1,0 +1,7916 @@
+{
+  "module": "scripts/forge/forge_cli/chain_core.py",
+  "total_lines": 20456,
+  "symbols": [
+    {
+      "name": "SCHEMA",
+      "kind": "assignment",
+      "line": 57,
+      "end_line": 57,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "KIND",
+      "kind": "assignment",
+      "line": 60,
+      "end_line": 60,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FRESH_REVIEWER_EVALS_GATE",
+      "kind": "assignment",
+      "line": 63,
+      "end_line": 63,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FRESH_REVIEWER_EVALS_REQUESTS",
+      "kind": "assignment",
+      "line": 66,
+      "end_line": 66,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FRESH_REVIEWER_EVALS_REQUESTED_EVENT",
+      "kind": "assignment",
+      "line": 69,
+      "end_line": 69,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "STATES",
+      "kind": "assignment",
+      "line": 72,
+      "end_line": 82,
+      "loc": 11,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "STATE_KEYS",
+      "kind": "assignment",
+      "line": 85,
+      "end_line": 106,
+      "loc": 22,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "EVENT_KEYS",
+      "kind": "assignment",
+      "line": 109,
+      "end_line": 109,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_STATE_KEYS",
+      "kind": "assignment",
+      "line": 112,
+      "end_line": 139,
+      "loc": 28,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_MERGE_INACTIVE_ATTEMPT_OBSERVATION_SOURCES",
+      "kind": "assignment",
+      "line": 142,
+      "end_line": 154,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_MERGE_INACTIVE_POST_ATTEMPT_RECOVERY_SOURCES",
+      "kind": "assignment",
+      "line": 157,
+      "end_line": 159,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_EVENT_KEYS",
+      "kind": "assignment",
+      "line": 162,
+      "end_line": 174,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_EVENT_NAMES",
+      "kind": "assignment",
+      "line": 177,
+      "end_line": 208,
+      "loc": 32,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_CONSEQUENTIAL_EVENTS",
+      "kind": "assignment",
+      "line": 211,
+      "end_line": 219,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "TIER_RANK",
+      "kind": "assignment",
+      "line": 222,
+      "end_line": 222,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "INACTIVE_SECONDS",
+      "kind": "assignment",
+      "line": 225,
+      "end_line": 225,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FENCED_CHILD_ACK_TIMEOUT_SECONDS",
+      "kind": "assignment",
+      "line": 228,
+      "end_line": 228,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FENCED_CHILD_DRAIN_SECONDS",
+      "kind": "assignment",
+      "line": 231,
+      "end_line": 231,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FENCED_CHILD_DRAIN_CAP_BYTES",
+      "kind": "assignment",
+      "line": 234,
+      "end_line": 234,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FENCED_CHILD_STOP_GRACE_SECONDS",
+      "kind": "assignment",
+      "line": 237,
+      "end_line": 237,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FENCED_CHILD_REAP_SECONDS",
+      "kind": "assignment",
+      "line": 240,
+      "end_line": 240,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "ZERO_DIGEST",
+      "kind": "assignment",
+      "line": 243,
+      "end_line": 243,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_TIMEOUT_SECONDS",
+      "kind": "assignment",
+      "line": 246,
+      "end_line": 246,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_POLL_SECONDS",
+      "kind": "assignment",
+      "line": 249,
+      "end_line": 249,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_RECORD_CAP_BYTES",
+      "kind": "assignment",
+      "line": 252,
+      "end_line": 252,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "MERGE_SCOPE_BINDING_CAP_BYTES",
+      "kind": "assignment",
+      "line": 255,
+      "end_line": 255,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_INTENT_NAME",
+      "kind": "assignment",
+      "line": 258,
+      "end_line": 258,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_DIRECTORY_NAME",
+      "kind": "assignment",
+      "line": 261,
+      "end_line": 261,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_OWNER_NAME",
+      "kind": "assignment",
+      "line": 264,
+      "end_line": 264,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_FLOCK_NAME",
+      "kind": "assignment",
+      "line": 267,
+      "end_line": 267,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_RECOVERY_NAME",
+      "kind": "assignment",
+      "line": 270,
+      "end_line": 270,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_INFLIGHT_NAME",
+      "kind": "assignment",
+      "line": 273,
+      "end_line": 273,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "COMMON_LOCK_OWNER_KINDS",
+      "kind": "assignment",
+      "line": 276,
+      "end_line": 276,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "COMMON_LOCK_OPERATIONS",
+      "kind": "assignment",
+      "line": 279,
+      "end_line": 290,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "COMMON_LOCK_FENCE_OPERATIONS",
+      "kind": "assignment",
+      "line": 293,
+      "end_line": 308,
+      "loc": 16,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "COMMON_LOCK_RECOVERY_KINDS",
+      "kind": "assignment",
+      "line": 311,
+      "end_line": 313,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_COMMON_LOCK_OWNER_KEYS",
+      "kind": "assignment",
+      "line": 316,
+      "end_line": 327,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_COMMON_LOCK_FENCE_KEYS",
+      "kind": "assignment",
+      "line": 330,
+      "end_line": 343,
+      "loc": 14,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_COMMON_LOCK_RECOVERY_KEYS",
+      "kind": "assignment",
+      "line": 346,
+      "end_line": 369,
+      "loc": 24,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_CHAIN_LEASE_KEYS",
+      "kind": "assignment",
+      "line": 372,
+      "end_line": 374,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_REQUIRED_COMMON_LOCK_CONTROLS",
+      "kind": "assignment",
+      "line": 377,
+      "end_line": 397,
+      "loc": 21,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "COMMON_LOCK_CONTROLS",
+      "kind": "assignment",
+      "line": 400,
+      "end_line": 400,
+      "loc": 1,
+      "refs": [
+        "_REQUIRED_COMMON_LOCK_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "CHAIN_ID_RE",
+      "kind": "assignment",
+      "line": 403,
+      "end_line": 403,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "SHA256_RE",
+      "kind": "assignment",
+      "line": 406,
+      "end_line": 406,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "COMMIT_RE",
+      "kind": "assignment",
+      "line": 409,
+      "end_line": 409,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "RUN_ID_RE",
+      "kind": "assignment",
+      "line": 412,
+      "end_line": 412,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "CHAIN_TOMBSTONE_SCHEMA",
+      "kind": "assignment",
+      "line": 415,
+      "end_line": 415,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "CHAIN_TOMBSTONE_EVENT",
+      "kind": "assignment",
+      "line": 418,
+      "end_line": 418,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "CHAIN_TOMBSTONE_KEYS",
+      "kind": "assignment",
+      "line": 421,
+      "end_line": 423,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_REQUIRED_MERGE_STORE_CONTROLS",
+      "kind": "assignment",
+      "line": 426,
+      "end_line": 441,
+      "loc": 16,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_STORE_CONTROLS",
+      "kind": "assignment",
+      "line": 444,
+      "end_line": 444,
+      "loc": 1,
+      "refs": [
+        "_REQUIRED_MERGE_STORE_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_REQUIRED_MERGE_ADAPTER_CONTROLS",
+      "kind": "assignment",
+      "line": 447,
+      "end_line": 455,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_ADAPTER_CONTROLS",
+      "kind": "assignment",
+      "line": 458,
+      "end_line": 458,
+      "loc": 1,
+      "refs": [
+        "_REQUIRED_MERGE_ADAPTER_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_REQUIRED_MERGE_INTEGRATION_CONTROLS",
+      "kind": "assignment",
+      "line": 461,
+      "end_line": 479,
+      "loc": 19,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_INTEGRATION_CONTROLS",
+      "kind": "assignment",
+      "line": 482,
+      "end_line": 482,
+      "loc": 1,
+      "refs": [
+        "_REQUIRED_MERGE_INTEGRATION_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "INGEST_PROOF_ORDER",
+      "kind": "assignment",
+      "line": 485,
+      "end_line": 502,
+      "loc": 18,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_REQUIRED_INGEST_PROOF_CONTROLS",
+      "kind": "assignment",
+      "line": 505,
+      "end_line": 505,
+      "loc": 1,
+      "refs": [
+        "INGEST_PROOF_ORDER"
+      ],
+      "mutable_state": true
+    },
+    {
+      "name": "INGEST_PROOF_CONTROLS",
+      "kind": "assignment",
+      "line": 508,
+      "end_line": 508,
+      "loc": 1,
+      "refs": [
+        "_REQUIRED_INGEST_PROOF_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_WORKTREE_LOCKS_GUARD",
+      "kind": "assignment",
+      "line": 511,
+      "end_line": 511,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_WORKTREE_LOCKS",
+      "kind": "assignment",
+      "line": 514,
+      "end_line": 514,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_WORKTREE_LOCK_STATE",
+      "kind": "assignment",
+      "line": 517,
+      "end_line": 517,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_exclusive_descriptor_lock",
+      "kind": "function",
+      "line": 521,
+      "end_line": 603,
+      "loc": 83,
+      "refs": [
+        "COMMON_LOCK_POLL_SECONDS",
+        "_WORKTREE_LOCKS",
+        "_WORKTREE_LOCKS_GUARD",
+        "_WORKTREE_LOCK_STATE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "canonical_bytes",
+      "kind": "function",
+      "line": 606,
+      "end_line": 609,
+      "loc": 4,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_chain_storage_root",
+      "kind": "function",
+      "line": 612,
+      "end_line": 618,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_validated_commitment_path",
+      "kind": "function",
+      "line": 621,
+      "end_line": 646,
+      "loc": 26,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_parsed_run_captured_path",
+      "kind": "function",
+      "line": 649,
+      "end_line": 655,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_ingest_proof",
+      "kind": "function",
+      "line": 658,
+      "end_line": 677,
+      "loc": 20,
+      "refs": [
+        "INGEST_PROOF_CONTROLS",
+        "INGEST_PROOF_ORDER",
+        "_REQUIRED_INGEST_PROOF_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_event_outbox",
+      "kind": "function",
+      "line": 680,
+      "end_line": 709,
+      "loc": 30,
+      "refs": [
+        "SHA256_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "reduce_merge_event",
+      "kind": "function",
+      "line": 712,
+      "end_line": 779,
+      "loc": 68,
+      "refs": [
+        "INACTIVE_SECONDS",
+        "_merge_event_outbox",
+        "_merge_payload_delta",
+        "parse_time"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_gate_plan_valid",
+      "kind": "function",
+      "line": 782,
+      "end_line": 842,
+      "loc": 61,
+      "refs": [
+        "SHA256_RE",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_epoch_valid",
+      "kind": "function",
+      "line": 845,
+      "end_line": 885,
+      "loc": 41,
+      "refs": [
+        "SHA256_RE",
+        "_merge_gate_plan_valid",
+        "_valid_nonce",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_payload_delta",
+      "kind": "function",
+      "line": 888,
+      "end_line": 986,
+      "loc": 99,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_bootstrap_classification_pending",
+      "kind": "function",
+      "line": 989,
+      "end_line": 1057,
+      "loc": 69,
+      "refs": [
+        "COMMIT_RE",
+        "_valid_nonce",
+        "_valid_positive_int"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_revision9_compatibility_view",
+      "kind": "function",
+      "line": 1060,
+      "end_line": 1130,
+      "loc": 71,
+      "refs": [
+        "_merge_bootstrap_classification_pending"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_state_shape_valid",
+      "kind": "function",
+      "line": 1133,
+      "end_line": 1141,
+      "loc": 9,
+      "refs": [
+        "_merge_epoch_valid",
+        "_merge_revision9_compatibility_view"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_ingest_state_shape_valid",
+      "kind": "function",
+      "line": 1144,
+      "end_line": 1152,
+      "loc": 9,
+      "refs": [
+        "_merge_state_shape_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_history_uses_additive_grammar",
+      "kind": "function",
+      "line": 1155,
+      "end_line": 1196,
+      "loc": 42,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_ingest_transition_valid",
+      "kind": "function",
+      "line": 1199,
+      "end_line": 1223,
+      "loc": 25,
+      "refs": [
+        "_merge_history_uses_additive_grammar",
+        "_merge_transition_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_plan_position_fact",
+      "kind": "function",
+      "line": 1226,
+      "end_line": 1243,
+      "loc": 18,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_carried_gate_steps",
+      "kind": "function",
+      "line": 1246,
+      "end_line": 1282,
+      "loc": 37,
+      "refs": [
+        "SHA256_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_gate_step_generation_digests",
+      "kind": "function",
+      "line": 1285,
+      "end_line": 1306,
+      "loc": 22,
+      "refs": [
+        "SHA256_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_current_authority_valid",
+      "kind": "function",
+      "line": 1309,
+      "end_line": 1352,
+      "loc": 44,
+      "refs": [
+        "SHA256_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_REMOTE_ONLY_IDENTITY_FIELDS",
+      "kind": "assignment",
+      "line": 1355,
+      "end_line": 1363,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_remote_only_equality_proof",
+      "kind": "function",
+      "line": 1366,
+      "end_line": 1374,
+      "loc": 9,
+      "refs": [
+        "_MERGE_REMOTE_ONLY_IDENTITY_FIELDS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_carry_payload_valid",
+      "kind": "function",
+      "line": 1377,
+      "end_line": 1406,
+      "loc": 30,
+      "refs": [
+        "_merge_remote_only_equality_proof"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_plan_transition_valid",
+      "kind": "function",
+      "line": 1409,
+      "end_line": 1532,
+      "loc": 124,
+      "refs": [
+        "SHA256_RE",
+        "_merge_plan_position_fact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_merge_scope_proof",
+      "kind": "function",
+      "line": 1535,
+      "end_line": 1616,
+      "loc": 82,
+      "refs": [
+        "SHA256_RE",
+        "_valid_sorted_unique_strings",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_event_binding_valid",
+      "kind": "function",
+      "line": 1619,
+      "end_line": 1665,
+      "loc": 47,
+      "refs": [
+        "PublishedLockRecord",
+        "_merge_scope_binding_validator"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_transition_valid",
+      "kind": "function",
+      "line": 1668,
+      "end_line": 1783,
+      "loc": 116,
+      "refs": [
+        "SHA256_RE",
+        "_merge_scope_event_binding_valid",
+        "_validate_merge_scope_fetch_binding",
+        "_validate_merge_scope_proof",
+        "_validate_merge_scope_request",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_published_recovery_evidence_valid",
+      "kind": "function",
+      "line": 1786,
+      "end_line": 1810,
+      "loc": 25,
+      "refs": [
+        "SHA256_RE",
+        "_valid_nonnegative_int",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_recovery_event_intent",
+      "kind": "function",
+      "line": 1813,
+      "end_line": 1818,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_recovery_value_carries_inflight",
+      "kind": "function",
+      "line": 1821,
+      "end_line": 1838,
+      "loc": 18,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_recovery_cleanup_intent",
+      "kind": "function",
+      "line": 1841,
+      "end_line": 1848,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_recovery_cleanup_result_matches",
+      "kind": "function",
+      "line": 1851,
+      "end_line": 1882,
+      "loc": 32,
+      "refs": [
+        "_merge_cleanup_step_result_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_classify_merge_recovery_lifecycle",
+      "kind": "function",
+      "line": 1885,
+      "end_line": 2193,
+      "loc": 309,
+      "refs": [
+        "SHA256_RE",
+        "_EPOCH_FETCH_OBSERVATION_SCHEMA",
+        "_epoch_fetch_observation_record_valid",
+        "_merge_cleanup_intent_valid",
+        "_recovery_cleanup_intent",
+        "_recovery_cleanup_result_matches",
+        "_recovery_event_intent",
+        "_recovery_value_carries_inflight",
+        "_valid_nonnegative_int",
+        "canonical_bytes",
+        "merge_gate_intent_digest"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_recovery_proof_transition_valid",
+      "kind": "function",
+      "line": 2196,
+      "end_line": 2395,
+      "loc": 200,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "COMMON_LOCK_RECOVERY_NAME",
+        "MERGE_STATE_KEYS",
+        "_classify_merge_recovery_lifecycle",
+        "_published_recovery_evidence_valid",
+        "_validate_fence_record",
+        "_validate_recovery_record",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_epoch_fetch_observation_predecessor_valid",
+      "kind": "function",
+      "line": 2398,
+      "end_line": 2423,
+      "loc": 26,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_recovered_absent_rebase_intent_digest",
+      "kind": "function",
+      "line": 2426,
+      "end_line": 2474,
+      "loc": 49,
+      "refs": [
+        "_merge_candidate_observation_evidence_valid",
+        "_merge_rebase_result_classification"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_attempted_release_preconditions_valid",
+      "kind": "function",
+      "line": 2477,
+      "end_line": 2595,
+      "loc": 119,
+      "refs": [
+        "_merge_containment",
+        "canonical_bytes",
+        "reduce_merge_event"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CLEANUP_INTENT_SCHEMA",
+      "kind": "assignment",
+      "line": 2598,
+      "end_line": 2598,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CLEANUP_RESULT_SCHEMA",
+      "kind": "assignment",
+      "line": 2601,
+      "end_line": 2601,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CLEANUP_CLOSE_SCHEMA",
+      "kind": "assignment",
+      "line": 2604,
+      "end_line": 2604,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CLEANUP_RECOVERY_SCHEMA",
+      "kind": "assignment",
+      "line": 2607,
+      "end_line": 2607,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CLEANUP_FENCE_OPERATIONS",
+      "kind": "assignment",
+      "line": 2610,
+      "end_line": 2617,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_merge_cleanup_expected_subject",
+      "kind": "function",
+      "line": 2620,
+      "end_line": 2667,
+      "loc": 48,
+      "refs": [
+        "COMMIT_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_expected_argv",
+      "kind": "function",
+      "line": 2670,
+      "end_line": 2740,
+      "loc": 71,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_intent_valid",
+      "kind": "function",
+      "line": 2743,
+      "end_line": 2806,
+      "loc": 64,
+      "refs": [
+        "SHA256_RE",
+        "_MERGE_CLEANUP_FENCE_OPERATIONS",
+        "_MERGE_CLEANUP_INTENT_SCHEMA",
+        "_MERGE_CLEANUP_RECOVERY_SCHEMA",
+        "_merge_cleanup_expected_argv",
+        "_merge_cleanup_expected_subject",
+        "_valid_nonce",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_process_result_valid",
+      "kind": "function",
+      "line": 2809,
+      "end_line": 2887,
+      "loc": 79,
+      "refs": [
+        "SHA256_RE",
+        "_valid_positive_int"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_process_output",
+      "kind": "function",
+      "line": 2890,
+      "end_line": 2902,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_process_complete",
+      "kind": "function",
+      "line": 2905,
+      "end_line": 2916,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_branch_observation",
+      "kind": "function",
+      "line": 2919,
+      "end_line": 2937,
+      "loc": 19,
+      "refs": [
+        "COMMIT_RE",
+        "_merge_cleanup_process_complete",
+        "_merge_cleanup_process_output"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_worktree_inventory",
+      "kind": "function",
+      "line": 2940,
+      "end_line": 2968,
+      "loc": 29,
+      "refs": [
+        "COMMIT_RE",
+        "_merge_cleanup_process_complete",
+        "_merge_cleanup_process_output",
+        "_parse_registered_worktrees"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_fetch_head_bytes",
+      "kind": "function",
+      "line": 2971,
+      "end_line": 2989,
+      "loc": 19,
+      "refs": [
+        "COMMIT_RE",
+        "MERGE_SCOPE_BINDING_CAP_BYTES"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_observation_valid",
+      "kind": "function",
+      "line": 2992,
+      "end_line": 3207,
+      "loc": 216,
+      "refs": [
+        "MERGE_SCOPE_BINDING_CAP_BYTES",
+        "SHA256_RE",
+        "_merge_cleanup_branch_observation",
+        "_merge_cleanup_fetch_head_bytes",
+        "_merge_cleanup_process_output",
+        "_merge_cleanup_worktree_inventory"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_step_result_valid",
+      "kind": "function",
+      "line": 3210,
+      "end_line": 3247,
+      "loc": 38,
+      "refs": [
+        "_MERGE_CLEANUP_RESULT_SCHEMA",
+        "_merge_cleanup_intent_valid",
+        "_merge_cleanup_observation_valid",
+        "_merge_cleanup_process_result_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_results_valid",
+      "kind": "function",
+      "line": 3250,
+      "end_line": 3264,
+      "loc": 15,
+      "refs": [
+        "_merge_cleanup_step_result_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_evidence_history",
+      "kind": "function",
+      "line": 3267,
+      "end_line": 3287,
+      "loc": 21,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_history_summary",
+      "kind": "function",
+      "line": 3290,
+      "end_line": 3369,
+      "loc": 80,
+      "refs": [
+        "_merge_cleanup_evidence_history"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_unmatched_intent",
+      "kind": "function",
+      "line": 3372,
+      "end_line": 3405,
+      "loc": 34,
+      "refs": [
+        "_MERGE_CLEANUP_INTENT_SCHEMA",
+        "_recovery_cleanup_intent"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_retry_proof_valid",
+      "kind": "function",
+      "line": 3408,
+      "end_line": 3444,
+      "loc": 37,
+      "refs": [
+        "_recovery_cleanup_intent"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_intent_transition_valid",
+      "kind": "function",
+      "line": 3447,
+      "end_line": 3539,
+      "loc": 93,
+      "refs": [
+        "_MERGE_CLEANUP_RECOVERY_SCHEMA",
+        "_merge_cleanup_history_summary",
+        "_merge_cleanup_intent_valid",
+        "_merge_cleanup_retry_proof_valid",
+        "_merge_cleanup_unmatched_intent",
+        "_recovery_cleanup_intent"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_result_transition_valid",
+      "kind": "function",
+      "line": 3542,
+      "end_line": 3582,
+      "loc": 41,
+      "refs": [
+        "_merge_cleanup_results_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_history_has_git_mutation_intent",
+      "kind": "function",
+      "line": 3585,
+      "end_line": 3614,
+      "loc": 30,
+      "refs": [
+        "_recovery_event_intent"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_release_preconditions_valid",
+      "kind": "function",
+      "line": 3617,
+      "end_line": 3738,
+      "loc": 122,
+      "refs": [
+        "_MERGE_CLEANUP_CLOSE_SCHEMA",
+        "_merge_attempted_release_preconditions_valid",
+        "_merge_cleanup_evidence_history",
+        "_merge_cleanup_history_summary",
+        "_merge_history_has_git_mutation_intent",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_transition_valid",
+      "kind": "function",
+      "line": 3741,
+      "end_line": 5724,
+      "loc": 1984,
+      "refs": [
+        "MERGE_STATE_KEYS",
+        "SHA256_RE",
+        "_MERGE_CANDIDATE_OBSERVATION_SCHEMA",
+        "_MERGE_INACTIVE_ATTEMPT_OBSERVATION_SOURCES",
+        "_MERGE_REMOTE_ONLY_IDENTITY_FIELDS",
+        "_bootstrap_fetch_observation_record_valid",
+        "_bootstrap_fetch_observation_transition_valid",
+        "_epoch_ancestry_record_valid",
+        "_epoch_fetch_observation_passed",
+        "_epoch_fetch_observation_predecessor_valid",
+        "_epoch_fetch_observation_record_valid",
+        "_epoch_fetch_result_intent_digest",
+        "_merge_bootstrap_classification_pending",
+        "_merge_candidate_observation_evidence",
+        "_merge_candidate_observation_record_valid",
+        "_merge_candidate_observation_step_names",
+        "_merge_candidate_observation_transition_valid",
+        "_merge_carried_gate_steps",
+        "_merge_carry_payload_valid",
+        "_merge_cleanup_intent_transition_valid",
+        "_merge_cleanup_result_transition_valid",
+        "_merge_containment",
+        "_merge_current_authority_valid",
+        "_merge_gate_step_generation_digests",
+        "_merge_inactive_post_attempt_recovery_ready",
+        "_merge_latest_contained_attempt",
+        "_merge_old_tip_all_false",
+        "_merge_plan_position_fact",
+        "_merge_plan_transition_valid",
+        "_merge_rebase_result_classification",
+        "_merge_recovery_proof_transition_valid",
+        "_merge_release_preconditions_valid",
+        "_merge_revision9_compatibility_view",
+        "_merge_scope_transition_valid",
+        "_merge_state_shape_valid",
+        "_recovered_absent_rebase_intent_digest",
+        "_remote_observation_progress_transition_valid",
+        "_remote_observation_progress_valid",
+        "_replayed_remote_observation_completed",
+        "_require_merge_integration_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_ReceiptRunSnapshot",
+      "kind": "class",
+      "line": 5728,
+      "end_line": 5737,
+      "loc": 10,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_chain_receipt_snapshot_lock",
+      "kind": "function",
+      "line": 5741,
+      "end_line": 5805,
+      "loc": 65,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_receipt_run_snapshot",
+      "kind": "function",
+      "line": 5808,
+      "end_line": 5836,
+      "loc": 29,
+      "refs": [
+        "_ReceiptRunSnapshot"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_ChainReceiptSnapshotVerifier",
+      "kind": "class",
+      "line": 5839,
+      "end_line": 5951,
+      "loc": 113,
+      "refs": [
+        "_ReceiptRunSnapshot",
+        "_chain_receipt_snapshot_lock",
+        "_receipt_run_snapshot"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_ChainActivationSnapshot",
+      "kind": "class",
+      "line": 5955,
+      "end_line": 5963,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_resolve_chain_activation_snapshot",
+      "kind": "function",
+      "line": 5966,
+      "end_line": 6205,
+      "loc": 240,
+      "refs": [
+        "ZERO_DIGEST",
+        "_ChainActivationSnapshot",
+        "_ChainReceiptSnapshotVerifier",
+        "_merge_history_uses_additive_grammar",
+        "_replay_merge_event_bytes",
+        "_validate_chain_activation_lineage",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_resolve_chain_activation_projection",
+      "kind": "function",
+      "line": 6208,
+      "end_line": 6234,
+      "loc": 27,
+      "refs": [
+        "_ChainReceiptSnapshotVerifier",
+        "_resolve_chain_activation_snapshot"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_chain_activation_ownership_summary",
+      "kind": "function",
+      "line": 6237,
+      "end_line": 6295,
+      "loc": 59,
+      "refs": [
+        "_ChainReceiptSnapshotVerifier",
+        "_resolve_chain_activation_snapshot"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_chain_activation_lineage",
+      "kind": "function",
+      "line": 6298,
+      "end_line": 6531,
+      "loc": 234,
+      "refs": [
+        "_ChainReceiptSnapshotVerifier",
+        "_chain_activation_ownership_summary",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_no_pending_chain_activation_outbox",
+      "kind": "function",
+      "line": 6534,
+      "end_line": 6698,
+      "loc": 165,
+      "refs": [
+        "_resolve_chain_activation_projection"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_prepare_merge_activation_preamble",
+      "kind": "function",
+      "line": 6701,
+      "end_line": 6729,
+      "loc": 29,
+      "refs": [
+        "_require_no_pending_chain_activation_outbox"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_prevalidate_chain_batch_carrier",
+      "kind": "function",
+      "line": 6732,
+      "end_line": 6874,
+      "loc": 143,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_authorize_chain_batch",
+      "kind": "function",
+      "line": 6877,
+      "end_line": 7103,
+      "loc": 227,
+      "refs": [
+        "_chain_storage_root",
+        "_resolve_chain_activation_snapshot"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_ingest_input",
+      "kind": "function",
+      "line": 7106,
+      "end_line": 7274,
+      "loc": 169,
+      "refs": [
+        "_parsed_run_captured_path",
+        "_validated_commitment_path"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_capture_ingest_blob",
+      "kind": "function",
+      "line": 7277,
+      "end_line": 7364,
+      "loc": 88,
+      "refs": [
+        "_parsed_run_captured_path",
+        "_validated_commitment_path"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_capture_run_evidence",
+      "kind": "function",
+      "line": 7367,
+      "end_line": 7387,
+      "loc": 21,
+      "refs": [
+        "_capture_ingest_blob",
+        "_require_merge_adapter_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_capture_ingest_record_evidence",
+      "kind": "function",
+      "line": 7390,
+      "end_line": 7422,
+      "loc": 33,
+      "refs": [
+        "_capture_run_evidence",
+        "_parsed_run_captured_path",
+        "_read_ingest_input"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_ingest_captured_paths",
+      "kind": "function",
+      "line": 7425,
+      "end_line": 7462,
+      "loc": 38,
+      "refs": [
+        "SHA256_RE",
+        "_parsed_run_captured_path",
+        "_validated_commitment_path"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_ingest_step_is_current",
+      "kind": "function",
+      "line": 7465,
+      "end_line": 7515,
+      "loc": 51,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_ingest_secret_scan_is_current",
+      "kind": "function",
+      "line": 7518,
+      "end_line": 7553,
+      "loc": 36,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_ingest_binding",
+      "kind": "function",
+      "line": 7556,
+      "end_line": 7577,
+      "loc": 22,
+      "refs": [
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_prove_ingest_live_chain",
+      "kind": "function",
+      "line": 7580,
+      "end_line": 7637,
+      "loc": 58,
+      "refs": [
+        "_chain_storage_root"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_gate_event_fact",
+      "kind": "function",
+      "line": 7640,
+      "end_line": 7673,
+      "loc": 34,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_current_gate_facts",
+      "kind": "function",
+      "line": 7676,
+      "end_line": 7721,
+      "loc": 46,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_ingest_record_templates",
+      "kind": "function",
+      "line": 7724,
+      "end_line": 7900,
+      "loc": 177,
+      "refs": [
+        "_merge_current_authority_valid",
+        "_merge_gate_event_fact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_ingest_allocation_records",
+      "kind": "function",
+      "line": 7903,
+      "end_line": 7925,
+      "loc": 23,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_verify_and_build_merge_ingest_records",
+      "kind": "function",
+      "line": 7928,
+      "end_line": 8515,
+      "loc": 588,
+      "refs": [
+        "COMMIT_RE",
+        "INGEST_PROOF_ORDER",
+        "SHA256_RE",
+        "_capture_ingest_record_evidence",
+        "_committed_changelog_output_paths",
+        "_ingest_allocation_records",
+        "_ingest_captured_paths",
+        "_merge_current_authority_valid",
+        "_merge_current_gate_facts",
+        "_merge_ingest_binding",
+        "_merge_ingest_record_templates",
+        "_merge_ingest_transition_valid",
+        "_prove_ingest_live_chain",
+        "_read_ingest_input",
+        "_require_ingest_proof"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_verify_and_build_ingest_records",
+      "kind": "function",
+      "line": 8518,
+      "end_line": 9319,
+      "loc": 802,
+      "refs": [
+        "CLIOptions",
+        "COMMIT_RE",
+        "ChainStore",
+        "CommandContext",
+        "EVENT_KEYS",
+        "INGEST_PROOF_CONTROLS",
+        "INGEST_PROOF_ORDER",
+        "Repository",
+        "SHA256_RE",
+        "TIER_RANK",
+        "ZERO_DIGEST",
+        "_REQUIRED_INGEST_PROOF_CONTROLS",
+        "_binding_is_current_with_candidate_v2",
+        "_binding_matches_source_fact_with_candidate_v2",
+        "_capture_ingest_record_evidence",
+        "_commit_transition_valid_with_candidate_v2",
+        "_committed_changelog_output_paths",
+        "_gate_one_complete",
+        "_gate_satisfied",
+        "_ingest_allocation_records",
+        "_ingest_captured_paths",
+        "_ingest_secret_scan_is_current",
+        "_ingest_step_is_current",
+        "_latest_current_pass",
+        "_merge_ingest_state_shape_valid",
+        "_prove_ingest_live_chain",
+        "_read_ingest_input",
+        "_require_ingest_proof",
+        "_required_steps",
+        "_user_skip",
+        "_verify_and_build_merge_ingest_records",
+        "candidate_is_v2",
+        "canonical_bytes",
+        "reduce_merge_event",
+        "validate_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_ingest_proof_verifier",
+      "kind": "function",
+      "line": 9322,
+      "end_line": 9325,
+      "loc": 4,
+      "refs": [
+        "_verify_and_build_ingest_records"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "register_activation_reservation_seam",
+      "kind": "function",
+      "line": 9328,
+      "end_line": 9351,
+      "loc": 24,
+      "refs": [
+        "_require_no_pending_chain_activation_outbox"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "register_coordination_seams",
+      "kind": "function",
+      "line": 9354,
+      "end_line": 9385,
+      "loc": 32,
+      "refs": [
+        "_authorize_chain_batch",
+        "_ingest_proof_verifier",
+        "reduce_merge_event",
+        "register_activation_reservation_seam"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_coordination_refusal",
+      "kind": "function",
+      "line": 9400,
+      "end_line": 9459,
+      "loc": 60,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_chain_batch_target",
+      "kind": "function",
+      "line": 9462,
+      "end_line": 9491,
+      "loc": 30,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_chain_batch_lock",
+      "kind": "function",
+      "line": 9495,
+      "end_line": 9526,
+      "loc": 32,
+      "refs": [
+        "_validate_chain_batch_target",
+        "register_coordination_seams"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "iso_z",
+      "kind": "function",
+      "line": 9529,
+      "end_line": 9532,
+      "loc": 4,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "parse_time",
+      "kind": "function",
+      "line": 9535,
+      "end_line": 9541,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "candidate_is_v2",
+      "kind": "function",
+      "line": 9544,
+      "end_line": 9550,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_candidate_binding_for_state_with_candidate_v2",
+      "kind": "function",
+      "line": 9553,
+      "end_line": 9560,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_binding_shape_valid_with_candidate_v2",
+      "kind": "function",
+      "line": 9563,
+      "end_line": 9571,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_event_batch_records_with_candidate_v2",
+      "kind": "function",
+      "line": 9574,
+      "end_line": 9587,
+      "loc": 14,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_binding_matches_source_fact_with_candidate_v2",
+      "kind": "function",
+      "line": 9590,
+      "end_line": 9608,
+      "loc": 19,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_binding_is_current_with_candidate_v2",
+      "kind": "function",
+      "line": 9611,
+      "end_line": 9646,
+      "loc": 36,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_commit_transition_valid_with_candidate_v2",
+      "kind": "function",
+      "line": 9649,
+      "end_line": 9657,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "Repository",
+      "kind": "class",
+      "line": 9660,
+      "end_line": 9840,
+      "loc": 181,
+      "refs": [
+        "COMMIT_RE",
+        "iso_z"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_committed_changelog_output_paths",
+      "kind": "function",
+      "line": 9843,
+      "end_line": 9853,
+      "loc": 11,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "validate_state",
+      "kind": "function",
+      "line": 9856,
+      "end_line": 10286,
+      "loc": 431,
+      "refs": [
+        "CHAIN_ID_RE",
+        "COMMIT_RE",
+        "KIND",
+        "RUN_ID_RE",
+        "SCHEMA",
+        "SHA256_RE",
+        "STATES",
+        "STATE_KEYS",
+        "parse_time"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_merge_store_control",
+      "kind": "function",
+      "line": 10289,
+      "end_line": 10297,
+      "loc": 9,
+      "refs": [
+        "MERGE_STORE_CONTROLS",
+        "_REQUIRED_MERGE_STORE_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_merge_adapter_control",
+      "kind": "function",
+      "line": 10300,
+      "end_line": 10308,
+      "loc": 9,
+      "refs": [
+        "MERGE_ADAPTER_CONTROLS",
+        "_REQUIRED_MERGE_ADAPTER_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_merge_integration_control",
+      "kind": "function",
+      "line": 10311,
+      "end_line": 10319,
+      "loc": 9,
+      "refs": [
+        "MERGE_INTEGRATION_CONTROLS",
+        "_REQUIRED_MERGE_INTEGRATION_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "validate_merge_state",
+      "kind": "function",
+      "line": 10322,
+      "end_line": 10365,
+      "loc": 44,
+      "refs": [
+        "CHAIN_ID_RE",
+        "MERGE_EVENT_NAMES",
+        "MERGE_STATE_KEYS",
+        "_merge_state_shape_valid",
+        "_require_merge_store_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeReplayResult",
+      "kind": "class",
+      "line": 10369,
+      "end_line": 10388,
+      "loc": 20,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_replay_merge_event_bytes",
+      "kind": "function",
+      "line": 10391,
+      "end_line": 10669,
+      "loc": 279,
+      "refs": [
+        "MERGE_EVENT_KEYS",
+        "MERGE_EVENT_NAMES",
+        "MERGE_STATE_KEYS",
+        "MergeReplayResult",
+        "SHA256_RE",
+        "ZERO_DIGEST",
+        "_ChainReceiptSnapshotVerifier",
+        "_merge_history_uses_additive_grammar",
+        "_merge_ingest_transition_valid",
+        "_merge_state_shape_valid",
+        "_require_merge_store_control",
+        "canonical_bytes",
+        "reduce_merge_event",
+        "validate_merge_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_drain_chain_batch_capability",
+      "kind": "function",
+      "line": 10672,
+      "end_line": 10720,
+      "loc": 49,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_ChainStoragePrimitives",
+      "kind": "class",
+      "line": 10723,
+      "end_line": 11812,
+      "loc": 1090,
+      "refs": [
+        "CHAIN_ID_RE",
+        "CHAIN_TOMBSTONE_EVENT",
+        "CHAIN_TOMBSTONE_KEYS",
+        "CHAIN_TOMBSTONE_SCHEMA",
+        "EVENT_KEYS",
+        "MERGE_EVENT_KEYS",
+        "SHA256_RE",
+        "ZERO_DIGEST",
+        "_exclusive_descriptor_lock",
+        "_forge_command",
+        "_replay_merge_event_bytes",
+        "_require_merge_store_control",
+        "canonical_bytes",
+        "iso_z",
+        "parse_time",
+        "validate_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "ChainStore",
+      "kind": "class",
+      "line": 11815,
+      "end_line": 12515,
+      "loc": 701,
+      "refs": [
+        "EVENT_KEYS",
+        "INACTIVE_SECONDS",
+        "ZERO_DIGEST",
+        "_ChainStoragePrimitives",
+        "_binding_is_current_with_candidate_v2",
+        "_binding_matches_source_fact_with_candidate_v2",
+        "_chain_batch_lock",
+        "_commit_transition_valid_with_candidate_v2",
+        "_coordination_refusal",
+        "_drain_chain_batch_capability",
+        "_event_batch_records_with_candidate_v2",
+        "_forge_command",
+        "_prevalidate_chain_batch_carrier",
+        "_validate_bound_chain_state",
+        "candidate_is_v2",
+        "canonical_bytes",
+        "iso_z",
+        "register_coordination_seams",
+        "validate_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_build_merge_chain_journal_records",
+      "kind": "function",
+      "line": 12518,
+      "end_line": 12638,
+      "loc": 121,
+      "refs": [
+        "MERGE_CONSEQUENTIAL_EVENTS",
+        "_merge_gate_event_fact",
+        "_merge_ingest_binding",
+        "_merge_ingest_record_templates",
+        "_parsed_run_captured_path",
+        "_prepare_merge_activation_preamble",
+        "_require_merge_store_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_new_merge_record_is_current",
+      "kind": "function",
+      "line": 12641,
+      "end_line": 12685,
+      "loc": 45,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeChainStore",
+      "kind": "class",
+      "line": 12688,
+      "end_line": 13506,
+      "loc": 819,
+      "refs": [
+        "ChainLease",
+        "MERGE_EVENT_NAMES",
+        "MergeReplayResult",
+        "RecoveryReservation",
+        "ZERO_DIGEST",
+        "_ChainStoragePrimitives",
+        "_build_merge_chain_journal_records",
+        "_chain_batch_lock",
+        "_coordination_refusal",
+        "_drain_chain_batch_capability",
+        "_merge_history_uses_additive_grammar",
+        "_merge_state_shape_valid",
+        "_merge_transition_valid",
+        "_new_merge_record_is_current",
+        "_prove_merge_run_task_binding",
+        "_replay_merge_event_bytes",
+        "_require_merge_store_control",
+        "acquire_chain_lease",
+        "canonical_bytes",
+        "iso_z",
+        "reduce_merge_event",
+        "register_coordination_seams",
+        "validate_merge_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_common_lock_control",
+      "kind": "function",
+      "line": 13509,
+      "end_line": 13517,
+      "loc": 9,
+      "refs": [
+        "COMMON_LOCK_CONTROLS",
+        "_REQUIRED_COMMON_LOCK_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "CommonLockBoundaryCrash",
+      "kind": "class",
+      "line": 13520,
+      "end_line": 13527,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "PublishedLockRecord",
+      "kind": "class",
+      "line": 13531,
+      "end_line": 13547,
+      "loc": 17,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "CommonLockInspection",
+      "kind": "class",
+      "line": 13551,
+      "end_line": 13578,
+      "loc": 28,
+      "refs": [
+        "PublishedLockRecord"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "CommonLockUnavailable",
+      "kind": "class",
+      "line": 13581,
+      "end_line": 13600,
+      "loc": 20,
+      "refs": [
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "CommonLockReleaseFailure",
+      "kind": "class",
+      "line": 13603,
+      "end_line": 13616,
+      "loc": 14,
+      "refs": [
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "ChainLeaseUnavailable",
+      "kind": "class",
+      "line": 13619,
+      "end_line": 13634,
+      "loc": 16,
+      "refs": [
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "FencedChildSurvived",
+      "kind": "class",
+      "line": 13637,
+      "end_line": 13642,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_valid_utc_second",
+      "kind": "function",
+      "line": 13645,
+      "end_line": 13651,
+      "loc": 7,
+      "refs": [
+        "iso_z",
+        "parse_time"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_valid_positive_int",
+      "kind": "function",
+      "line": 13654,
+      "end_line": 13655,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_valid_nonnegative_int",
+      "kind": "function",
+      "line": 13658,
+      "end_line": 13659,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_valid_host",
+      "kind": "function",
+      "line": 13662,
+      "end_line": 13667,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_valid_nonce",
+      "kind": "function",
+      "line": 13670,
+      "end_line": 13671,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_owner_record",
+      "kind": "function",
+      "line": 13674,
+      "end_line": 13704,
+      "loc": 31,
+      "refs": [
+        "CHAIN_ID_RE",
+        "COMMON_LOCK_OPERATIONS",
+        "COMMON_LOCK_OWNER_KINDS",
+        "_COMMON_LOCK_OWNER_KEYS",
+        "_require_common_lock_control",
+        "_valid_host",
+        "_valid_nonce",
+        "_valid_positive_int",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_fence_record",
+      "kind": "function",
+      "line": 13707,
+      "end_line": 13733,
+      "loc": 27,
+      "refs": [
+        "CHAIN_ID_RE",
+        "COMMON_LOCK_FENCE_OPERATIONS",
+        "SHA256_RE",
+        "_COMMON_LOCK_FENCE_KEYS",
+        "_require_common_lock_control",
+        "_valid_host",
+        "_valid_nonce",
+        "_valid_positive_int",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_valid_nullable_chain",
+      "kind": "function",
+      "line": 13736,
+      "end_line": 13740,
+      "loc": 5,
+      "refs": [
+        "CHAIN_ID_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_recovery_record",
+      "kind": "function",
+      "line": 13743,
+      "end_line": 13808,
+      "loc": 66,
+      "refs": [
+        "COMMON_LOCK_RECOVERY_KINDS",
+        "SHA256_RE",
+        "_COMMON_LOCK_RECOVERY_KEYS",
+        "_require_common_lock_control",
+        "_valid_host",
+        "_valid_nonce",
+        "_valid_nonnegative_int",
+        "_valid_nullable_chain",
+        "_valid_positive_int",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_chain_lease_record",
+      "kind": "function",
+      "line": 13811,
+      "end_line": 13827,
+      "loc": 17,
+      "refs": [
+        "CHAIN_ID_RE",
+        "_CHAIN_LEASE_KEYS",
+        "_require_common_lock_control",
+        "_valid_host",
+        "_valid_nonce",
+        "_valid_positive_int",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_write_all",
+      "kind": "function",
+      "line": 13830,
+      "end_line": 13836,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_owned_record_at",
+      "kind": "function",
+      "line": 13839,
+      "end_line": 13894,
+      "loc": 56,
+      "refs": [
+        "COMMON_LOCK_RECORD_CAP_BYTES",
+        "PublishedLockRecord",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_same_published_record",
+      "kind": "function",
+      "line": 13897,
+      "end_line": 13905,
+      "loc": 9,
+      "refs": [
+        "PublishedLockRecord"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_open_owned_directory",
+      "kind": "function",
+      "line": 13908,
+      "end_line": 13922,
+      "loc": 15,
+      "refs": [
+        "ChainStore"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_open_lock_directory",
+      "kind": "function",
+      "line": 13925,
+      "end_line": 13942,
+      "loc": 18,
+      "refs": [
+        "COMMON_LOCK_DIRECTORY_NAME"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_inspect_common_lock_fd",
+      "kind": "function",
+      "line": 13945,
+      "end_line": 14040,
+      "loc": 96,
+      "refs": [
+        "COMMON_LOCK_DIRECTORY_NAME",
+        "COMMON_LOCK_INTENT_NAME",
+        "COMMON_LOCK_OWNER_NAME",
+        "CommonLockInspection",
+        "_opaque_path_evidence_at",
+        "_open_lock_directory",
+        "_read_owned_record_at",
+        "_same_published_record",
+        "_validate_owner_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_PublicationCleanupFailure",
+      "kind": "class",
+      "line": 14043,
+      "end_line": 14044,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_create_private_record_at",
+      "kind": "function",
+      "line": 14047,
+      "end_line": 14120,
+      "loc": 74,
+      "refs": [
+        "PublishedLockRecord",
+        "_PublicationCleanupFailure",
+        "_write_all",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_publish_no_replace_link",
+      "kind": "function",
+      "line": 14123,
+      "end_line": 14136,
+      "loc": 14,
+      "refs": [
+        "_require_common_lock_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_revalidate_record_at",
+      "kind": "function",
+      "line": 14139,
+      "end_line": 14149,
+      "loc": 11,
+      "refs": [
+        "PublishedLockRecord",
+        "_read_owned_record_at",
+        "_same_published_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_unlink_revalidated_record_at",
+      "kind": "function",
+      "line": 14152,
+      "end_line": 14161,
+      "loc": 10,
+      "refs": [
+        "PublishedLockRecord",
+        "_require_common_lock_control",
+        "_revalidate_record_at"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_record_at_if_present",
+      "kind": "function",
+      "line": 14164,
+      "end_line": 14173,
+      "loc": 10,
+      "refs": [
+        "PublishedLockRecord",
+        "_read_owned_record_at"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_process_probe",
+      "kind": "function",
+      "line": 14176,
+      "end_line": 14185,
+      "loc": 10,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_group_probe",
+      "kind": "function",
+      "line": 14188,
+      "end_line": 14197,
+      "loc": 10,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_sleep_with_deadline",
+      "kind": "function",
+      "line": 14200,
+      "end_line": 14209,
+      "loc": 10,
+      "refs": [
+        "COMMON_LOCK_POLL_SECONDS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_deadline_open",
+      "kind": "function",
+      "line": 14212,
+      "end_line": 14217,
+      "loc": 6,
+      "refs": [
+        "_require_common_lock_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_opaque_path_evidence_at",
+      "kind": "function",
+      "line": 14220,
+      "end_line": 14251,
+      "loc": 32,
+      "refs": [
+        "COMMON_LOCK_RECORD_CAP_BYTES"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "RecoveryReservation",
+      "kind": "class",
+      "line": 14255,
+      "end_line": 14329,
+      "loc": 75,
+      "refs": [
+        "CHAIN_ID_RE",
+        "COMMON_LOCK_RECOVERY_NAME",
+        "PublishedLockRecord",
+        "_open_owned_directory",
+        "_require_deadline_open",
+        "_revalidate_record_at",
+        "_validate_recovery_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_new_owner_record",
+      "kind": "function",
+      "line": 14332,
+      "end_line": 14352,
+      "loc": 21,
+      "refs": [
+        "_validate_owner_record",
+        "iso_z"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_fence_matches_owner",
+      "kind": "function",
+      "line": 14355,
+      "end_line": 14361,
+      "loc": 7,
+      "refs": [
+        "PublishedLockRecord"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_publish_portable_owner",
+      "kind": "function",
+      "line": 14364,
+      "end_line": 14456,
+      "loc": 93,
+      "refs": [
+        "COMMON_LOCK_DIRECTORY_NAME",
+        "COMMON_LOCK_INTENT_NAME",
+        "COMMON_LOCK_OWNER_NAME",
+        "CommonLockBoundaryCrash",
+        "PublishedLockRecord",
+        "_create_private_record_at",
+        "_inspect_common_lock_fd",
+        "_open_lock_directory",
+        "_publish_no_replace_link",
+        "_read_owned_record_at",
+        "_release_portable_identity",
+        "_require_common_lock_control",
+        "_same_published_record",
+        "_unlink_revalidated_record_at",
+        "_validate_owner_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_release_portable_identity",
+      "kind": "function",
+      "line": 14459,
+      "end_line": 14574,
+      "loc": 116,
+      "refs": [
+        "COMMON_LOCK_DIRECTORY_NAME",
+        "COMMON_LOCK_INTENT_NAME",
+        "COMMON_LOCK_OWNER_NAME",
+        "PublishedLockRecord",
+        "_inspect_common_lock_fd",
+        "_open_lock_directory",
+        "_publish_no_replace_link",
+        "_read_owned_record_at",
+        "_require_common_lock_control",
+        "_revalidate_record_at",
+        "_same_published_record",
+        "_unlink_revalidated_record_at",
+        "_validate_owner_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_publish_recovery_reservation",
+      "kind": "function",
+      "line": 14577,
+      "end_line": 14649,
+      "loc": 73,
+      "refs": [
+        "COMMON_LOCK_RECOVERY_NAME",
+        "CommonLockBoundaryCrash",
+        "RecoveryReservation",
+        "_create_private_record_at",
+        "_publish_no_replace_link",
+        "_read_owned_record_at",
+        "_require_common_lock_control",
+        "_same_published_record",
+        "_unlink_revalidated_record_at",
+        "_validate_recovery_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_reservation_evidence",
+      "kind": "function",
+      "line": 14652,
+      "end_line": 14671,
+      "loc": 20,
+      "refs": [
+        "COMMON_LOCK_RECOVERY_NAME",
+        "_opaque_path_evidence_at",
+        "_read_owned_record_at",
+        "_validate_recovery_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_clear_owned_reservation",
+      "kind": "function",
+      "line": 14674,
+      "end_line": 14690,
+      "loc": 17,
+      "refs": [
+        "COMMON_LOCK_RECOVERY_NAME",
+        "RecoveryReservation",
+        "_require_common_lock_control",
+        "_unlink_revalidated_record_at",
+        "_validate_recovery_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_recovery_record",
+      "kind": "function",
+      "line": 14693,
+      "end_line": 14728,
+      "loc": 36,
+      "refs": [
+        "PublishedLockRecord",
+        "_validate_recovery_record",
+        "iso_z"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_fence_death_proof",
+      "kind": "function",
+      "line": 14731,
+      "end_line": 14744,
+      "loc": 14,
+      "refs": [
+        "PublishedLockRecord"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_recovery_proof_recorder",
+      "kind": "function",
+      "line": 14747,
+      "end_line": 14761,
+      "loc": 15,
+      "refs": [
+        "_require_common_lock_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_persist_recovery_proof",
+      "kind": "function",
+      "line": 14764,
+      "end_line": 14779,
+      "loc": 16,
+      "refs": [
+        "_require_recovery_proof_recorder"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_recovery_classification_receipt_valid",
+      "kind": "function",
+      "line": 14782,
+      "end_line": 14855,
+      "loc": 74,
+      "refs": [
+        "MergeChainStore",
+        "PublishedLockRecord",
+        "RecoveryReservation",
+        "SHA256_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "CommonRebaseLock",
+      "kind": "class",
+      "line": 14858,
+      "end_line": 15084,
+      "loc": 227,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "COMMON_LOCK_INTENT_NAME",
+        "CommonLockBoundaryCrash",
+        "CommonLockReleaseFailure",
+        "PublishedLockRecord",
+        "RecoveryReservation",
+        "_clear_owned_reservation",
+        "_clear_reserved_fence",
+        "_common_fence_path_present",
+        "_fence_matches_owner",
+        "_inspect_common_lock_fd",
+        "_publish_recovery_reservation",
+        "_recovery_record",
+        "_release_portable_identity",
+        "_require_common_lock_control",
+        "_require_recovery_proof_recorder",
+        "_reservation_evidence",
+        "_revalidate_record_at",
+        "_same_published_record",
+        "_validate_fence_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_acquire_secondary_flock",
+      "kind": "function",
+      "line": 15087,
+      "end_line": 15145,
+      "loc": 59,
+      "refs": [
+        "COMMON_LOCK_FLOCK_NAME",
+        "_require_deadline_open",
+        "_sleep_with_deadline",
+        "_write_all",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_fence_for_recovery",
+      "kind": "function",
+      "line": 15148,
+      "end_line": 15173,
+      "loc": 26,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "PublishedLockRecord",
+        "_opaque_path_evidence_at",
+        "_record_at_if_present",
+        "_validate_fence_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_common_fence_path_present",
+      "kind": "function",
+      "line": 15176,
+      "end_line": 15194,
+      "loc": 19,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_recover_stale_portable_owner",
+      "kind": "function",
+      "line": 15197,
+      "end_line": 15275,
+      "loc": 79,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "COMMON_LOCK_RECOVERY_NAME",
+        "PublishedLockRecord",
+        "RecoveryReservation",
+        "_fence_death_proof",
+        "_inspect_common_lock_fd",
+        "_persist_recovery_proof",
+        "_release_portable_identity",
+        "_require_common_lock_control",
+        "_require_deadline_open",
+        "_revalidate_record_at",
+        "_same_published_record",
+        "_validate_fence_record",
+        "_validate_recovery_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_clear_reserved_fence",
+      "kind": "function",
+      "line": 15278,
+      "end_line": 15383,
+      "loc": 106,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "PublishedLockRecord",
+        "RecoveryReservation",
+        "_fence_death_proof",
+        "_persist_recovery_proof",
+        "_read_owned_record_at",
+        "_recovery_classification_receipt_valid",
+        "_require_common_lock_control",
+        "_require_deadline_open",
+        "_revalidate_record_at",
+        "_unlink_revalidated_record_at",
+        "_validate_fence_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "acquire_common_lock",
+      "kind": "function",
+      "line": 15386,
+      "end_line": 15929,
+      "loc": 544,
+      "refs": [
+        "COMMON_LOCK_TIMEOUT_SECONDS",
+        "CommonLockBoundaryCrash",
+        "CommonLockUnavailable",
+        "CommonRebaseLock",
+        "PublishedLockRecord",
+        "RecoveryReservation",
+        "_acquire_secondary_flock",
+        "_clear_owned_reservation",
+        "_clear_reserved_fence",
+        "_common_fence_path_present",
+        "_fence_matches_owner",
+        "_group_probe",
+        "_inspect_common_lock_fd",
+        "_new_owner_record",
+        "_open_owned_directory",
+        "_process_probe",
+        "_publish_portable_owner",
+        "_publish_recovery_reservation",
+        "_read_fence_for_recovery",
+        "_recover_stale_portable_owner",
+        "_recovery_classification_receipt_valid",
+        "_recovery_record",
+        "_release_portable_identity",
+        "_require_common_lock_control",
+        "_require_deadline_open",
+        "_require_recovery_proof_recorder",
+        "_reservation_evidence",
+        "_sleep_with_deadline",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "ChainLease",
+      "kind": "class",
+      "line": 15932,
+      "end_line": 16026,
+      "loc": 95,
+      "refs": [
+        "CommonRebaseLock",
+        "PublishedLockRecord",
+        "RecoveryReservation",
+        "_lease_exclusion_is_current",
+        "_require_common_lock_control",
+        "_revalidate_record_at",
+        "_unlink_revalidated_record_at",
+        "_validate_chain_lease_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_lease_exclusion_is_current",
+      "kind": "function",
+      "line": 16029,
+      "end_line": 16048,
+      "loc": 20,
+      "refs": [
+        "CommonRebaseLock",
+        "RecoveryReservation"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_lease_reclaim_authority_is_current",
+      "kind": "function",
+      "line": 16051,
+      "end_line": 16064,
+      "loc": 14,
+      "refs": [
+        "CommonRebaseLock",
+        "RecoveryReservation",
+        "_lease_exclusion_is_current"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_repository_recovery_reservation_present",
+      "kind": "function",
+      "line": 16067,
+      "end_line": 16074,
+      "loc": 8,
+      "refs": [
+        "COMMON_LOCK_RECOVERY_NAME"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_reconcile_merge_projection_for_lease_reclaim",
+      "kind": "function",
+      "line": 16077,
+      "end_line": 16145,
+      "loc": 69,
+      "refs": [
+        "ChainLease",
+        "CommonRebaseLock",
+        "MergeChainStore",
+        "RecoveryReservation"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "acquire_chain_lease",
+      "kind": "function",
+      "line": 16148,
+      "end_line": 16382,
+      "loc": 235,
+      "refs": [
+        "CHAIN_ID_RE",
+        "COMMON_LOCK_TIMEOUT_SECONDS",
+        "ChainLease",
+        "ChainLeaseUnavailable",
+        "CommonLockBoundaryCrash",
+        "CommonRebaseLock",
+        "PublishedLockRecord",
+        "RecoveryReservation",
+        "_create_private_record_at",
+        "_lease_exclusion_is_current",
+        "_lease_reclaim_authority_is_current",
+        "_opaque_path_evidence_at",
+        "_open_owned_directory",
+        "_process_probe",
+        "_publish_no_replace_link",
+        "_read_owned_record_at",
+        "_reconcile_merge_projection_for_lease_reclaim",
+        "_record_at_if_present",
+        "_repository_recovery_reservation_present",
+        "_require_common_lock_control",
+        "_same_published_record",
+        "_sleep_with_deadline",
+        "_unlink_revalidated_record_at",
+        "_validate_chain_lease_record",
+        "iso_z"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "FencedProcessResult",
+      "kind": "class",
+      "line": 16386,
+      "end_line": 16414,
+      "loc": 29,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "merge_gate_intent_digest",
+      "kind": "function",
+      "line": 16417,
+      "end_line": 16468,
+      "loc": 52,
+      "refs": [
+        "CHAIN_ID_RE",
+        "SHA256_RE",
+        "_require_common_lock_control",
+        "_valid_nonnegative_int",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_BlockedFenceChild",
+      "kind": "class",
+      "line": 16472,
+      "end_line": 16477,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_pipe_cloexec",
+      "kind": "function",
+      "line": 16480,
+      "end_line": 16491,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_child_ack",
+      "kind": "function",
+      "line": 16494,
+      "end_line": 16525,
+      "loc": 32,
+      "refs": [
+        "_sleep_with_deadline",
+        "_valid_positive_int"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_spawn_blocked_fence_child",
+      "kind": "function",
+      "line": 16528,
+      "end_line": 16671,
+      "loc": 144,
+      "refs": [
+        "FENCED_CHILD_REAP_SECONDS",
+        "FENCED_CHILD_STOP_GRACE_SECONDS",
+        "_BlockedFenceChild",
+        "_pipe_cloexec",
+        "_read_child_ack",
+        "_wait_for_child_exit"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_waitpid_nohang",
+      "kind": "function",
+      "line": 16674,
+      "end_line": 16681,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_wait_for_child_exit",
+      "kind": "function",
+      "line": 16684,
+      "end_line": 16698,
+      "loc": 15,
+      "refs": [
+        "_waitpid_nohang"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_terminate_fenced_group",
+      "kind": "function",
+      "line": 16701,
+      "end_line": 16742,
+      "loc": 42,
+      "refs": [
+        "_BlockedFenceChild",
+        "_require_common_lock_control",
+        "_waitpid_nohang"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_stop_unstarted_child",
+      "kind": "function",
+      "line": 16745,
+      "end_line": 16778,
+      "loc": 34,
+      "refs": [
+        "FENCED_CHILD_REAP_SECONDS",
+        "FENCED_CHILD_STOP_GRACE_SECONDS",
+        "_BlockedFenceChild",
+        "_wait_for_child_exit"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_publish_fence",
+      "kind": "function",
+      "line": 16781,
+      "end_line": 16864,
+      "loc": 84,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "CommonLockBoundaryCrash",
+        "CommonRebaseLock",
+        "PublishedLockRecord",
+        "_PublicationCleanupFailure",
+        "_create_private_record_at",
+        "_publish_no_replace_link",
+        "_read_owned_record_at",
+        "_same_published_record",
+        "_unlink_revalidated_record_at",
+        "_validate_fence_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_collect_fenced_child",
+      "kind": "function",
+      "line": 16867,
+      "end_line": 17023,
+      "loc": 157,
+      "refs": [
+        "FENCED_CHILD_DRAIN_CAP_BYTES",
+        "FENCED_CHILD_DRAIN_SECONDS",
+        "_BlockedFenceChild",
+        "_require_common_lock_control",
+        "_terminate_fenced_group",
+        "_waitpid_nohang"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "run_fenced_command",
+      "kind": "function",
+      "line": 17026,
+      "end_line": 17370,
+      "loc": 345,
+      "refs": [
+        "COMMON_LOCK_FENCE_OPERATIONS",
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "COMMON_LOCK_TIMEOUT_SECONDS",
+        "CommonLockBoundaryCrash",
+        "CommonLockReleaseFailure",
+        "CommonLockUnavailable",
+        "CommonRebaseLock",
+        "FENCED_CHILD_ACK_TIMEOUT_SECONDS",
+        "FencedChildSurvived",
+        "FencedProcessResult",
+        "PublishedLockRecord",
+        "SHA256_RE",
+        "_BlockedFenceChild",
+        "_PublicationCleanupFailure",
+        "_collect_fenced_child",
+        "_publish_fence",
+        "_require_common_lock_control",
+        "_revalidate_record_at",
+        "_sleep_with_deadline",
+        "_spawn_blocked_fence_child",
+        "_stop_unstarted_child",
+        "_terminate_fenced_group",
+        "_unlink_revalidated_record_at",
+        "_validate_fence_record",
+        "iso_z"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "hold_common_lock",
+      "kind": "function",
+      "line": 17373,
+      "end_line": 17491,
+      "loc": 119,
+      "refs": [
+        "COMMON_LOCK_INTENT_NAME",
+        "Repository",
+        "_write_all",
+        "acquire_common_lock",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "CLIOptions",
+      "kind": "class",
+      "line": 17495,
+      "end_line": 17502,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "CommandContext",
+      "kind": "class",
+      "line": 17506,
+      "end_line": 17555,
+      "loc": 50,
+      "refs": [
+        "CLIOptions",
+        "ChainStore",
+        "Repository",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_policy_for_state",
+      "kind": "function",
+      "line": 17558,
+      "end_line": 17579,
+      "loc": 22,
+      "refs": [
+        "CommandContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_bound_chain_state",
+      "kind": "function",
+      "line": 17582,
+      "end_line": 17673,
+      "loc": 92,
+      "refs": [
+        "_committed_changelog_output_paths",
+        "_forge_command"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_latest_current_pass",
+      "kind": "function",
+      "line": 17676,
+      "end_line": 17682,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_user_skip",
+      "kind": "function",
+      "line": 17685,
+      "end_line": 17690,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_gate_satisfied",
+      "kind": "function",
+      "line": 17693,
+      "end_line": 17731,
+      "loc": 39,
+      "refs": [
+        "FRESH_REVIEWER_EVALS_GATE",
+        "_latest_current_pass",
+        "_user_skip"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_reviewer_evals_required",
+      "kind": "function",
+      "line": 17734,
+      "end_line": 17756,
+      "loc": 23,
+      "refs": [
+        "CommandContext",
+        "_policy_for_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_required_steps",
+      "kind": "function",
+      "line": 17759,
+      "end_line": 17777,
+      "loc": 19,
+      "refs": [
+        "CommandContext",
+        "FRESH_REVIEWER_EVALS_GATE",
+        "_fresh_reviewer_evals_required",
+        "_policy_for_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_gate_one_complete",
+      "kind": "function",
+      "line": 17780,
+      "end_line": 17798,
+      "loc": 19,
+      "refs": [
+        "_user_skip"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_forge_command",
+      "kind": "function",
+      "line": 17801,
+      "end_line": 17803,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeRunTaskSnapshot",
+      "kind": "class",
+      "line": 17807,
+      "end_line": 17812,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_refusal",
+      "kind": "function",
+      "line": 17815,
+      "end_line": 17834,
+      "loc": 20,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_parse_registered_worktrees",
+      "kind": "function",
+      "line": 17837,
+      "end_line": 17861,
+      "loc": 25,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_rebase_action",
+      "kind": "function",
+      "line": 17864,
+      "end_line": 17879,
+      "loc": 16,
+      "refs": [
+        "SHA256_RE",
+        "_valid_nonce"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_rebase_result_classification",
+      "kind": "function",
+      "line": 17882,
+      "end_line": 17957,
+      "loc": 76,
+      "refs": [
+        "SHA256_RE",
+        "_merge_rebase_action",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_prove_merge_run_task_binding",
+      "kind": "function",
+      "line": 17960,
+      "end_line": 18024,
+      "loc": 65,
+      "refs": [
+        "MergeRunTaskSnapshot",
+        "_chain_batch_lock",
+        "_merge_refusal"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_SCOPE_UNSET",
+      "kind": "assignment",
+      "line": 18027,
+      "end_line": 18042,
+      "loc": 16,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_MERGE_SCOPE_OVERLAY",
+      "kind": "assignment",
+      "line": 18045,
+      "end_line": 18056,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_merge_scope_environment_contract",
+      "kind": "function",
+      "line": 18059,
+      "end_line": 18064,
+      "loc": 6,
+      "refs": [
+        "_MERGE_SCOPE_OVERLAY",
+        "_MERGE_SCOPE_UNSET"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_valid_sorted_unique_strings",
+      "kind": "function",
+      "line": 18067,
+      "end_line": 18073,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_merge_scope_request",
+      "kind": "function",
+      "line": 18076,
+      "end_line": 18125,
+      "loc": 50,
+      "refs": [
+        "_merge_scope_environment_contract",
+        "_valid_sorted_unique_strings",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_retained_inflight",
+      "kind": "function",
+      "line": 18128,
+      "end_line": 18135,
+      "loc": 8,
+      "refs": [
+        "PublishedLockRecord"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_merge_scope_fetch_binding",
+      "kind": "function",
+      "line": 18138,
+      "end_line": 18307,
+      "loc": 170,
+      "refs": [
+        "CHAIN_ID_RE",
+        "COMMIT_RE",
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "SHA256_RE",
+        "_valid_nonnegative_int",
+        "_valid_utc_second",
+        "_validate_fence_record",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_binding_names",
+      "kind": "function",
+      "line": 18310,
+      "end_line": 18317,
+      "loc": 8,
+      "refs": [
+        "PublishedLockRecord"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_binding_validator",
+      "kind": "function",
+      "line": 18320,
+      "end_line": 18423,
+      "loc": 104,
+      "refs": [
+        "COMMON_LOCK_INFLIGHT_NAME",
+        "FencedProcessResult",
+        "PublishedLockRecord",
+        "_merge_full_patch_argv",
+        "_merge_retained_inflight",
+        "_merge_scope_argv",
+        "_merge_scope_binding_names",
+        "_merge_scope_environment_contract",
+        "_validate_fence_record",
+        "_validate_merge_scope_fetch_binding",
+        "_validate_merge_scope_request",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_argv",
+      "kind": "function",
+      "line": 18426,
+      "end_line": 18458,
+      "loc": 33,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_full_patch_argv",
+      "kind": "function",
+      "line": 18461,
+      "end_line": 18496,
+      "loc": 36,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_containment",
+      "kind": "function",
+      "line": 18499,
+      "end_line": 18540,
+      "loc": 42,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_old_tip_all_false",
+      "kind": "function",
+      "line": 18543,
+      "end_line": 18560,
+      "loc": 18,
+      "refs": [
+        "_merge_containment"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_latest_contained_attempt",
+      "kind": "function",
+      "line": 18563,
+      "end_line": 18593,
+      "loc": 31,
+      "refs": [
+        "COMMIT_RE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_inactive_post_attempt_recovery_ready",
+      "kind": "function",
+      "line": 18596,
+      "end_line": 18640,
+      "loc": 45,
+      "refs": [
+        "SHA256_RE",
+        "_MERGE_INACTIVE_POST_ATTEMPT_RECOVERY_SOURCES"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_observation_heads",
+      "kind": "function",
+      "line": 18643,
+      "end_line": 18652,
+      "loc": 10,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_observation_fetch_argv",
+      "kind": "function",
+      "line": 18655,
+      "end_line": 18666,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_containment_argv",
+      "kind": "function",
+      "line": 18669,
+      "end_line": 18682,
+      "loc": 14,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_EPOCH_FETCH_OBSERVATION_SCHEMA",
+      "kind": "assignment",
+      "line": 18685,
+      "end_line": 18685,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_epoch_fetch_observation_record_valid",
+      "kind": "function",
+      "line": 18688,
+      "end_line": 18765,
+      "loc": 78,
+      "refs": [
+        "SHA256_RE",
+        "_EPOCH_FETCH_OBSERVATION_SCHEMA",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_epoch_fetch_observation_passed",
+      "kind": "function",
+      "line": 18768,
+      "end_line": 18778,
+      "loc": 11,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_epoch_fetch_result_intent_digest",
+      "kind": "function",
+      "line": 18781,
+      "end_line": 18995,
+      "loc": 215,
+      "refs": [
+        "COMMIT_RE",
+        "SHA256_RE",
+        "_epoch_ancestry_record_valid",
+        "_epoch_fetch_observation_passed",
+        "_epoch_fetch_observation_record_valid",
+        "_merge_candidate_observation_evidence_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_epoch_ancestry_record_valid",
+      "kind": "function",
+      "line": 18998,
+      "end_line": 19099,
+      "loc": 102,
+      "refs": [
+        "SHA256_RE",
+        "_remote_containment_argv",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_containment_evidence_valid",
+      "kind": "function",
+      "line": 19102,
+      "end_line": 19144,
+      "loc": 43,
+      "refs": [
+        "SHA256_RE",
+        "_remote_containment_argv"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_observation_progress_valid",
+      "kind": "function",
+      "line": 19147,
+      "end_line": 19271,
+      "loc": 125,
+      "refs": [
+        "COMMIT_RE",
+        "SHA256_RE",
+        "_remote_containment_argv",
+        "_remote_containment_evidence_valid",
+        "_remote_observation_fetch_argv",
+        "_remote_observation_heads",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_observation_progress_transition_valid",
+      "kind": "function",
+      "line": 19274,
+      "end_line": 19348,
+      "loc": 75,
+      "refs": [
+        "_remote_observation_progress_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_observation_progress_matches_observed",
+      "kind": "function",
+      "line": 19351,
+      "end_line": 19438,
+      "loc": 88,
+      "refs": [
+        "_remote_observation_progress_valid",
+        "_valid_utc_second",
+        "parse_time"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_replayed_remote_observation_completed",
+      "kind": "function",
+      "line": 19441,
+      "end_line": 19470,
+      "loc": 30,
+      "refs": [
+        "_remote_observation_progress_matches_observed"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CANDIDATE_OBSERVATION_SCHEMA",
+      "kind": "assignment",
+      "line": 19473,
+      "end_line": 19473,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CANDIDATE_OBSERVATION_EVIDENCE_SCHEMA",
+      "kind": "assignment",
+      "line": 19476,
+      "end_line": 19478,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_BOOTSTRAP_FETCH_OBSERVATION_SCHEMA",
+      "kind": "assignment",
+      "line": 19481,
+      "end_line": 19481,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_bootstrap_fetch_observation_record_valid",
+      "kind": "function",
+      "line": 19484,
+      "end_line": 19624,
+      "loc": 141,
+      "refs": [
+        "COMMIT_RE",
+        "SHA256_RE",
+        "_BOOTSTRAP_FETCH_OBSERVATION_SCHEMA",
+        "_valid_nonce",
+        "_valid_positive_int",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_bootstrap_fetch_observation_transition_valid",
+      "kind": "function",
+      "line": 19627,
+      "end_line": 19654,
+      "loc": 28,
+      "refs": [
+        "_bootstrap_fetch_observation_record_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_step_specs",
+      "kind": "function",
+      "line": 19657,
+      "end_line": 19821,
+      "loc": 165,
+      "refs": [
+        "COMMIT_RE",
+        "TIER_RANK",
+        "_merge_scope_argv"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_step_names",
+      "kind": "function",
+      "line": 19824,
+      "end_line": 19839,
+      "loc": 16,
+      "refs": [
+        "_merge_candidate_observation_step_specs"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_binding",
+      "kind": "function",
+      "line": 19842,
+      "end_line": 19886,
+      "loc": 45,
+      "refs": [
+        "COMMIT_RE",
+        "SHA256_RE",
+        "TIER_RANK",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_record_valid",
+      "kind": "function",
+      "line": 19889,
+      "end_line": 20017,
+      "loc": 129,
+      "refs": [
+        "SHA256_RE",
+        "TIER_RANK",
+        "_MERGE_CANDIDATE_OBSERVATION_SCHEMA",
+        "_merge_candidate_observation_binding",
+        "_merge_candidate_observation_step_specs",
+        "_valid_utc_second"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_transition_valid",
+      "kind": "function",
+      "line": 20020,
+      "end_line": 20063,
+      "loc": 44,
+      "refs": [
+        "_merge_candidate_observation_record_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_evidence",
+      "kind": "function",
+      "line": 20066,
+      "end_line": 20125,
+      "loc": 60,
+      "refs": [
+        "_MERGE_CANDIDATE_OBSERVATION_EVIDENCE_SCHEMA",
+        "_merge_candidate_observation_record_valid",
+        "_merge_candidate_observation_step_names",
+        "canonical_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_evidence_valid",
+      "kind": "function",
+      "line": 20128,
+      "end_line": 20153,
+      "loc": 26,
+      "refs": [
+        "_merge_candidate_observation_evidence"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "__all__",
+      "kind": "assignment",
+      "line": 20156,
+      "end_line": 20455,
+      "loc": 300,
+      "refs": [],
+      "mutable_state": true
+    }
+  ],
+  "edges": [
+    [
+      "COMMON_LOCK_CONTROLS",
+      "_REQUIRED_COMMON_LOCK_CONTROLS"
+    ],
+    [
+      "MERGE_STORE_CONTROLS",
+      "_REQUIRED_MERGE_STORE_CONTROLS"
+    ],
+    [
+      "MERGE_ADAPTER_CONTROLS",
+      "_REQUIRED_MERGE_ADAPTER_CONTROLS"
+    ],
+    [
+      "MERGE_INTEGRATION_CONTROLS",
+      "_REQUIRED_MERGE_INTEGRATION_CONTROLS"
+    ],
+    [
+      "_REQUIRED_INGEST_PROOF_CONTROLS",
+      "INGEST_PROOF_ORDER"
+    ],
+    [
+      "INGEST_PROOF_CONTROLS",
+      "_REQUIRED_INGEST_PROOF_CONTROLS"
+    ],
+    [
+      "_exclusive_descriptor_lock",
+      "_WORKTREE_LOCK_STATE"
+    ],
+    [
+      "_exclusive_descriptor_lock",
+      "_WORKTREE_LOCKS"
+    ],
+    [
+      "_exclusive_descriptor_lock",
+      "_WORKTREE_LOCKS_GUARD"
+    ],
+    [
+      "_exclusive_descriptor_lock",
+      "COMMON_LOCK_POLL_SECONDS"
+    ],
+    [
+      "_require_ingest_proof",
+      "_REQUIRED_INGEST_PROOF_CONTROLS"
+    ],
+    [
+      "_require_ingest_proof",
+      "INGEST_PROOF_CONTROLS"
+    ],
+    [
+      "_require_ingest_proof",
+      "INGEST_PROOF_ORDER"
+    ],
+    [
+      "_merge_event_outbox",
+      "SHA256_RE"
+    ],
+    [
+      "reduce_merge_event",
+      "_merge_event_outbox"
+    ],
+    [
+      "reduce_merge_event",
+      "_merge_payload_delta"
+    ],
+    [
+      "reduce_merge_event",
+      "parse_time"
+    ],
+    [
+      "reduce_merge_event",
+      "INACTIVE_SECONDS"
+    ],
+    [
+      "_merge_gate_plan_valid",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_gate_plan_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_epoch_valid",
+      "_merge_gate_plan_valid"
+    ],
+    [
+      "_merge_epoch_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_epoch_valid",
+      "_valid_utc_second"
+    ],
+    [
+      "_merge_epoch_valid",
+      "_valid_nonce"
+    ],
+    [
+      "_merge_bootstrap_classification_pending",
+      "_valid_positive_int"
+    ],
+    [
+      "_merge_bootstrap_classification_pending",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_bootstrap_classification_pending",
+      "_valid_nonce"
+    ],
+    [
+      "_merge_revision9_compatibility_view",
+      "_merge_bootstrap_classification_pending"
+    ],
+    [
+      "_merge_state_shape_valid",
+      "_merge_revision9_compatibility_view"
+    ],
+    [
+      "_merge_state_shape_valid",
+      "_merge_epoch_valid"
+    ],
+    [
+      "_merge_ingest_state_shape_valid",
+      "_merge_state_shape_valid"
+    ],
+    [
+      "_merge_ingest_transition_valid",
+      "_merge_history_uses_additive_grammar"
+    ],
+    [
+      "_merge_ingest_transition_valid",
+      "_merge_transition_valid"
+    ],
+    [
+      "_merge_carried_gate_steps",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_gate_step_generation_digests",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_current_authority_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_remote_only_equality_proof",
+      "_MERGE_REMOTE_ONLY_IDENTITY_FIELDS"
+    ],
+    [
+      "_merge_carry_payload_valid",
+      "_merge_remote_only_equality_proof"
+    ],
+    [
+      "_merge_plan_transition_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_plan_transition_valid",
+      "_merge_plan_position_fact"
+    ],
+    [
+      "_validate_merge_scope_proof",
+      "canonical_bytes"
+    ],
+    [
+      "_validate_merge_scope_proof",
+      "SHA256_RE"
+    ],
+    [
+      "_validate_merge_scope_proof",
+      "_valid_sorted_unique_strings"
+    ],
+    [
+      "_merge_scope_event_binding_valid",
+      "_merge_scope_binding_validator"
+    ],
+    [
+      "_merge_scope_event_binding_valid",
+      "PublishedLockRecord"
+    ],
+    [
+      "_merge_scope_transition_valid",
+      "_merge_scope_event_binding_valid"
+    ],
+    [
+      "_merge_scope_transition_valid",
+      "_validate_merge_scope_proof"
+    ],
+    [
+      "_merge_scope_transition_valid",
+      "_validate_merge_scope_request"
+    ],
+    [
+      "_merge_scope_transition_valid",
+      "_validate_merge_scope_fetch_binding"
+    ],
+    [
+      "_merge_scope_transition_valid",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_scope_transition_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_published_recovery_evidence_valid",
+      "canonical_bytes"
+    ],
+    [
+      "_published_recovery_evidence_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_published_recovery_evidence_valid",
+      "_valid_nonnegative_int"
+    ],
+    [
+      "_recovery_cleanup_result_matches",
+      "_merge_cleanup_step_result_valid"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_recovery_event_intent"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_recovery_cleanup_result_matches"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_recovery_value_carries_inflight"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "merge_gate_intent_digest"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_epoch_fetch_observation_record_valid"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_recovery_cleanup_intent"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "canonical_bytes"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_EPOCH_FETCH_OBSERVATION_SCHEMA"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "SHA256_RE"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_merge_cleanup_intent_valid"
+    ],
+    [
+      "_classify_merge_recovery_lifecycle",
+      "_valid_nonnegative_int"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "_classify_merge_recovery_lifecycle"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "_published_recovery_evidence_valid"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "_validate_fence_record"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "COMMON_LOCK_RECOVERY_NAME"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "_validate_recovery_record"
+    ],
+    [
+      "_merge_recovery_proof_transition_valid",
+      "MERGE_STATE_KEYS"
+    ],
+    [
+      "_recovered_absent_rebase_intent_digest",
+      "_merge_rebase_result_classification"
+    ],
+    [
+      "_recovered_absent_rebase_intent_digest",
+      "_merge_candidate_observation_evidence_valid"
+    ],
+    [
+      "_merge_attempted_release_preconditions_valid",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_attempted_release_preconditions_valid",
+      "_merge_containment"
+    ],
+    [
+      "_merge_attempted_release_preconditions_valid",
+      "reduce_merge_event"
+    ],
+    [
+      "_merge_cleanup_expected_subject",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "_merge_cleanup_expected_subject"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "_valid_utc_second"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "_MERGE_CLEANUP_FENCE_OPERATIONS"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "_merge_cleanup_expected_argv"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "_MERGE_CLEANUP_RECOVERY_SCHEMA"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "_MERGE_CLEANUP_INTENT_SCHEMA"
+    ],
+    [
+      "_merge_cleanup_intent_valid",
+      "_valid_nonce"
+    ],
+    [
+      "_merge_cleanup_process_result_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_cleanup_process_result_valid",
+      "_valid_positive_int"
+    ],
+    [
+      "_merge_cleanup_branch_observation",
+      "_merge_cleanup_process_complete"
+    ],
+    [
+      "_merge_cleanup_branch_observation",
+      "_merge_cleanup_process_output"
+    ],
+    [
+      "_merge_cleanup_branch_observation",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_cleanup_worktree_inventory",
+      "_merge_cleanup_process_complete"
+    ],
+    [
+      "_merge_cleanup_worktree_inventory",
+      "_merge_cleanup_process_output"
+    ],
+    [
+      "_merge_cleanup_worktree_inventory",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_cleanup_worktree_inventory",
+      "_parse_registered_worktrees"
+    ],
+    [
+      "_merge_cleanup_fetch_head_bytes",
+      "MERGE_SCOPE_BINDING_CAP_BYTES"
+    ],
+    [
+      "_merge_cleanup_fetch_head_bytes",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_cleanup_observation_valid",
+      "_merge_cleanup_branch_observation"
+    ],
+    [
+      "_merge_cleanup_observation_valid",
+      "_merge_cleanup_worktree_inventory"
+    ],
+    [
+      "_merge_cleanup_observation_valid",
+      "_merge_cleanup_process_output"
+    ],
+    [
+      "_merge_cleanup_observation_valid",
+      "MERGE_SCOPE_BINDING_CAP_BYTES"
+    ],
+    [
+      "_merge_cleanup_observation_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_cleanup_observation_valid",
+      "_merge_cleanup_fetch_head_bytes"
+    ],
+    [
+      "_merge_cleanup_step_result_valid",
+      "_MERGE_CLEANUP_RESULT_SCHEMA"
+    ],
+    [
+      "_merge_cleanup_step_result_valid",
+      "_merge_cleanup_intent_valid"
+    ],
+    [
+      "_merge_cleanup_step_result_valid",
+      "_merge_cleanup_process_result_valid"
+    ],
+    [
+      "_merge_cleanup_step_result_valid",
+      "_merge_cleanup_observation_valid"
+    ],
+    [
+      "_merge_cleanup_results_valid",
+      "_merge_cleanup_step_result_valid"
+    ],
+    [
+      "_merge_cleanup_history_summary",
+      "_merge_cleanup_evidence_history"
+    ],
+    [
+      "_merge_cleanup_unmatched_intent",
+      "_recovery_cleanup_intent"
+    ],
+    [
+      "_merge_cleanup_unmatched_intent",
+      "_MERGE_CLEANUP_INTENT_SCHEMA"
+    ],
+    [
+      "_merge_cleanup_retry_proof_valid",
+      "_recovery_cleanup_intent"
+    ],
+    [
+      "_merge_cleanup_intent_transition_valid",
+      "_recovery_cleanup_intent"
+    ],
+    [
+      "_merge_cleanup_intent_transition_valid",
+      "_MERGE_CLEANUP_RECOVERY_SCHEMA"
+    ],
+    [
+      "_merge_cleanup_intent_transition_valid",
+      "_merge_cleanup_intent_valid"
+    ],
+    [
+      "_merge_cleanup_intent_transition_valid",
+      "_merge_cleanup_history_summary"
+    ],
+    [
+      "_merge_cleanup_intent_transition_valid",
+      "_merge_cleanup_unmatched_intent"
+    ],
+    [
+      "_merge_cleanup_intent_transition_valid",
+      "_merge_cleanup_retry_proof_valid"
+    ],
+    [
+      "_merge_cleanup_result_transition_valid",
+      "_merge_cleanup_results_valid"
+    ],
+    [
+      "_merge_history_has_git_mutation_intent",
+      "_recovery_event_intent"
+    ],
+    [
+      "_merge_release_preconditions_valid",
+      "_merge_cleanup_evidence_history"
+    ],
+    [
+      "_merge_release_preconditions_valid",
+      "_MERGE_CLEANUP_CLOSE_SCHEMA"
+    ],
+    [
+      "_merge_release_preconditions_valid",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_release_preconditions_valid",
+      "_merge_cleanup_history_summary"
+    ],
+    [
+      "_merge_release_preconditions_valid",
+      "_merge_history_has_git_mutation_intent"
+    ],
+    [
+      "_merge_release_preconditions_valid",
+      "_merge_attempted_release_preconditions_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_recovery_proof_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_remote_observation_progress_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_MERGE_REMOTE_ONLY_IDENTITY_FIELDS"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_current_authority_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_bootstrap_fetch_observation_record_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_inactive_post_attempt_recovery_ready"
+    ],
+    [
+      "_merge_transition_valid",
+      "_remote_observation_progress_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_containment"
+    ],
+    [
+      "_merge_transition_valid",
+      "_MERGE_INACTIVE_ATTEMPT_OBSERVATION_SOURCES"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_state_shape_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_rebase_result_classification"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_bootstrap_classification_pending"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_scope_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_carry_payload_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_latest_contained_attempt"
+    ],
+    [
+      "_merge_transition_valid",
+      "_bootstrap_fetch_observation_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_release_preconditions_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_old_tip_all_false"
+    ],
+    [
+      "_merge_transition_valid",
+      "_epoch_ancestry_record_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_candidate_observation_record_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_cleanup_result_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_require_merge_integration_control"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_plan_position_fact"
+    ],
+    [
+      "_merge_transition_valid",
+      "_epoch_fetch_observation_predecessor_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_revision9_compatibility_view"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_carried_gate_steps"
+    ],
+    [
+      "_merge_transition_valid",
+      "MERGE_STATE_KEYS"
+    ],
+    [
+      "_merge_transition_valid",
+      "_recovered_absent_rebase_intent_digest"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_plan_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_gate_step_generation_digests"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_cleanup_intent_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_epoch_fetch_observation_record_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_candidate_observation_step_names"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_candidate_observation_evidence"
+    ],
+    [
+      "_merge_transition_valid",
+      "_merge_candidate_observation_transition_valid"
+    ],
+    [
+      "_merge_transition_valid",
+      "_MERGE_CANDIDATE_OBSERVATION_SCHEMA"
+    ],
+    [
+      "_merge_transition_valid",
+      "_epoch_fetch_result_intent_digest"
+    ],
+    [
+      "_merge_transition_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_transition_valid",
+      "_replayed_remote_observation_completed"
+    ],
+    [
+      "_merge_transition_valid",
+      "_epoch_fetch_observation_passed"
+    ],
+    [
+      "_receipt_run_snapshot",
+      "_ReceiptRunSnapshot"
+    ],
+    [
+      "_ChainReceiptSnapshotVerifier",
+      "_receipt_run_snapshot"
+    ],
+    [
+      "_ChainReceiptSnapshotVerifier",
+      "_chain_receipt_snapshot_lock"
+    ],
+    [
+      "_ChainReceiptSnapshotVerifier",
+      "_ReceiptRunSnapshot"
+    ],
+    [
+      "_resolve_chain_activation_snapshot",
+      "_merge_history_uses_additive_grammar"
+    ],
+    [
+      "_resolve_chain_activation_snapshot",
+      "_replay_merge_event_bytes"
+    ],
+    [
+      "_resolve_chain_activation_snapshot",
+      "_ChainActivationSnapshot"
+    ],
+    [
+      "_resolve_chain_activation_snapshot",
+      "_ChainReceiptSnapshotVerifier"
+    ],
+    [
+      "_resolve_chain_activation_snapshot",
+      "_validate_chain_activation_lineage"
+    ],
+    [
+      "_resolve_chain_activation_snapshot",
+      "canonical_bytes"
+    ],
+    [
+      "_resolve_chain_activation_snapshot",
+      "ZERO_DIGEST"
+    ],
+    [
+      "_resolve_chain_activation_projection",
+      "_ChainReceiptSnapshotVerifier"
+    ],
+    [
+      "_resolve_chain_activation_projection",
+      "_resolve_chain_activation_snapshot"
+    ],
+    [
+      "_chain_activation_ownership_summary",
+      "_ChainReceiptSnapshotVerifier"
+    ],
+    [
+      "_chain_activation_ownership_summary",
+      "_resolve_chain_activation_snapshot"
+    ],
+    [
+      "_validate_chain_activation_lineage",
+      "_ChainReceiptSnapshotVerifier"
+    ],
+    [
+      "_validate_chain_activation_lineage",
+      "_chain_activation_ownership_summary"
+    ],
+    [
+      "_validate_chain_activation_lineage",
+      "canonical_bytes"
+    ],
+    [
+      "_require_no_pending_chain_activation_outbox",
+      "_resolve_chain_activation_projection"
+    ],
+    [
+      "_prepare_merge_activation_preamble",
+      "_require_no_pending_chain_activation_outbox"
+    ],
+    [
+      "_authorize_chain_batch",
+      "_chain_storage_root"
+    ],
+    [
+      "_authorize_chain_batch",
+      "_resolve_chain_activation_snapshot"
+    ],
+    [
+      "_read_ingest_input",
+      "_validated_commitment_path"
+    ],
+    [
+      "_read_ingest_input",
+      "_parsed_run_captured_path"
+    ],
+    [
+      "_capture_ingest_blob",
+      "_validated_commitment_path"
+    ],
+    [
+      "_capture_ingest_blob",
+      "_parsed_run_captured_path"
+    ],
+    [
+      "_capture_run_evidence",
+      "_capture_ingest_blob"
+    ],
+    [
+      "_capture_run_evidence",
+      "_require_merge_adapter_control"
+    ],
+    [
+      "_capture_ingest_record_evidence",
+      "_read_ingest_input"
+    ],
+    [
+      "_capture_ingest_record_evidence",
+      "_capture_run_evidence"
+    ],
+    [
+      "_capture_ingest_record_evidence",
+      "_parsed_run_captured_path"
+    ],
+    [
+      "_ingest_captured_paths",
+      "_validated_commitment_path"
+    ],
+    [
+      "_ingest_captured_paths",
+      "_parsed_run_captured_path"
+    ],
+    [
+      "_ingest_captured_paths",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_ingest_binding",
+      "canonical_bytes"
+    ],
+    [
+      "_prove_ingest_live_chain",
+      "_chain_storage_root"
+    ],
+    [
+      "_merge_ingest_record_templates",
+      "_merge_gate_event_fact"
+    ],
+    [
+      "_merge_ingest_record_templates",
+      "_merge_current_authority_valid"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_capture_ingest_record_evidence"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_read_ingest_input"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_ingest_allocation_records"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_ingest_captured_paths"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_merge_ingest_record_templates"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_require_ingest_proof"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "INGEST_PROOF_ORDER"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_merge_current_authority_valid"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "COMMIT_RE"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_merge_current_gate_facts"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_merge_ingest_transition_valid"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "SHA256_RE"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_committed_changelog_output_paths"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_merge_ingest_binding"
+    ],
+    [
+      "_verify_and_build_merge_ingest_records",
+      "_prove_ingest_live_chain"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "EVENT_KEYS"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "CLIOptions"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "ZERO_DIGEST"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_prove_ingest_live_chain"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_verify_and_build_merge_ingest_records"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "validate_state"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "TIER_RANK"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_latest_current_pass"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_user_skip"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_binding_matches_source_fact_with_candidate_v2"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_require_ingest_proof"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "INGEST_PROOF_ORDER"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "COMMIT_RE"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "CommandContext"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_merge_ingest_state_shape_valid"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "INGEST_PROOF_CONTROLS"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_binding_is_current_with_candidate_v2"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_ingest_allocation_records"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "ChainStore"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_ingest_secret_scan_is_current"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_gate_satisfied"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "reduce_merge_event"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_REQUIRED_INGEST_PROOF_CONTROLS"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_committed_changelog_output_paths"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_commit_transition_valid_with_candidate_v2"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_capture_ingest_record_evidence"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_read_ingest_input"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_ingest_captured_paths"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_required_steps"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_gate_one_complete"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "_ingest_step_is_current"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "canonical_bytes"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "SHA256_RE"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "candidate_is_v2"
+    ],
+    [
+      "_verify_and_build_ingest_records",
+      "Repository"
+    ],
+    [
+      "_ingest_proof_verifier",
+      "_verify_and_build_ingest_records"
+    ],
+    [
+      "register_activation_reservation_seam",
+      "_require_no_pending_chain_activation_outbox"
+    ],
+    [
+      "register_coordination_seams",
+      "reduce_merge_event"
+    ],
+    [
+      "register_coordination_seams",
+      "_ingest_proof_verifier"
+    ],
+    [
+      "register_coordination_seams",
+      "register_activation_reservation_seam"
+    ],
+    [
+      "register_coordination_seams",
+      "_authorize_chain_batch"
+    ],
+    [
+      "_chain_batch_lock",
+      "register_coordination_seams"
+    ],
+    [
+      "_chain_batch_lock",
+      "_validate_chain_batch_target"
+    ],
+    [
+      "Repository",
+      "iso_z"
+    ],
+    [
+      "Repository",
+      "COMMIT_RE"
+    ],
+    [
+      "validate_state",
+      "parse_time"
+    ],
+    [
+      "validate_state",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "validate_state",
+      "SCHEMA"
+    ],
+    [
+      "validate_state",
+      "RUN_ID_RE"
+    ],
+    [
+      "validate_state",
+      "COMMIT_RE"
+    ],
+    [
+      "validate_state",
+      "SHA256_RE"
+    ],
+    [
+      "validate_state",
+      "STATES"
+    ],
+    [
+      "validate_state",
+      "STATE_KEYS"
+    ],
+    [
+      "validate_state",
+      "KIND"
+    ],
+    [
+      "_require_merge_store_control",
+      "MERGE_STORE_CONTROLS"
+    ],
+    [
+      "_require_merge_store_control",
+      "_REQUIRED_MERGE_STORE_CONTROLS"
+    ],
+    [
+      "_require_merge_adapter_control",
+      "_REQUIRED_MERGE_ADAPTER_CONTROLS"
+    ],
+    [
+      "_require_merge_adapter_control",
+      "MERGE_ADAPTER_CONTROLS"
+    ],
+    [
+      "_require_merge_integration_control",
+      "_REQUIRED_MERGE_INTEGRATION_CONTROLS"
+    ],
+    [
+      "_require_merge_integration_control",
+      "MERGE_INTEGRATION_CONTROLS"
+    ],
+    [
+      "validate_merge_state",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "validate_merge_state",
+      "MERGE_EVENT_NAMES"
+    ],
+    [
+      "validate_merge_state",
+      "_require_merge_store_control"
+    ],
+    [
+      "validate_merge_state",
+      "_merge_state_shape_valid"
+    ],
+    [
+      "validate_merge_state",
+      "MERGE_STATE_KEYS"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "_merge_history_uses_additive_grammar"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "MERGE_EVENT_KEYS"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "MERGE_EVENT_NAMES"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "_ChainReceiptSnapshotVerifier"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "MergeReplayResult"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "reduce_merge_event"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "_merge_ingest_transition_valid"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "_require_merge_store_control"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "SHA256_RE"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "canonical_bytes"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "validate_merge_state"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "ZERO_DIGEST"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "_merge_state_shape_valid"
+    ],
+    [
+      "_replay_merge_event_bytes",
+      "MERGE_STATE_KEYS"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "parse_time"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "_replay_merge_event_bytes"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "EVENT_KEYS"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "MERGE_EVENT_KEYS"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "_exclusive_descriptor_lock"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "ZERO_DIGEST"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "_require_merge_store_control"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "SHA256_RE"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "canonical_bytes"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "CHAIN_TOMBSTONE_SCHEMA"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "iso_z"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "CHAIN_TOMBSTONE_KEYS"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "_forge_command"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "validate_state"
+    ],
+    [
+      "_ChainStoragePrimitives",
+      "CHAIN_TOMBSTONE_EVENT"
+    ],
+    [
+      "ChainStore",
+      "EVENT_KEYS"
+    ],
+    [
+      "ChainStore",
+      "_validate_bound_chain_state"
+    ],
+    [
+      "ChainStore",
+      "_prevalidate_chain_batch_carrier"
+    ],
+    [
+      "ChainStore",
+      "ZERO_DIGEST"
+    ],
+    [
+      "ChainStore",
+      "validate_state"
+    ],
+    [
+      "ChainStore",
+      "_event_batch_records_with_candidate_v2"
+    ],
+    [
+      "ChainStore",
+      "_chain_batch_lock"
+    ],
+    [
+      "ChainStore",
+      "_binding_matches_source_fact_with_candidate_v2"
+    ],
+    [
+      "ChainStore",
+      "_coordination_refusal"
+    ],
+    [
+      "ChainStore",
+      "_binding_is_current_with_candidate_v2"
+    ],
+    [
+      "ChainStore",
+      "register_coordination_seams"
+    ],
+    [
+      "ChainStore",
+      "INACTIVE_SECONDS"
+    ],
+    [
+      "ChainStore",
+      "_commit_transition_valid_with_candidate_v2"
+    ],
+    [
+      "ChainStore",
+      "_ChainStoragePrimitives"
+    ],
+    [
+      "ChainStore",
+      "_drain_chain_batch_capability"
+    ],
+    [
+      "ChainStore",
+      "canonical_bytes"
+    ],
+    [
+      "ChainStore",
+      "candidate_is_v2"
+    ],
+    [
+      "ChainStore",
+      "iso_z"
+    ],
+    [
+      "ChainStore",
+      "_forge_command"
+    ],
+    [
+      "_build_merge_chain_journal_records",
+      "_parsed_run_captured_path"
+    ],
+    [
+      "_build_merge_chain_journal_records",
+      "MERGE_CONSEQUENTIAL_EVENTS"
+    ],
+    [
+      "_build_merge_chain_journal_records",
+      "_merge_ingest_record_templates"
+    ],
+    [
+      "_build_merge_chain_journal_records",
+      "_require_merge_store_control"
+    ],
+    [
+      "_build_merge_chain_journal_records",
+      "_merge_gate_event_fact"
+    ],
+    [
+      "_build_merge_chain_journal_records",
+      "_prepare_merge_activation_preamble"
+    ],
+    [
+      "_build_merge_chain_journal_records",
+      "_merge_ingest_binding"
+    ],
+    [
+      "MergeChainStore",
+      "_replay_merge_event_bytes"
+    ],
+    [
+      "MergeChainStore",
+      "_merge_transition_valid"
+    ],
+    [
+      "MergeChainStore",
+      "MERGE_EVENT_NAMES"
+    ],
+    [
+      "MergeChainStore",
+      "ZERO_DIGEST"
+    ],
+    [
+      "MergeChainStore",
+      "_merge_state_shape_valid"
+    ],
+    [
+      "MergeChainStore",
+      "ChainLease"
+    ],
+    [
+      "MergeChainStore",
+      "_merge_history_uses_additive_grammar"
+    ],
+    [
+      "MergeChainStore",
+      "_chain_batch_lock"
+    ],
+    [
+      "MergeChainStore",
+      "_build_merge_chain_journal_records"
+    ],
+    [
+      "MergeChainStore",
+      "RecoveryReservation"
+    ],
+    [
+      "MergeChainStore",
+      "acquire_chain_lease"
+    ],
+    [
+      "MergeChainStore",
+      "validate_merge_state"
+    ],
+    [
+      "MergeChainStore",
+      "_coordination_refusal"
+    ],
+    [
+      "MergeChainStore",
+      "_prove_merge_run_task_binding"
+    ],
+    [
+      "MergeChainStore",
+      "reduce_merge_event"
+    ],
+    [
+      "MergeChainStore",
+      "register_coordination_seams"
+    ],
+    [
+      "MergeChainStore",
+      "MergeReplayResult"
+    ],
+    [
+      "MergeChainStore",
+      "_ChainStoragePrimitives"
+    ],
+    [
+      "MergeChainStore",
+      "_drain_chain_batch_capability"
+    ],
+    [
+      "MergeChainStore",
+      "_require_merge_store_control"
+    ],
+    [
+      "MergeChainStore",
+      "canonical_bytes"
+    ],
+    [
+      "MergeChainStore",
+      "iso_z"
+    ],
+    [
+      "MergeChainStore",
+      "_new_merge_record_is_current"
+    ],
+    [
+      "_require_common_lock_control",
+      "_REQUIRED_COMMON_LOCK_CONTROLS"
+    ],
+    [
+      "_require_common_lock_control",
+      "COMMON_LOCK_CONTROLS"
+    ],
+    [
+      "CommonLockInspection",
+      "PublishedLockRecord"
+    ],
+    [
+      "CommonLockUnavailable",
+      "canonical_bytes"
+    ],
+    [
+      "CommonLockReleaseFailure",
+      "canonical_bytes"
+    ],
+    [
+      "ChainLeaseUnavailable",
+      "canonical_bytes"
+    ],
+    [
+      "_valid_utc_second",
+      "parse_time"
+    ],
+    [
+      "_valid_utc_second",
+      "iso_z"
+    ],
+    [
+      "_validate_owner_record",
+      "_valid_host"
+    ],
+    [
+      "_validate_owner_record",
+      "_require_common_lock_control"
+    ],
+    [
+      "_validate_owner_record",
+      "_valid_utc_second"
+    ],
+    [
+      "_validate_owner_record",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "_validate_owner_record",
+      "_COMMON_LOCK_OWNER_KEYS"
+    ],
+    [
+      "_validate_owner_record",
+      "COMMON_LOCK_OWNER_KINDS"
+    ],
+    [
+      "_validate_owner_record",
+      "_valid_positive_int"
+    ],
+    [
+      "_validate_owner_record",
+      "COMMON_LOCK_OPERATIONS"
+    ],
+    [
+      "_validate_owner_record",
+      "_valid_nonce"
+    ],
+    [
+      "_validate_fence_record",
+      "_valid_host"
+    ],
+    [
+      "_validate_fence_record",
+      "_require_common_lock_control"
+    ],
+    [
+      "_validate_fence_record",
+      "_valid_utc_second"
+    ],
+    [
+      "_validate_fence_record",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "_validate_fence_record",
+      "COMMON_LOCK_FENCE_OPERATIONS"
+    ],
+    [
+      "_validate_fence_record",
+      "_COMMON_LOCK_FENCE_KEYS"
+    ],
+    [
+      "_validate_fence_record",
+      "_valid_positive_int"
+    ],
+    [
+      "_validate_fence_record",
+      "SHA256_RE"
+    ],
+    [
+      "_validate_fence_record",
+      "_valid_nonce"
+    ],
+    [
+      "_valid_nullable_chain",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "_validate_recovery_record",
+      "_valid_host"
+    ],
+    [
+      "_validate_recovery_record",
+      "_require_common_lock_control"
+    ],
+    [
+      "_validate_recovery_record",
+      "_valid_utc_second"
+    ],
+    [
+      "_validate_recovery_record",
+      "COMMON_LOCK_RECOVERY_KINDS"
+    ],
+    [
+      "_validate_recovery_record",
+      "SHA256_RE"
+    ],
+    [
+      "_validate_recovery_record",
+      "_valid_positive_int"
+    ],
+    [
+      "_validate_recovery_record",
+      "_valid_nullable_chain"
+    ],
+    [
+      "_validate_recovery_record",
+      "_valid_nonnegative_int"
+    ],
+    [
+      "_validate_recovery_record",
+      "_COMMON_LOCK_RECOVERY_KEYS"
+    ],
+    [
+      "_validate_recovery_record",
+      "_valid_nonce"
+    ],
+    [
+      "_validate_chain_lease_record",
+      "_valid_host"
+    ],
+    [
+      "_validate_chain_lease_record",
+      "_require_common_lock_control"
+    ],
+    [
+      "_validate_chain_lease_record",
+      "_valid_utc_second"
+    ],
+    [
+      "_validate_chain_lease_record",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "_validate_chain_lease_record",
+      "_CHAIN_LEASE_KEYS"
+    ],
+    [
+      "_validate_chain_lease_record",
+      "_valid_positive_int"
+    ],
+    [
+      "_validate_chain_lease_record",
+      "_valid_nonce"
+    ],
+    [
+      "_read_owned_record_at",
+      "canonical_bytes"
+    ],
+    [
+      "_read_owned_record_at",
+      "PublishedLockRecord"
+    ],
+    [
+      "_read_owned_record_at",
+      "COMMON_LOCK_RECORD_CAP_BYTES"
+    ],
+    [
+      "_same_published_record",
+      "PublishedLockRecord"
+    ],
+    [
+      "_open_owned_directory",
+      "ChainStore"
+    ],
+    [
+      "_open_lock_directory",
+      "COMMON_LOCK_DIRECTORY_NAME"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "COMMON_LOCK_INTENT_NAME"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "COMMON_LOCK_OWNER_NAME"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "COMMON_LOCK_DIRECTORY_NAME"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "_open_lock_directory"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "_same_published_record"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "_read_owned_record_at"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "_validate_owner_record"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "_opaque_path_evidence_at"
+    ],
+    [
+      "_inspect_common_lock_fd",
+      "CommonLockInspection"
+    ],
+    [
+      "_create_private_record_at",
+      "canonical_bytes"
+    ],
+    [
+      "_create_private_record_at",
+      "_write_all"
+    ],
+    [
+      "_create_private_record_at",
+      "PublishedLockRecord"
+    ],
+    [
+      "_create_private_record_at",
+      "_PublicationCleanupFailure"
+    ],
+    [
+      "_publish_no_replace_link",
+      "_require_common_lock_control"
+    ],
+    [
+      "_revalidate_record_at",
+      "_same_published_record"
+    ],
+    [
+      "_revalidate_record_at",
+      "PublishedLockRecord"
+    ],
+    [
+      "_revalidate_record_at",
+      "_read_owned_record_at"
+    ],
+    [
+      "_unlink_revalidated_record_at",
+      "PublishedLockRecord"
+    ],
+    [
+      "_unlink_revalidated_record_at",
+      "_require_common_lock_control"
+    ],
+    [
+      "_unlink_revalidated_record_at",
+      "_revalidate_record_at"
+    ],
+    [
+      "_record_at_if_present",
+      "PublishedLockRecord"
+    ],
+    [
+      "_record_at_if_present",
+      "_read_owned_record_at"
+    ],
+    [
+      "_sleep_with_deadline",
+      "COMMON_LOCK_POLL_SECONDS"
+    ],
+    [
+      "_require_deadline_open",
+      "_require_common_lock_control"
+    ],
+    [
+      "_opaque_path_evidence_at",
+      "COMMON_LOCK_RECORD_CAP_BYTES"
+    ],
+    [
+      "RecoveryReservation",
+      "_revalidate_record_at"
+    ],
+    [
+      "RecoveryReservation",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "RecoveryReservation",
+      "COMMON_LOCK_RECOVERY_NAME"
+    ],
+    [
+      "RecoveryReservation",
+      "_open_owned_directory"
+    ],
+    [
+      "RecoveryReservation",
+      "_validate_recovery_record"
+    ],
+    [
+      "RecoveryReservation",
+      "PublishedLockRecord"
+    ],
+    [
+      "RecoveryReservation",
+      "_require_deadline_open"
+    ],
+    [
+      "_new_owner_record",
+      "_validate_owner_record"
+    ],
+    [
+      "_new_owner_record",
+      "iso_z"
+    ],
+    [
+      "_fence_matches_owner",
+      "PublishedLockRecord"
+    ],
+    [
+      "_publish_portable_owner",
+      "COMMON_LOCK_INTENT_NAME"
+    ],
+    [
+      "_publish_portable_owner",
+      "_require_common_lock_control"
+    ],
+    [
+      "_publish_portable_owner",
+      "COMMON_LOCK_OWNER_NAME"
+    ],
+    [
+      "_publish_portable_owner",
+      "COMMON_LOCK_DIRECTORY_NAME"
+    ],
+    [
+      "_publish_portable_owner",
+      "_open_lock_directory"
+    ],
+    [
+      "_publish_portable_owner",
+      "_inspect_common_lock_fd"
+    ],
+    [
+      "_publish_portable_owner",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "_publish_portable_owner",
+      "_release_portable_identity"
+    ],
+    [
+      "_publish_portable_owner",
+      "_same_published_record"
+    ],
+    [
+      "_publish_portable_owner",
+      "_read_owned_record_at"
+    ],
+    [
+      "_publish_portable_owner",
+      "_validate_owner_record"
+    ],
+    [
+      "_publish_portable_owner",
+      "CommonLockBoundaryCrash"
+    ],
+    [
+      "_publish_portable_owner",
+      "_publish_no_replace_link"
+    ],
+    [
+      "_publish_portable_owner",
+      "PublishedLockRecord"
+    ],
+    [
+      "_publish_portable_owner",
+      "_create_private_record_at"
+    ],
+    [
+      "_release_portable_identity",
+      "COMMON_LOCK_INTENT_NAME"
+    ],
+    [
+      "_release_portable_identity",
+      "_require_common_lock_control"
+    ],
+    [
+      "_release_portable_identity",
+      "_revalidate_record_at"
+    ],
+    [
+      "_release_portable_identity",
+      "COMMON_LOCK_DIRECTORY_NAME"
+    ],
+    [
+      "_release_portable_identity",
+      "COMMON_LOCK_OWNER_NAME"
+    ],
+    [
+      "_release_portable_identity",
+      "_inspect_common_lock_fd"
+    ],
+    [
+      "_release_portable_identity",
+      "_open_lock_directory"
+    ],
+    [
+      "_release_portable_identity",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "_release_portable_identity",
+      "_same_published_record"
+    ],
+    [
+      "_release_portable_identity",
+      "_read_owned_record_at"
+    ],
+    [
+      "_release_portable_identity",
+      "_validate_owner_record"
+    ],
+    [
+      "_release_portable_identity",
+      "_publish_no_replace_link"
+    ],
+    [
+      "_release_portable_identity",
+      "PublishedLockRecord"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "_require_common_lock_control"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "_same_published_record"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "COMMON_LOCK_RECOVERY_NAME"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "_read_owned_record_at"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "CommonLockBoundaryCrash"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "RecoveryReservation"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "_validate_recovery_record"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "_publish_no_replace_link"
+    ],
+    [
+      "_publish_recovery_reservation",
+      "_create_private_record_at"
+    ],
+    [
+      "_reservation_evidence",
+      "COMMON_LOCK_RECOVERY_NAME"
+    ],
+    [
+      "_reservation_evidence",
+      "_read_owned_record_at"
+    ],
+    [
+      "_reservation_evidence",
+      "_validate_recovery_record"
+    ],
+    [
+      "_reservation_evidence",
+      "_opaque_path_evidence_at"
+    ],
+    [
+      "_clear_owned_reservation",
+      "_require_common_lock_control"
+    ],
+    [
+      "_clear_owned_reservation",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "_clear_owned_reservation",
+      "COMMON_LOCK_RECOVERY_NAME"
+    ],
+    [
+      "_clear_owned_reservation",
+      "RecoveryReservation"
+    ],
+    [
+      "_clear_owned_reservation",
+      "_validate_recovery_record"
+    ],
+    [
+      "_recovery_record",
+      "PublishedLockRecord"
+    ],
+    [
+      "_recovery_record",
+      "iso_z"
+    ],
+    [
+      "_recovery_record",
+      "_validate_recovery_record"
+    ],
+    [
+      "_fence_death_proof",
+      "PublishedLockRecord"
+    ],
+    [
+      "_require_recovery_proof_recorder",
+      "_require_common_lock_control"
+    ],
+    [
+      "_persist_recovery_proof",
+      "_require_recovery_proof_recorder"
+    ],
+    [
+      "_recovery_classification_receipt_valid",
+      "MergeChainStore"
+    ],
+    [
+      "_recovery_classification_receipt_valid",
+      "PublishedLockRecord"
+    ],
+    [
+      "_recovery_classification_receipt_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_recovery_classification_receipt_valid",
+      "RecoveryReservation"
+    ],
+    [
+      "CommonRebaseLock",
+      "_recovery_record"
+    ],
+    [
+      "CommonRebaseLock",
+      "COMMON_LOCK_INTENT_NAME"
+    ],
+    [
+      "CommonRebaseLock",
+      "_revalidate_record_at"
+    ],
+    [
+      "CommonRebaseLock",
+      "_clear_owned_reservation"
+    ],
+    [
+      "CommonRebaseLock",
+      "_require_recovery_proof_recorder"
+    ],
+    [
+      "CommonRebaseLock",
+      "PublishedLockRecord"
+    ],
+    [
+      "CommonRebaseLock",
+      "_clear_reserved_fence"
+    ],
+    [
+      "CommonRebaseLock",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "CommonRebaseLock",
+      "_inspect_common_lock_fd"
+    ],
+    [
+      "CommonRebaseLock",
+      "_release_portable_identity"
+    ],
+    [
+      "CommonRebaseLock",
+      "CommonLockBoundaryCrash"
+    ],
+    [
+      "CommonRebaseLock",
+      "RecoveryReservation"
+    ],
+    [
+      "CommonRebaseLock",
+      "_reservation_evidence"
+    ],
+    [
+      "CommonRebaseLock",
+      "_validate_fence_record"
+    ],
+    [
+      "CommonRebaseLock",
+      "_common_fence_path_present"
+    ],
+    [
+      "CommonRebaseLock",
+      "_require_common_lock_control"
+    ],
+    [
+      "CommonRebaseLock",
+      "_publish_recovery_reservation"
+    ],
+    [
+      "CommonRebaseLock",
+      "_same_published_record"
+    ],
+    [
+      "CommonRebaseLock",
+      "CommonLockReleaseFailure"
+    ],
+    [
+      "CommonRebaseLock",
+      "_fence_matches_owner"
+    ],
+    [
+      "_acquire_secondary_flock",
+      "COMMON_LOCK_FLOCK_NAME"
+    ],
+    [
+      "_acquire_secondary_flock",
+      "canonical_bytes"
+    ],
+    [
+      "_acquire_secondary_flock",
+      "_write_all"
+    ],
+    [
+      "_acquire_secondary_flock",
+      "_sleep_with_deadline"
+    ],
+    [
+      "_acquire_secondary_flock",
+      "_require_deadline_open"
+    ],
+    [
+      "_read_fence_for_recovery",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_read_fence_for_recovery",
+      "_validate_fence_record"
+    ],
+    [
+      "_read_fence_for_recovery",
+      "_record_at_if_present"
+    ],
+    [
+      "_read_fence_for_recovery",
+      "_opaque_path_evidence_at"
+    ],
+    [
+      "_read_fence_for_recovery",
+      "PublishedLockRecord"
+    ],
+    [
+      "_common_fence_path_present",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_require_common_lock_control"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_revalidate_record_at"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_inspect_common_lock_fd"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_validate_fence_record"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_release_portable_identity"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_same_published_record"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "COMMON_LOCK_RECOVERY_NAME"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_validate_recovery_record"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "RecoveryReservation"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_persist_recovery_proof"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "PublishedLockRecord"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_require_deadline_open"
+    ],
+    [
+      "_recover_stale_portable_owner",
+      "_fence_death_proof"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_recovery_classification_receipt_valid"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_require_common_lock_control"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_revalidate_record_at"
+    ],
+    [
+      "_clear_reserved_fence",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_validate_fence_record"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_read_owned_record_at"
+    ],
+    [
+      "_clear_reserved_fence",
+      "RecoveryReservation"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_persist_recovery_proof"
+    ],
+    [
+      "_clear_reserved_fence",
+      "PublishedLockRecord"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_require_deadline_open"
+    ],
+    [
+      "_clear_reserved_fence",
+      "_fence_death_proof"
+    ],
+    [
+      "acquire_common_lock",
+      "_recovery_record"
+    ],
+    [
+      "acquire_common_lock",
+      "_new_owner_record"
+    ],
+    [
+      "acquire_common_lock",
+      "_process_probe"
+    ],
+    [
+      "acquire_common_lock",
+      "CommonRebaseLock"
+    ],
+    [
+      "acquire_common_lock",
+      "_clear_owned_reservation"
+    ],
+    [
+      "acquire_common_lock",
+      "_sleep_with_deadline"
+    ],
+    [
+      "acquire_common_lock",
+      "_read_fence_for_recovery"
+    ],
+    [
+      "acquire_common_lock",
+      "_require_recovery_proof_recorder"
+    ],
+    [
+      "acquire_common_lock",
+      "PublishedLockRecord"
+    ],
+    [
+      "acquire_common_lock",
+      "_require_deadline_open"
+    ],
+    [
+      "acquire_common_lock",
+      "_clear_reserved_fence"
+    ],
+    [
+      "acquire_common_lock",
+      "_group_probe"
+    ],
+    [
+      "acquire_common_lock",
+      "_inspect_common_lock_fd"
+    ],
+    [
+      "acquire_common_lock",
+      "_release_portable_identity"
+    ],
+    [
+      "acquire_common_lock",
+      "COMMON_LOCK_TIMEOUT_SECONDS"
+    ],
+    [
+      "acquire_common_lock",
+      "CommonLockBoundaryCrash"
+    ],
+    [
+      "acquire_common_lock",
+      "RecoveryReservation"
+    ],
+    [
+      "acquire_common_lock",
+      "_reservation_evidence"
+    ],
+    [
+      "acquire_common_lock",
+      "_recover_stale_portable_owner"
+    ],
+    [
+      "acquire_common_lock",
+      "_acquire_secondary_flock"
+    ],
+    [
+      "acquire_common_lock",
+      "_common_fence_path_present"
+    ],
+    [
+      "acquire_common_lock",
+      "_publish_portable_owner"
+    ],
+    [
+      "acquire_common_lock",
+      "CommonLockUnavailable"
+    ],
+    [
+      "acquire_common_lock",
+      "_open_owned_directory"
+    ],
+    [
+      "acquire_common_lock",
+      "_recovery_classification_receipt_valid"
+    ],
+    [
+      "acquire_common_lock",
+      "_require_common_lock_control"
+    ],
+    [
+      "acquire_common_lock",
+      "_publish_recovery_reservation"
+    ],
+    [
+      "acquire_common_lock",
+      "_fence_matches_owner"
+    ],
+    [
+      "acquire_common_lock",
+      "canonical_bytes"
+    ],
+    [
+      "ChainLease",
+      "_require_common_lock_control"
+    ],
+    [
+      "ChainLease",
+      "_revalidate_record_at"
+    ],
+    [
+      "ChainLease",
+      "_lease_exclusion_is_current"
+    ],
+    [
+      "ChainLease",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "ChainLease",
+      "_validate_chain_lease_record"
+    ],
+    [
+      "ChainLease",
+      "CommonRebaseLock"
+    ],
+    [
+      "ChainLease",
+      "RecoveryReservation"
+    ],
+    [
+      "ChainLease",
+      "PublishedLockRecord"
+    ],
+    [
+      "_lease_exclusion_is_current",
+      "CommonRebaseLock"
+    ],
+    [
+      "_lease_exclusion_is_current",
+      "RecoveryReservation"
+    ],
+    [
+      "_lease_reclaim_authority_is_current",
+      "_lease_exclusion_is_current"
+    ],
+    [
+      "_lease_reclaim_authority_is_current",
+      "CommonRebaseLock"
+    ],
+    [
+      "_lease_reclaim_authority_is_current",
+      "RecoveryReservation"
+    ],
+    [
+      "_repository_recovery_reservation_present",
+      "COMMON_LOCK_RECOVERY_NAME"
+    ],
+    [
+      "_reconcile_merge_projection_for_lease_reclaim",
+      "MergeChainStore"
+    ],
+    [
+      "_reconcile_merge_projection_for_lease_reclaim",
+      "CommonRebaseLock"
+    ],
+    [
+      "_reconcile_merge_projection_for_lease_reclaim",
+      "ChainLease"
+    ],
+    [
+      "_reconcile_merge_projection_for_lease_reclaim",
+      "RecoveryReservation"
+    ],
+    [
+      "acquire_chain_lease",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "acquire_chain_lease",
+      "_lease_exclusion_is_current"
+    ],
+    [
+      "acquire_chain_lease",
+      "_process_probe"
+    ],
+    [
+      "acquire_chain_lease",
+      "CommonRebaseLock"
+    ],
+    [
+      "acquire_chain_lease",
+      "_sleep_with_deadline"
+    ],
+    [
+      "acquire_chain_lease",
+      "PublishedLockRecord"
+    ],
+    [
+      "acquire_chain_lease",
+      "ChainLease"
+    ],
+    [
+      "acquire_chain_lease",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "acquire_chain_lease",
+      "_read_owned_record_at"
+    ],
+    [
+      "acquire_chain_lease",
+      "COMMON_LOCK_TIMEOUT_SECONDS"
+    ],
+    [
+      "acquire_chain_lease",
+      "_reconcile_merge_projection_for_lease_reclaim"
+    ],
+    [
+      "acquire_chain_lease",
+      "CommonLockBoundaryCrash"
+    ],
+    [
+      "acquire_chain_lease",
+      "RecoveryReservation"
+    ],
+    [
+      "acquire_chain_lease",
+      "_repository_recovery_reservation_present"
+    ],
+    [
+      "acquire_chain_lease",
+      "_create_private_record_at"
+    ],
+    [
+      "acquire_chain_lease",
+      "_record_at_if_present"
+    ],
+    [
+      "acquire_chain_lease",
+      "_lease_reclaim_authority_is_current"
+    ],
+    [
+      "acquire_chain_lease",
+      "_validate_chain_lease_record"
+    ],
+    [
+      "acquire_chain_lease",
+      "_open_owned_directory"
+    ],
+    [
+      "acquire_chain_lease",
+      "_require_common_lock_control"
+    ],
+    [
+      "acquire_chain_lease",
+      "_same_published_record"
+    ],
+    [
+      "acquire_chain_lease",
+      "ChainLeaseUnavailable"
+    ],
+    [
+      "acquire_chain_lease",
+      "_opaque_path_evidence_at"
+    ],
+    [
+      "acquire_chain_lease",
+      "iso_z"
+    ],
+    [
+      "acquire_chain_lease",
+      "_publish_no_replace_link"
+    ],
+    [
+      "merge_gate_intent_digest",
+      "_require_common_lock_control"
+    ],
+    [
+      "merge_gate_intent_digest",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "merge_gate_intent_digest",
+      "canonical_bytes"
+    ],
+    [
+      "merge_gate_intent_digest",
+      "SHA256_RE"
+    ],
+    [
+      "merge_gate_intent_digest",
+      "_valid_nonnegative_int"
+    ],
+    [
+      "_read_child_ack",
+      "_valid_positive_int"
+    ],
+    [
+      "_read_child_ack",
+      "_sleep_with_deadline"
+    ],
+    [
+      "_spawn_blocked_fence_child",
+      "_BlockedFenceChild"
+    ],
+    [
+      "_spawn_blocked_fence_child",
+      "_read_child_ack"
+    ],
+    [
+      "_spawn_blocked_fence_child",
+      "_wait_for_child_exit"
+    ],
+    [
+      "_spawn_blocked_fence_child",
+      "_pipe_cloexec"
+    ],
+    [
+      "_spawn_blocked_fence_child",
+      "FENCED_CHILD_REAP_SECONDS"
+    ],
+    [
+      "_spawn_blocked_fence_child",
+      "FENCED_CHILD_STOP_GRACE_SECONDS"
+    ],
+    [
+      "_wait_for_child_exit",
+      "_waitpid_nohang"
+    ],
+    [
+      "_terminate_fenced_group",
+      "_BlockedFenceChild"
+    ],
+    [
+      "_terminate_fenced_group",
+      "_waitpid_nohang"
+    ],
+    [
+      "_terminate_fenced_group",
+      "_require_common_lock_control"
+    ],
+    [
+      "_stop_unstarted_child",
+      "_BlockedFenceChild"
+    ],
+    [
+      "_stop_unstarted_child",
+      "_wait_for_child_exit"
+    ],
+    [
+      "_stop_unstarted_child",
+      "FENCED_CHILD_STOP_GRACE_SECONDS"
+    ],
+    [
+      "_stop_unstarted_child",
+      "FENCED_CHILD_REAP_SECONDS"
+    ],
+    [
+      "_publish_fence",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_publish_fence",
+      "_validate_fence_record"
+    ],
+    [
+      "_publish_fence",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "_publish_fence",
+      "_same_published_record"
+    ],
+    [
+      "_publish_fence",
+      "_read_owned_record_at"
+    ],
+    [
+      "_publish_fence",
+      "_PublicationCleanupFailure"
+    ],
+    [
+      "_publish_fence",
+      "CommonRebaseLock"
+    ],
+    [
+      "_publish_fence",
+      "CommonLockBoundaryCrash"
+    ],
+    [
+      "_publish_fence",
+      "_publish_no_replace_link"
+    ],
+    [
+      "_publish_fence",
+      "PublishedLockRecord"
+    ],
+    [
+      "_publish_fence",
+      "_create_private_record_at"
+    ],
+    [
+      "_collect_fenced_child",
+      "_BlockedFenceChild"
+    ],
+    [
+      "_collect_fenced_child",
+      "_require_common_lock_control"
+    ],
+    [
+      "_collect_fenced_child",
+      "_waitpid_nohang"
+    ],
+    [
+      "_collect_fenced_child",
+      "FENCED_CHILD_DRAIN_SECONDS"
+    ],
+    [
+      "_collect_fenced_child",
+      "FENCED_CHILD_DRAIN_CAP_BYTES"
+    ],
+    [
+      "_collect_fenced_child",
+      "_terminate_fenced_group"
+    ],
+    [
+      "run_fenced_command",
+      "_BlockedFenceChild"
+    ],
+    [
+      "run_fenced_command",
+      "_stop_unstarted_child"
+    ],
+    [
+      "run_fenced_command",
+      "_revalidate_record_at"
+    ],
+    [
+      "run_fenced_command",
+      "FENCED_CHILD_ACK_TIMEOUT_SECONDS"
+    ],
+    [
+      "run_fenced_command",
+      "CommonRebaseLock"
+    ],
+    [
+      "run_fenced_command",
+      "FencedProcessResult"
+    ],
+    [
+      "run_fenced_command",
+      "_sleep_with_deadline"
+    ],
+    [
+      "run_fenced_command",
+      "PublishedLockRecord"
+    ],
+    [
+      "run_fenced_command",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "run_fenced_command",
+      "_unlink_revalidated_record_at"
+    ],
+    [
+      "run_fenced_command",
+      "_publish_fence"
+    ],
+    [
+      "run_fenced_command",
+      "COMMON_LOCK_TIMEOUT_SECONDS"
+    ],
+    [
+      "run_fenced_command",
+      "COMMON_LOCK_FENCE_OPERATIONS"
+    ],
+    [
+      "run_fenced_command",
+      "CommonLockBoundaryCrash"
+    ],
+    [
+      "run_fenced_command",
+      "_collect_fenced_child"
+    ],
+    [
+      "run_fenced_command",
+      "FencedChildSurvived"
+    ],
+    [
+      "run_fenced_command",
+      "_validate_fence_record"
+    ],
+    [
+      "run_fenced_command",
+      "_PublicationCleanupFailure"
+    ],
+    [
+      "run_fenced_command",
+      "CommonLockUnavailable"
+    ],
+    [
+      "run_fenced_command",
+      "_terminate_fenced_group"
+    ],
+    [
+      "run_fenced_command",
+      "_require_common_lock_control"
+    ],
+    [
+      "run_fenced_command",
+      "CommonLockReleaseFailure"
+    ],
+    [
+      "run_fenced_command",
+      "_spawn_blocked_fence_child"
+    ],
+    [
+      "run_fenced_command",
+      "SHA256_RE"
+    ],
+    [
+      "run_fenced_command",
+      "iso_z"
+    ],
+    [
+      "hold_common_lock",
+      "COMMON_LOCK_INTENT_NAME"
+    ],
+    [
+      "hold_common_lock",
+      "acquire_common_lock"
+    ],
+    [
+      "hold_common_lock",
+      "canonical_bytes"
+    ],
+    [
+      "hold_common_lock",
+      "_write_all"
+    ],
+    [
+      "hold_common_lock",
+      "Repository"
+    ],
+    [
+      "CommandContext",
+      "canonical_bytes"
+    ],
+    [
+      "CommandContext",
+      "ChainStore"
+    ],
+    [
+      "CommandContext",
+      "Repository"
+    ],
+    [
+      "CommandContext",
+      "CLIOptions"
+    ],
+    [
+      "_policy_for_state",
+      "CommandContext"
+    ],
+    [
+      "_validate_bound_chain_state",
+      "_committed_changelog_output_paths"
+    ],
+    [
+      "_validate_bound_chain_state",
+      "_forge_command"
+    ],
+    [
+      "_gate_satisfied",
+      "FRESH_REVIEWER_EVALS_GATE"
+    ],
+    [
+      "_gate_satisfied",
+      "_latest_current_pass"
+    ],
+    [
+      "_gate_satisfied",
+      "_user_skip"
+    ],
+    [
+      "_fresh_reviewer_evals_required",
+      "CommandContext"
+    ],
+    [
+      "_fresh_reviewer_evals_required",
+      "_policy_for_state"
+    ],
+    [
+      "_required_steps",
+      "CommandContext"
+    ],
+    [
+      "_required_steps",
+      "FRESH_REVIEWER_EVALS_GATE"
+    ],
+    [
+      "_required_steps",
+      "_fresh_reviewer_evals_required"
+    ],
+    [
+      "_required_steps",
+      "_policy_for_state"
+    ],
+    [
+      "_gate_one_complete",
+      "_user_skip"
+    ],
+    [
+      "_merge_rebase_action",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_rebase_action",
+      "_valid_nonce"
+    ],
+    [
+      "_merge_rebase_result_classification",
+      "_valid_utc_second"
+    ],
+    [
+      "_merge_rebase_result_classification",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_rebase_result_classification",
+      "_merge_rebase_action"
+    ],
+    [
+      "_prove_merge_run_task_binding",
+      "MergeRunTaskSnapshot"
+    ],
+    [
+      "_prove_merge_run_task_binding",
+      "_merge_refusal"
+    ],
+    [
+      "_prove_merge_run_task_binding",
+      "_chain_batch_lock"
+    ],
+    [
+      "_merge_scope_environment_contract",
+      "_MERGE_SCOPE_UNSET"
+    ],
+    [
+      "_merge_scope_environment_contract",
+      "_MERGE_SCOPE_OVERLAY"
+    ],
+    [
+      "_validate_merge_scope_request",
+      "_merge_scope_environment_contract"
+    ],
+    [
+      "_validate_merge_scope_request",
+      "canonical_bytes"
+    ],
+    [
+      "_validate_merge_scope_request",
+      "_valid_sorted_unique_strings"
+    ],
+    [
+      "_merge_retained_inflight",
+      "PublishedLockRecord"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "_valid_utc_second"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "CHAIN_ID_RE"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "_validate_fence_record"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "COMMIT_RE"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "canonical_bytes"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "SHA256_RE"
+    ],
+    [
+      "_validate_merge_scope_fetch_binding",
+      "_valid_nonnegative_int"
+    ],
+    [
+      "_merge_scope_binding_names",
+      "PublishedLockRecord"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_merge_scope_environment_contract"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_merge_scope_binding_names"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "COMMON_LOCK_INFLIGHT_NAME"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_validate_fence_record"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_merge_scope_argv"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_validate_merge_scope_request"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_validate_merge_scope_fetch_binding"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_merge_full_patch_argv"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "FencedProcessResult"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "PublishedLockRecord"
+    ],
+    [
+      "_merge_scope_binding_validator",
+      "_merge_retained_inflight"
+    ],
+    [
+      "_merge_old_tip_all_false",
+      "_merge_containment"
+    ],
+    [
+      "_merge_latest_contained_attempt",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_inactive_post_attempt_recovery_ready",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_inactive_post_attempt_recovery_ready",
+      "_MERGE_INACTIVE_POST_ATTEMPT_RECOVERY_SOURCES"
+    ],
+    [
+      "_epoch_fetch_observation_record_valid",
+      "_EPOCH_FETCH_OBSERVATION_SCHEMA"
+    ],
+    [
+      "_epoch_fetch_observation_record_valid",
+      "_valid_utc_second"
+    ],
+    [
+      "_epoch_fetch_observation_record_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_epoch_fetch_result_intent_digest",
+      "_merge_candidate_observation_evidence_valid"
+    ],
+    [
+      "_epoch_fetch_result_intent_digest",
+      "_epoch_fetch_observation_record_valid"
+    ],
+    [
+      "_epoch_fetch_result_intent_digest",
+      "_epoch_ancestry_record_valid"
+    ],
+    [
+      "_epoch_fetch_result_intent_digest",
+      "COMMIT_RE"
+    ],
+    [
+      "_epoch_fetch_result_intent_digest",
+      "SHA256_RE"
+    ],
+    [
+      "_epoch_fetch_result_intent_digest",
+      "_epoch_fetch_observation_passed"
+    ],
+    [
+      "_epoch_ancestry_record_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_epoch_ancestry_record_valid",
+      "_remote_containment_argv"
+    ],
+    [
+      "_epoch_ancestry_record_valid",
+      "_valid_utc_second"
+    ],
+    [
+      "_remote_containment_evidence_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_remote_containment_evidence_valid",
+      "_remote_containment_argv"
+    ],
+    [
+      "_remote_observation_progress_valid",
+      "_remote_observation_fetch_argv"
+    ],
+    [
+      "_remote_observation_progress_valid",
+      "_valid_utc_second"
+    ],
+    [
+      "_remote_observation_progress_valid",
+      "_remote_observation_heads"
+    ],
+    [
+      "_remote_observation_progress_valid",
+      "COMMIT_RE"
+    ],
+    [
+      "_remote_observation_progress_valid",
+      "_remote_containment_evidence_valid"
+    ],
+    [
+      "_remote_observation_progress_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_remote_observation_progress_valid",
+      "_remote_containment_argv"
+    ],
+    [
+      "_remote_observation_progress_transition_valid",
+      "_remote_observation_progress_valid"
+    ],
+    [
+      "_remote_observation_progress_matches_observed",
+      "parse_time"
+    ],
+    [
+      "_remote_observation_progress_matches_observed",
+      "_valid_utc_second"
+    ],
+    [
+      "_remote_observation_progress_matches_observed",
+      "_remote_observation_progress_valid"
+    ],
+    [
+      "_replayed_remote_observation_completed",
+      "_remote_observation_progress_matches_observed"
+    ],
+    [
+      "_bootstrap_fetch_observation_record_valid",
+      "_valid_utc_second"
+    ],
+    [
+      "_bootstrap_fetch_observation_record_valid",
+      "_BOOTSTRAP_FETCH_OBSERVATION_SCHEMA"
+    ],
+    [
+      "_bootstrap_fetch_observation_record_valid",
+      "COMMIT_RE"
+    ],
+    [
+      "_bootstrap_fetch_observation_record_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_bootstrap_fetch_observation_record_valid",
+      "_valid_positive_int"
+    ],
+    [
+      "_bootstrap_fetch_observation_record_valid",
+      "_valid_nonce"
+    ],
+    [
+      "_bootstrap_fetch_observation_transition_valid",
+      "_bootstrap_fetch_observation_record_valid"
+    ],
+    [
+      "_merge_candidate_observation_step_specs",
+      "_merge_scope_argv"
+    ],
+    [
+      "_merge_candidate_observation_step_specs",
+      "TIER_RANK"
+    ],
+    [
+      "_merge_candidate_observation_step_specs",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_candidate_observation_step_names",
+      "_merge_candidate_observation_step_specs"
+    ],
+    [
+      "_merge_candidate_observation_binding",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_candidate_observation_binding",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_candidate_observation_binding",
+      "TIER_RANK"
+    ],
+    [
+      "_merge_candidate_observation_binding",
+      "COMMIT_RE"
+    ],
+    [
+      "_merge_candidate_observation_record_valid",
+      "TIER_RANK"
+    ],
+    [
+      "_merge_candidate_observation_record_valid",
+      "_valid_utc_second"
+    ],
+    [
+      "_merge_candidate_observation_record_valid",
+      "_merge_candidate_observation_step_specs"
+    ],
+    [
+      "_merge_candidate_observation_record_valid",
+      "_MERGE_CANDIDATE_OBSERVATION_SCHEMA"
+    ],
+    [
+      "_merge_candidate_observation_record_valid",
+      "_merge_candidate_observation_binding"
+    ],
+    [
+      "_merge_candidate_observation_record_valid",
+      "SHA256_RE"
+    ],
+    [
+      "_merge_candidate_observation_transition_valid",
+      "_merge_candidate_observation_record_valid"
+    ],
+    [
+      "_merge_candidate_observation_evidence",
+      "canonical_bytes"
+    ],
+    [
+      "_merge_candidate_observation_evidence",
+      "_merge_candidate_observation_step_names"
+    ],
+    [
+      "_merge_candidate_observation_evidence",
+      "_MERGE_CANDIDATE_OBSERVATION_EVIDENCE_SCHEMA"
+    ],
+    [
+      "_merge_candidate_observation_evidence",
+      "_merge_candidate_observation_record_valid"
+    ],
+    [
+      "_merge_candidate_observation_evidence_valid",
+      "_merge_candidate_observation_evidence"
+    ]
+  ],
+  "hubs": [
+    "canonical_bytes",
+    "PublishedLockRecord",
+    "_require_common_lock_control",
+    "_valid_utc_second",
+    "RecoveryReservation",
+    "_read_owned_record_at",
+    "iso_z",
+    "_valid_nonce",
+    "_validate_fence_record",
+    "_same_published_record",
+    "_unlink_revalidated_record_at",
+    "_valid_positive_int",
+    "_revalidate_record_at",
+    "CommonRebaseLock",
+    "CommonLockBoundaryCrash",
+    "_validate_recovery_record",
+    "_parsed_run_captured_path",
+    "reduce_merge_event",
+    "_merge_state_shape_valid",
+    "_ChainReceiptSnapshotVerifier",
+    "parse_time",
+    "_require_merge_store_control",
+    "_valid_nonnegative_int",
+    "_inspect_common_lock_fd",
+    "_publish_no_replace_link",
+    "_sleep_with_deadline",
+    "_require_deadline_open",
+    "_BlockedFenceChild",
+    "_merge_history_uses_additive_grammar",
+    "_recovery_cleanup_intent",
+    "_valid_host",
+    "_validate_owner_record",
+    "_create_private_record_at",
+    "_opaque_path_evidence_at",
+    "_release_portable_identity",
+    "CommandContext",
+    "_validated_commitment_path",
+    "_merge_current_authority_valid",
+    "_merge_cleanup_intent_valid",
+    "_merge_cleanup_process_output"
+  ],
+  "fan_in": {
+    "_exclusive_descriptor_lock": 1,
+    "canonical_bytes": 31,
+    "_chain_storage_root": 2,
+    "_validated_commitment_path": 3,
+    "_parsed_run_captured_path": 5,
+    "_require_ingest_proof": 2,
+    "_merge_event_outbox": 1,
+    "reduce_merge_event": 5,
+    "_merge_gate_plan_valid": 1,
+    "_merge_epoch_valid": 1,
+    "_merge_payload_delta": 1,
+    "_merge_bootstrap_classification_pending": 2,
+    "_merge_revision9_compatibility_view": 2,
+    "_merge_state_shape_valid": 5,
+    "_merge_ingest_state_shape_valid": 1,
+    "_merge_history_uses_additive_grammar": 4,
+    "_merge_ingest_transition_valid": 2,
+    "_merge_plan_position_fact": 2,
+    "_merge_carried_gate_steps": 1,
+    "_merge_gate_step_generation_digests": 1,
+    "_merge_current_authority_valid": 3,
+    "_merge_remote_only_equality_proof": 1,
+    "_merge_carry_payload_valid": 1,
+    "_merge_plan_transition_valid": 1,
+    "_validate_merge_scope_proof": 1,
+    "_merge_scope_event_binding_valid": 1,
+    "_merge_scope_transition_valid": 1,
+    "_published_recovery_evidence_valid": 1,
+    "_recovery_event_intent": 2,
+    "_recovery_value_carries_inflight": 1,
+    "_recovery_cleanup_intent": 4,
+    "_recovery_cleanup_result_matches": 1,
+    "_classify_merge_recovery_lifecycle": 1,
+    "_merge_recovery_proof_transition_valid": 1,
+    "_epoch_fetch_observation_predecessor_valid": 1,
+    "_recovered_absent_rebase_intent_digest": 1,
+    "_merge_attempted_release_preconditions_valid": 1,
+    "_merge_cleanup_expected_subject": 1,
+    "_merge_cleanup_expected_argv": 1,
+    "_merge_cleanup_intent_valid": 3,
+    "_merge_cleanup_process_result_valid": 1,
+    "_merge_cleanup_process_output": 3,
+    "_merge_cleanup_process_complete": 2,
+    "_merge_cleanup_branch_observation": 1,
+    "_merge_cleanup_worktree_inventory": 1,
+    "_merge_cleanup_fetch_head_bytes": 1,
+    "_merge_cleanup_observation_valid": 1,
+    "_merge_cleanup_step_result_valid": 2,
+    "_merge_cleanup_results_valid": 1,
+    "_merge_cleanup_evidence_history": 2,
+    "_merge_cleanup_history_summary": 2,
+    "_merge_cleanup_unmatched_intent": 1,
+    "_merge_cleanup_retry_proof_valid": 1,
+    "_merge_cleanup_intent_transition_valid": 1,
+    "_merge_cleanup_result_transition_valid": 1,
+    "_merge_history_has_git_mutation_intent": 1,
+    "_merge_release_preconditions_valid": 1,
+    "_merge_transition_valid": 2,
+    "_ReceiptRunSnapshot": 2,
+    "_chain_receipt_snapshot_lock": 1,
+    "_receipt_run_snapshot": 1,
+    "_ChainReceiptSnapshotVerifier": 5,
+    "_ChainActivationSnapshot": 1,
+    "_resolve_chain_activation_snapshot": 3,
+    "_resolve_chain_activation_projection": 1,
+    "_chain_activation_ownership_summary": 1,
+    "_validate_chain_activation_lineage": 1,
+    "_require_no_pending_chain_activation_outbox": 2,
+    "_prepare_merge_activation_preamble": 1,
+    "_prevalidate_chain_batch_carrier": 1,
+    "_authorize_chain_batch": 1,
+    "_read_ingest_input": 3,
+    "_capture_ingest_blob": 1,
+    "_capture_run_evidence": 1,
+    "_capture_ingest_record_evidence": 2,
+    "_ingest_captured_paths": 2,
+    "_ingest_step_is_current": 1,
+    "_ingest_secret_scan_is_current": 1,
+    "_merge_ingest_binding": 2,
+    "_prove_ingest_live_chain": 2,
+    "_merge_gate_event_fact": 2,
+    "_merge_current_gate_facts": 1,
+    "_merge_ingest_record_templates": 2,
+    "_ingest_allocation_records": 2,
+    "_verify_and_build_merge_ingest_records": 1,
+    "_verify_and_build_ingest_records": 1,
+    "_ingest_proof_verifier": 1,
+    "register_activation_reservation_seam": 1,
+    "register_coordination_seams": 3,
+    "_coordination_refusal": 2,
+    "_validate_chain_batch_target": 1,
+    "_chain_batch_lock": 3,
+    "iso_z": 9,
+    "parse_time": 5,
+    "candidate_is_v2": 2,
+    "_candidate_binding_for_state_with_candidate_v2": 0,
+    "_binding_shape_valid_with_candidate_v2": 0,
+    "_event_batch_records_with_candidate_v2": 1,
+    "_binding_matches_source_fact_with_candidate_v2": 2,
+    "_binding_is_current_with_candidate_v2": 2,
+    "_commit_transition_valid_with_candidate_v2": 2,
+    "Repository": 3,
+    "_committed_changelog_output_paths": 3,
+    "validate_state": 3,
+    "_require_merge_store_control": 5,
+    "_require_merge_adapter_control": 1,
+    "_require_merge_integration_control": 1,
+    "validate_merge_state": 2,
+    "MergeReplayResult": 2,
+    "_replay_merge_event_bytes": 3,
+    "_drain_chain_batch_capability": 2,
+    "_ChainStoragePrimitives": 2,
+    "ChainStore": 3,
+    "_build_merge_chain_journal_records": 1,
+    "_new_merge_record_is_current": 1,
+    "MergeChainStore": 2,
+    "_require_common_lock_control": 22,
+    "CommonLockBoundaryCrash": 7,
+    "PublishedLockRecord": 27,
+    "CommonLockInspection": 1,
+    "CommonLockUnavailable": 2,
+    "CommonLockReleaseFailure": 2,
+    "ChainLeaseUnavailable": 1,
+    "FencedChildSurvived": 1,
+    "_valid_utc_second": 14,
+    "_valid_positive_int": 8,
+    "_valid_nonnegative_int": 5,
+    "_valid_host": 4,
+    "_valid_nonce": 9,
+    "_validate_owner_record": 4,
+    "_validate_fence_record": 9,
+    "_valid_nullable_chain": 1,
+    "_validate_recovery_record": 7,
+    "_validate_chain_lease_record": 2,
+    "_write_all": 3,
+    "_read_owned_record_at": 10,
+    "_same_published_record": 9,
+    "_open_owned_directory": 3,
+    "_open_lock_directory": 3,
+    "_inspect_common_lock_fd": 5,
+    "_PublicationCleanupFailure": 3,
+    "_create_private_record_at": 4,
+    "_publish_no_replace_link": 5,
+    "_revalidate_record_at": 8,
+    "_unlink_revalidated_record_at": 9,
+    "_record_at_if_present": 2,
+    "_process_probe": 2,
+    "_group_probe": 1,
+    "_sleep_with_deadline": 5,
+    "_require_deadline_open": 5,
+    "_opaque_path_evidence_at": 4,
+    "RecoveryReservation": 13,
+    "_new_owner_record": 1,
+    "_fence_matches_owner": 2,
+    "_publish_portable_owner": 1,
+    "_release_portable_identity": 4,
+    "_publish_recovery_reservation": 2,
+    "_reservation_evidence": 2,
+    "_clear_owned_reservation": 2,
+    "_recovery_record": 2,
+    "_fence_death_proof": 2,
+    "_require_recovery_proof_recorder": 3,
+    "_persist_recovery_proof": 2,
+    "_recovery_classification_receipt_valid": 2,
+    "CommonRebaseLock": 8,
+    "_acquire_secondary_flock": 1,
+    "_read_fence_for_recovery": 1,
+    "_common_fence_path_present": 2,
+    "_recover_stale_portable_owner": 1,
+    "_clear_reserved_fence": 2,
+    "acquire_common_lock": 1,
+    "ChainLease": 3,
+    "_lease_exclusion_is_current": 3,
+    "_lease_reclaim_authority_is_current": 1,
+    "_repository_recovery_reservation_present": 1,
+    "_reconcile_merge_projection_for_lease_reclaim": 1,
+    "acquire_chain_lease": 1,
+    "FencedProcessResult": 2,
+    "merge_gate_intent_digest": 1,
+    "_BlockedFenceChild": 5,
+    "_pipe_cloexec": 1,
+    "_read_child_ack": 1,
+    "_spawn_blocked_fence_child": 1,
+    "_waitpid_nohang": 3,
+    "_wait_for_child_exit": 2,
+    "_terminate_fenced_group": 2,
+    "_stop_unstarted_child": 1,
+    "_publish_fence": 1,
+    "_collect_fenced_child": 1,
+    "run_fenced_command": 0,
+    "hold_common_lock": 0,
+    "CLIOptions": 2,
+    "CommandContext": 4,
+    "_policy_for_state": 2,
+    "_validate_bound_chain_state": 1,
+    "_latest_current_pass": 2,
+    "_user_skip": 3,
+    "_gate_satisfied": 1,
+    "_fresh_reviewer_evals_required": 1,
+    "_required_steps": 1,
+    "_gate_one_complete": 1,
+    "_forge_command": 3,
+    "MergeRunTaskSnapshot": 1,
+    "_merge_refusal": 1,
+    "_parse_registered_worktrees": 1,
+    "_merge_rebase_action": 1,
+    "_merge_rebase_result_classification": 2,
+    "_prove_merge_run_task_binding": 1,
+    "_merge_scope_environment_contract": 2,
+    "_valid_sorted_unique_strings": 2,
+    "_validate_merge_scope_request": 2,
+    "_merge_retained_inflight": 1,
+    "_validate_merge_scope_fetch_binding": 2,
+    "_merge_scope_binding_names": 1,
+    "_merge_scope_binding_validator": 1,
+    "_merge_scope_argv": 2,
+    "_merge_full_patch_argv": 1,
+    "_merge_containment": 3,
+    "_merge_old_tip_all_false": 1,
+    "_merge_latest_contained_attempt": 1,
+    "_merge_inactive_post_attempt_recovery_ready": 1,
+    "_remote_observation_heads": 1,
+    "_remote_observation_fetch_argv": 1,
+    "_remote_containment_argv": 3,
+    "_epoch_fetch_observation_record_valid": 3,
+    "_epoch_fetch_observation_passed": 2,
+    "_epoch_fetch_result_intent_digest": 1,
+    "_epoch_ancestry_record_valid": 2,
+    "_remote_containment_evidence_valid": 1,
+    "_remote_observation_progress_valid": 3,
+    "_remote_observation_progress_transition_valid": 1,
+    "_remote_observation_progress_matches_observed": 1,
+    "_replayed_remote_observation_completed": 1,
+    "_bootstrap_fetch_observation_record_valid": 2,
+    "_bootstrap_fetch_observation_transition_valid": 1,
+    "_merge_candidate_observation_step_specs": 2,
+    "_merge_candidate_observation_step_names": 2,
+    "_merge_candidate_observation_binding": 1,
+    "_merge_candidate_observation_record_valid": 3,
+    "_merge_candidate_observation_transition_valid": 1,
+    "_merge_candidate_observation_evidence": 2,
+    "_merge_candidate_observation_evidence_valid": 2
+  },
+  "clusters": [
+    [
+      "_exclusive_descriptor_lock",
+      "_chain_storage_root",
+      "_require_ingest_proof",
+      "_merge_bootstrap_classification_pending",
+      "_merge_revision9_compatibility_view",
+      "_merge_ingest_state_shape_valid",
+      "_merge_ingest_transition_valid",
+      "_merge_plan_position_fact",
+      "_merge_carried_gate_steps",
+      "_merge_gate_step_generation_digests",
+      "_merge_remote_only_equality_proof",
+      "_merge_carry_payload_valid",
+      "_merge_plan_transition_valid",
+      "_validate_merge_scope_proof",
+      "_merge_scope_event_binding_valid",
+      "_merge_scope_transition_valid",
+      "_published_recovery_evidence_valid",
+      "_recovery_event_intent",
+      "_recovery_value_carries_inflight",
+      "_recovery_cleanup_result_matches",
+      "_classify_merge_recovery_lifecycle",
+      "_merge_recovery_proof_transition_valid",
+      "_epoch_fetch_observation_predecessor_valid",
+      "_recovered_absent_rebase_intent_digest",
+      "_merge_attempted_release_preconditions_valid",
+      "_merge_cleanup_process_result_valid",
+      "_merge_cleanup_process_complete",
+      "_merge_cleanup_branch_observation",
+      "_merge_cleanup_worktree_inventory",
+      "_merge_cleanup_fetch_head_bytes",
+      "_merge_cleanup_observation_valid",
+      "_merge_cleanup_step_result_valid",
+      "_merge_cleanup_results_valid",
+      "_merge_cleanup_evidence_history",
+      "_merge_cleanup_history_summary",
+      "_merge_cleanup_unmatched_intent",
+      "_merge_cleanup_retry_proof_valid",
+      "_merge_cleanup_intent_transition_valid",
+      "_merge_cleanup_result_transition_valid",
+      "_merge_history_has_git_mutation_intent",
+      "_merge_release_preconditions_valid",
+      "_merge_transition_valid",
+      "_ChainActivationSnapshot",
+      "_resolve_chain_activation_snapshot",
+      "_resolve_chain_activation_projection",
+      "_chain_activation_ownership_summary",
+      "_validate_chain_activation_lineage",
+      "_require_no_pending_chain_activation_outbox",
+      "_prepare_merge_activation_preamble",
+      "_prevalidate_chain_batch_carrier",
+      "_authorize_chain_batch",
+      "_read_ingest_input",
+      "_capture_ingest_blob",
+      "_capture_run_evidence",
+      "_capture_ingest_record_evidence",
+      "_ingest_captured_paths",
+      "_ingest_step_is_current",
+      "_ingest_secret_scan_is_current",
+      "_merge_ingest_binding",
+      "_prove_ingest_live_chain",
+      "_merge_gate_event_fact",
+      "_merge_current_gate_facts",
+      "_merge_ingest_record_templates",
+      "_ingest_allocation_records",
+      "_verify_and_build_merge_ingest_records",
+      "_verify_and_build_ingest_records",
+      "_ingest_proof_verifier",
+      "register_activation_reservation_seam",
+      "register_coordination_seams",
+      "_coordination_refusal",
+      "_validate_chain_batch_target",
+      "_chain_batch_lock",
+      "candidate_is_v2",
+      "_event_batch_records_with_candidate_v2",
+      "_binding_matches_source_fact_with_candidate_v2",
+      "_binding_is_current_with_candidate_v2",
+      "_commit_transition_valid_with_candidate_v2",
+      "Repository",
+      "_committed_changelog_output_paths",
+      "validate_state",
+      "_require_merge_adapter_control",
+      "_require_merge_integration_control",
+      "validate_merge_state",
+      "MergeReplayResult",
+      "_replay_merge_event_bytes",
+      "_drain_chain_batch_capability",
+      "_ChainStoragePrimitives",
+      "ChainStore",
+      "_build_merge_chain_journal_records",
+      "_new_merge_record_is_current",
+      "MergeChainStore",
+      "CommonLockUnavailable",
+      "CommonLockReleaseFailure",
+      "ChainLeaseUnavailable",
+      "FencedChildSurvived",
+      "_validate_chain_lease_record",
+      "_write_all",
+      "_open_owned_directory",
+      "_open_lock_directory",
+      "_PublicationCleanupFailure",
+      "_record_at_if_present",
+      "_process_probe",
+      "_group_probe",
+      "_new_owner_record",
+      "_fence_matches_owner",
+      "_publish_portable_owner",
+      "_publish_recovery_reservation",
+      "_reservation_evidence",
+      "_clear_owned_reservation",
+      "_recovery_record",
+      "_fence_death_proof",
+      "_require_recovery_proof_recorder",
+      "_persist_recovery_proof",
+      "_recovery_classification_receipt_valid",
+      "_acquire_secondary_flock",
+      "_read_fence_for_recovery",
+      "_common_fence_path_present",
+      "_recover_stale_portable_owner",
+      "_clear_reserved_fence",
+      "acquire_common_lock",
+      "ChainLease",
+      "_lease_exclusion_is_current",
+      "_lease_reclaim_authority_is_current",
+      "_repository_recovery_reservation_present",
+      "_reconcile_merge_projection_for_lease_reclaim",
+      "acquire_chain_lease",
+      "FencedProcessResult",
+      "merge_gate_intent_digest",
+      "_pipe_cloexec",
+      "_read_child_ack",
+      "_spawn_blocked_fence_child",
+      "_waitpid_nohang",
+      "_wait_for_child_exit",
+      "_terminate_fenced_group",
+      "_stop_unstarted_child",
+      "_publish_fence",
+      "_collect_fenced_child",
+      "run_fenced_command",
+      "hold_common_lock",
+      "CLIOptions",
+      "_policy_for_state",
+      "_validate_bound_chain_state",
+      "_latest_current_pass",
+      "_user_skip",
+      "_gate_satisfied",
+      "_fresh_reviewer_evals_required",
+      "_required_steps",
+      "_gate_one_complete",
+      "_forge_command",
+      "MergeRunTaskSnapshot",
+      "_merge_refusal",
+      "_parse_registered_worktrees",
+      "_merge_rebase_action",
+      "_merge_rebase_result_classification",
+      "_prove_merge_run_task_binding",
+      "_merge_scope_environment_contract",
+      "_valid_sorted_unique_strings",
+      "_validate_merge_scope_request",
+      "_merge_retained_inflight",
+      "_validate_merge_scope_fetch_binding",
+      "_merge_scope_binding_names",
+      "_merge_scope_binding_validator",
+      "_merge_scope_argv",
+      "_merge_full_patch_argv",
+      "_merge_containment",
+      "_merge_old_tip_all_false",
+      "_merge_latest_contained_attempt",
+      "_merge_inactive_post_attempt_recovery_ready",
+      "_remote_observation_heads",
+      "_remote_observation_fetch_argv",
+      "_remote_containment_argv",
+      "_epoch_fetch_observation_record_valid",
+      "_epoch_fetch_observation_passed",
+      "_epoch_fetch_result_intent_digest",
+      "_epoch_ancestry_record_valid",
+      "_remote_containment_evidence_valid",
+      "_remote_observation_progress_valid",
+      "_remote_observation_progress_transition_valid",
+      "_remote_observation_progress_matches_observed",
+      "_replayed_remote_observation_completed",
+      "_bootstrap_fetch_observation_record_valid",
+      "_bootstrap_fetch_observation_transition_valid",
+      "_merge_candidate_observation_step_specs",
+      "_merge_candidate_observation_step_names",
+      "_merge_candidate_observation_binding",
+      "_merge_candidate_observation_record_valid",
+      "_merge_candidate_observation_transition_valid",
+      "_merge_candidate_observation_evidence",
+      "_merge_candidate_observation_evidence_valid"
+    ],
+    [
+      "_merge_gate_plan_valid",
+      "_merge_epoch_valid"
+    ],
+    [
+      "_merge_payload_delta"
+    ],
+    [
+      "_merge_cleanup_expected_argv"
+    ],
+    [
+      "_chain_receipt_snapshot_lock"
+    ],
+    [
+      "_merge_cleanup_expected_subject"
+    ],
+    [
+      "_ReceiptRunSnapshot",
+      "_receipt_run_snapshot"
+    ],
+    [
+      "_merge_event_outbox"
+    ],
+    [
+      "CommonLockInspection"
+    ],
+    [
+      "_binding_shape_valid_with_candidate_v2"
+    ],
+    [
+      "_candidate_binding_for_state_with_candidate_v2"
+    ],
+    [
+      "_valid_nullable_chain"
+    ]
+  ],
+  "communities": [
+    [
+      "_exclusive_descriptor_lock",
+      "_require_ingest_proof",
+      "_merge_ingest_state_shape_valid",
+      "_prevalidate_chain_batch_carrier",
+      "_read_ingest_input",
+      "_capture_ingest_record_evidence",
+      "_ingest_captured_paths",
+      "_ingest_step_is_current",
+      "_ingest_secret_scan_is_current",
+      "_prove_ingest_live_chain",
+      "_merge_current_gate_facts",
+      "_ingest_allocation_records",
+      "_verify_and_build_merge_ingest_records",
+      "_verify_and_build_ingest_records",
+      "_coordination_refusal",
+      "candidate_is_v2",
+      "_event_batch_records_with_candidate_v2",
+      "_binding_matches_source_fact_with_candidate_v2",
+      "_binding_is_current_with_candidate_v2",
+      "_commit_transition_valid_with_candidate_v2",
+      "Repository",
+      "_committed_changelog_output_paths",
+      "validate_state",
+      "_drain_chain_batch_capability",
+      "_ChainStoragePrimitives",
+      "ChainStore",
+      "_write_all",
+      "_open_owned_directory",
+      "_acquire_secondary_flock",
+      "hold_common_lock",
+      "CLIOptions",
+      "_validate_bound_chain_state",
+      "_latest_current_pass",
+      "_user_skip",
+      "_gate_satisfied",
+      "_gate_one_complete",
+      "_forge_command"
+    ],
+    [
+      "_merge_ingest_transition_valid",
+      "_merge_carried_gate_steps",
+      "_merge_gate_step_generation_digests",
+      "_epoch_fetch_observation_predecessor_valid",
+      "_recovered_absent_rebase_intent_digest",
+      "_merge_transition_valid",
+      "_require_merge_integration_control",
+      "_merge_rebase_action",
+      "_merge_rebase_result_classification",
+      "_merge_latest_contained_attempt",
+      "_merge_inactive_post_attempt_recovery_ready",
+      "_epoch_fetch_observation_record_valid",
+      "_epoch_fetch_observation_passed",
+      "_epoch_fetch_result_intent_digest",
+      "_epoch_ancestry_record_valid",
+      "_remote_observation_progress_transition_valid",
+      "_remote_observation_progress_matches_observed",
+      "_replayed_remote_observation_completed",
+      "_bootstrap_fetch_observation_record_valid",
+      "_bootstrap_fetch_observation_transition_valid",
+      "_merge_candidate_observation_evidence_valid"
+    ],
+    [
+      "validate_merge_state",
+      "MergeReplayResult",
+      "_replay_merge_event_bytes",
+      "_new_merge_record_is_current",
+      "MergeChainStore",
+      "ChainLeaseUnavailable",
+      "_validate_chain_lease_record",
+      "_record_at_if_present",
+      "_process_probe",
+      "_fence_death_proof",
+      "_require_recovery_proof_recorder",
+      "_persist_recovery_proof",
+      "_recovery_classification_receipt_valid",
+      "_read_fence_for_recovery",
+      "_recover_stale_portable_owner",
+      "_clear_reserved_fence",
+      "ChainLease",
+      "_lease_exclusion_is_current",
+      "_lease_reclaim_authority_is_current",
+      "_repository_recovery_reservation_present",
+      "_reconcile_merge_projection_for_lease_reclaim",
+      "acquire_chain_lease"
+    ],
+    [
+      "_validate_merge_scope_proof",
+      "_merge_scope_event_binding_valid",
+      "_merge_scope_transition_valid",
+      "FencedProcessResult",
+      "_merge_scope_environment_contract",
+      "_valid_sorted_unique_strings",
+      "_validate_merge_scope_request",
+      "_merge_retained_inflight",
+      "_validate_merge_scope_fetch_binding",
+      "_merge_scope_binding_names",
+      "_merge_scope_binding_validator",
+      "_merge_scope_argv",
+      "_merge_full_patch_argv",
+      "_merge_candidate_observation_step_specs",
+      "_merge_candidate_observation_step_names",
+      "_merge_candidate_observation_binding",
+      "_merge_candidate_observation_record_valid",
+      "_merge_candidate_observation_transition_valid",
+      "_merge_candidate_observation_evidence"
+    ],
+    [
+      "_chain_storage_root",
+      "_ChainActivationSnapshot",
+      "_resolve_chain_activation_snapshot",
+      "_resolve_chain_activation_projection",
+      "_chain_activation_ownership_summary",
+      "_validate_chain_activation_lineage",
+      "_require_no_pending_chain_activation_outbox",
+      "_prepare_merge_activation_preamble",
+      "_authorize_chain_batch",
+      "_ingest_proof_verifier",
+      "register_activation_reservation_seam",
+      "register_coordination_seams",
+      "_validate_chain_batch_target",
+      "_chain_batch_lock"
+    ],
+    [
+      "_published_recovery_evidence_valid",
+      "_recovery_event_intent",
+      "_recovery_value_carries_inflight",
+      "_recovery_cleanup_result_matches",
+      "_classify_merge_recovery_lifecycle",
+      "_merge_recovery_proof_transition_valid",
+      "_merge_cleanup_process_result_valid",
+      "_merge_cleanup_step_result_valid",
+      "_merge_cleanup_results_valid",
+      "_merge_cleanup_result_transition_valid",
+      "_merge_history_has_git_mutation_intent",
+      "merge_gate_intent_digest"
+    ],
+    [
+      "CommonLockUnavailable",
+      "_group_probe",
+      "_new_owner_record",
+      "_fence_matches_owner",
+      "_publish_recovery_reservation",
+      "_reservation_evidence",
+      "_clear_owned_reservation",
+      "_recovery_record",
+      "_common_fence_path_present",
+      "acquire_common_lock"
+    ],
+    [
+      "CommonLockReleaseFailure",
+      "FencedChildSurvived",
+      "_PublicationCleanupFailure",
+      "_pipe_cloexec",
+      "_read_child_ack",
+      "_spawn_blocked_fence_child",
+      "_wait_for_child_exit",
+      "_stop_unstarted_child",
+      "_publish_fence",
+      "run_fenced_command"
+    ],
+    [
+      "_merge_attempted_release_preconditions_valid",
+      "_merge_cleanup_evidence_history",
+      "_merge_cleanup_history_summary",
+      "_merge_release_preconditions_valid",
+      "_merge_containment",
+      "_merge_old_tip_all_false"
+    ],
+    [
+      "_merge_ingest_binding",
+      "_merge_gate_event_fact",
+      "_merge_ingest_record_templates",
+      "_build_merge_chain_journal_records"
+    ],
+    [
+      "_merge_cleanup_process_complete",
+      "_merge_cleanup_branch_observation",
+      "_merge_cleanup_worktree_inventory",
+      "_merge_cleanup_fetch_head_bytes",
+      "_merge_cleanup_observation_valid",
+      "_parse_registered_worktrees"
+    ],
+    [
+      "_waitpid_nohang",
+      "_terminate_fenced_group",
+      "_collect_fenced_child"
+    ],
+    [
+      "_remote_observation_heads",
+      "_remote_observation_fetch_argv",
+      "_remote_containment_argv",
+      "_remote_containment_evidence_valid",
+      "_remote_observation_progress_valid"
+    ],
+    [
+      "_merge_cleanup_unmatched_intent",
+      "_merge_cleanup_retry_proof_valid",
+      "_merge_cleanup_intent_transition_valid"
+    ],
+    [
+      "_merge_plan_position_fact",
+      "_merge_plan_transition_valid"
+    ],
+    [
+      "_merge_bootstrap_classification_pending",
+      "_merge_revision9_compatibility_view"
+    ],
+    [
+      "_capture_ingest_blob",
+      "_capture_run_evidence",
+      "_require_merge_adapter_control"
+    ],
+    [
+      "_open_lock_directory",
+      "_publish_portable_owner"
+    ],
+    [
+      "_merge_gate_plan_valid",
+      "_merge_epoch_valid"
+    ],
+    [
+      "_merge_payload_delta"
+    ],
+    [
+      "MergeRunTaskSnapshot",
+      "_merge_refusal",
+      "_prove_merge_run_task_binding"
+    ],
+    [
+      "_merge_cleanup_expected_argv"
+    ],
+    [
+      "_chain_receipt_snapshot_lock"
+    ],
+    [
+      "_policy_for_state",
+      "_fresh_reviewer_evals_required",
+      "_required_steps"
+    ],
+    [
+      "_merge_cleanup_expected_subject"
+    ],
+    [
+      "_merge_remote_only_equality_proof",
+      "_merge_carry_payload_valid"
+    ],
+    [
+      "_ReceiptRunSnapshot",
+      "_receipt_run_snapshot"
+    ],
+    [
+      "_merge_event_outbox"
+    ],
+    [
+      "CommonLockInspection"
+    ],
+    [
+      "_binding_shape_valid_with_candidate_v2"
+    ],
+    [
+      "_candidate_binding_for_state_with_candidate_v2"
+    ],
+    [
+      "_valid_nullable_chain"
+    ]
+  ],
+  "mutable_state": [
+    "STATES",
+    "STATE_KEYS",
+    "EVENT_KEYS",
+    "MERGE_STATE_KEYS",
+    "_MERGE_INACTIVE_ATTEMPT_OBSERVATION_SOURCES",
+    "_MERGE_INACTIVE_POST_ATTEMPT_RECOVERY_SOURCES",
+    "MERGE_EVENT_KEYS",
+    "MERGE_EVENT_NAMES",
+    "MERGE_CONSEQUENTIAL_EVENTS",
+    "TIER_RANK",
+    "COMMON_LOCK_OWNER_KINDS",
+    "COMMON_LOCK_OPERATIONS",
+    "COMMON_LOCK_FENCE_OPERATIONS",
+    "COMMON_LOCK_RECOVERY_KINDS",
+    "_COMMON_LOCK_OWNER_KEYS",
+    "_COMMON_LOCK_FENCE_KEYS",
+    "_COMMON_LOCK_RECOVERY_KEYS",
+    "_CHAIN_LEASE_KEYS",
+    "_REQUIRED_COMMON_LOCK_CONTROLS",
+    "CHAIN_ID_RE",
+    "SHA256_RE",
+    "COMMIT_RE",
+    "RUN_ID_RE",
+    "CHAIN_TOMBSTONE_KEYS",
+    "_REQUIRED_MERGE_STORE_CONTROLS",
+    "_REQUIRED_MERGE_ADAPTER_CONTROLS",
+    "_REQUIRED_MERGE_INTEGRATION_CONTROLS",
+    "_REQUIRED_INGEST_PROOF_CONTROLS",
+    "_WORKTREE_LOCKS_GUARD",
+    "_WORKTREE_LOCKS",
+    "_WORKTREE_LOCK_STATE",
+    "_MERGE_CLEANUP_FENCE_OPERATIONS",
+    "_MERGE_SCOPE_UNSET",
+    "_MERGE_SCOPE_OVERLAY",
+    "__all__"
+  ],
+  "external_dependents": []
+}
