@@ -8,6 +8,8 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-09-13
+
 ### Changed
 
 - Run-bound commit chains no longer freeze at a multi-cell stack gate (GH#23). A stack-validations region with two or more fenced cells recorded one bound journal verification per cell while the replay validator required the whole batch, so `verify` returned `frozen-chain — carried binding fact is stale` after the first cell. The engine now emits one passed bound verification per completed batch, sourced from the final cell; a failed cell still records its failure immediately and stops the batch. Per-cell chain facts, the currentness predicate and non-run-bound chains are unchanged. FR-230 evidence re-minted.
