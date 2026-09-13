@@ -26,10 +26,11 @@ const MINT = args.mintCmd
 const FOCUSED = 'python3 -m unittest ' + (args.focusedTests || []).join(' ')
 
 // Environment every gate run needs in this repository (verify.sh reads REFACTOR_* ; tests need the
-// forge-gate TMPDIR and no session pid; import-linter needs the two source roots on PYTHONPATH).
+// forge-gate TMPDIR and no session pid; import-linter needs the two source roots on PYTHONPATH; the
+// type step is mypy through type_baseline.py, ratcheted against .refactor/type-baseline.json).
 const GATE_ENV =
   `export PYTHONPATH=scripts:scripts/forge; export TMPDIR=/tmp/forge-gate; mkdir -p /tmp/forge-gate; unset FORGE_SESSION_PID; ` +
-  `export REFACTOR_TYPE_CMD='python3 -m compileall -q ${PKG}'; export REFACTOR_TEST_CMD='${FOCUSED}'; export PATH="$HOME/.local/bin:$PATH"`
+  `export MYPYPATH=scripts:scripts/forge; unset REFACTOR_TYPE_CMD; export REFACTOR_TEST_CMD='${FOCUSED}'; export PATH="$HOME/.local/bin:$PATH"`
 // Every gate is strict on bodies: a CHANGED body is a stop, never a note (the oracle is the split's contract).
 const GATE = `${GATE_ENV}; bash ${S}/verify.sh --pkg ${PKG} --snapshot ${SNAP} --strict-bodies`
 // Merge-time and wave-end gates are strict on bodies: a CHANGED body is a stop, never a note.
