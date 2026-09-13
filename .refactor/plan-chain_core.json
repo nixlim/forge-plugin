@@ -44,6 +44,23 @@
      "COMMON_LOCK_FLOCK_NAME",
      "COMMON_LOCK_RECOVERY_NAME",
      "COMMON_LOCK_INFLIGHT_NAME",
+     "CHAIN_ID_RE",
+     "SHA256_RE",
+     "COMMIT_RE",
+     "RUN_ID_RE",
+     "_WORKTREE_LOCKS_GUARD",
+     "_WORKTREE_LOCKS",
+     "_WORKTREE_LOCK_STATE",
+     "_exclusive_descriptor_lock",
+     "_MERGE_REMOTE_ONLY_IDENTITY_FIELDS",
+     "_MERGE_SCOPE_UNSET",
+     "_MERGE_SCOPE_OVERLAY"
+    ]
+   },
+   {
+    "cluster": "controls",
+    "dest": "scripts/forge/forge_cli/chain_core/_controls.py",
+    "symbols": [
      "COMMON_LOCK_OWNER_KINDS",
      "COMMON_LOCK_OPERATIONS",
      "COMMON_LOCK_FENCE_OPERATIONS",
@@ -54,10 +71,6 @@
      "_CHAIN_LEASE_KEYS",
      "_REQUIRED_COMMON_LOCK_CONTROLS",
      "COMMON_LOCK_CONTROLS",
-     "CHAIN_ID_RE",
-     "SHA256_RE",
-     "COMMIT_RE",
-     "RUN_ID_RE",
      "CHAIN_TOMBSTONE_SCHEMA",
      "CHAIN_TOMBSTONE_EVENT",
      "CHAIN_TOMBSTONE_KEYS",
@@ -70,18 +83,11 @@
      "INGEST_PROOF_ORDER",
      "_REQUIRED_INGEST_PROOF_CONTROLS",
      "INGEST_PROOF_CONTROLS",
-     "_WORKTREE_LOCKS_GUARD",
-     "_WORKTREE_LOCKS",
-     "_WORKTREE_LOCK_STATE",
-     "_exclusive_descriptor_lock",
-     "_MERGE_REMOTE_ONLY_IDENTITY_FIELDS",
      "_MERGE_CLEANUP_INTENT_SCHEMA",
      "_MERGE_CLEANUP_RESULT_SCHEMA",
      "_MERGE_CLEANUP_CLOSE_SCHEMA",
      "_MERGE_CLEANUP_RECOVERY_SCHEMA",
      "_MERGE_CLEANUP_FENCE_OPERATIONS",
-     "_MERGE_SCOPE_UNSET",
-     "_MERGE_SCOPE_OVERLAY",
      "_EPOCH_FETCH_OBSERVATION_SCHEMA",
      "_MERGE_CANDIDATE_OBSERVATION_SCHEMA",
      "_MERGE_CANDIDATE_OBSERVATION_EVIDENCE_SCHEMA",
@@ -205,7 +211,13 @@
      "_read_ingest_input",
      "_capture_ingest_blob",
      "_capture_run_evidence",
-     "_capture_ingest_record_evidence",
+     "_capture_ingest_record_evidence"
+    ]
+   },
+   {
+    "cluster": "ingest currency",
+    "dest": "scripts/forge/forge_cli/chain_core/_ingest_currency.py",
+    "symbols": [
      "_ingest_captured_paths",
      "_ingest_step_is_current",
      "_ingest_secret_scan_is_current",
@@ -213,23 +225,13 @@
     ]
    },
    {
-    "cluster": "lock records",
-    "dest": "scripts/forge/forge_cli/chain_core/_lock_records.py",
+    "cluster": "lock record validators",
+    "dest": "scripts/forge/forge_cli/chain_core/_lock_record_validators.py",
     "symbols": [
      "_validate_owner_record",
      "_validate_fence_record",
      "_validate_recovery_record",
-     "_validate_chain_lease_record",
-     "_read_owned_record_at",
-     "_same_published_record",
-     "_open_lock_directory",
-     "_opaque_path_evidence_at",
-     "_inspect_common_lock_fd",
-     "_create_private_record_at",
-     "_publish_no_replace_link",
-     "_revalidate_record_at",
-     "_unlink_revalidated_record_at",
-     "_record_at_if_present"
+     "_validate_chain_lease_record"
     ]
    },
    {
@@ -240,13 +242,7 @@
      "_recovery_cleanup_intent",
      "_merge_cleanup_expected_subject",
      "_merge_cleanup_expected_argv",
-     "_merge_cleanup_intent_valid",
-     "_merge_cleanup_evidence_history",
-     "_merge_cleanup_history_summary",
-     "_merge_cleanup_unmatched_intent",
-     "_merge_cleanup_retry_proof_valid",
-     "_merge_cleanup_intent_transition_valid",
-     "_merge_history_has_git_mutation_intent"
+     "_merge_cleanup_intent_valid"
     ]
    },
    {
@@ -255,14 +251,7 @@
     "symbols": [
      "_merge_event_outbox",
      "_merge_payload_delta",
-     "reduce_merge_event",
-     "_merge_gate_plan_valid",
-     "_merge_epoch_valid",
-     "_merge_bootstrap_classification_pending",
-     "_merge_revision9_compatibility_view",
-     "_merge_state_shape_valid",
-     "_merge_ingest_state_shape_valid",
-     "_merge_history_uses_additive_grammar"
+     "reduce_merge_event"
     ]
    },
    {
@@ -282,6 +271,19 @@
     ]
    },
    {
+    "cluster": "merge state shape",
+    "dest": "scripts/forge/forge_cli/chain_core/_merge_state_shape.py",
+    "symbols": [
+     "_merge_gate_plan_valid",
+     "_merge_epoch_valid",
+     "_merge_bootstrap_classification_pending",
+     "_merge_revision9_compatibility_view",
+     "_merge_state_shape_valid",
+     "_merge_ingest_state_shape_valid",
+     "_merge_history_uses_additive_grammar"
+    ]
+   },
+   {
     "cluster": "repository",
     "dest": "scripts/forge/forge_cli/chain_core/_repository.py",
     "symbols": [
@@ -292,6 +294,34 @@
   ],
   [
    {
+    "cluster": "lock record io",
+    "dest": "scripts/forge/forge_cli/chain_core/_lock_record_io.py",
+    "symbols": [
+     "_read_owned_record_at",
+     "_same_published_record",
+     "_open_lock_directory",
+     "_opaque_path_evidence_at",
+     "_inspect_common_lock_fd",
+     "_create_private_record_at",
+     "_publish_no_replace_link",
+     "_revalidate_record_at",
+     "_unlink_revalidated_record_at",
+     "_record_at_if_present"
+    ]
+   },
+   {
+    "cluster": "merge cleanup history",
+    "dest": "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py",
+    "symbols": [
+     "_merge_cleanup_evidence_history",
+     "_merge_cleanup_history_summary",
+     "_merge_cleanup_unmatched_intent",
+     "_merge_cleanup_retry_proof_valid",
+     "_merge_cleanup_intent_transition_valid",
+     "_merge_history_has_git_mutation_intent"
+    ]
+   },
+   {
     "cluster": "merge cleanup observation",
     "dest": "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py",
     "symbols": [
@@ -301,14 +331,6 @@
      "_merge_cleanup_worktree_inventory",
      "_merge_cleanup_fetch_head_bytes",
      "_merge_cleanup_observation_valid"
-    ]
-   },
-   {
-    "cluster": "merge release",
-    "dest": "scripts/forge/forge_cli/chain_core/_merge_release.py",
-    "symbols": [
-     "_merge_attempted_release_preconditions_valid",
-     "_merge_release_preconditions_valid"
     ]
    },
    {
@@ -339,16 +361,12 @@
   ],
   [
    {
-    "cluster": "merge candidate observation",
-    "dest": "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py",
+    "cluster": "merge candidate observation steps",
+    "dest": "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py",
     "symbols": [
      "_merge_candidate_observation_step_specs",
      "_merge_candidate_observation_step_names",
-     "_merge_candidate_observation_binding",
-     "_merge_candidate_observation_record_valid",
-     "_merge_candidate_observation_transition_valid",
-     "_merge_candidate_observation_evidence",
-     "_merge_candidate_observation_evidence_valid"
+     "_merge_candidate_observation_binding"
     ]
    },
    {
@@ -362,12 +380,32 @@
     ]
    },
    {
+    "cluster": "merge release",
+    "dest": "scripts/forge/forge_cli/chain_core/_merge_release.py",
+    "symbols": [
+     "_merge_attempted_release_preconditions_valid",
+     "_merge_release_preconditions_valid"
+    ]
+   },
+   {
     "cluster": "merge scope",
     "dest": "scripts/forge/forge_cli/chain_core/_merge_scope.py",
     "symbols": [
      "_validate_merge_scope_proof",
      "_merge_scope_event_binding_valid",
      "_merge_scope_transition_valid"
+    ]
+   }
+  ],
+  [
+   {
+    "cluster": "merge candidate observation",
+    "dest": "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py",
+    "symbols": [
+     "_merge_candidate_observation_record_valid",
+     "_merge_candidate_observation_transition_valid",
+     "_merge_candidate_observation_evidence",
+     "_merge_candidate_observation_evidence_valid"
     ]
    }
   ],
@@ -441,6 +479,16 @@
   ],
   [
    {
+    "cluster": "chain batch carrier",
+    "dest": "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py",
+    "symbols": [
+     "_prevalidate_chain_batch_carrier",
+     "_coordination_refusal",
+     "_validate_chain_batch_target",
+     "_drain_chain_batch_capability"
+    ]
+   },
+   {
     "cluster": "activation",
     "dest": "scripts/forge/forge_cli/chain_core/_activation.py",
     "symbols": [
@@ -469,14 +517,10 @@
     ]
    },
    {
-    "cluster": "chain batch",
-    "dest": "scripts/forge/forge_cli/chain_core/_chain_batch.py",
+    "cluster": "chain batch authorize",
+    "dest": "scripts/forge/forge_cli/chain_core/_chain_batch_authorize.py",
     "symbols": [
-     "_prevalidate_chain_batch_carrier",
-     "_authorize_chain_batch",
-     "_coordination_refusal",
-     "_validate_chain_batch_target",
-     "_drain_chain_batch_capability"
+     "_authorize_chain_batch"
     ]
    }
   ],
