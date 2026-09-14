@@ -79,9 +79,14 @@ const brief = (c) =>
 
 const extract = (c, label, extra) => agent(brief(c), { label, phase: 'Extract', agentType: 'refactor-python:extractor', isolation: 'worktree', schema: EXTRACT, ...(extra || {}) })
 
+// args.mergeGen: bump to re-run merge agents on resume (their cached FAIL results would otherwise replay).
+const MERGE_GEN = args.mergeGen ? ` [merge generation ${args.mergeGen}]` : ''
 const mergeOne = (r, c) => agent(
-  `On branch ${BRANCH} in the repository root: run 'git merge --no-ff ${r.branch}'. If git reports conflicts run 'git merge --abort' and return {gate:"FAIL", cause:"conflict"}. ` +
-  `Otherwise run exactly: ${GATE_STRICT}\nReturn {gate, cause} from its "== gate results ==" block (FAIL if any line is FAIL). Do not fix anything.`,
+  `On branch ${BRANCH} in the repository root.${MERGE_GEN} The extractor for cluster "${c.cluster}" committed ${r.commit} on its worktree branch ${r.branch}; merge BY COMMIT, never by the branch name. Steps:\n` +
+  `1. Require 'git rev-parse --abbrev-ref HEAD' to print ${BRANCH} and 'git status --porcelain --untracked-files=no' to be empty; otherwise return {gate:"FAIL", cause:"dirty or wrong branch"}.\n` +
+  `2. If 'git merge-base --is-ancestor ${r.commit} HEAD' succeeds the commit is already merged: skip to step 4.\n` +
+  `3. before=$(git rev-parse HEAD); run 'git merge --no-ff ${r.commit} -m "Merge ${c.cluster} (${r.commit}) into ${BRANCH}"'. If git reports conflicts run 'git merge --abort' and return {gate:"FAIL", cause:"conflict"}. Then require 'git rev-parse HEAD' to differ from before AND 'git merge-base --is-ancestor ${r.commit} HEAD' to succeed; otherwise return {gate:"FAIL", cause:"nothing merged"}.\n` +
+  `4. Run exactly: ${GATE_STRICT}\nReturn {gate, cause, commit:<git rev-parse HEAD>} from its "== gate results ==" block (FAIL if any line is FAIL). Do not fix anything.`,
   { label: `merge:${c.cluster}`, phase: 'Merge', agentType: 'refactor-python:gate-runner', schema: GATE_SCHEMA },
 )
 
@@ -128,7 +133,7 @@ for (let w = 0; w < plan.waves.length; w++) {
     for (const c of pending) {
       await runCluster(c, results)
       const r = results[results.length - 1]
-      if (r.gate !== 'pass') { failedClusters.push(c.cluster); break }
+      if (r.gate !== 'pass' || !r.commit) { failedClusters.push(c.cluster); break }
       phase('Merge')
       const m = await mergeOne(r, c)
       if (!m || m.gate !== 'PASS') { failedClusters.push(c.cluster); log(`wave ${w}: merge of ${c.cluster} failed: ${m && m.cause}`); break }
@@ -140,7 +145,7 @@ for (let w = 0; w < plan.waves.length; w++) {
     phase('Merge')
     for (const c of pending) {
       let r = results.find((x) => x.cluster === c.cluster)
-      if (!r || r.gate !== 'pass') { failedClusters.push(c.cluster); continue }
+      if (!r || r.gate !== 'pass' || !r.commit) { failedClusters.push(c.cluster); log(`wave ${w}: ${c.cluster} has no passing report with a commit`); continue }
       let ok = false
       for (let attempt = 0; attempt < 2 && !ok; attempt++) {
         const m = await mergeOne(r, c)
