@@ -671,5 +671,5 @@ __all__ = [
     'register_coordination_seams',
     'run_fenced_command',
     'validate_merge_state',
-    'validate_state', "_ReceiptRunSnapshot", "_chain_receipt_snapshot_lock", "_receipt_run_snapshot", "_ChainActivationSnapshot", "_chain_activation_ownership_summary", "_validate_chain_activation_lineage", "_resolve_chain_activation_projection", "register_activation_reservation_seam",
+    'validate_state',
 ]
