@@ -175,6 +175,12 @@ from forge_cli.chain_core._candidate_v2 import (
     _binding_is_current_with_candidate_v2,
     _commit_transition_valid_with_candidate_v2,
 )
+from forge_cli.chain_core._receipt_snapshot import (
+    _ReceiptRunSnapshot,
+    _chain_receipt_snapshot_lock,
+    _receipt_run_snapshot,
+    _ChainReceiptSnapshotVerifier,
+)
 
 
 def _merge_event_outbox(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -5189,233 +5195,6 @@ def _merge_transition_valid(
         context.clear()
         context.update(trial_context)
     return True
-
-
-@dataclasses.dataclass(frozen=True)
-class _ReceiptRunSnapshot:
-    """Exact run surfaces authenticated without nesting an exclusive run lock."""
-
-    run_dir: Path
-    run_observation: object
-    lock_observation: object
-    names: frozenset[str]
-    journal_exact: object
-    receipts_exact: object
-    intent_exact: object
-
-
-@contextlib.contextmanager
-def _chain_receipt_snapshot_lock(run_dir: Path) -> Iterable[object]:
-    """Reuse the current run lock or bind a foreign run by exact snapshots.
-
-    Lineage authorization already holds its target run's exclusive lock.  A
-    second flock on a sibling run would permit an A->B/B->A deadlock.  Foreign
-    descriptors therefore never flock; callers bracket every read with exact
-    file, directory, and stable-lock identity snapshots and refuse on change.
-    """
-
-    batch, _builders, journal = runtime._coordination_modules()
-    key = os.path.abspath(os.fspath(run_dir))
-    active = batch._active_locks().get(key)
-    if active is not None:
-        batch._validate_batch_lock(active)
-        batch._validate_no_orphan_intent_temporary(active)
-        try:
-            yield active
-        finally:
-            batch._validate_no_orphan_intent_temporary(active)
-            batch._validate_batch_lock(active)
-        return
-
-    run_descriptor: int | None = None
-    lock_descriptor: int | None = None
-    try:
-        run_descriptor, run_observation = journal._open_strict_batch_directory(
-            run_dir, refusal=journal.BATCH_DIVERGED
-        )
-        _lock_stat, lock_observation = batch._validate_named_file(
-            run_descriptor, journal.BATCH_LOCK_NAME
-        )
-        lock_descriptor = os.open(
-            journal.BATCH_LOCK_NAME,
-            batch._safe_open_flags(os.O_RDONLY, nonblocking=True),
-            dir_fd=run_descriptor,
-        )
-        if not batch._same(os.fstat(lock_descriptor), lock_observation):
-            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-        locked = batch.BatchLock(
-            run_dir,
-            run_descriptor,
-            lock_descriptor,
-            lock_observation,
-        )
-        if (
-            journal._file_observation(os.fstat(run_descriptor))
-            != run_observation
-        ):
-            raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-        batch._validate_batch_lock(locked)
-        batch._validate_no_orphan_intent_temporary(locked)
-        try:
-            yield locked
-        finally:
-            batch._validate_no_orphan_intent_temporary(locked)
-            batch._validate_batch_lock(locked)
-    except journal.CoordinationRefusal:
-        raise
-    except (FileNotFoundError, OSError) as exc:
-        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED) from exc
-    finally:
-        if lock_descriptor is not None:
-            os.close(lock_descriptor)
-        if run_descriptor is not None:
-            os.close(run_descriptor)
-
-
-def _receipt_run_snapshot(locked: object) -> _ReceiptRunSnapshot:
-    """Capture every run surface consulted by receipt replay."""
-
-    batch, _builders, journal = runtime._coordination_modules()
-    batch._validate_batch_lock(locked)
-    batch._validate_no_orphan_intent_temporary(locked)
-    journal_exact = batch._optional_exact_named_file(locked, "journal.jsonl")
-    if journal_exact is None:
-        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-    snapshot = _ReceiptRunSnapshot(
-        run_dir=locked.run_dir,
-        run_observation=journal._file_observation(
-            os.fstat(locked.run_descriptor)
-        ),
-        lock_observation=locked.lock_observation,
-        names=frozenset(os.listdir(locked.run_descriptor)),
-        journal_exact=journal_exact,
-        receipts_exact=batch._optional_exact_named_file(
-            locked, journal.BATCH_RECEIPTS_NAME
-        ),
-        intent_exact=batch._optional_exact_named_file(
-            locked, journal.BATCH_INTENT_NAME
-        ),
-    )
-    if frozenset(os.listdir(locked.run_descriptor)) != snapshot.names:
-        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-    batch._validate_no_orphan_intent_temporary(locked)
-    batch._validate_batch_lock(locked)
-    return snapshot
-
-
-class _ChainReceiptSnapshotVerifier:
-    """Authenticate every sibling receipt against one closed run snapshot."""
-
-    def __init__(self, repository: Path) -> None:
-        self.repository = repository
-        self._snapshots: dict[str, _ReceiptRunSnapshot] = {}
-
-    def __call__(
-        self,
-        repository: Path,
-        chain_id: str,
-        state: dict[str, object],
-        pending: dict[str, object],
-        carried_records: tuple[dict[str, object], ...],
-        acknowledgement: dict[str, object],
-    ) -> None:
-        batch, builders, journal = runtime._coordination_modules()
-        run_binding = state.get("run_binding")
-        if (
-            repository != self.repository
-            or not isinstance(run_binding, dict)
-            or not builders._run_binding_valid(run_binding)
-            or run_binding.get("repository") != str(self.repository)
-        ):
-            raise builders._binding_replay_refusal()
-        run_id = run_binding.get("run_id")
-        if not journal._valid_run_id(run_id):
-            raise builders._binding_replay_refusal()
-        assert isinstance(run_id, str)
-        run_dir = (
-            builders.chain_storage_root(self.repository).parents[1]
-            / ".codex-orchestrator"
-            / "runs"
-            / run_id
-        )
-        key = os.path.abspath(os.fspath(run_dir))
-        try:
-            with _chain_receipt_snapshot_lock(run_dir) as locked:
-                before = _receipt_run_snapshot(locked)
-                previous = self._snapshots.get(key)
-                if previous is not None and before != previous:
-                    raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-                receipts, loaded_raw, loaded_observation = (
-                    batch._load_receipts_for_chain_replay(locked)
-                )
-                loaded_exact = (
-                    None
-                    if loaded_observation is None
-                    else journal.ExactFile(loaded_raw, loaded_observation)
-                )
-                matches = [
-                    receipt
-                    for receipt in receipts
-                    if receipt.get("idempotency_key")
-                    == pending.get("idempotency_key")
-                ]
-                if len(matches) != 1:
-                    raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-                receipt = matches[0]
-                batch.validate_pending_outbox_receipt(pending, receipt)
-                _, request_digest = batch.normalized_request(
-                    self.repository,
-                    run_id,
-                    "chain outbox-drain",
-                    {
-                        "chain_id": chain_id,
-                        "source_event_digest": pending["source_event_digest"],
-                        "batch_digest": pending["batch_digest"],
-                        "record_count": pending["record_count"],
-                    },
-                )
-                journal_records = batch._verify_receipt_journal(
-                    locked, receipt, expected_journal=before.journal_exact
-                )
-                if (
-                    loaded_exact != before.receipts_exact
-                    or receipt.get("request_sha256") != request_digest
-                    or b"".join(
-                        journal._journal_line(record)
-                        for record in journal_records
-                    )
-                    != b"".join(
-                        journal._journal_line(record)
-                        for record in carried_records
-                    )
-                    or acknowledgement.get("receipt_digest")
-                    != journal._sha256(
-                        journal._canonical_json_bytes(receipt) + b"\n"
-                    )
-                    or _receipt_run_snapshot(locked) != before
-                ):
-                    raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-                self._snapshots[key] = before
-        except journal.CoordinationRefusal as exc:
-            raise builders._binding_replay_refusal() from exc
-        except (KeyError, MemoryError, OSError) as exc:
-            raise builders._binding_replay_refusal() from exc
-
-    def recheck(self) -> None:
-        """Prove all sibling run snapshots stayed exact through chain replay."""
-
-        _batch, builders, journal = runtime._coordination_modules()
-        try:
-            for snapshot in self._snapshots.values():
-                with _chain_receipt_snapshot_lock(snapshot.run_dir) as locked:
-                    if _receipt_run_snapshot(locked) != snapshot:
-                        raise journal.CoordinationRefusal(
-                            journal.BATCH_DIVERGED
-                        )
-        except journal.CoordinationRefusal as exc:
-            raise builders._binding_replay_refusal() from exc
-        except (MemoryError, OSError) as exc:
-            raise builders._binding_replay_refusal() from exc
 
 
 @dataclasses.dataclass(frozen=True)
@@ -19348,5 +19127,5 @@ __all__ = [
     'register_coordination_seams',
     'run_fenced_command',
     'validate_merge_state',
-    'validate_state',
+    'validate_state', "_ReceiptRunSnapshot", "_chain_receipt_snapshot_lock", "_receipt_run_snapshot",
 ]
