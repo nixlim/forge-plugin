@@ -164,102 +164,102 @@ from ._core import (
     _merge_refusal as _merge_refusal,
     _valid_sorted_unique_strings as _valid_sorted_unique_strings,
 )
-from forge_cli.chain_core._candidate_v2 import (
-    candidate_is_v2,
-    _candidate_binding_for_state_with_candidate_v2,
-    _binding_shape_valid_with_candidate_v2,
-    _event_batch_records_with_candidate_v2,
-    _binding_matches_source_fact_with_candidate_v2,
-    _binding_is_current_with_candidate_v2,
-    _commit_transition_valid_with_candidate_v2,
+from ._candidate_v2 import (
+    candidate_is_v2 as candidate_is_v2,
+    _candidate_binding_for_state_with_candidate_v2 as _candidate_binding_for_state_with_candidate_v2,
+    _binding_shape_valid_with_candidate_v2 as _binding_shape_valid_with_candidate_v2,
+    _event_batch_records_with_candidate_v2 as _event_batch_records_with_candidate_v2,
+    _binding_matches_source_fact_with_candidate_v2 as _binding_matches_source_fact_with_candidate_v2,
+    _binding_is_current_with_candidate_v2 as _binding_is_current_with_candidate_v2,
+    _commit_transition_valid_with_candidate_v2 as _commit_transition_valid_with_candidate_v2,
 )
-from forge_cli.chain_core._receipt_snapshot import (
-    _ReceiptRunSnapshot,
-    _chain_receipt_snapshot_lock,
-    _receipt_run_snapshot,
-    _ChainReceiptSnapshotVerifier,
+from ._receipt_snapshot import (
+    _ReceiptRunSnapshot as _ReceiptRunSnapshot,
+    _chain_receipt_snapshot_lock as _chain_receipt_snapshot_lock,
+    _receipt_run_snapshot as _receipt_run_snapshot,
+    _ChainReceiptSnapshotVerifier as _ChainReceiptSnapshotVerifier,
 )
-from forge_cli.chain_core._merge_plan import (
-    _merge_plan_position_fact,
-    _merge_carried_gate_steps,
-    _merge_gate_step_generation_digests,
-    _merge_current_authority_valid,
-    _merge_remote_only_equality_proof,
-    _merge_carry_payload_valid,
-    _merge_plan_transition_valid,
+from ._merge_plan import (
+    _merge_plan_position_fact as _merge_plan_position_fact,
+    _merge_carried_gate_steps as _merge_carried_gate_steps,
+    _merge_gate_step_generation_digests as _merge_gate_step_generation_digests,
+    _merge_current_authority_valid as _merge_current_authority_valid,
+    _merge_remote_only_equality_proof as _merge_remote_only_equality_proof,
+    _merge_carry_payload_valid as _merge_carry_payload_valid,
+    _merge_plan_transition_valid as _merge_plan_transition_valid,
 )
-from forge_cli.chain_core._bootstrap_observation import (
-    _bootstrap_fetch_observation_record_valid,
-    _bootstrap_fetch_observation_transition_valid,
+from ._bootstrap_observation import (
+    _bootstrap_fetch_observation_record_valid as _bootstrap_fetch_observation_record_valid,
+    _bootstrap_fetch_observation_transition_valid as _bootstrap_fetch_observation_transition_valid,
 )
-from forge_cli.chain_core._fenced_child import (
-    _BlockedFenceChild,
-    _pipe_cloexec,
-    _read_child_ack,
-    _waitpid_nohang,
-    _wait_for_child_exit,
-    _spawn_blocked_fence_child,
-    _terminate_fenced_group,
-    _stop_unstarted_child,
-    _collect_fenced_child,
+from ._fenced_child import (
+    _BlockedFenceChild as _BlockedFenceChild,
+    _pipe_cloexec as _pipe_cloexec,
+    _read_child_ack as _read_child_ack,
+    _waitpid_nohang as _waitpid_nohang,
+    _wait_for_child_exit as _wait_for_child_exit,
+    _spawn_blocked_fence_child as _spawn_blocked_fence_child,
+    _terminate_fenced_group as _terminate_fenced_group,
+    _stop_unstarted_child as _stop_unstarted_child,
+    _collect_fenced_child as _collect_fenced_child,
 )
-from forge_cli.chain_core._ingest_capture import (
-    _read_ingest_input,
-    _capture_ingest_blob,
-    _capture_run_evidence,
-    _capture_ingest_record_evidence,
+from ._ingest_capture import (
+    _read_ingest_input as _read_ingest_input,
+    _capture_ingest_blob as _capture_ingest_blob,
+    _capture_run_evidence as _capture_run_evidence,
+    _capture_ingest_record_evidence as _capture_ingest_record_evidence,
 )
-from forge_cli.chain_core._chain_state import (
-    validate_state,
+from ._chain_state import (
+    validate_state as validate_state,
 )
-from forge_cli.chain_core._ingest_currency import (
-    _ingest_captured_paths,
-    _ingest_step_is_current,
-    _ingest_secret_scan_is_current,
-    _prove_ingest_live_chain,
+from ._ingest_currency import (
+    _ingest_captured_paths as _ingest_captured_paths,
+    _ingest_step_is_current as _ingest_step_is_current,
+    _ingest_secret_scan_is_current as _ingest_secret_scan_is_current,
+    _prove_ingest_live_chain as _prove_ingest_live_chain,
 )
-from forge_cli.chain_core._lock_record_validators import (
-    _validate_owner_record,
-    _validate_fence_record,
-    _validate_recovery_record,
-    _validate_chain_lease_record,
+from ._lock_record_validators import (
+    _validate_owner_record as _validate_owner_record,
+    _validate_fence_record as _validate_fence_record,
+    _validate_recovery_record as _validate_recovery_record,
+    _validate_chain_lease_record as _validate_chain_lease_record,
 )
-from forge_cli.chain_core._merge_cleanup_intent import (
-    _recovery_event_intent,
-    _recovery_cleanup_intent,
-    _merge_cleanup_expected_subject,
-    _merge_cleanup_expected_argv,
-    _merge_cleanup_intent_valid,
+from ._merge_cleanup_intent import (
+    _recovery_event_intent as _recovery_event_intent,
+    _recovery_cleanup_intent as _recovery_cleanup_intent,
+    _merge_cleanup_expected_subject as _merge_cleanup_expected_subject,
+    _merge_cleanup_expected_argv as _merge_cleanup_expected_argv,
+    _merge_cleanup_intent_valid as _merge_cleanup_intent_valid,
 )
-from forge_cli.chain_core._merge_events import (
-    _merge_event_outbox,
-    _merge_payload_delta,
-    reduce_merge_event,
+from ._merge_events import (
+    _merge_event_outbox as _merge_event_outbox,
+    _merge_payload_delta as _merge_payload_delta,
+    reduce_merge_event as reduce_merge_event,
 )
-from forge_cli.chain_core._merge_rebase import (
-    _parse_registered_worktrees,
-    _merge_rebase_action,
-    _merge_rebase_result_classification,
-    _merge_containment,
-    _merge_old_tip_all_false,
-    _merge_latest_contained_attempt,
-    _merge_inactive_post_attempt_recovery_ready,
-    _remote_observation_heads,
-    _remote_observation_fetch_argv,
-    _remote_containment_argv,
+from ._merge_rebase import (
+    _parse_registered_worktrees as _parse_registered_worktrees,
+    _merge_rebase_action as _merge_rebase_action,
+    _merge_rebase_result_classification as _merge_rebase_result_classification,
+    _merge_containment as _merge_containment,
+    _merge_old_tip_all_false as _merge_old_tip_all_false,
+    _merge_latest_contained_attempt as _merge_latest_contained_attempt,
+    _merge_inactive_post_attempt_recovery_ready as _merge_inactive_post_attempt_recovery_ready,
+    _remote_observation_heads as _remote_observation_heads,
+    _remote_observation_fetch_argv as _remote_observation_fetch_argv,
+    _remote_containment_argv as _remote_containment_argv,
 )
-from forge_cli.chain_core._merge_state_shape import (
-    _merge_gate_plan_valid,
-    _merge_epoch_valid,
-    _merge_bootstrap_classification_pending,
-    _merge_revision9_compatibility_view,
-    _merge_state_shape_valid,
-    _merge_ingest_state_shape_valid,
-    _merge_history_uses_additive_grammar,
+from ._merge_state_shape import (
+    _merge_gate_plan_valid as _merge_gate_plan_valid,
+    _merge_epoch_valid as _merge_epoch_valid,
+    _merge_bootstrap_classification_pending as _merge_bootstrap_classification_pending,
+    _merge_revision9_compatibility_view as _merge_revision9_compatibility_view,
+    _merge_state_shape_valid as _merge_state_shape_valid,
+    _merge_ingest_state_shape_valid as _merge_ingest_state_shape_valid,
+    _merge_history_uses_additive_grammar as _merge_history_uses_additive_grammar,
 )
-from forge_cli.chain_core._repository import (
-    Repository,
-    _committed_changelog_output_paths,
+from ._repository import (
+    Repository as Repository,
+    _committed_changelog_output_paths as _committed_changelog_output_paths,
 )
 
 
