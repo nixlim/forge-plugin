@@ -338,23 +338,23 @@ from ._activation_outbox import (
 from ._chain_batch_authorize import (
     _authorize_chain_batch as _authorize_chain_batch,
 )
-from forge_cli.chain_core._commit_chain import (
-    CLIOptions,
-    register_activation_reservation_seam,
-    _validate_bound_chain_state,
-    _user_skip,
-    _gate_one_complete,
-    _latest_current_pass,
-    _gate_satisfied,
-    _verify_and_build_ingest_records,
-    _ingest_proof_verifier,
-    register_coordination_seams,
-    _chain_batch_lock,
-    ChainStore,
-    CommandContext,
-    _policy_for_state,
-    _fresh_reviewer_evals_required,
-    _required_steps,
+from ._commit_chain import (
+    CLIOptions as CLIOptions,
+    register_activation_reservation_seam as register_activation_reservation_seam,
+    _validate_bound_chain_state as _validate_bound_chain_state,
+    _user_skip as _user_skip,
+    _gate_one_complete as _gate_one_complete,
+    _latest_current_pass as _latest_current_pass,
+    _gate_satisfied as _gate_satisfied,
+    _verify_and_build_ingest_records as _verify_and_build_ingest_records,
+    _ingest_proof_verifier as _ingest_proof_verifier,
+    register_coordination_seams as register_coordination_seams,
+    _chain_batch_lock as _chain_batch_lock,
+    ChainStore as ChainStore,
+    CommandContext as CommandContext,
+    _policy_for_state as _policy_for_state,
+    _fresh_reviewer_evals_required as _fresh_reviewer_evals_required,
+    _required_steps as _required_steps,
 )
 
 
