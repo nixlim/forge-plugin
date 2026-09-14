@@ -370,13 +370,13 @@ from ._lock_owner import (
     _release_portable_identity as _release_portable_identity,
     _publish_portable_owner as _publish_portable_owner,
 )
-from forge_cli.chain_core._lock_recovery import (
-    _fence_death_proof,
-    _require_recovery_proof_recorder,
-    _persist_recovery_proof,
-    _read_fence_for_recovery,
-    _common_fence_path_present,
-    _recover_stale_portable_owner,
+from ._lock_recovery import (
+    _fence_death_proof as _fence_death_proof,
+    _require_recovery_proof_recorder as _require_recovery_proof_recorder,
+    _persist_recovery_proof as _persist_recovery_proof,
+    _read_fence_for_recovery as _read_fence_for_recovery,
+    _common_fence_path_present as _common_fence_path_present,
+    _recover_stale_portable_owner as _recover_stale_portable_owner,
 )
 
 
