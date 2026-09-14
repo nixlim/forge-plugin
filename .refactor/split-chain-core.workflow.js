@@ -199,7 +199,9 @@ if (completed < plan.waves.length) {
 
 // ------------------------------------------------------------ Codex review
 phase('Codex review')
-const codex = await agent(
+// args.codexDone: {ok, path, verdict, thread} from a review already run by the orchestrator (the headless review
+// outlives a subagent's turn budget); when present the review agent is skipped.
+const codex = args.codexDone ? args.codexDone : await agent(
   `On branch ${BRANCH}, run: ${GATE_ENV}; bash ${S}/codex_review.sh --base ${BASE} --plan ${PLAN_MD} --out .refactor/codex-review-chain_core.md\n` +
   `Do not read the .jsonl log. Return JSON {ok:boolean, path:string, verdict:string, thread:string} from the output file (the thread id is on its last lines; verdict "unavailable" and ok:false if codex failed).`,
   { label: 'codex-review', phase: 'Codex review', schema: { type: 'object', required: ['ok', 'path', 'verdict'], properties: { ok: { type: 'boolean' }, path: { type: 'string' }, verdict: { type: 'string' }, thread: { type: 'string' } } } },
