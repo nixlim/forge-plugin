@@ -77,6 +77,7 @@
       "scripts/forge/forge_cli/chain_core/_merge_scope.py",
       "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py",
       "scripts/forge/forge_cli/chain_core/_merge_state_shape.py",
+      "scripts/forge/forge_cli/chain_core/_merge_transition.py",
       "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py",
       "scripts/forge/forge_cli/chain_core/_remote_observation.py",
       "scripts/forge/forge_cli/chain_core/_repository.py",
@@ -106,19 +107,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "ca06716fe8ea5198cc755af5bb380a05f03d973007c7cdc31506390cbb39e660"
+      "result_sha256": "e3ef3237c0535172e00259493f953b4d3cf44595e70dfdc36a2ed5a8646d173e"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "048a1d076073f1d3069e89d54c64229dbce897c376e467e1d5a0e729e724c685"
+      "result_sha256": "f4a9c7f01e07ed8fb2cc3931170e36f923c52e5d154c84cf99a97524520b7e4c"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "edd6e32a3806cee5c50108361dbb4d03d65fbd52b75f5a2a65a622e3ce6699c5"
+      "result_sha256": "1024bb6e9a3106497c547ff22f74ff8b5fe0aae91d6685c1a20f897d7ee1f8fa"
     },
     {
       "slot": "push",
@@ -136,13 +137,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "aa56dfe440f3c01c6392fa890c73692dda9f74a334566d4b126715afea61981b"
+      "result_sha256": "e4475dd0b6a6c995d52de416b70340fadca1a55c478a67fa5194593a9cb34027"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "63f148e891bcab5f14ca9d704f8e5465b98b9c5b9728e222f42d438a433788f3"
+      "result_sha256": "331e318e6957c8be329bd446c97adafd2ac47952d338b1b39b0dd273d5315a7f"
     }
   ]
 }

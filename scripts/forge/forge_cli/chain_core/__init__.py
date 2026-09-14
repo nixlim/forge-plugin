@@ -346,9 +346,9 @@ from ._merge_recovery_proof import (
     _epoch_fetch_observation_predecessor_valid as _epoch_fetch_observation_predecessor_valid,
     _recovered_absent_rebase_intent_digest as _recovered_absent_rebase_intent_digest,
 )
-from forge_cli.chain_core._merge_transition import (
-    _merge_transition_valid,
-    _merge_ingest_transition_valid,
+from ._merge_transition import (
+    _merge_transition_valid as _merge_transition_valid,
+    _merge_ingest_transition_valid as _merge_ingest_transition_valid,
 )
 
 
