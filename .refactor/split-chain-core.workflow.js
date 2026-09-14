@@ -110,7 +110,9 @@ const DONE_WAVES = new Set(args.doneWaves || [])   // waves already extracted, m
 for (let w = 0; w < plan.waves.length; w++) {
   const wave = plan.waves[w]
   if (DONE_WAVES.has(w)) { waveReports.push({ wave: w, merged: wave.map((c) => c.cluster), failed: [], end: { gate: 'PASS', commit: 'done-before-resume' } }); log(`wave ${w}: already closed on the branch, skipping`); continue }
-  const sequential = w === 0 || wave.length === 1
+  // args.sequential: every cluster rewrites chain_core/__init__.py, so parallel extraction only ever lands its first
+  // merge and re-extracts the rest; sequential extraction from the merged HEAD never conflicts.
+  const sequential = !!args.sequential || w === 0 || wave.length === 1
   const merged = []
   const failedClusters = []
 
