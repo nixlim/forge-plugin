@@ -350,18 +350,18 @@ from ._merge_transition import (
     _merge_transition_valid as _merge_transition_valid,
     _merge_ingest_transition_valid as _merge_ingest_transition_valid,
 )
-from forge_cli.chain_core._ingest_merge import (
-    _merge_ingest_binding,
-    _merge_gate_event_fact,
-    _merge_current_gate_facts,
-    _merge_ingest_record_templates,
-    _ingest_allocation_records,
-    _verify_and_build_merge_ingest_records,
+from ._ingest_merge import (
+    _merge_ingest_binding as _merge_ingest_binding,
+    _merge_gate_event_fact as _merge_gate_event_fact,
+    _merge_current_gate_facts as _merge_current_gate_facts,
+    _merge_ingest_record_templates as _merge_ingest_record_templates,
+    _ingest_allocation_records as _ingest_allocation_records,
+    _verify_and_build_merge_ingest_records as _verify_and_build_merge_ingest_records,
 )
-from forge_cli.chain_core._merge_replay import (
-    validate_merge_state,
-    MergeReplayResult,
-    _replay_merge_event_bytes,
+from ._merge_replay import (
+    validate_merge_state as validate_merge_state,
+    MergeReplayResult as MergeReplayResult,
+    _replay_merge_event_bytes as _replay_merge_event_bytes,
 )
 
 
