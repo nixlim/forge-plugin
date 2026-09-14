@@ -6,8 +6,8 @@ export const meta = {
     { title: 'Extract', detail: 'one extractor per cluster in its own worktree' },
     { title: 'Merge', detail: 'merge leaves-first, focused gate, wave-end re-exports + re-mint + full gate-1' },
     { title: 'Codex review', detail: 'headless GPT-5.6 Sol review of the whole split' },
-    { title: 'Review', detail: 'Fable adjudicates diff and Codex findings; consensus round' },
     { title: 'Finalize', detail: 'spec sentence, baseline, import contract, strict oracle, full gate-1, report' },
+    { title: 'Review', detail: 'Fable adjudicates the finalized diff and Codex findings; consensus round' },
   ],
 }
 
@@ -207,10 +207,28 @@ const codex = args.codexDone ? args.codexDone : await agent(
   { label: 'codex-review', phase: 'Codex review', schema: { type: 'object', required: ['ok', 'path', 'verdict'], properties: { ok: { type: 'boolean' }, path: { type: 'string' }, verdict: { type: 'string' }, thread: { type: 'string' } } } },
 )
 
+// Finalize runs BEFORE the Fable review so the reviewer judges the finished tree (spec sentence, measured
+// baseline, import contract, last re-mint) instead of a state finalize is about to change.
+// ---------------------------------------------------------------- Finalize
+phase('Finalize')
+const fin = await agent(
+  `On branch ${BRANCH} at the repository root, finalize the split (operator-approved items only):\n` +
+  `1. docs/specs/forge-plugin-spec.md: rewrite the one sentence in the section-5 bullet that describes the forge_cli package's files so it names the chain_core package (${PKG}/chain_core/, root __init__.py holding __all__ and re-exports, submodules per ${PLAN_MD}) instead of chain_core.py; change nothing else. Then run ${GATE_ENV}; python3 -m unittest tests.test_docs_contract tests.test_repo_conformance and update the docs-contract pin only if that test names the sentence.\n` +
+  `2. .refactor-baseline.json: run ${GATE_ENV}; git ls-files -z '*.py' | xargs -0 python3 scripts/check_file_length.py --write-baseline .refactor-baseline.json --max 500, then verify the ONLY new entries are files under ${PKG}/chain_core/ and every other entry is unchanged or removed (the old chain_core.py entry disappears); report the new entries with their sizes.\n` +
+  `3. pyproject.toml [tool.importlinter]: add one 'layers' contract for forge_cli.chain_core in wave order from ${PLAN_MD} (top: the last-wave modules; bottom: _state), no ignore_imports; run ${GATE_ENV}; lint-imports.\n` +
+  `4. Strict oracle: ${GATE_ENV}; python3 ${S}/snapshot_bodies.py compare ${SNAP} ${PKG} --strict\n` +
+  `5. ${GATE_ENV}; ruff check scripts tests system/fr223 && git ls-files -z '*.py' | xargs -0 python3 scripts/check_file_length.py --baseline .refactor-baseline.json\n` +
+  `6. FR-230 subjects and re-mint, then confirm: ${REMINT}\n` +
+  `7. Full gate-1: ${GATE1}\n` +
+  `8. If all passed: git add docs/specs/forge-plugin-spec.md .refactor-baseline.json pyproject.toml .forge/evals/tasks tests/fixtures/fr230-results tests/test_fr223_v2_byte_pins.py tests/test_docs_contract.py && git commit -m "refactor(chain_core): finalize split (spec sentence, baseline, import contract)"\n` +
+  `Return a Markdown report: table of ${PKG}/chain_core/*.py with code-line counts (python3 scripts/check_file_length.py --max 0 on each), symbols moved, gate status of steps 4-7, Codex verdict ${JSON.stringify(codex && codex.verdict)} (the Fable review of the finalized tree and the consensus round follow in the run result), the tip SHA, and the exact commands to reproduce the gate.`,
+  { label: 'finalize', phase: 'Finalize' },
+)
+
 // ------------------------------------------------------------------ Review
 phase('Review')
 const review = await agent(
-  `Review the split of forge_cli.chain_core on branch ${BRANCH}: baseline commit ${BASE}, HEAD, plan ${PLAN_MD}, critique .refactor/critique-chain_core.md, snapshot ${SNAP}, scripts ${S}, ` +
+  `Review the FINALIZED split of forge_cli.chain_core on branch ${BRANCH} (finalize has already committed the spec sentence, the measured size baseline and the import contract): baseline commit ${BASE}, HEAD, plan ${PLAN_MD}, critique .refactor/critique-chain_core.md, snapshot ${SNAP}, scripts ${S}, ` +
   `codex review at ${(codex && codex.path) || 'unavailable'}. Gate environment for any command you run: ${GATE_ENV}. Do your own check first (oracle compare, targeted reads, ` +
   `grep for new direct patch.object sites on chain_core aliases in tests/, import-time side effects, byte-identical reason literals), then adjudicate every Codex BLOCKING finding as CONFIRMED/REFUTED/UNVERIFIABLE with evidence. ` +
   `Return JSON {verdict, blocking[], disputed[], allowedChanged[], summary}; allowedChanged must be [] unless you explicitly approve a body change.`,
@@ -225,21 +243,5 @@ for (const finding of (review && review.disputed) || []) {
   )
   consensus.push({ finding, outcome: (reply && reply.outcome) || 'no answer', evidence: reply && reply.evidence })
 }
-
-// ---------------------------------------------------------------- Finalize
-phase('Finalize')
-const fin = await agent(
-  `On branch ${BRANCH} at the repository root, finalize the split (operator-approved items only):\n` +
-  `1. docs/specs/forge-plugin-spec.md: rewrite the one sentence in the section-5 bullet that describes the forge_cli package's files so it names the chain_core package (${PKG}/chain_core/, root __init__.py holding __all__ and re-exports, submodules per ${PLAN_MD}) instead of chain_core.py; change nothing else. Then run ${GATE_ENV}; python3 -m unittest tests.test_docs_contract tests.test_repo_conformance and update the docs-contract pin only if that test names the sentence.\n` +
-  `2. .refactor-baseline.json: run ${GATE_ENV}; git ls-files -z '*.py' | xargs -0 python3 scripts/check_file_length.py --write-baseline .refactor-baseline.json --max 500, then verify the ONLY new entries are files under ${PKG}/chain_core/ and every other entry is unchanged or removed (the old chain_core.py entry disappears); report the new entries with their sizes.\n` +
-  `3. pyproject.toml [tool.importlinter]: add one 'layers' contract for forge_cli.chain_core in wave order from ${PLAN_MD} (top: the last-wave modules; bottom: _state), no ignore_imports; run ${GATE_ENV}; lint-imports.\n` +
-  `4. Strict oracle: ${GATE_ENV}; python3 ${S}/snapshot_bodies.py compare ${SNAP} ${PKG} --strict${(review && review.allowedChanged && review.allowedChanged.length) ? ' --allow-changed ' + review.allowedChanged.join(',') : ''}\n` +
-  `5. ${GATE_ENV}; ruff check scripts tests system/fr223 && git ls-files -z '*.py' | xargs -0 python3 scripts/check_file_length.py --baseline .refactor-baseline.json\n` +
-  `6. FR-230 subjects and re-mint, then confirm: ${REMINT}\n` +
-  `7. Full gate-1: ${GATE1}\n` +
-  `8. If all passed: git add docs/specs/forge-plugin-spec.md .refactor-baseline.json pyproject.toml .forge/evals/tasks tests/fixtures/fr230-results tests/test_fr223_v2_byte_pins.py tests/test_docs_contract.py && git commit -m "refactor(chain_core): finalize split (spec sentence, baseline, import contract)"\n` +
-  `Return a Markdown report: table of ${PKG}/chain_core/*.py with code-line counts (python3 scripts/check_file_length.py --max 0 on each), symbols moved, gate status of steps 4-7, Codex verdict ${JSON.stringify(codex && codex.verdict)}, Fable verdict ${JSON.stringify(review && review.verdict)}, consensus ${JSON.stringify(consensus)}, the tip SHA, and the exact commands to reproduce the gate.`,
-  { label: 'finalize', phase: 'Finalize' },
-)
 
 return { branch: BRANCH, status: 'done', wavesCompleted: completed, codex, review, consensus, report: fin }
