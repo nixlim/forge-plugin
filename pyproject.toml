@@ -167,6 +167,46 @@ ignore_imports = [
     "forge_cli.runtime -> codex_orchestrator.journal",
 ]
 
+# forge_cli.chain_core intra-package layering, top to bottom, in the wave order of
+# .refactor/plan-chain_core.md (wave 16 at the top, wave 0's _state at the bottom;
+# `|` marks modules of one wave that do not import each other). _fenced_process
+# imports _common_lock, so the two wave-16 modules are sequential layers. The split
+# introduced no function-local imports, so no intra-package ignore is needed; the
+# three ignores below mirror the "forge_cli layers" contract exactly (the
+# pre-existing runtime.py:74 -> codex_orchestrator -> forge_cli.chain_core lazy
+# cross-link closes an indirect cycle into every submodule). TODO: remove with theirs.
+[[tool.importlinter.contracts]]
+name = "forge_cli.chain_core layers"
+type = "layers"
+containers = ["forge_cli.chain_core"]
+layers = [
+    "_fenced_process",
+    "_common_lock",
+    "_merge_chain",
+    "_lock_recovery",
+    "_lock_owner | _lock_reservation",
+    "_commit_chain",
+    "_activation_outbox | _chain_batch_authorize",
+    "_activation | _chain_batch_carrier | _storage",
+    "_ingest_merge | _merge_replay",
+    "_merge_transition",
+    "_merge_recovery_proof",
+    "_merge_recovery_lifecycle",
+    "_merge_epoch",
+    "_merge_candidate_observation",
+    "_merge_candidate_observation_steps | _merge_cleanup_result | _merge_release | _merge_scope",
+    "_lock_record_io | _merge_cleanup_history | _merge_cleanup_observation | _merge_scope_binding | _remote_observation",
+    "_bootstrap_observation | _candidate_v2 | _chain_state | _fenced_child | _ingest_capture | _ingest_currency | _lock_record_validators | _merge_cleanup_intent | _merge_events | _merge_plan | _merge_rebase | _merge_state_shape | _receipt_snapshot | _repository",
+    "_core",
+    "_controls",
+    "_state",
+]
+ignore_imports = [
+    "forge_cli.runtime -> codex_orchestrator.batch",
+    "forge_cli.runtime -> codex_orchestrator.builders",
+    "forge_cli.runtime -> codex_orchestrator.journal",
+]
+
 # codex_orchestrator must not depend on forge_cli at module import time. The four
 # function-level imports below are pre-existing lazy cross-links (2026-09-13); they
 # are ignored here so the contract tracks today's shape. TODO: remove each ignore
