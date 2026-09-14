@@ -51,8 +51,22 @@
       "scripts/forge/forge_cli/app.py",
       "scripts/forge/forge_cli/candidate.py",
       "scripts/forge/forge_cli/chain_core/__init__.py",
+      "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py",
+      "scripts/forge/forge_cli/chain_core/_candidate_v2.py",
+      "scripts/forge/forge_cli/chain_core/_chain_state.py",
       "scripts/forge/forge_cli/chain_core/_controls.py",
       "scripts/forge/forge_cli/chain_core/_core.py",
+      "scripts/forge/forge_cli/chain_core/_fenced_child.py",
+      "scripts/forge/forge_cli/chain_core/_ingest_capture.py",
+      "scripts/forge/forge_cli/chain_core/_ingest_currency.py",
+      "scripts/forge/forge_cli/chain_core/_lock_record_validators.py",
+      "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py",
+      "scripts/forge/forge_cli/chain_core/_merge_events.py",
+      "scripts/forge/forge_cli/chain_core/_merge_plan.py",
+      "scripts/forge/forge_cli/chain_core/_merge_rebase.py",
+      "scripts/forge/forge_cli/chain_core/_merge_state_shape.py",
+      "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py",
+      "scripts/forge/forge_cli/chain_core/_repository.py",
       "scripts/forge/forge_cli/chain_core/_state.py",
       "scripts/forge/forge_cli/engine.py",
       "scripts/forge/forge_cli/envelope.py",
@@ -79,19 +93,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "e406553bffc26b17090c247fd4f814cde831b54c98b38aa2395eb215e482f7ce"
+      "result_sha256": "34a14e68c3defc5bfb3f2161b6c891109cea224c3e1c42f1976e68cfc22d3116"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "978ece2fe5a360fb65c115b8487af39aa7da95899c7820ccc8cee444b0a46547"
+      "result_sha256": "334122ee7621a6b7a39abb419648cda3ea14cde827eac300e0ddcc23c7eaf686"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "b5872f102f4282c72fb15973948e720a764f3fd882e00da5e2d0fc7222b23756"
+      "result_sha256": "97cd05e35bfc7f20314a605c8add838943b239760e83006b1a64743b731b7316"
     },
     {
       "slot": "push",
@@ -109,13 +123,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "33eb0748c910e033a20fd9b9e1ffb4cffc7d2bfd52aa992af5588ec45512d683"
+      "result_sha256": "411286335ad1033aef76714c7e4fe202711bbf7ab05366360b32c8512f6b9e30"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "42392682b00a868c554e6f3073b3b415282f6982fc90e4ec4921fd31f0bac288"
+      "result_sha256": "28eb798c3f949cd5d7e2d8ae1866a23f14b5509fec0c122994a4a6d1fcd0355e"
     }
   ]
 }
