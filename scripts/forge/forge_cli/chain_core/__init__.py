@@ -356,6 +356,14 @@ from ._commit_chain import (
     _fresh_reviewer_evals_required as _fresh_reviewer_evals_required,
     _required_steps as _required_steps,
 )
+from forge_cli.chain_core._lock_reservation import (
+    _open_owned_directory,
+    RecoveryReservation,
+    _publish_recovery_reservation,
+    _reservation_evidence,
+    _clear_owned_reservation,
+    _recovery_record,
+)
 
 
 # The Revision-9 seam marker rides on the callables themselves so the registrar above can
@@ -1361,101 +1369,6 @@ class MergeChainStore(_ChainStoragePrimitives):
             )
 
 
-def _open_owned_directory(path: Path) -> tuple[Path, int]:
-    canonical = Path(os.path.realpath(path))
-    descriptor = os.open(
-        canonical,
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0),
-    )
-    try:
-        ChainStore._owned_directory(descriptor, str(canonical))
-        return canonical, descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
-
-
-@dataclasses.dataclass(frozen=True)
-class RecoveryReservation:
-    common_dir: Path
-    identity: PublishedLockRecord
-    deadline: float
-    clock: Callable[[], float] = dataclasses.field(
-        repr=False, compare=False
-    )
-    sleeper: Callable[[float], None] = dataclasses.field(
-        repr=False, compare=False
-    )
-
-    @property
-    def record(self) -> dict[str, Any]:
-        return copy.deepcopy(self.identity.record)
-
-    def assert_current(self, operation: str) -> None:
-        """Revalidate this exact reservation inside its original deadline."""
-
-        _require_deadline_open(self.deadline, self.clock, operation)
-        canonical, common = _open_owned_directory(self.common_dir)
-        try:
-            _revalidate_record_at(
-                common,
-                COMMON_LOCK_RECOVERY_NAME,
-                canonical / COMMON_LOCK_RECOVERY_NAME,
-                self.identity,
-                _validate_recovery_record,
-            )
-        finally:
-            os.close(common)
-
-    def remaining_timeout(self, operation: str) -> float:
-        self.assert_current(operation)
-        remaining = self.deadline - self.clock()
-        if remaining <= 0:
-            raise TimeoutError(
-                f"{operation} exhausted the shared common-lock deadline"
-            )
-        return remaining
-
-    def affected_merge_chain(self) -> str:
-        """Return the reservation's one affected merge chain, or fail closed."""
-
-        record = self.identity.record
-        identities = [
-            (record.get("stale_owner_kind"), record.get("stale_owner_chain_id")),
-            (record.get("inflight_owner_kind"), record.get("inflight_chain_id")),
-        ]
-        chains = {
-            str(selected_chain)
-            for kind, selected_chain in identities
-            if kind is not None or selected_chain is not None
-            if kind == "merge"
-            and isinstance(selected_chain, str)
-            and CHAIN_ID_RE.fullmatch(selected_chain) is not None
-        }
-        populated = [
-            (kind, selected_chain)
-            for kind, selected_chain in identities
-            if kind is not None or selected_chain is not None
-        ]
-        if not populated or len(chains) != 1 or any(
-            kind != "merge" or selected_chain not in chains
-            for kind, selected_chain in populated
-        ):
-            raise OSError(
-                "recovery reservation does not identify one affected merge chain"
-            )
-        return next(iter(chains))
-
-    def matches_chain(self, chain_id: str) -> bool:
-        try:
-            return self.affected_merge_chain() == chain_id
-        except OSError:
-            return False
-
-
 def _new_owner_record(
     owner_kind: str,
     chain_id: str | None,
@@ -1699,160 +1612,6 @@ def _release_portable_identity(
     os.fsync(common)
     if boundary is not None:
         boundary(f"{prefix}-final-fsynced")
-
-
-def _publish_recovery_reservation(
-    common: int,
-    common_dir: Path,
-    record: Mapping[str, Any],
-    boundary: Callable[[str], None] | None,
-    *,
-    deadline: float,
-    clock: Callable[[], float],
-    sleeper: Callable[[float], None],
-) -> RecoveryReservation | None:
-    _require_common_lock_control("immutable-recovery-reservation")
-    temporary, temporary_identity = _create_private_record_at(
-        common,
-        common_dir,
-        "agent-rebase.recover",
-        record,
-        boundary=boundary,
-        stage="recovery-temp-fsynced",
-    )
-    try:
-        try:
-            _publish_no_replace_link(
-                common, temporary, common, COMMON_LOCK_RECOVERY_NAME
-            )
-        except FileExistsError:
-            _unlink_revalidated_record_at(
-                common,
-                temporary,
-                common_dir / temporary,
-                temporary_identity,
-                _validate_recovery_record,
-            )
-            os.fsync(common)
-            return None
-        os.fsync(common)
-        canonical = _read_owned_record_at(
-            common,
-            COMMON_LOCK_RECOVERY_NAME,
-            common_dir / COMMON_LOCK_RECOVERY_NAME,
-            _validate_recovery_record,
-        )
-        if not _same_published_record(canonical, temporary_identity):
-            raise OSError("recovery reservation publication changed identity")
-        if boundary is not None:
-            boundary("recovery-reservation-published")
-        _unlink_revalidated_record_at(
-            common,
-            temporary,
-            common_dir / temporary,
-            temporary_identity,
-            _validate_recovery_record,
-        )
-        os.fsync(common)
-        if boundary is not None:
-            boundary("recovery-temp-unlinked")
-        return RecoveryReservation(
-            common_dir,
-            canonical,
-            deadline,
-            clock,
-            sleeper,
-        )
-    except BaseException as exc:
-        if isinstance(exc, CommonLockBoundaryCrash):
-            raise
-        try:
-            os.unlink(temporary, dir_fd=common)
-            os.fsync(common)
-        except (FileNotFoundError, OSError):
-            pass
-        # A published canonical reservation is immutable even when a later
-        # step fails.  Never roll it back here.
-        raise
-
-
-def _reservation_evidence(common: int, common_dir: Path) -> dict[str, Any] | None:
-    try:
-        reservation = _read_owned_record_at(
-            common,
-            COMMON_LOCK_RECOVERY_NAME,
-            common_dir / COMMON_LOCK_RECOVERY_NAME,
-            _validate_recovery_record,
-        )
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as exc:
-        return {
-            "reservation": _opaque_path_evidence_at(
-                common,
-                COMMON_LOCK_RECOVERY_NAME,
-                common_dir / COMMON_LOCK_RECOVERY_NAME,
-            ),
-            "detail": f"immutable reservation is malformed or unreadable: {exc}",
-        }
-    return {"reservation": reservation.evidence()}
-
-
-def _clear_owned_reservation(
-    common: int,
-    common_dir: Path,
-    reservation: RecoveryReservation,
-    boundary: Callable[[str], None] | None,
-) -> None:
-    _require_common_lock_control("immutable-recovery-reservation")
-    _unlink_revalidated_record_at(
-        common,
-        COMMON_LOCK_RECOVERY_NAME,
-        common_dir / COMMON_LOCK_RECOVERY_NAME,
-        reservation.identity,
-        _validate_recovery_record,
-    )
-    os.fsync(common)
-    if boundary is not None:
-        boundary("recovery-reservation-cleared")
-
-
-def _recovery_record(
-    recovery_kind: str,
-    *,
-    stale_owner: PublishedLockRecord | None,
-    inflight: PublishedLockRecord | None,
-    host: str,
-    pid: int,
-    now: Callable[[], dt.datetime],
-) -> dict[str, Any]:
-    stamp = iso_z(now())
-    stale = stale_owner.record if stale_owner is not None else {}
-    fence = inflight.record if inflight is not None else {}
-    return _validate_recovery_record(
-        {
-            "schema": "forge-rebase-recovery/1",
-            "recovery_kind": recovery_kind,
-            "host": host,
-            "pid": pid,
-            "nonce": secrets.token_hex(16),
-            "started_at": stamp,
-            "stale_owner_inode": stale_owner.inode if stale_owner is not None else None,
-            "stale_owner_digest": stale_owner.digest if stale_owner is not None else None,
-            "stale_owner_host": stale.get("host"),
-            "stale_owner_pid": stale.get("pid"),
-            "stale_owner_kind": stale.get("owner_kind"),
-            "stale_owner_chain_id": stale.get("chain_id"),
-            "inflight_inode": inflight.inode if inflight is not None else None,
-            "inflight_digest": inflight.digest if inflight is not None else None,
-            "inflight_host": fence.get("host"),
-            "inflight_pgid": fence.get("pgid"),
-            "inflight_owner_kind": fence.get("owner_kind"),
-            "inflight_chain_id": fence.get("chain_id"),
-            "owner_dead_at": stamp if stale_owner is not None else None,
-            "group_dead_at": stamp if inflight is not None else None,
-        }
-    )
 
 
 def _fence_death_proof(
