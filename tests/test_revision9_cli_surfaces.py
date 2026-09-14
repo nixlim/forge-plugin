@@ -3127,8 +3127,9 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             "#!/usr/bin/env bash\nexit 1\n", encoding="utf-8"
         )
         self.change("src/app.py", "VALUE = 2\n")
+        # chain_core split: `os` is a singleton, so patch it directly rather than via the package namespace.
         with mock.patch.object(
-            CORE.os, "lstat", side_effect=disappear_after_observation
+            os, "lstat", side_effect=disappear_after_observation
         ):
             exit_code, refused = self.invoke_cli(
                 "--run-id",
