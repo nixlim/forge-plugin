@@ -61,12 +61,16 @@
       "scripts/forge/forge_cli/chain_core/_ingest_currency.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_io.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_validators.py",
+      "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py",
+      "scripts/forge/forge_cli/chain_core/_merge_cleanup_result.py",
       "scripts/forge/forge_cli/chain_core/_merge_events.py",
       "scripts/forge/forge_cli/chain_core/_merge_plan.py",
       "scripts/forge/forge_cli/chain_core/_merge_rebase.py",
+      "scripts/forge/forge_cli/chain_core/_merge_release.py",
+      "scripts/forge/forge_cli/chain_core/_merge_scope.py",
       "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py",
       "scripts/forge/forge_cli/chain_core/_merge_state_shape.py",
       "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py",
@@ -98,19 +102,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "fc068ad63c185b3fede6d11bfb2a2e4dd462cf96f297022dd369087d07a0361e"
+      "result_sha256": "a8dfee2d6e03cd8d407939017b5934ed2c702b6e602cd75af46c4a6bbc0f077c"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "1727036da22b3fd3e89a44e5df75cdf776e0842a79cecb9ab38af88c80da813c"
+      "result_sha256": "1f86f0cb88ef6f6bc3d7e71b3ab4c0c6e47c6e6b6d5cbf380c68d608e982840a"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "48c139f3d9399c0ae102742326f9d1b27395d426f74040347d23dc45cb5fdec9"
+      "result_sha256": "9f3ee845d6ad1b2ac65aab760b6cf13c6ed3ae91a9ffe8b1c54aa3bd179e0d0f"
     },
     {
       "slot": "push",
@@ -128,13 +132,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "bbee35e03dc0a9b90ebe8d699c06b301e465dd347c3c3b3cf62d4db2548b79cb"
+      "result_sha256": "ebe4fe9d565d5265e0260afdc86bedcb41c93b7aad7802ee74f124a05c0e99d8"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "50c93364af579e106c994dea17cfb641d2fea22ddbbea66e99550d02c6c3b832"
+      "result_sha256": "c8822fd89fbdf27fd2c91cd46f3502641b6046d04b8c26674a5823817efe48f1"
     }
   ]
 }

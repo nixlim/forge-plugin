@@ -305,25 +305,25 @@ from ._remote_observation import (
     _remote_observation_progress_matches_observed as _remote_observation_progress_matches_observed,
     _replayed_remote_observation_completed as _replayed_remote_observation_completed,
 )
-from forge_cli.chain_core._merge_candidate_observation_steps import (
-    _merge_candidate_observation_step_specs,
-    _merge_candidate_observation_step_names,
-    _merge_candidate_observation_binding,
+from ._merge_candidate_observation_steps import (
+    _merge_candidate_observation_step_specs as _merge_candidate_observation_step_specs,
+    _merge_candidate_observation_step_names as _merge_candidate_observation_step_names,
+    _merge_candidate_observation_binding as _merge_candidate_observation_binding,
 )
-from forge_cli.chain_core._merge_cleanup_result import (
-    _merge_cleanup_process_result_valid,
-    _merge_cleanup_step_result_valid,
-    _merge_cleanup_results_valid,
-    _merge_cleanup_result_transition_valid,
+from ._merge_cleanup_result import (
+    _merge_cleanup_process_result_valid as _merge_cleanup_process_result_valid,
+    _merge_cleanup_step_result_valid as _merge_cleanup_step_result_valid,
+    _merge_cleanup_results_valid as _merge_cleanup_results_valid,
+    _merge_cleanup_result_transition_valid as _merge_cleanup_result_transition_valid,
 )
-from forge_cli.chain_core._merge_release import (
-    _merge_attempted_release_preconditions_valid,
-    _merge_release_preconditions_valid,
+from ._merge_release import (
+    _merge_attempted_release_preconditions_valid as _merge_attempted_release_preconditions_valid,
+    _merge_release_preconditions_valid as _merge_release_preconditions_valid,
 )
-from forge_cli.chain_core._merge_scope import (
-    _validate_merge_scope_proof,
-    _merge_scope_event_binding_valid,
-    _merge_scope_transition_valid,
+from ._merge_scope import (
+    _validate_merge_scope_proof as _validate_merge_scope_proof,
+    _merge_scope_event_binding_valid as _merge_scope_event_binding_valid,
+    _merge_scope_transition_valid as _merge_scope_transition_valid,
 )
 
 
