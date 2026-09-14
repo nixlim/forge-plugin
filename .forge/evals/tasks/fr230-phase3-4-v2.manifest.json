@@ -68,6 +68,7 @@
       "scripts/forge/forge_cli/chain_core/_lock_owner.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_io.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_validators.py",
+      "scripts/forge/forge_cli/chain_core/_lock_recovery.py",
       "scripts/forge/forge_cli/chain_core/_lock_reservation.py",
       "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py",
       "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py",
@@ -117,19 +118,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "421875095beb806b049f4856bd658aa84dd67393ff37d85c27ac5894e15a6765"
+      "result_sha256": "2d34fad75eb722c3c25e03ae4659a4bcfc9658115f0c2e9e8496cbcfa18cc3a3"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "79696125abaf9777b024a6f9bbf7e8364e586b5135e6ead91987c6823965b5cc"
+      "result_sha256": "14e2fdd798de727e26f6e64da3ca8d8586d97b705dff6adf672891cadd8c24b5"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "3594c94cf14ba0a8a40d0a8b070d8c93f0979444bfd7ecdc05a6f4566b70ad2d"
+      "result_sha256": "38668a36b14f130b948533387185dfb151dcfbb1d955dc6f70370c3aff0c00e1"
     },
     {
       "slot": "push",
@@ -147,13 +148,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "ae98da137ba7831eb36a81d2aa349ec78ead43a3f35f9441335dcbd68d7e1c89"
+      "result_sha256": "fefc056d1cad3d1c8d5610ee35e57a42bfa510effa85c505bb28d838eb815c22"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "fda3c1dc1e115fab16788e0654674eb5f8b5777f476ef9c74dab164896c3cb07"
+      "result_sha256": "258ab136732fba7ec4473d53dee9425b93c150c6c1fdf9456d1c70032837f59c"
     }
   ]
 }
