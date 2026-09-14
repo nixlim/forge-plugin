@@ -65,8 +65,10 @@
       "scripts/forge/forge_cli/chain_core/_ingest_capture.py",
       "scripts/forge/forge_cli/chain_core/_ingest_currency.py",
       "scripts/forge/forge_cli/chain_core/_ingest_merge.py",
+      "scripts/forge/forge_cli/chain_core/_lock_owner.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_io.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_validators.py",
+      "scripts/forge/forge_cli/chain_core/_lock_reservation.py",
       "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py",
       "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py",
@@ -115,19 +117,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "eead9ad653882efeb32d020fb0982ff6c4f00065c8b7a4a35e647105ca3889aa"
+      "result_sha256": "421875095beb806b049f4856bd658aa84dd67393ff37d85c27ac5894e15a6765"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "70b7e794e1310374962689c152bc736d00fdbd88e4a6d236924623c603d5eda8"
+      "result_sha256": "79696125abaf9777b024a6f9bbf7e8364e586b5135e6ead91987c6823965b5cc"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "b20eaed24a1dd3775473030a87af215b7623154f505f48941195126879b463d3"
+      "result_sha256": "3594c94cf14ba0a8a40d0a8b070d8c93f0979444bfd7ecdc05a6f4566b70ad2d"
     },
     {
       "slot": "push",
@@ -145,13 +147,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "4aee4c4aff6facbb6c2aafa06d838e1f0a1689a41b9d14da079de29e1e2464bc"
+      "result_sha256": "ae98da137ba7831eb36a81d2aa349ec78ead43a3f35f9441335dcbd68d7e1c89"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "0aba56fb543f6a713b9b4b6b00b17e2a7d3dec17bffc71d69be72c12adac1017"
+      "result_sha256": "fda3c1dc1e115fab16788e0654674eb5f8b5777f476ef9c74dab164896c3cb07"
     }
   ]
 }
