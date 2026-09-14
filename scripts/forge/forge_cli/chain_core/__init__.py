@@ -356,19 +356,19 @@ from ._commit_chain import (
     _fresh_reviewer_evals_required as _fresh_reviewer_evals_required,
     _required_steps as _required_steps,
 )
-from forge_cli.chain_core._lock_reservation import (
-    _open_owned_directory,
-    RecoveryReservation,
-    _publish_recovery_reservation,
-    _reservation_evidence,
-    _clear_owned_reservation,
-    _recovery_record,
+from ._lock_reservation import (
+    _open_owned_directory as _open_owned_directory,
+    RecoveryReservation as RecoveryReservation,
+    _publish_recovery_reservation as _publish_recovery_reservation,
+    _reservation_evidence as _reservation_evidence,
+    _clear_owned_reservation as _clear_owned_reservation,
+    _recovery_record as _recovery_record,
 )
-from forge_cli.chain_core._lock_owner import (
-    _new_owner_record,
-    _fence_matches_owner,
-    _release_portable_identity,
-    _publish_portable_owner,
+from ._lock_owner import (
+    _new_owner_record as _new_owner_record,
+    _fence_matches_owner as _fence_matches_owner,
+    _release_portable_identity as _release_portable_identity,
+    _publish_portable_owner as _publish_portable_owner,
 )
 
 
