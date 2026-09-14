@@ -224,6 +224,13 @@ from forge_cli.chain_core._lock_record_validators import (
     _validate_recovery_record,
     _validate_chain_lease_record,
 )
+from forge_cli.chain_core._merge_cleanup_intent import (
+    _recovery_event_intent,
+    _recovery_cleanup_intent,
+    _merge_cleanup_expected_subject,
+    _merge_cleanup_expected_argv,
+    _merge_cleanup_intent_valid,
+)
 
 
 def _merge_event_outbox(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -1050,14 +1057,6 @@ def _published_recovery_evidence_valid(
     )
 
 
-def _recovery_event_intent(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    payload = event.get("payload")
-    delta = payload.get("delta") if isinstance(payload, Mapping) else None
-    integration = delta.get("integration") if isinstance(delta, Mapping) else None
-    intent = integration.get("intent") if isinstance(integration, Mapping) else None
-    return intent if isinstance(intent, Mapping) else None
-
-
 def _recovery_value_carries_inflight(value: object, digest: str) -> bool:
     """Find only an explicitly named child-result fence digest."""
 
@@ -1076,16 +1075,6 @@ def _recovery_value_carries_inflight(value: object, digest: str) -> bool:
             _recovery_value_carries_inflight(member, digest) for member in value
         )
     return False
-
-
-def _recovery_cleanup_intent(
-    event: Mapping[str, Any] | None,
-) -> Mapping[str, Any] | None:
-    payload = event.get("payload") if isinstance(event, Mapping) else None
-    delta = payload.get("delta") if isinstance(payload, Mapping) else None
-    cleanup = delta.get("cleanup") if isinstance(delta, Mapping) else None
-    intent = cleanup.get("intent") if isinstance(cleanup, Mapping) else None
-    return intent if isinstance(intent, Mapping) else None
 
 
 def _recovery_cleanup_result_matches(
@@ -1832,195 +1821,6 @@ def _merge_attempted_release_preconditions_valid(
     }
     return payload.get("terminal_preconditions_digest") == sha256_bytes(
         canonical_bytes(preconditions)
-    )
-
-
-def _merge_cleanup_expected_subject(
-    state: Mapping[str, Any], operation: str, subject: object
-) -> dict[str, Any] | None:
-    """Return the exact cleanup subject or reject a dynamic mismatch."""
-
-    candidate = state.get("candidate")
-    integration = state.get("integration")
-    push = integration.get("push") if isinstance(integration, Mapping) else None
-    worktree = state.get("worktree")
-    target = state.get("target")
-    if not (
-        isinstance(candidate, Mapping)
-        and isinstance(push, Mapping)
-        and isinstance(worktree, Mapping)
-        and isinstance(target, Mapping)
-        and isinstance(subject, Mapping)
-    ):
-        return None
-    landed_head = push.get("landed_head")
-    candidate_head = candidate.get("candidate_head")
-    if operation == "remote-fetch":
-        expected = {
-            "destination_ref": target.get("destination_ref"),
-            "landed_head": landed_head,
-        }
-    elif operation == "remote-containment":
-        expected = {
-            "landed_head": landed_head,
-            "remote_tip": subject.get("remote_tip"),
-        }
-        if not isinstance(expected["remote_tip"], str) or COMMIT_RE.fullmatch(
-            expected["remote_tip"]
-        ) is None:
-            return None
-    elif operation in {"worktree-observation", "worktree-remove"}:
-        expected = {
-            "path": worktree.get("path"),
-            "branch": state.get("branch"),
-            "candidate_head": candidate_head,
-        }
-    elif operation in {"branch-observation", "branch-delete"}:
-        expected = {
-            "branch": state.get("branch"),
-            "candidate_head": candidate_head,
-        }
-    else:
-        return None
-    return expected if dict(subject) == expected else None
-
-
-def _merge_cleanup_expected_argv(
-    state: Mapping[str, Any], operation: str, subject: Mapping[str, Any]
-) -> list[str] | None:
-    repository = str(state.get("repository"))
-    if operation == "remote-fetch":
-        return [
-            "git",
-            "--no-pager",
-            "-C",
-            repository,
-            "fetch",
-            "--no-tags",
-            "--quiet",
-            "origin",
-            str(subject["destination_ref"]),
-        ]
-    if operation == "remote-containment":
-        return [
-            "git",
-            "--no-pager",
-            "-C",
-            repository,
-            "merge-base",
-            "--is-ancestor",
-            str(subject["landed_head"]),
-            str(subject["remote_tip"]),
-        ]
-    if operation == "worktree-observation":
-        return [
-            "git",
-            "--no-pager",
-            "-C",
-            repository,
-            "worktree",
-            "list",
-            "--porcelain",
-            "-z",
-        ]
-    if operation == "worktree-remove":
-        return [
-            "git",
-            "--no-pager",
-            "-C",
-            repository,
-            "worktree",
-            "remove",
-            str(subject["path"]),
-        ]
-    if operation == "branch-observation":
-        return [
-            "git",
-            "--no-pager",
-            "-C",
-            repository,
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            f"{subject['branch']}^{{commit}}",
-        ]
-    if operation == "branch-delete":
-        return [
-            "git",
-            "--no-pager",
-            "-C",
-            repository,
-            "update-ref",
-            "-d",
-            str(subject["branch"]),
-            str(subject["candidate_head"]),
-        ]
-    return None
-
-
-def _merge_cleanup_intent_valid(
-    value: object, state: Mapping[str, Any]
-) -> bool:
-    required = {
-        "schema",
-        "operation",
-        "fence_operation",
-        "operation_nonce",
-        "generation_digest",
-        "subject",
-        "argv",
-        "cwd",
-        "started_at",
-    }
-    if not isinstance(value, Mapping):
-        return False
-    keys = set(value)
-    if keys != required and keys != required | {"recovery"}:
-        return False
-    operation = value.get("operation")
-    candidate = state.get("candidate")
-    if (
-        not isinstance(operation, str)
-        or operation not in _MERGE_CLEANUP_FENCE_OPERATIONS
-        or value.get("schema") != _MERGE_CLEANUP_INTENT_SCHEMA
-        or value.get("fence_operation")
-        != _MERGE_CLEANUP_FENCE_OPERATIONS[operation]
-        or not _valid_nonce(value.get("operation_nonce"))
-        or not isinstance(candidate, Mapping)
-        or value.get("generation_digest") != candidate.get("generation_digest")
-        or value.get("cwd") != state.get("repository")
-        or not _valid_utc_second(value.get("started_at"))
-    ):
-        return False
-    subject = _merge_cleanup_expected_subject(state, operation, value.get("subject"))
-    if subject is None:
-        return False
-    recovery = value.get("recovery")
-    if ("recovery" in value) != (recovery is not None):
-        return False
-    if recovery is not None and not (
-        operation == "remote-fetch"
-        and isinstance(recovery, Mapping)
-        and set(recovery)
-        == {
-            "schema",
-            "intent_event_digest",
-            "operation",
-            "fence_operation",
-            "recovery_event_digest",
-        }
-        and recovery.get("schema") == _MERGE_CLEANUP_RECOVERY_SCHEMA
-        and isinstance(recovery.get("intent_event_digest"), str)
-        and SHA256_RE.fullmatch(recovery["intent_event_digest"]) is not None
-        and recovery.get("operation") in _MERGE_CLEANUP_FENCE_OPERATIONS
-        and recovery.get("fence_operation")
-        == _MERGE_CLEANUP_FENCE_OPERATIONS[recovery["operation"]]
-        and isinstance(recovery.get("recovery_event_digest"), str)
-        and SHA256_RE.fullmatch(recovery["recovery_event_digest"]) is not None
-    ):
-        return False
-    return value.get("argv") == _merge_cleanup_expected_argv(
-        state, operation, subject
     )
 
 
