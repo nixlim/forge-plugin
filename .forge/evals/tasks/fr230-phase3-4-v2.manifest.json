@@ -61,6 +61,7 @@
       "scripts/forge/forge_cli/chain_core/_ingest_currency.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_io.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_validators.py",
+      "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py",
       "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py",
@@ -102,19 +103,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "a8dfee2d6e03cd8d407939017b5934ed2c702b6e602cd75af46c4a6bbc0f077c"
+      "result_sha256": "7dfa27291643645af5051a240e1767677f71435bfbc6ebfcf692f7cea5ee45e0"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "1f86f0cb88ef6f6bc3d7e71b3ab4c0c6e47c6e6b6d5cbf380c68d608e982840a"
+      "result_sha256": "4c989ae37a6c0d39b6f0397e5e0399e1d6505c5163567bc7d4625c4e817f0959"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "9f3ee845d6ad1b2ac65aab760b6cf13c6ed3ae91a9ffe8b1c54aa3bd179e0d0f"
+      "result_sha256": "b7e707fb94e5152077fc3702fc07ee3552ee339081f66c1bfef1418a0a3581d5"
     },
     {
       "slot": "push",
@@ -132,13 +133,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "ebe4fe9d565d5265e0260afdc86bedcb41c93b7aad7802ee74f124a05c0e99d8"
+      "result_sha256": "909478d155e25fd8c3388af86548e550939159d412e3de3bc39c6720831c84e0"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "c8822fd89fbdf27fd2c91cd46f3502641b6046d04b8c26674a5823817efe48f1"
+      "result_sha256": "4e53e25512f712266980eb2c1952eb926ec687c03a38fd1fde143ef0b459ef61"
     }
   ]
 }

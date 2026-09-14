@@ -323,11 +323,11 @@ from ._merge_scope import (
     _merge_scope_event_binding_valid as _merge_scope_event_binding_valid,
     _merge_scope_transition_valid as _merge_scope_transition_valid,
 )
-from forge_cli.chain_core._merge_candidate_observation import (
-    _merge_candidate_observation_record_valid,
-    _merge_candidate_observation_transition_valid,
-    _merge_candidate_observation_evidence,
-    _merge_candidate_observation_evidence_valid,
+from ._merge_candidate_observation import (
+    _merge_candidate_observation_record_valid as _merge_candidate_observation_record_valid,
+    _merge_candidate_observation_transition_valid as _merge_candidate_observation_transition_valid,
+    _merge_candidate_observation_evidence as _merge_candidate_observation_evidence,
+    _merge_candidate_observation_evidence_valid as _merge_candidate_observation_evidence_valid,
 )
 
 
