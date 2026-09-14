@@ -218,6 +218,12 @@ from forge_cli.chain_core._ingest_currency import (
     _ingest_secret_scan_is_current,
     _prove_ingest_live_chain,
 )
+from forge_cli.chain_core._lock_record_validators import (
+    _validate_owner_record,
+    _validate_fence_record,
+    _validate_recovery_record,
+    _validate_chain_lease_record,
+)
 
 
 def _merge_event_outbox(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -11382,155 +11388,6 @@ class MergeChainStore(_ChainStoragePrimitives):
                 receipt,
                 session=session,
             )
-
-
-def _validate_owner_record(value: Any) -> dict[str, Any]:
-    _require_common_lock_control("canonical-records")
-    if not isinstance(value, dict) or set(value) != _COMMON_LOCK_OWNER_KEYS:
-        raise ValueError("common-lock owner has an invalid key set")
-    kind = value.get("owner_kind")
-    operation = value.get("operation")
-    chain_id = value.get("chain_id")
-    if kind not in COMMON_LOCK_OWNER_KINDS:
-        raise ValueError("common-lock owner kind is invalid")
-    if operation not in COMMON_LOCK_OPERATIONS:
-        raise ValueError("common-lock operation is invalid")
-    if kind == "merge":
-        if not isinstance(chain_id, str) or not CHAIN_ID_RE.fullmatch(chain_id):
-            raise ValueError("merge common-lock owner lacks a valid chain")
-        if operation not in {"start", "refresh", "finalize", "recover", "cleanup", "abort"}:
-            raise ValueError("merge common-lock operation is invalid")
-    elif chain_id is not None:
-        raise ValueError("non-merge common-lock owner carries a chain")
-    if kind == "push" and operation != "push":
-        raise ValueError("push common-lock owner operation is invalid")
-    if kind == "phase5" and operation != "phase5-scan":
-        raise ValueError("phase5 common-lock owner operation is invalid")
-    if (
-        value.get("schema") != "forge-rebase-lock/1"
-        or not _valid_host(value.get("host"))
-        or not _valid_positive_int(value.get("pid"))
-        or not _valid_nonce(value.get("nonce"))
-        or not _valid_utc_second(value.get("started_at"))
-    ):
-        raise ValueError("common-lock owner fields are invalid")
-    return copy.deepcopy(value)
-
-
-def _validate_fence_record(value: Any) -> dict[str, Any]:
-    _require_common_lock_control("canonical-records")
-    if not isinstance(value, dict) or set(value) != _COMMON_LOCK_FENCE_KEYS:
-        raise ValueError("in-flight fence has an invalid key set")
-    kind = value.get("owner_kind")
-    chain_id = value.get("chain_id")
-    operation = value.get("operation")
-    if kind not in {"merge", "push"} or operation not in COMMON_LOCK_FENCE_OPERATIONS:
-        raise ValueError("in-flight fence kind or operation is invalid")
-    if kind == "merge":
-        if not isinstance(chain_id, str) or not CHAIN_ID_RE.fullmatch(chain_id):
-            raise ValueError("merge in-flight fence lacks a valid chain")
-    elif chain_id is not None:
-        raise ValueError("push in-flight fence carries a chain")
-    if operation == "attribution-observation" and kind != "push":
-        raise ValueError("attribution observation is not standalone push")
-    if (
-        value.get("schema") != "forge-rebase-inflight/1"
-        or not _valid_host(value.get("host"))
-        or not _valid_positive_int(value.get("pid"))
-        or not _valid_positive_int(value.get("pgid"))
-        or not SHA256_RE.fullmatch(str(value.get("intent_digest") or ""))
-        or not _valid_nonce(value.get("nonce"))
-        or not _valid_utc_second(value.get("started_at"))
-    ):
-        raise ValueError("in-flight fence fields are invalid")
-    return copy.deepcopy(value)
-
-
-def _validate_recovery_record(value: Any) -> dict[str, Any]:
-    _require_common_lock_control("canonical-records")
-    if not isinstance(value, dict) or set(value) != _COMMON_LOCK_RECOVERY_KEYS:
-        raise ValueError("recovery reservation has an invalid key set")
-    kind = value.get("recovery_kind")
-    if (
-        value.get("schema") != "forge-rebase-recovery/1"
-        or kind not in COMMON_LOCK_RECOVERY_KINDS
-        or not _valid_host(value.get("host"))
-        or not _valid_positive_int(value.get("pid"))
-        or not _valid_nonce(value.get("nonce"))
-        or not _valid_utc_second(value.get("started_at"))
-    ):
-        raise ValueError("recovery reservation identity is invalid")
-    stale_fields = (
-        "stale_owner_inode",
-        "stale_owner_digest",
-        "stale_owner_host",
-        "stale_owner_pid",
-        "stale_owner_kind",
-        "stale_owner_chain_id",
-        "owner_dead_at",
-    )
-    inflight_fields = (
-        "inflight_inode",
-        "inflight_digest",
-        "inflight_host",
-        "inflight_pgid",
-        "inflight_owner_kind",
-        "inflight_chain_id",
-        "group_dead_at",
-    )
-    if kind.startswith("fallback-"):
-        if (
-            not _valid_nonnegative_int(value.get("stale_owner_inode"))
-            or not SHA256_RE.fullmatch(str(value.get("stale_owner_digest") or ""))
-            or not _valid_host(value.get("stale_owner_host"))
-            or not _valid_positive_int(value.get("stale_owner_pid"))
-            or not _valid_nullable_chain(
-                value.get("stale_owner_kind"),
-                value.get("stale_owner_chain_id"),
-                allow_phase5=True,
-            )
-            or not _valid_utc_second(value.get("owner_dead_at"))
-        ):
-            raise ValueError("fallback reservation stale-owner fields are invalid")
-    elif any(value.get(field) is not None for field in stale_fields):
-        raise ValueError("flock-held reservation carries stale-owner fields")
-    if kind == "fallback-owner":
-        if any(value.get(field) is not None for field in inflight_fields):
-            raise ValueError("owner-only reservation carries in-flight fields")
-    else:
-        if (
-            not _valid_nonnegative_int(value.get("inflight_inode"))
-            or not SHA256_RE.fullmatch(str(value.get("inflight_digest") or ""))
-            or not _valid_host(value.get("inflight_host"))
-            or not _valid_positive_int(value.get("inflight_pgid"))
-            or not _valid_nullable_chain(
-                value.get("inflight_owner_kind"),
-                value.get("inflight_chain_id"),
-                allow_phase5=False,
-            )
-            or not _valid_utc_second(value.get("group_dead_at"))
-        ):
-            raise ValueError("fence reservation in-flight fields are invalid")
-    return copy.deepcopy(value)
-
-
-def _validate_chain_lease_record(value: Any) -> dict[str, Any]:
-    _require_common_lock_control("canonical-records")
-    if not isinstance(value, dict) or set(value) != _CHAIN_LEASE_KEYS:
-        raise ValueError("chain lease has an invalid key set")
-    if (
-        not isinstance(value.get("chain_id"), str)
-        or CHAIN_ID_RE.fullmatch(value["chain_id"]) is None
-        or not _valid_host(value.get("host"))
-        or not _valid_positive_int(value.get("pid"))
-        or not _valid_nonce(value.get("nonce"))
-        or not isinstance(value.get("session"), str)
-        or not value["session"]
-        or "\x00" in value["session"]
-        or not _valid_utc_second(value.get("started_at"))
-    ):
-        raise ValueError("chain lease fields are invalid")
-    return copy.deepcopy(value)
 
 
 def _read_owned_record_at(
