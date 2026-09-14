@@ -353,20 +353,20 @@ from ._merge_replay import (
     MergeReplayResult as MergeReplayResult,
     _replay_merge_event_bytes as _replay_merge_event_bytes,
 )
-from forge_cli.chain_core._chain_batch_carrier import (
-    _prevalidate_chain_batch_carrier,
-    _coordination_refusal,
-    _validate_chain_batch_target,
-    _drain_chain_batch_capability,
+from ._chain_batch_carrier import (
+    _prevalidate_chain_batch_carrier as _prevalidate_chain_batch_carrier,
+    _coordination_refusal as _coordination_refusal,
+    _validate_chain_batch_target as _validate_chain_batch_target,
+    _drain_chain_batch_capability as _drain_chain_batch_capability,
 )
-from forge_cli.chain_core._activation import (
-    _ChainActivationSnapshot,
-    _resolve_chain_activation_snapshot,
-    _chain_activation_ownership_summary,
-    _validate_chain_activation_lineage,
+from ._activation import (
+    _ChainActivationSnapshot as _ChainActivationSnapshot,
+    _resolve_chain_activation_snapshot as _resolve_chain_activation_snapshot,
+    _chain_activation_ownership_summary as _chain_activation_ownership_summary,
+    _validate_chain_activation_lineage as _validate_chain_activation_lineage,
 )
-from forge_cli.chain_core._storage import (
-    _ChainStoragePrimitives,
+from ._storage import (
+    _ChainStoragePrimitives as _ChainStoragePrimitives,
 )
 
 
