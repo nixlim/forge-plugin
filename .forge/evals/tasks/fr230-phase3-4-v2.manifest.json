@@ -67,6 +67,7 @@
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_result.py",
+      "scripts/forge/forge_cli/chain_core/_merge_epoch.py",
       "scripts/forge/forge_cli/chain_core/_merge_events.py",
       "scripts/forge/forge_cli/chain_core/_merge_plan.py",
       "scripts/forge/forge_cli/chain_core/_merge_rebase.py",
@@ -103,19 +104,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "7dfa27291643645af5051a240e1767677f71435bfbc6ebfcf692f7cea5ee45e0"
+      "result_sha256": "6cfd62426ac62d329cd0014ecc0538761bf4a5e1567ab5ef3be0ec61f333df38"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "4c989ae37a6c0d39b6f0397e5e0399e1d6505c5163567bc7d4625c4e817f0959"
+      "result_sha256": "28bfde14d11642bb323eb6aa7a30ab38cb4ddc96c60253f4a158ba65fedd683b"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "b7e707fb94e5152077fc3702fc07ee3552ee339081f66c1bfef1418a0a3581d5"
+      "result_sha256": "aff40ba192923d3ac8eb76ffb893ec587394510c883867b2a108a5f0519e9956"
     },
     {
       "slot": "push",
@@ -133,13 +134,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "909478d155e25fd8c3388af86548e550939159d412e3de3bc39c6720831c84e0"
+      "result_sha256": "d01b9533fa16384f28559d3ce1b5c3e37cc6ca6195c1b982b62cee5510e92374"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "4e53e25512f712266980eb2c1952eb926ec687c03a38fd1fde143ef0b459ef61"
+      "result_sha256": "75edc29a1e0c506bb5a1f3eaf9027e4920f4bc9c41967bd381ea3337211683b9"
     }
   ]
 }
