@@ -261,50 +261,50 @@ from ._repository import (
     Repository as Repository,
     _committed_changelog_output_paths as _committed_changelog_output_paths,
 )
-from forge_cli.chain_core._lock_record_io import (
-    _read_owned_record_at,
-    _same_published_record,
-    _open_lock_directory,
-    _opaque_path_evidence_at,
-    _inspect_common_lock_fd,
-    _create_private_record_at,
-    _publish_no_replace_link,
-    _revalidate_record_at,
-    _unlink_revalidated_record_at,
-    _record_at_if_present,
+from ._lock_record_io import (
+    _read_owned_record_at as _read_owned_record_at,
+    _same_published_record as _same_published_record,
+    _open_lock_directory as _open_lock_directory,
+    _opaque_path_evidence_at as _opaque_path_evidence_at,
+    _inspect_common_lock_fd as _inspect_common_lock_fd,
+    _create_private_record_at as _create_private_record_at,
+    _publish_no_replace_link as _publish_no_replace_link,
+    _revalidate_record_at as _revalidate_record_at,
+    _unlink_revalidated_record_at as _unlink_revalidated_record_at,
+    _record_at_if_present as _record_at_if_present,
 )
-from forge_cli.chain_core._merge_cleanup_history import (
-    _merge_cleanup_evidence_history,
-    _merge_cleanup_history_summary,
-    _merge_cleanup_unmatched_intent,
-    _merge_cleanup_retry_proof_valid,
-    _merge_cleanup_intent_transition_valid,
-    _merge_history_has_git_mutation_intent,
+from ._merge_cleanup_history import (
+    _merge_cleanup_evidence_history as _merge_cleanup_evidence_history,
+    _merge_cleanup_history_summary as _merge_cleanup_history_summary,
+    _merge_cleanup_unmatched_intent as _merge_cleanup_unmatched_intent,
+    _merge_cleanup_retry_proof_valid as _merge_cleanup_retry_proof_valid,
+    _merge_cleanup_intent_transition_valid as _merge_cleanup_intent_transition_valid,
+    _merge_history_has_git_mutation_intent as _merge_history_has_git_mutation_intent,
 )
-from forge_cli.chain_core._merge_cleanup_observation import (
-    _merge_cleanup_process_output,
-    _merge_cleanup_process_complete,
-    _merge_cleanup_branch_observation,
-    _merge_cleanup_worktree_inventory,
-    _merge_cleanup_fetch_head_bytes,
-    _merge_cleanup_observation_valid,
+from ._merge_cleanup_observation import (
+    _merge_cleanup_process_output as _merge_cleanup_process_output,
+    _merge_cleanup_process_complete as _merge_cleanup_process_complete,
+    _merge_cleanup_branch_observation as _merge_cleanup_branch_observation,
+    _merge_cleanup_worktree_inventory as _merge_cleanup_worktree_inventory,
+    _merge_cleanup_fetch_head_bytes as _merge_cleanup_fetch_head_bytes,
+    _merge_cleanup_observation_valid as _merge_cleanup_observation_valid,
 )
-from forge_cli.chain_core._merge_scope_binding import (
-    _merge_scope_environment_contract,
-    _validate_merge_scope_request,
-    _merge_retained_inflight,
-    _validate_merge_scope_fetch_binding,
-    _merge_scope_binding_names,
-    _merge_full_patch_argv,
-    _merge_scope_argv,
-    _merge_scope_binding_validator,
+from ._merge_scope_binding import (
+    _merge_scope_environment_contract as _merge_scope_environment_contract,
+    _validate_merge_scope_request as _validate_merge_scope_request,
+    _merge_retained_inflight as _merge_retained_inflight,
+    _validate_merge_scope_fetch_binding as _validate_merge_scope_fetch_binding,
+    _merge_scope_binding_names as _merge_scope_binding_names,
+    _merge_full_patch_argv as _merge_full_patch_argv,
+    _merge_scope_argv as _merge_scope_argv,
+    _merge_scope_binding_validator as _merge_scope_binding_validator,
 )
-from forge_cli.chain_core._remote_observation import (
-    _remote_containment_evidence_valid,
-    _remote_observation_progress_valid,
-    _remote_observation_progress_transition_valid,
-    _remote_observation_progress_matches_observed,
-    _replayed_remote_observation_completed,
+from ._remote_observation import (
+    _remote_containment_evidence_valid as _remote_containment_evidence_valid,
+    _remote_observation_progress_valid as _remote_observation_progress_valid,
+    _remote_observation_progress_transition_valid as _remote_observation_progress_transition_valid,
+    _remote_observation_progress_matches_observed as _remote_observation_progress_matches_observed,
+    _replayed_remote_observation_completed as _replayed_remote_observation_completed,
 )
 
 
