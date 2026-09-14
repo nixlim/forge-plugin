@@ -150,7 +150,7 @@ for (let w = 0; w < plan.waves.length; w++) {
       for (let attempt = 0; attempt < 2 && !ok; attempt++) {
         const m = await mergeOne(r, c)
         if (m && m.gate === 'PASS') { ok = true; break }
-        if (m && m.cause === 'conflict' && attempt === 0) {
+        if (m && /conflict/i.test(String(m.cause || '')) && attempt === 0) {   // agents sometimes describe the conflict instead of returning the literal
           r = await extract(c, `reextract:w${w}:${c.cluster}`)
           if (!r || r.gate !== 'pass') break
           continue
