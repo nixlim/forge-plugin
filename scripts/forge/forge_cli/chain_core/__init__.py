@@ -166,6 +166,15 @@ from ._core import (
     _merge_refusal as _merge_refusal,
     _valid_sorted_unique_strings as _valid_sorted_unique_strings,
 )
+from forge_cli.chain_core._candidate_v2 import (
+    candidate_is_v2,
+    _candidate_binding_for_state_with_candidate_v2,
+    _binding_shape_valid_with_candidate_v2,
+    _event_batch_records_with_candidate_v2,
+    _binding_matches_source_fact_with_candidate_v2,
+    _binding_is_current_with_candidate_v2,
+    _commit_transition_valid_with_candidate_v2,
+)
 
 
 def _merge_event_outbox(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -8982,122 +8991,6 @@ def _chain_batch_lock(
             # batch -> registry -> journal order before any write is reached.
             _validate_chain_batch_target(repository, run_id)
         yield
-
-
-def candidate_is_v2(state: Mapping[str, Any]) -> bool:
-    record = state.get("candidate")
-    return bool(
-        isinstance(record, Mapping)
-        and record.get("schema") == candidate_module.CANDIDATE_SCHEMA
-        and record.get("authorization_id") == record.get("sha256")
-    )
-
-
-def _candidate_binding_for_state_with_candidate_v2(
-    builders: Any,
-    family: str,
-    state: Mapping[str, Any],
-) -> dict[str, object] | None:
-    """Delegate candidate binding reconstruction to the canonical builders."""
-
-    return builders._candidate_binding_for_state(family, state)
-
-
-def _binding_shape_valid_with_candidate_v2(
-    journal: Any,
-    value: object,
-    *,
-    record: Mapping[str, object] | None = None,
-) -> bool:
-    """Delegate every binding dialect to the canonical journal grammar."""
-
-    return bool(journal._binding_shape_valid(value, record=record))
-
-
-def _event_batch_records_with_candidate_v2(
-    builders: Any,
-    journal: Any,
-    event: Mapping[str, object],
-    family: str,
-) -> tuple[
-    tuple[dict[str, object], ...],
-    dict[str, object] | None,
-    str | None,
-]:
-    """Delegate event-carrier decoding to the canonical builders."""
-
-    del journal
-    return builders._event_batch_records(event, family)
-
-
-def _binding_matches_source_fact_with_candidate_v2(
-    builders: Any,
-    journal: Any,
-    binding: Mapping[str, object],
-    record: Mapping[str, object],
-    event: Mapping[str, object],
-    prior: Mapping[str, object] | None,
-    current: Mapping[str, object],
-    *,
-    family: str,
-) -> bool:
-    """Delegate source-fact matching without projecting the candidate dialect."""
-
-    del journal
-    return bool(
-        builders._binding_matches_source_fact(
-            binding, record, event, prior, current, family=family
-        )
-    )
-
-
-def _binding_is_current_with_candidate_v2(
-    builders: Any,
-    journal: Any,
-    state: Mapping[str, object],
-    binding: Mapping[str, object],
-    record: Mapping[str, object],
-    source_event: Mapping[str, object],
-    source_prior: Mapping[str, object] | None,
-    source_state: Mapping[str, object],
-    replay_entries: Sequence[
-        tuple[
-            dict[str, object],
-            dict[str, object] | None,
-            dict[str, object],
-            tuple[dict[str, object], ...],
-            str | None,
-        ]
-    ],
-    *,
-    chain_family: str,
-) -> bool:
-    """Delegate currentness without projecting the candidate dialect."""
-
-    del journal
-    return bool(
-        builders._binding_is_current(
-            state,
-            binding,
-            record,
-            source_event,
-            source_prior,
-            source_state,
-            replay_entries,
-            chain_family=chain_family,
-        )
-    )
-
-
-def _commit_transition_valid_with_candidate_v2(
-    builders: Any,
-    event: Mapping[str, Any],
-    prior: Mapping[str, Any] | None,
-    current: Mapping[str, Any],
-) -> bool:
-    """Delegate every commit transition to the canonical builders."""
-
-    return bool(builders._commit_transition_valid(event, prior, current))
 
 
 class Repository:
