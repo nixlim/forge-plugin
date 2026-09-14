@@ -10,7 +10,7 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
-- Refactor (chain_core): extracted the lock-owner cluster (`_new_owner_record`, `_fence_matches_owner`, `_release_portable_identity`, `_publish_portable_owner`) out of `chain_core/__init__.py` into `chain_core/_lock_owner.py`; behavior unchanged, re-exports preserved.
+- Refactor (chain_core): `scripts/forge/forge_cli/chain_core.py` (about 19,300 code lines) is now the package `scripts/forge/forge_cli/chain_core/`: 45 submodules hold the 315 moved symbols with every function and class body unchanged (strict AST oracle 881/881), and the root `__init__.py` keeps the verbatim `__all__` and re-exports every symbol the module defined, so `forge_cli.chain_core.<name>` and the CLI shim's forwarding are unchanged. Unused imports are no longer bound on the package root; test patches of moved controls go through `tests/_cli_loader.patch_chain_core`, which patches every submodule binding the name. The spec's package sentence, the size baseline (eight over-budget chain_core files recorded at measured size) and a `forge_cli.chain_core layers` import-linter contract follow (bead forge-plugin-deb; follow-ups in forge-plugin-r0b and forge-plugin-4j7).
 - File categories: `*.js` now belongs to the `config` category (and the changelog gate's code-suffix list), so a tracked JavaScript file such as the chain_core split's Workflow script `.refactor/split-chain-core.workflow.js` matches a category and `tests.test_repo_conformance` file-category coverage passes (bead forge-plugin-g9i).
 
 ## [0.6.12] - 2026-09-13
