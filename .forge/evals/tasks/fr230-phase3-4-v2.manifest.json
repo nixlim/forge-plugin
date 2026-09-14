@@ -72,6 +72,7 @@
       "scripts/forge/forge_cli/chain_core/_lock_reservation.py",
       "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py",
       "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py",
+      "scripts/forge/forge_cli/chain_core/_merge_chain.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py",
       "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py",
@@ -118,19 +119,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "2d34fad75eb722c3c25e03ae4659a4bcfc9658115f0c2e9e8496cbcfa18cc3a3"
+      "result_sha256": "00c154d04964eb5e504145d28a37357c442a11622211e6535c2ab8b20dfe2a4c"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "14e2fdd798de727e26f6e64da3ca8d8586d97b705dff6adf672891cadd8c24b5"
+      "result_sha256": "45564d337bea6dcda0c8211006ffc6f03c8211a6e078ae0b275d1003cf3dcdfe"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "38668a36b14f130b948533387185dfb151dcfbb1d955dc6f70370c3aff0c00e1"
+      "result_sha256": "277f763daca85067bfa3b49346fe2d2dbe09f1860c01c9b635cc51ca11a84ea5"
     },
     {
       "slot": "push",
@@ -148,13 +149,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "fefc056d1cad3d1c8d5610ee35e57a42bfa510effa85c505bb28d838eb815c22"
+      "result_sha256": "744f61e43afc81d13a2c028e3de14e6c955f8b297d72c559831434f7164922cf"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "258ab136732fba7ec4473d53dee9425b93c150c6c1fdf9456d1c70032837f59c"
+      "result_sha256": "6d482f768f3524039415f2838fd075555349136d7f888be5d056d5ba9ab736b9"
     }
   ]
 }

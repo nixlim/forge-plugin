@@ -354,20 +354,20 @@ from ._lock_recovery import (
     _common_fence_path_present as _common_fence_path_present,
     _recover_stale_portable_owner as _recover_stale_portable_owner,
 )
-from forge_cli.chain_core._merge_chain import (
-    _build_merge_chain_journal_records,
-    _new_merge_record_is_current,
-    _prove_merge_run_task_binding,
-    _repository_recovery_reservation_present,
-    MergeChainStore,
-    _recovery_classification_receipt_valid,
-    CommonRebaseLock,
-    _clear_reserved_fence,
-    ChainLease,
-    _lease_exclusion_is_current,
-    _lease_reclaim_authority_is_current,
-    _reconcile_merge_projection_for_lease_reclaim,
-    acquire_chain_lease,
+from ._merge_chain import (
+    _build_merge_chain_journal_records as _build_merge_chain_journal_records,
+    _new_merge_record_is_current as _new_merge_record_is_current,
+    _prove_merge_run_task_binding as _prove_merge_run_task_binding,
+    _repository_recovery_reservation_present as _repository_recovery_reservation_present,
+    MergeChainStore as MergeChainStore,
+    _recovery_classification_receipt_valid as _recovery_classification_receipt_valid,
+    CommonRebaseLock as CommonRebaseLock,
+    _clear_reserved_fence as _clear_reserved_fence,
+    ChainLease as ChainLease,
+    _lease_exclusion_is_current as _lease_exclusion_is_current,
+    _lease_reclaim_authority_is_current as _lease_reclaim_authority_is_current,
+    _reconcile_merge_projection_for_lease_reclaim as _reconcile_merge_projection_for_lease_reclaim,
+    acquire_chain_lease as acquire_chain_lease,
 )
 
 
