@@ -370,6 +370,14 @@ from ._lock_owner import (
     _release_portable_identity as _release_portable_identity,
     _publish_portable_owner as _publish_portable_owner,
 )
+from forge_cli.chain_core._lock_recovery import (
+    _fence_death_proof,
+    _require_recovery_proof_recorder,
+    _persist_recovery_proof,
+    _read_fence_for_recovery,
+    _common_fence_path_present,
+    _recover_stale_portable_owner,
+)
 
 
 # The Revision-9 seam marker rides on the callables themselves so the registrar above can
@@ -1375,57 +1383,6 @@ class MergeChainStore(_ChainStoragePrimitives):
             )
 
 
-def _fence_death_proof(
-    fence: PublishedLockRecord,
-    *,
-    group_dead_at: str,
-) -> dict[str, Any]:
-    return {
-        "schema": "forge-rebase-fence-death/1",
-        "operation": fence.record["operation"],
-        "intent_digest": fence.record["intent_digest"],
-        "fence_digest": fence.digest,
-        "host": fence.record["host"],
-        "pgid": fence.record["pgid"],
-        "group_dead_at": group_dead_at,
-    }
-
-
-def _require_recovery_proof_recorder(
-    owner_kinds: Sequence[str],
-    recorder: Callable[[dict[str, Any]], Any] | None,
-    *,
-    no_transaction_record: bool,
-) -> None:
-    _require_common_lock_control("death-proof-revalidation")
-    if (
-        recorder is None
-        and not no_transaction_record
-        and any(kind in {"merge", "push"} for kind in owner_kinds)
-    ):
-        raise OSError(
-            "common-lock recovery recorder is required before proof-dependent unlink"
-        )
-
-
-def _persist_recovery_proof(
-    proof: Mapping[str, Any],
-    recorder: Callable[[dict[str, Any]], Any] | None,
-    *,
-    owner_kinds: Sequence[str],
-    no_transaction_record: bool,
-    proof_already_persisted: bool = False,
-) -> None:
-    _require_recovery_proof_recorder(
-        owner_kinds,
-        recorder,
-        no_transaction_record=no_transaction_record,
-    )
-    if proof_already_persisted or recorder is None:
-        return
-    recorder(copy.deepcopy(dict(proof)))
-
-
 def _recovery_classification_receipt_valid(
     value: object,
     *,
@@ -1790,136 +1747,6 @@ def _acquire_secondary_flock(
                 pass
         os.close(descriptor)
         raise
-
-
-def _read_fence_for_recovery(
-    common: int, common_dir: Path
-) -> tuple[PublishedLockRecord | None, str | None, dict[str, Any] | None]:
-    try:
-        return (
-            _record_at_if_present(
-                common,
-                COMMON_LOCK_INFLIGHT_NAME,
-                common_dir / COMMON_LOCK_INFLIGHT_NAME,
-                _validate_fence_record,
-            ),
-            None,
-            None,
-        )
-    except (OSError, ValueError) as exc:
-        return (
-            None,
-            str(exc),
-            {
-                "fence": _opaque_path_evidence_at(
-                    common,
-                    COMMON_LOCK_INFLIGHT_NAME,
-                    common_dir / COMMON_LOCK_INFLIGHT_NAME,
-                )
-            },
-        )
-
-
-def _common_fence_path_present(common: int) -> bool:
-    """Observe only whether the physical fence name exists.
-
-    Revision 12 permits an ordinary contender to notice that the reserved
-    name is occupied, but not to open, parse, probe, classify, or clear the
-    occupant.  In particular this check runs before portable/flock
-    publication so an ordinary refusal is byte preserving for every lock
-    artifact.
-    """
-
-    try:
-        os.stat(
-            COMMON_LOCK_INFLIGHT_NAME,
-            dir_fd=common,
-            follow_symlinks=False,
-        )
-    except FileNotFoundError:
-        return False
-    return True
-
-
-def _recover_stale_portable_owner(
-    common: int,
-    common_dir: Path,
-    stale: PublishedLockRecord,
-    inflight: PublishedLockRecord | None,
-    reservation: RecoveryReservation,
-    *,
-    pid_probe: Callable[[int], str],
-    group_probe: Callable[[int], str],
-    deadline: float,
-    clock: Callable[[], float],
-    boundary: Callable[[str], None] | None,
-    recovery_recorder: Callable[[dict[str, Any]], Any] | None,
-    no_transaction_record: bool,
-    proof_already_persisted: bool = False,
-) -> None:
-    _require_common_lock_control("death-proof-revalidation")
-    reservation.assert_current("stale-owner reservation revalidation")
-    canonical_reservation = _revalidate_record_at(
-        common,
-        COMMON_LOCK_RECOVERY_NAME,
-        common_dir / COMMON_LOCK_RECOVERY_NAME,
-        reservation.identity,
-        _validate_recovery_record,
-    )
-    inspection = _inspect_common_lock_fd(common, common_dir)
-    if (
-        not inspection.recoverable
-        or inspection.outer is None
-        or not _same_published_record(inspection.outer, stale)
-    ):
-        raise OSError("stale portable owner changed after reservation")
-    if pid_probe(int(stale.record["pid"])) != "dead":
-        raise OSError("stale portable owner death could not be re-proved")
-    _require_deadline_open(deadline, clock, "stale-owner death proof")
-    proof = copy.deepcopy(canonical_reservation.record)
-    current_inflight: PublishedLockRecord | None = None
-    if inflight is not None:
-        current_inflight = _revalidate_record_at(
-            common,
-            COMMON_LOCK_INFLIGHT_NAME,
-            common_dir / COMMON_LOCK_INFLIGHT_NAME,
-            inflight,
-            _validate_fence_record,
-        )
-        if group_probe(int(current_inflight.record["pgid"])) != "dead":
-            raise OSError("in-flight group death could not be re-proved")
-        _require_deadline_open(deadline, clock, "in-flight group death proof")
-    _persist_recovery_proof(
-        proof,
-        recovery_recorder,
-        owner_kinds=(str(stale.record["owner_kind"]),),
-        no_transaction_record=no_transaction_record,
-        proof_already_persisted=proof_already_persisted,
-    )
-    if current_inflight is not None:
-        _persist_recovery_proof(
-            _fence_death_proof(
-                current_inflight,
-                group_dead_at=str(canonical_reservation.record["group_dead_at"]),
-            ),
-            recovery_recorder,
-            owner_kinds=(str(current_inflight.record["owner_kind"]),),
-            no_transaction_record=no_transaction_record,
-            proof_already_persisted=proof_already_persisted,
-        )
-    if pid_probe(int(stale.record["pid"])) != "dead":
-        raise OSError("stale portable owner PID became live or unprovable")
-    reservation.assert_current("stale-owner release")
-    _release_portable_identity(
-        common,
-        common_dir,
-        stale,
-        boundary=boundary,
-        prefix="recovery-release",
-        complete_partial=True,
-    )
-    if boundary is not None:
-        boundary("recovery-stale-owner-released")
 
 
 def _clear_reserved_fence(
