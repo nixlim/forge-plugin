@@ -52,8 +52,10 @@
       "scripts/forge/forge_cli/candidate.py",
       "scripts/forge/forge_cli/chain_core/__init__.py",
       "scripts/forge/forge_cli/chain_core/_activation.py",
+      "scripts/forge/forge_cli/chain_core/_activation_outbox.py",
       "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py",
       "scripts/forge/forge_cli/chain_core/_candidate_v2.py",
+      "scripts/forge/forge_cli/chain_core/_chain_batch_authorize.py",
       "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py",
       "scripts/forge/forge_cli/chain_core/_chain_state.py",
       "scripts/forge/forge_cli/chain_core/_controls.py",
@@ -112,19 +114,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "eff5618dee883198f8ab1f3c93e8218c4baa21030604f97ba2ff0438c824a8de"
+      "result_sha256": "9fd831a8027ade8c275dfa28c64e24f07091522d00f1349745f374675446cb02"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "8406e4d855df86b7947add912eae2d689c2b18acf2c1c5b19e14f26413c13211"
+      "result_sha256": "6d21bbda1fbc2781a2163c2524fb1c1c0fbac752d1448dd79b8b6840365469ea"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "ccf105cb8a7ba471d8a43c501cdc77c394c054a4d35a844f5814e736f1ad15ba"
+      "result_sha256": "38004ef5c49adacf5720df59b6bce216e9358ea833f61b74df838775556e038f"
     },
     {
       "slot": "push",
@@ -142,13 +144,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "dc7a990dd2332284760ae9cb81b0339ce8c71df2c46180e6b71ef9b2b0155a53"
+      "result_sha256": "7fff7dc255c854f75633f872623c3326957aa342d64bf6fe8ab7803d66e4ddfd"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "120c384afe92a61659dd90bc6a6f55eff2047c4db25f0dfcf79e846bd230e6be"
+      "result_sha256": "bddcf671ecf1bf817ab417f67f69e39c81085d252fe54769ae1a592abb7491d4"
     }
   ]
 }

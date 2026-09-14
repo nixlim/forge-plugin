@@ -358,13 +358,13 @@ from ._activation import _ChainActivationSnapshot as _ChainActivationSnapshot, _
 from ._storage import (
     _ChainStoragePrimitives as _ChainStoragePrimitives,
 )
-from forge_cli.chain_core._activation_outbox import (
-    _resolve_chain_activation_projection,
-    _require_no_pending_chain_activation_outbox,
-    _prepare_merge_activation_preamble,
+from ._activation_outbox import (
+    _resolve_chain_activation_projection as _resolve_chain_activation_projection,
+    _require_no_pending_chain_activation_outbox as _require_no_pending_chain_activation_outbox,
+    _prepare_merge_activation_preamble as _prepare_merge_activation_preamble,
 )
-from forge_cli.chain_core._chain_batch_authorize import (
-    _authorize_chain_batch,
+from ._chain_batch_authorize import (
+    _authorize_chain_batch as _authorize_chain_batch,
 )
 
 
