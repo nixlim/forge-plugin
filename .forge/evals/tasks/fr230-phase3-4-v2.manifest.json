@@ -71,6 +71,7 @@
       "scripts/forge/forge_cli/chain_core/_merge_events.py",
       "scripts/forge/forge_cli/chain_core/_merge_plan.py",
       "scripts/forge/forge_cli/chain_core/_merge_rebase.py",
+      "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py",
       "scripts/forge/forge_cli/chain_core/_merge_release.py",
       "scripts/forge/forge_cli/chain_core/_merge_scope.py",
       "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py",
@@ -104,19 +105,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "6cfd62426ac62d329cd0014ecc0538761bf4a5e1567ab5ef3be0ec61f333df38"
+      "result_sha256": "b5d2f5bda03e0209aab4242bdc6f315eac3ac4a524e2056b993814559060d98a"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "28bfde14d11642bb323eb6aa7a30ab38cb4ddc96c60253f4a158ba65fedd683b"
+      "result_sha256": "c80508ab0bd041b6785b9a6ee18bacdf3a2887eb0cf53b4e8d344314063c8d60"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "aff40ba192923d3ac8eb76ffb893ec587394510c883867b2a108a5f0519e9956"
+      "result_sha256": "d0f21e2f30c21302a308d75ef1abfd6b170b9765a663276b54f6c600edb8105b"
     },
     {
       "slot": "push",
@@ -134,13 +135,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "d01b9533fa16384f28559d3ce1b5c3e37cc6ca6195c1b982b62cee5510e92374"
+      "result_sha256": "4f5052c25471b731227098ae09b2865da8fa73b0c75ea77dcb6334f18cc0cab7"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "75edc29a1e0c506bb5a1f3eaf9027e4920f4bc9c41967bd381ea3337211683b9"
+      "result_sha256": "c329e9cb46bb8beb1470eae22fcaa8fec9b56f0be90d5dace0de88040f48735f"
     }
   ]
 }

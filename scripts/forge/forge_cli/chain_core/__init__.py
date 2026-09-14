@@ -335,11 +335,11 @@ from ._merge_epoch import (
     _epoch_ancestry_record_valid as _epoch_ancestry_record_valid,
     _epoch_fetch_result_intent_digest as _epoch_fetch_result_intent_digest,
 )
-from forge_cli.chain_core._merge_recovery_lifecycle import (
-    _published_recovery_evidence_valid,
-    _recovery_value_carries_inflight,
-    _recovery_cleanup_result_matches,
-    _classify_merge_recovery_lifecycle,
+from ._merge_recovery_lifecycle import (
+    _published_recovery_evidence_valid as _published_recovery_evidence_valid,
+    _recovery_value_carries_inflight as _recovery_value_carries_inflight,
+    _recovery_cleanup_result_matches as _recovery_cleanup_result_matches,
+    _classify_merge_recovery_lifecycle as _classify_merge_recovery_lifecycle,
 )
 
 
