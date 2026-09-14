@@ -72,6 +72,7 @@
       "scripts/forge/forge_cli/chain_core/_merge_plan.py",
       "scripts/forge/forge_cli/chain_core/_merge_rebase.py",
       "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py",
+      "scripts/forge/forge_cli/chain_core/_merge_recovery_proof.py",
       "scripts/forge/forge_cli/chain_core/_merge_release.py",
       "scripts/forge/forge_cli/chain_core/_merge_scope.py",
       "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py",
@@ -105,19 +106,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "b5d2f5bda03e0209aab4242bdc6f315eac3ac4a524e2056b993814559060d98a"
+      "result_sha256": "ca06716fe8ea5198cc755af5bb380a05f03d973007c7cdc31506390cbb39e660"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "c80508ab0bd041b6785b9a6ee18bacdf3a2887eb0cf53b4e8d344314063c8d60"
+      "result_sha256": "048a1d076073f1d3069e89d54c64229dbce897c376e467e1d5a0e729e724c685"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "d0f21e2f30c21302a308d75ef1abfd6b170b9765a663276b54f6c600edb8105b"
+      "result_sha256": "edd6e32a3806cee5c50108361dbb4d03d65fbd52b75f5a2a65a622e3ce6699c5"
     },
     {
       "slot": "push",
@@ -135,13 +136,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "4f5052c25471b731227098ae09b2865da8fa73b0c75ea77dcb6334f18cc0cab7"
+      "result_sha256": "aa56dfe440f3c01c6392fa890c73692dda9f74a334566d4b126715afea61981b"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "c329e9cb46bb8beb1470eae22fcaa8fec9b56f0be90d5dace0de88040f48735f"
+      "result_sha256": "63f148e891bcab5f14ca9d704f8e5465b98b9c5b9728e222f42d438a433788f3"
     }
   ]
 }
