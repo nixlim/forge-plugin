@@ -10,6 +10,7 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Refactor (chain_core): extracted the lock-owner cluster (`_new_owner_record`, `_fence_matches_owner`, `_release_portable_identity`, `_publish_portable_owner`) out of `chain_core/__init__.py` into `chain_core/_lock_owner.py`; behavior unchanged, re-exports preserved.
 - File categories: `*.js` now belongs to the `config` category (and the changelog gate's code-suffix list), so a tracked JavaScript file such as the chain_core split's Workflow script `.refactor/split-chain-core.workflow.js` matches a category and `tests.test_repo_conformance` file-category coverage passes (bead forge-plugin-g9i).
 
 ## [0.6.12] - 2026-09-13
