@@ -586,9 +586,10 @@ class Revision9IngestPredicateNegativeTests(
         with self.cli_process_context():
             CLI.register_coordination_seams()
         verifier = CLI._ingest_proof_verifier
-        # cli split phase 2b: the ingest verifiers live in the canonical chain-core module,
+        # cli split phase 2b: the ingest verifiers live in the canonical chain-core package,
         # so their authority globals are that module's, shared by every loaded shim.
-        self.assertIs(verifier.__globals__, vars(CORE))
+        # chain_core split wave 12: the verifier body lives in chain_core._commit_chain.
+        self.assertIs(verifier.__globals__, vars(package_module("chain_core._commit_chain")))
         self.assertIs(getattr(verifier, "_forge_cli_revision9_seam", None), True)
         return verifier.__globals__
 
