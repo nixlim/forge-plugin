@@ -329,11 +329,11 @@ from ._merge_candidate_observation import (
     _merge_candidate_observation_evidence as _merge_candidate_observation_evidence,
     _merge_candidate_observation_evidence_valid as _merge_candidate_observation_evidence_valid,
 )
-from forge_cli.chain_core._merge_epoch import (
-    _epoch_fetch_observation_record_valid,
-    _epoch_fetch_observation_passed,
-    _epoch_ancestry_record_valid,
-    _epoch_fetch_result_intent_digest,
+from ._merge_epoch import (
+    _epoch_fetch_observation_record_valid as _epoch_fetch_observation_record_valid,
+    _epoch_fetch_observation_passed as _epoch_fetch_observation_passed,
+    _epoch_ancestry_record_valid as _epoch_ancestry_record_valid,
+    _epoch_fetch_result_intent_digest as _epoch_fetch_result_intent_digest,
 )
 
 
