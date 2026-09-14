@@ -21,7 +21,6 @@ import errno
 import fcntl
 import hashlib
 import json
-import math
 import os
 import re
 import secrets
@@ -310,6 +309,12 @@ from forge_cli.chain_core._merge_candidate_observation_steps import (
     _merge_candidate_observation_step_specs,
     _merge_candidate_observation_step_names,
     _merge_candidate_observation_binding,
+)
+from forge_cli.chain_core._merge_cleanup_result import (
+    _merge_cleanup_process_result_valid,
+    _merge_cleanup_step_result_valid,
+    _merge_cleanup_results_valid,
+    _merge_cleanup_result_transition_valid,
 )
 
 
@@ -1382,187 +1387,6 @@ def _merge_attempted_release_preconditions_valid(
     }
     return payload.get("terminal_preconditions_digest") == sha256_bytes(
         canonical_bytes(preconditions)
-    )
-
-
-def _merge_cleanup_process_result_valid(
-    value: object, expected_argv: Sequence[str]
-) -> bool:
-    if not isinstance(value, Mapping) or set(value) != {
-        "argv",
-        "returncode",
-        "duration_seconds",
-        "output_base64",
-        "output_digest",
-        "timed_out",
-        "output_limit",
-        "launch_failed",
-        "group_survived",
-        "authorized",
-        "fence_digest",
-        "fence_inode",
-    }:
-        return False
-    returncode = value.get("returncode")
-    duration = value.get("duration_seconds")
-    output_base64 = value.get("output_base64")
-    try:
-        output = (
-            base64.b64decode(output_base64, validate=True)
-            if isinstance(output_base64, str)
-            else None
-        )
-    except (binascii.Error, ValueError):
-        output = None
-    canonical_not_authorized = bool(
-        value.get("authorized") is False
-        and returncode is None
-        and type(duration) is float
-        and duration == 0.0
-        and math.copysign(1.0, duration) == 1.0
-        and output == b""
-        and value.get("output_digest") == sha256_bytes(b"")
-        and value.get("timed_out") is False
-        and value.get("output_limit") is False
-        and value.get("launch_failed") is True
-        and value.get("group_survived") is False
-        and value.get("fence_digest") is None
-        and value.get("fence_inode") is None
-    )
-    return bool(
-        value.get("argv") == list(expected_argv)
-        and (
-            returncode is None
-            or isinstance(returncode, int)
-            and not isinstance(returncode, bool)
-        )
-        and isinstance(duration, (int, float))
-        and not isinstance(duration, bool)
-        and math.isfinite(duration)
-        and duration >= 0
-        and isinstance(output, bytes)
-        and len(output) <= runtime.OUTPUT_CAP_BYTES
-        and base64.b64encode(output).decode("ascii") == output_base64
-        and isinstance(value.get("output_digest"), str)
-        and SHA256_RE.fullmatch(value["output_digest"]) is not None
-        and (
-            value.get("output_limit") is True
-            and len(output) == runtime.OUTPUT_CAP_BYTES
-            or value.get("output_limit") is False
-            and sha256_bytes(output) == value.get("output_digest")
-        )
-        and type(value.get("timed_out")) is bool
-        and type(value.get("output_limit")) is bool
-        and type(value.get("launch_failed")) is bool
-        and type(value.get("group_survived")) is bool
-        and type(value.get("authorized")) is bool
-        and (
-            canonical_not_authorized
-            or value.get("authorized") is True
-            and isinstance(value.get("fence_digest"), str)
-            and SHA256_RE.fullmatch(value["fence_digest"]) is not None
-            and _valid_positive_int(value.get("fence_inode"))
-        )
-    )
-
-
-def _merge_cleanup_step_result_valid(
-    value: object,
-    state: Mapping[str, Any],
-    intent: Mapping[str, Any],
-    intent_digest: str,
-) -> bool:
-    if not isinstance(value, Mapping) or set(value) != {
-        "schema",
-        "operation",
-        "fence_operation",
-        "operation_nonce",
-        "intent_event_digest",
-        "outcome",
-        "observation",
-        "process",
-    }:
-        return False
-    operation = intent.get("operation")
-    outcome = value.get("outcome")
-    process = value.get("process")
-    subject = intent.get("subject")
-    if not (
-        _merge_cleanup_intent_valid(intent, state)
-        and value.get("schema") == _MERGE_CLEANUP_RESULT_SCHEMA
-        and value.get("operation") == operation
-        and value.get("fence_operation") == intent.get("fence_operation")
-        and value.get("operation_nonce") == intent.get("operation_nonce")
-        and value.get("intent_event_digest") == intent_digest
-        and isinstance(outcome, str)
-        and outcome in {"passed", "already-absent", "failed"}
-        and isinstance(subject, Mapping)
-        and isinstance(process, Mapping)
-        and _merge_cleanup_process_result_valid(process, intent.get("argv", ()))
-    ):
-        return False
-    return _merge_cleanup_observation_valid(
-        str(operation), value.get("observation"), subject, process, str(outcome)
-    )
-
-
-def _merge_cleanup_results_valid(
-    value: object,
-    state: Mapping[str, Any],
-    intent: Mapping[str, Any],
-    intent_digest: str,
-) -> bool:
-    """Validate one result event from the repeated FR-236 cleanup protocol."""
-
-    return bool(
-        isinstance(value, list)
-        and len(value) == 1
-        and _merge_cleanup_step_result_valid(
-            value[0], state, intent, intent_digest
-        )
-    )
-
-
-def _merge_cleanup_result_transition_valid(
-    event: Mapping[str, Any],
-    prior: Mapping[str, Any] | None,
-    current: Mapping[str, Any],
-) -> bool:
-    """Authenticate each durable cleanup result before compatibility projection."""
-
-    if event.get("event") != "cleanup_result":
-        return True
-    payload = event.get("payload")
-    if not isinstance(payload, Mapping):
-        return False
-    if prior is None or set(payload) != {"delta", "cleanup_results"}:
-        return False
-    prior_cleanup = prior.get("cleanup")
-    intent = (
-        prior_cleanup.get("intent") if isinstance(prior_cleanup, Mapping) else None
-    )
-    results = payload.get("cleanup_results")
-    if not (
-        isinstance(intent, Mapping)
-        and _merge_cleanup_results_valid(
-            results, prior, intent, str(event.get("previous_digest", ""))
-        )
-        and isinstance(results, list)
-        and isinstance(results[0], Mapping)
-    ):
-        return False
-    failed = results[0].get("outcome") == "failed"
-    expected_delta: dict[str, Any] = {
-        "cleanup": {"condition": "cleanup-failed" if failed else "none"}
-    }
-    expected_state = prior.get("state")
-    if failed and prior.get("state") != "cleanup_pending":
-        expected_delta["state"] = "cleanup_pending"
-        expected_state = "cleanup_pending"
-    return bool(
-        payload.get("delta") == expected_delta
-        and current.get("cleanup") == expected_delta["cleanup"]
-        and current.get("state") == expected_state
     )
 
 
