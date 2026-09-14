@@ -163,16 +163,23 @@ for (let w = 0; w < plan.waves.length; w++) {
   }
 
   phase('Merge')
-  const end = await agent(
-    `On branch ${BRANCH} at the repository root, close wave ${w} of ${PLAN_MD} (clusters: ${wave.map((c) => c.cluster).join(', ')}):\n` +
+  // Wave close is two agents on purpose: the 7-minute gate-1 exhausted a single agent's turn budget in wave 0.
+  const COMMIT_PATHS = `${PKG}/chain_core .forge/evals/tasks tests/fixtures/fr230-results tests/test_fr223_v2_byte_pins.py`
+  const commitMsg = `refactor(chain_core): re-exports and re-mint after wave ${w} (${wave.map((c) => c.dest.replace(/^.*\//, '')).join(', ')})`
+  const prep = await agent(
+    `On branch ${BRANCH} at the repository root, prepare the close of wave ${w} of ${PLAN_MD} (clusters: ${wave.map((c) => c.cluster).join(', ')}). Do NOT commit.\n` +
     `1. In ${SRC} add a backwards-compatible re-export for every symbol moved in this wave, using the explicit form 'from .<target> import A as A' ` +
     `(one line per symbol or grouped per target), so that every name in __all__ and every attribute read by engine.py, app.py, cli.py and tests still resolves; keep __all__ verbatim; do not add anything else.\n` +
     `2. Fast gate (no tests): ${GATE_FAST}\n` +
     `3. FR-230 subjects and re-mint, then confirm: ${REMINT}\n` +
-    `4. Full gate-1 (the committed cell): ${GATE1}\n` +
-    `5. If everything passed: git add -A -- ${PKG}/chain_core .forge/evals/tasks tests/fixtures/fr230-results tests/test_fr223_v2_byte_pins.py && git commit -m "refactor(chain_core): re-exports and re-mint after wave ${w} (${wave.map((c) => c.dest.replace(/^.*\//, '')).join(', ')})"\n` +
-    `Return {gate, cause, commit}. A FAIL in step 4 that is a pre-existing failure unrelated to the split must still be reported as FAIL with the failing test names in cause.`,
-    { label: `wave-end:w${w}`, phase: 'Merge', schema: GATE_SCHEMA },
+    `Return {gate, cause}: PASS only if steps 2 and 3 both passed. Leave the working tree as it is for the next agent.`,
+    { label: `wave-end-prep:w${w}`, phase: 'Merge', schema: GATE_SCHEMA },
+  )
+  const end = (!prep || prep.gate !== 'PASS') ? prep : await agent(
+    `On branch ${BRANCH} at the repository root (working tree already prepared; do not edit anything). Run the full gate-1 as ONE foreground Bash call with timeout 600000 (it takes about 7 minutes; never background it, never poll):\n${GATE1}\n` +
+    `If its exit status is 0: git add -A -- ${COMMIT_PATHS} && git commit -m "${commitMsg}" and return {gate:"PASS", commit:<sha>}. ` +
+    `Otherwise return {gate:"FAIL", cause:<the failing test names from the output>} without committing; a pre-existing failure unrelated to the split is still a FAIL.`,
+    { label: `wave-end-gate1:w${w}`, phase: 'Merge', agentType: 'refactor-python:gate-runner', schema: GATE_SCHEMA },
   )
   waveReports.push({ wave: w, merged, failed: [], end })
   if (!end || end.gate !== 'PASS') { log(`wave ${w}: wave-end gate failed: ${end && end.cause}`); break }
