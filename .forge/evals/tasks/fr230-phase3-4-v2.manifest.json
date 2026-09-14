@@ -58,6 +58,7 @@
       "scripts/forge/forge_cli/chain_core/_chain_batch_authorize.py",
       "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py",
       "scripts/forge/forge_cli/chain_core/_chain_state.py",
+      "scripts/forge/forge_cli/chain_core/_commit_chain.py",
       "scripts/forge/forge_cli/chain_core/_controls.py",
       "scripts/forge/forge_cli/chain_core/_core.py",
       "scripts/forge/forge_cli/chain_core/_fenced_child.py",
@@ -114,19 +115,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "9fd831a8027ade8c275dfa28c64e24f07091522d00f1349745f374675446cb02"
+      "result_sha256": "eead9ad653882efeb32d020fb0982ff6c4f00065c8b7a4a35e647105ca3889aa"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "6d21bbda1fbc2781a2163c2524fb1c1c0fbac752d1448dd79b8b6840365469ea"
+      "result_sha256": "70b7e794e1310374962689c152bc736d00fdbd88e4a6d236924623c603d5eda8"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "38004ef5c49adacf5720df59b6bce216e9358ea833f61b74df838775556e038f"
+      "result_sha256": "b20eaed24a1dd3775473030a87af215b7623154f505f48941195126879b463d3"
     },
     {
       "slot": "push",
@@ -144,13 +145,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "7fff7dc255c854f75633f872623c3326957aa342d64bf6fe8ab7803d66e4ddfd"
+      "result_sha256": "4aee4c4aff6facbb6c2aafa06d838e1f0a1689a41b9d14da079de29e1e2464bc"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "bddcf671ecf1bf817ab417f67f69e39c81085d252fe54769ae1a592abb7491d4"
+      "result_sha256": "0aba56fb543f6a713b9b4b6b00b17e2a7d3dec17bffc71d69be72c12adac1017"
     }
   ]
 }
