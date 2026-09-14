@@ -83,7 +83,7 @@ test gate. Installed repository surfaces are rendered from `system/`, `skills/`,
 | `python` | `*.py` |
 | `bash` | `*.sh` |
 | `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**`, `LICENSE`, `.forge/evals/candidates/**` |
-| `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `.claude-plugin/**`, `hooks/**`, `system/**`, `.beads/**` |
+| `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `*.js`, `.claude-plugin/**`, `hooks/**`, `system/**`, `.beads/**` |
 | `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**`, `tests/fixtures/**` |
 <!-- FORGE:REGION file-categories END -->
 
@@ -175,7 +175,7 @@ CONTROL_PREFIXES = (
     ".github/workflows/", "tests/fixtures/", ".beads/", ".claude/",
 )
 CONTROL_FILES = {"forge-project.md", ".forge-manifest", "AGENTS.md", "CLAUDE.md"}
-CODE_SUFFIXES = (".py", ".sh", ".yml", ".yaml", ".json", ".jsonl", ".toml")
+CODE_SUFFIXES = (".py", ".sh", ".yml", ".yaml", ".json", ".jsonl", ".toml", ".js")
 
 
 def requires_entry(path: str) -> bool:

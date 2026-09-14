@@ -8,6 +8,10 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Changed
+
+- File categories: `*.js` now belongs to the `config` category (and the changelog gate's code-suffix list), so a tracked JavaScript file such as the chain_core split's Workflow script `.refactor/split-chain-core.workflow.js` matches a category and `tests.test_repo_conformance` file-category coverage passes (bead forge-plugin-g9i).
+
 ## [0.6.12] - 2026-09-13
 
 ### Changed
