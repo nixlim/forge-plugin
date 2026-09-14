@@ -212,6 +212,12 @@ from forge_cli.chain_core._ingest_capture import (
 from forge_cli.chain_core._chain_state import (
     validate_state,
 )
+from forge_cli.chain_core._ingest_currency import (
+    _ingest_captured_paths,
+    _ingest_step_is_current,
+    _ingest_secret_scan_is_current,
+    _prove_ingest_live_chain,
+)
 
 
 def _merge_event_outbox(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -6082,137 +6088,6 @@ def _authorize_chain_batch(**arguments: Any) -> object:
     )
 
 
-def _ingest_captured_paths(
-    repository: Path,
-    run_dir: Path,
-    inputs: Mapping[str, object],
-) -> dict[str, str]:
-    """Derive the only citable paths from the request's captured digests."""
-
-    _batch, builders, journal = runtime._coordination_modules()
-    names = {
-        "state_file": "state.json",
-        "events_file": "events.jsonl",
-        "outcome_map": "outcome-map.json",
-    }
-    result: dict[str, str] = {}
-    for field, name in names.items():
-        digest = inputs.get(f"{field}_sha256")
-        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
-            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
-        path = run_dir / "captured" / "sha256" / digest / name
-        try:
-            capture_relative = path.relative_to(run_dir).as_posix()
-        except ValueError as exc:
-            raise journal.CoordinationRefusal(
-                builders.INGEST_PROOF_INVALID
-            ) from exc
-        if _validated_commitment_path(
-            "ingest.captured_package",
-            capture_relative,
-            repository=repository,
-            run_dir=run_dir,
-            direct_parent=path.parent,
-            require_file=True,
-        ) is None or _parsed_run_captured_path(
-            capture_relative, run_dir.name
-        ) is None:
-            raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
-        result[field] = capture_relative
-    return result
-
-
-def _ingest_step_is_current(
-    final_state: Mapping[str, Any],
-    event_state: Mapping[str, Any],
-    details: Mapping[str, Any],
-) -> bool:
-    step_id = details.get("step_id")
-    run_number = details.get("run")
-    if (
-        not isinstance(step_id, str)
-        or step_id
-        in {"classification", "fast-eligibility", "fast-finalize-eligibility"}
-        or type(run_number) is not int
-        or run_number <= 0
-    ):
-        return False
-    final_runs = final_state.get("steps", {}).get(step_id)
-    event_runs = event_state.get("steps", {}).get(step_id)
-    index = run_number - 1
-    if (
-        not isinstance(final_runs, list)
-        or not isinstance(event_runs, list)
-        or index >= len(final_runs)
-        or index >= len(event_runs)
-        or final_runs[index] != event_runs[index]
-        or not isinstance(final_runs[index], dict)
-        or final_runs[index].get("candidate")
-        != final_state.get("candidate", {}).get("sha256")
-    ):
-        return False
-    current = [
-        position
-        for position, fact in enumerate(final_runs)
-        if isinstance(fact, dict)
-        and fact.get("candidate") == final_state.get("candidate", {}).get("sha256")
-    ]
-    if not current:
-        return False
-    if step_id == "gate-1":
-        active = set(current[-2:])
-    elif step_id.startswith("stack:"):
-        latest = final_runs[current[-1]]
-        batch_id = latest.get("batch_id") if isinstance(latest, dict) else None
-        active = {
-            position
-            for position in current
-            if isinstance(final_runs[position], dict)
-            and final_runs[position].get("batch_id") == batch_id
-        }
-    else:
-        active = {current[-1]}
-    return index in active
-
-
-def _ingest_secret_scan_is_current(
-    final_state: Mapping[str, Any],
-    event: dict[str, object],
-    prior_state: dict[str, object] | None,
-    event_state: dict[str, object],
-) -> bool:
-    """Select only the exact latest current-candidate secret-scan append."""
-
-    _batch, builders, _journal = runtime._coordination_modules()
-    introduced = builders._commit_secret_scan_delta(
-        event, prior_state, event_state
-    )
-    final_steps = final_state.get("steps")
-    final_runs = (
-        final_steps.get("secret-scan")
-        if isinstance(final_steps, Mapping)
-        else None
-    )
-    candidate = final_state.get("candidate")
-    candidate_sha = (
-        candidate.get("sha256") if isinstance(candidate, Mapping) else None
-    )
-    if (
-        introduced is None
-        or not isinstance(final_runs, list)
-        or introduced[0] >= len(final_runs)
-        or final_runs[introduced[0]] != introduced[1]
-        or introduced[1].get("candidate") != candidate_sha
-    ):
-        return False
-    current = [
-        index
-        for index, fact in enumerate(final_runs)
-        if isinstance(fact, Mapping) and fact.get("candidate") == candidate_sha
-    ]
-    return bool(current and introduced[0] == current[-1])
-
-
 def _merge_ingest_binding(
     builders: Any,
     state: dict[str, object],
@@ -6235,66 +6110,6 @@ def _merge_ingest_binding(
         **preimage,
         "binding_id": sha256_bytes(canonical_bytes(preimage)),
     }
-
-
-def _prove_ingest_live_chain(
-    repository: Path,
-    chain_id: str,
-    materialized: dict[str, object],
-    captured_state: bytes,
-    captured_events: bytes,
-) -> None:
-    """Bind captured bytes to the stable live chain without consuming grammar."""
-
-    _batch, builders, journal = runtime._coordination_modules()
-    chains_root = _chain_storage_root(repository)
-    descriptor: int | None = None
-    try:
-        descriptor, observation = journal._open_bound_directory(chains_root)
-        with builders._chain_event_lock(
-            chains_root,
-            chain_id,
-            root_descriptor=descriptor,
-            root_observation=observation,
-        ):
-            live_state_bytes = builders._read_regular_bytes_at(
-                descriptor, f"{chain_id}.json"
-            )
-            live_events = builders._read_regular_bytes_at(
-                descriptor, f"{chain_id}.events.jsonl"
-            )
-            try:
-                live_state = json.loads(live_state_bytes.decode("utf-8"))
-            except (UnicodeError, ValueError, RecursionError) as exc:
-                raise journal.CoordinationRefusal(
-                    builders.INGEST_PROOF_INVALID
-                ) from exc
-            if (
-                live_state_bytes != captured_state
-                or live_events != captured_events
-                or live_state != materialized
-            ):
-                raise journal.CoordinationRefusal(
-                    builders.INGEST_PROOF_INVALID
-                )
-            if (
-                journal._file_observation(os.fstat(descriptor))
-                != observation
-                or journal._file_observation(os.lstat(chains_root))
-                != observation
-            ):
-                raise journal.CoordinationRefusal(
-                    builders.INGEST_PROOF_INVALID
-                )
-    except journal.CoordinationRefusal as exc:
-        if str(exc) == builders.INGEST_PROOF_INVALID:
-            raise
-        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID) from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
 
 
 def _merge_gate_event_fact(
