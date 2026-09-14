@@ -363,6 +363,12 @@ from ._merge_replay import (
     MergeReplayResult as MergeReplayResult,
     _replay_merge_event_bytes as _replay_merge_event_bytes,
 )
+from forge_cli.chain_core._chain_batch_carrier import (
+    _prevalidate_chain_batch_carrier,
+    _coordination_refusal,
+    _validate_chain_batch_target,
+    _drain_chain_batch_capability,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1141,151 +1147,6 @@ def _prepare_merge_activation_preamble(
         (marker,),
         carried=True,
     )
-
-
-def _prevalidate_chain_batch_carrier(
-    state: Mapping[str, Any],
-    pending_outbox: Mapping[str, Any],
-    carried_records: Sequence[dict[str, Any]],
-) -> None:
-    """Validate and bootstrap one commit carrier before it becomes durable.
-
-    The outer run lock is already held by ``ChainStore.persist``.  Complete
-    every deterministic run/record check, then create and rebind a legacy
-    receipt ledger while the prospective event still exists only in memory.
-    The ordinary drain repeats these checks against the durable carrier.
-    """
-
-    batch, builders, journal = runtime._coordination_modules()
-    binding = state.get("run_binding")
-    records = tuple(carried_records)
-    if (
-        not isinstance(binding, Mapping)
-        or not builders._run_binding_valid(dict(binding))
-        or not records
-        or not all(isinstance(record, dict) for record in records)
-    ):
-        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-    repository = Path(str(binding["repository"]))
-    run_id = str(binding["run_id"])
-    batch_bytes = b"".join(journal._journal_line(record) for record in records)
-    expected_outbox = {
-        "idempotency_key": pending_outbox.get("source_event_digest"),
-        "batch_digest": journal._sha256(batch_bytes),
-        "record_count": len(records),
-        "source_event_digest": pending_outbox.get("source_event_digest"),
-    }
-    if (
-        dict(pending_outbox) != expected_outbox
-        or state.get("journal_outbox") != expected_outbox
-    ):
-        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-
-    _canonical_repository, state_root = journal._resolve_repository(
-        repository, "journal batch"
-    )
-    run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
-    active = batch._active_locks().get(os.path.abspath(os.fspath(run_dir)))
-    if active is None:
-        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-
-    # Mirror execute_existing_batch's read-only schema/lifecycle phases before
-    # the carrier exists.  Binding authentication itself is supplied by the
-    # prospective event replay in ChainStore.persist below.
-    batch._validate_batch_lock(active)
-    batch._validate_no_orphan_intent_temporary(active)
-    if batch._load_intent(active) is not None:
-        raise journal.CoordinationRefusal(journal.BATCH_PENDING)
-    journal_exact = batch._optional_exact_named_file(active, "journal.jsonl")
-    if journal_exact is None:
-        raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
-    run_state = journal._scan_run(
-        run_dir,
-        raw=journal_exact.payload,
-        directory_observation=journal._file_observation(
-            os.fstat(active.run_descriptor)
-        ),
-        journal_observation=journal_exact.observation,
-    )
-    if (
-        run_state.run_id != run_id
-        or binding.get("task_id") not in {
-            record.get("id")
-            for record in run_state.records
-            if record.get("type") == "task"
-            and record.get("status") == "active"
-        }
-        or journal._recorded_repository_root(
-            run_state.run_dir, state_root, records=run_state.records
-        )
-        != _canonical_repository
-    ):
-        raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-    batch._validate_target_lifecycle(run_state, close=False)
-    journal._classify_owner(
-        run_state,
-        batch._read_only_session_owner(),
-        adopt_missing=run_state.pre_coordination,
-    )
-    for record in records:
-        journal._validate_record_envelope(record)
-    batch._prevalidate_records(
-        _canonical_repository,
-        run_state,
-        records,
-        close=False,
-        defer_binding=True,
-    )
-
-    try:
-        if (
-            batch._activation_preamble_records(
-                active,
-                run_state,
-                _canonical_repository,
-                records,
-                carried=True,
-            )
-            != records
-        ):
-            raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-        receipts_exact = batch._optional_exact_named_file(
-            active, journal.BATCH_RECEIPTS_NAME
-        )
-        if receipts_exact is None:
-            if not batch._legacy_batch_first_use(active.run_descriptor):
-                raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-            created = batch._ensure_receipt_ledger(active)
-            receipts_exact = batch._optional_exact_named_file(
-                active, journal.BATCH_RECEIPTS_NAME
-            )
-            if receipts_exact != journal.ExactFile(b"", created):
-                raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-        _receipts, receipts_raw, receipts_observation = batch._load_receipts(
-            active
-        )
-        if (
-            receipts_exact
-            != journal.ExactFile(receipts_raw, receipts_observation)
-            or batch._optional_exact_named_file(active, "journal.jsonl")
-            != journal_exact
-            or batch._load_intent(active) is not None
-            or batch._activation_preamble_records(
-                active,
-                run_state,
-                _canonical_repository,
-                records,
-                carried=True,
-            )
-            != records
-        ):
-            raise journal.CoordinationRefusal(journal.INVALID_JOURNAL_RECORD)
-        batch._validate_no_orphan_intent_temporary(active)
-        batch._validate_batch_lock(active)
-    except (OSError, FrozenError, journal.CoordinationRefusal) as exc:
-        raise journal.CoordinationRefusal(
-            journal.INVALID_JOURNAL_RECORD
-        ) from exc
 
 
 def _authorize_chain_batch(**arguments: Any) -> object:
@@ -2399,100 +2260,6 @@ for _seam in (
     setattr(_seam, "_forge_cli_revision9_seam", True)
 
 
-def _coordination_refusal(exc: BaseException) -> Refusal | FrozenError:
-    """Map task-03 diagnostics onto the closed Revision-9 CLI union."""
-
-    batch, builders, journal = runtime._coordination_modules()
-    message = str(exc)
-    if message == journal.BATCH_PENDING:
-        return Refusal(
-            V2ReasonCode.BATCH_PENDING,
-            message,
-            remediation="run journal batch-recover for the named run",
-        )
-    if message == journal.BATCH_KEY_CONFLICT:
-        return Refusal(
-            V2ReasonCode.BATCH_IDEMPOTENCY_CONFLICT,
-            message,
-            remediation="reuse the exact original request or choose a new idempotency key",
-        )
-    if message == journal.BATCH_KEY_REFUSAL:
-        return Refusal(
-            V2ReasonCode.STATE_PRECONDITION,
-            message,
-            remediation="supply exactly one 64-lowercase-hex idempotency key",
-        )
-    if "cites path outside run or repository" in message:
-        return Refusal(
-            V2ReasonCode.CITATION_OUT_OF_ROOT,
-            message,
-            remediation="supply an owner-controlled repository-relative ingest input",
-        )
-    if message in {builders.INGEST_PROOF_INVALID, builders.TERMINAL_CHAIN_INVALID}:
-        return Refusal(
-            V2ReasonCode.INGEST_PROOF_INVALID
-            if message == builders.INGEST_PROOF_INVALID
-            else V2ReasonCode.BINDING_INVALID,
-            message,
-            remediation="repair the authoritative chain proof and retry",
-        )
-    if message == builders.JOURNAL_OUTBOX_PENDING:
-        return Refusal(
-            V2ReasonCode.JOURNAL_OUTBOX_PENDING,
-            message,
-            remediation="replay and drain the pending chain journal outbox",
-        )
-    if message == journal.BATCH_DIVERGED:
-        return FrozenError(
-            message,
-            observed="journal transaction suffix or inode divergence",
-            schema=REVISION9_OUTPUT_SCHEMA,
-        )
-    if "binding" in message or message == journal.INVALID_JOURNAL_RECORD:
-        return Refusal(
-            V2ReasonCode.BINDING_INVALID,
-            message,
-            remediation="repair the structured chain binding and retry",
-        )
-    return Refusal(
-        V2ReasonCode.INGEST_PROOF_INVALID,
-        message,
-        remediation="inspect the Revision-9 coordination proof and retry",
-    )
-
-
-def _validate_chain_batch_target(
-    repository: Path,
-    run_id: str,
-) -> None:
-    """Re-prove the existing run/repository/owner tuple without mutating it."""
-
-    batch, _builders, journal = runtime._coordination_modules()
-    validated_run_id = journal._operation_run_id("journal append", run_id)
-    canonical_repository, state_root = journal._resolve_repository(
-        repository, "journal append"
-    )
-    with journal._registry_lock(state_root) as registry_lock:
-        view = journal._coordination_view(
-            state_root,
-            owner_target_ids=frozenset({validated_run_id}),
-            locked=registry_lock,
-        )
-        state = journal._target_state(view, validated_run_id, "journal append")
-        recorded_repository = journal._recorded_repository_root(
-            state.run_dir, state_root, records=state.records
-        )
-        if recorded_repository != canonical_repository:
-            raise journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE)
-        with journal._locked_journal(state) as locked:
-            journal._classify_owner(
-                state,
-                batch._read_only_session_owner(),
-                adopt_missing=state.pre_coordination,
-                locked=locked,
-            )
-
-
 @contextlib.contextmanager
 def _chain_batch_lock(
     run_dir: Path,
@@ -2526,57 +2293,6 @@ def _chain_batch_lock(
             # batch -> registry -> journal order before any write is reached.
             _validate_chain_batch_target(repository, run_id)
         yield
-
-
-def _drain_chain_batch_capability(
-    state: Mapping[str, Any],
-    pending_outbox: Mapping[str, Any],
-    carried_records: Sequence[dict[str, Any]],
-) -> dict[str, Any]:
-    """Drain one exact carrier through Revision-9's opaque authority path."""
-
-    binding = state.get("run_binding")
-    if not isinstance(binding, Mapping):
-        raise FrozenError(
-            "pending journal outbox lacks an immutable run binding",
-            chain_id=str(state.get("chain_id") or "") or None,
-            schema=REVISION9_OUTPUT_SCHEMA,
-        )
-    batch, _builders, _journal = runtime._coordination_modules()
-    capability = object()
-    registry = batch._FORGE_CLI_CHAIN_CAPABILITIES
-    registry_lock = batch._FORGE_CLI_CHAIN_CAPABILITIES_LOCK
-    with registry_lock:
-        registry[id(capability)] = (
-            capability,
-            {
-                "repository": Path(str(binding["repository"])),
-                "run_id": str(binding["run_id"]),
-                "task_id": str(binding["task_id"]),
-                "chain_id": str(state["chain_id"]),
-                "run_binding": copy.deepcopy(dict(binding)),
-                "pending_outbox": copy.deepcopy(dict(pending_outbox)),
-                "source_event_digest": pending_outbox[
-                    "source_event_digest"
-                ],
-                "records": tuple(copy.deepcopy(tuple(carried_records))),
-            },
-        )
-    try:
-        outcome = batch.drain_chain_batch(
-            Path(str(binding["repository"])),
-            str(binding["run_id"]),
-            chain_id=str(state["chain_id"]),
-            source_event_digest=str(pending_outbox["source_event_digest"]),
-            records=carried_records,
-            capability=capability,
-        )
-    finally:
-        with registry_lock:
-            registered = registry.get(id(capability))
-            if isinstance(registered, tuple) and registered[0] is capability:
-                registry.pop(id(capability), None)
-    return batch.journal_receipted_details(dict(pending_outbox), outcome.receipt)
 
 
 class _ChainStoragePrimitives:
