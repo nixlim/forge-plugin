@@ -116,14 +116,7 @@ class MutationRunnerTests(unittest.TestCase):
         timeout: float = 8,
         runner: Path = RUNNER,
     ) -> subprocess.CompletedProcess[str]:
-        arguments = [
-            "python3",
-            str(runner),
-            "--base",
-            base,
-            "--head",
-            head,
-        ]
+        arguments = ["python3", str(runner), "--base", base, "--head", head]
         if journal is not None:
             arguments.extend(
                 (
@@ -136,7 +129,12 @@ class MutationRunnerTests(unittest.TestCase):
                 )
             )
         invocation_environment = os.environ.copy() if environment is None else environment.copy()
-        invocation_environment.setdefault("FORGE_SESSION_PID", str(os.getpid()))
+        # The runner child must see this test process as the run owner. A FORGE_SESSION_PID
+        # inherited from the caller's shell (or merged in via {**os.environ, ...}) would make
+        # the runner refuse the append as a foreign live owner, so only a value the caller
+        # set deliberately (different from the ambient one) is kept.
+        if invocation_environment.get("FORGE_SESSION_PID") == os.environ.get("FORGE_SESSION_PID"):
+            invocation_environment["FORGE_SESSION_PID"] = str(os.getpid())
         return subprocess.run(
             arguments,
             cwd=self.repo,
@@ -173,14 +171,7 @@ class MutationRunnerTests(unittest.TestCase):
         task: str = "task-04",
         runner: Path = RUNNER,
     ) -> subprocess.CompletedProcess[bytes]:
-        arguments = [
-            "python3",
-            str(runner),
-            "--base",
-            base,
-            "--head",
-            head,
-        ]
+        arguments = ["python3", str(runner), "--base", base, "--head", head]
         if journal is not None:
             arguments.extend(
                 (

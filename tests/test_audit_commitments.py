@@ -1888,16 +1888,7 @@ class AuditCommitmentsTests(unittest.TestCase):
                 self.assertIn(expected, intact.stderr)
 
                 # Disable only that stable enforcement block in a temp copy.
-                begin = f"    # CONTROL {marker} BEGIN\n"
-                end = f"    # CONTROL {marker} END\n"
-                before, rest = source.split(begin, 1)
-                _, after = rest.split(end, 1)
-                mutant = AUDIT.parent / f".audit-{marker}-disabled.py"
-                self.addCleanup(mutant.unlink, missing_ok=True)
-                mutant.write_text(
-                    before + begin + "    pass\n" + end + after,
-                    encoding="utf-8",
-                )
+                mutant = self.disabled_control_copy(source, marker, "    pass\n")
                 disabled = self.invoke(mutant)
                 self.assertEqual(0, disabled.returncode, disabled.stderr)
                 self.assertEqual(EXPECTED, disabled.stdout)
@@ -1911,12 +1902,18 @@ class AuditCommitmentsTests(unittest.TestCase):
         end = f"    # CONTROL {marker} END\n"
         before, rest = source.split(begin, 1)
         _, after = rest.split(end, 1)
-        mutant = AUDIT.parent / f".audit-{marker}-disabled.py"
-        self.addCleanup(mutant.unlink, missing_ok=True)
-        mutant.write_text(
-            before + begin + replacement + end + after,
-            encoding="utf-8",
-        )
+        return self.write_mutant(marker, before + begin + replacement + end + after)
+
+    def write_mutant(self, marker: str, text: str) -> Path:
+        """Mutant under a private temp dir, never beside the real script (a sibling file
+        races with tests that copy the tracked scripts/ tree); its roots are pinned."""
+        scratch = tempfile.TemporaryDirectory(prefix="forge-audit-mutant-")
+        self.addCleanup(scratch.cleanup)
+        mutant = Path(scratch.name) / f".audit-{marker}-disabled.py"
+        derived = "PLUGIN_ROOT = Path(__file__).resolve().parents[2]\n"
+        pinned = f"PLUGIN_ROOT = Path({str(ROOT)!r})\nsys.path.insert(0, {str(AUDIT.parent)!r})\n"
+        assert derived in text, "audit script no longer derives PLUGIN_ROOT from __file__"
+        mutant.write_text(text.replace(derived, pinned, 1), encoding="utf-8")
         return mutant
 
     def setUp_fixture_again(self) -> None:
