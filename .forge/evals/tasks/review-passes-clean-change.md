@@ -12,15 +12,28 @@ against a prompt or constitution change that makes the reviewer over-block —
 a reviewer that BLOCKs everything is as useless as one that PASSes everything.
 
 The change below follows this repository's conventions: stdlib-only Python, a
-`from __future__ import annotations` header, explicit type hints, and a `unittest`
-test that covers the boundary cases rather than only the happy path.
+`from __future__ import annotations` header, explicit type hints, imports in the
+order the `ruff` I001 gate requires, a `unittest` test that covers the boundary
+cases rather than only the happy path, and the `CHANGELOG.md` `[Unreleased]` entry
+the committed changelog policy requires for added Python files.
 
 ## Input
 
 ```diff
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -9,4 +9,8 @@
+ ## [Unreleased]
+ 
++### Added
++
++- `scripts/forge/duration.py`: `format_duration` renders an elapsed gate duration as `<M>m<S>s` (or `<S>s` under a minute) for diagnostics; `tests/test_duration.py` covers the sub-minute, minute-boundary and negative cases.
++
+ ### Changed
+ 
 --- a/scripts/forge/duration.py
 +++ b/scripts/forge/duration.py
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,15 @@
 +#!/usr/bin/env python3
 +"""Format elapsed command durations for Forge gate diagnostics."""
 +
@@ -38,13 +51,13 @@ test that covers the boundary cases rather than only the happy path.
 +    return f"{remainder}s"
 --- a/tests/test_duration.py
 +++ b/tests/test_duration.py
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,32 @@
 +from __future__ import annotations
 +
-+import unittest
-+from pathlib import Path
 +import importlib.util
 +import sys
++import unittest
++from pathlib import Path
 +
 +ROOT = Path(__file__).resolve().parents[1]
 +spec = importlib.util.spec_from_file_location(
