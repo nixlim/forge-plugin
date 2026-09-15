@@ -27,7 +27,10 @@ import json
 import os
 import sys
 
-SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist", ".tox", ".mypy_cache", "migrations"}
+SKIP_DIRS = {
+    ".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist", ".tox",
+    ".mypy_cache", "migrations",
+}
 DEFAULT_BASELINE = ".refactor-baseline.json"
 
 
@@ -42,17 +45,20 @@ def code_lines(path: str) -> int:
     return n
 
 
+def _walk_py(root: str):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for fn in filenames:
+            if fn.endswith(".py"):
+                yield os.path.join(dirpath, fn)
+
+
 def iter_py(paths):
     for p in paths:
-        if os.path.isfile(p):
-            if p.endswith(".py"):
-                yield p
+        if os.path.isfile(p) and p.endswith(".py"):
+            yield p
         elif os.path.isdir(p):
-            for dirpath, dirnames, filenames in os.walk(p):
-                dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-                for fn in filenames:
-                    if fn.endswith(".py"):
-                        yield os.path.join(dirpath, fn)
+            yield from _walk_py(p)
 
 
 def load_baseline(path: str) -> dict[str, int]:
@@ -76,6 +82,37 @@ def check(files, max_lines: int, baseline: dict[str, int]):
     return violations
 
 
+def _write_baseline(args: argparse.Namespace) -> int:
+    files = list(iter_py(args.paths or ["."]))
+    over = {os.path.normpath(p): code_lines(p) for p in files if code_lines(p) > args.max}
+    with open(args.write_baseline, "w", encoding="utf-8") as f:
+        json.dump(dict(sorted(over.items())), f, indent=1)
+    print(f"baseline written: {len(over)} files over {args.max} lines -> {args.write_baseline}")
+    return 0
+
+
+def _hook(args: argparse.Namespace, baseline: dict[str, int]) -> int:
+    """PostToolUse mode: advisory only (exit 2 surfaces the message to the agent)."""
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return 0
+    fp = (payload.get("tool_input") or {}).get("file_path") or ""
+    if not fp.endswith(".py") or not os.path.exists(fp):
+        return 0
+    # hook runs with cwd = project dir; normalise relative to it for baseline lookup
+    rel = os.path.relpath(fp, os.getcwd()) if os.path.isabs(fp) else fp
+    violations = check([rel], args.max, baseline)
+    if not violations:
+        return 0
+    p, _n, why = violations[0]
+    sys.stderr.write(
+        f"FILE SIZE GUARD: {p}: {why}. Do not keep adding to this file. "
+        f"Split it into a package first (see the split-module skill), then continue.\n"
+    )
+    return 2
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="*")
@@ -86,41 +123,21 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.write_baseline:
-        files = list(iter_py(args.paths or ["."]))
-        over = {os.path.normpath(p): code_lines(p) for p in files if code_lines(p) > args.max}
-        with open(args.write_baseline, "w", encoding="utf-8") as f:
-            json.dump(dict(sorted(over.items())), f, indent=1)
-        print(f"baseline written: {len(over)} files over {args.max} lines -> {args.write_baseline}")
-        return 0
+        return _write_baseline(args)
 
     baseline = load_baseline(args.baseline)
-
     if args.hook:
-        try:
-            payload = json.load(sys.stdin)
-        except Exception:
-            return 0
-        fp = (payload.get("tool_input") or {}).get("file_path") or ""
-        if not fp.endswith(".py") or not os.path.exists(fp):
-            return 0
-        # hook runs with cwd = project dir; normalise relative to it for baseline lookup
-        rel = os.path.relpath(fp, os.getcwd()) if os.path.isabs(fp) else fp
-        v = check([rel], args.max, baseline)
-        if v:
-            p, n, why = v[0]
-            sys.stderr.write(
-                f"FILE SIZE GUARD: {p}: {why}. Do not keep adding to this file. "
-                f"Split it into a package first (see the split-module skill), then continue.\n"
-            )
-            return 2
-        return 0
+        return _hook(args, baseline)
 
     files = list(iter_py(args.paths or ["."]))
     violations = check(files, args.max, baseline)
-    for p, n, why in sorted(violations, key=lambda x: -x[1]):
+    for p, _n, why in sorted(violations, key=lambda x: -x[1]):
         print(f"{p}: {why}")
     if violations:
-        print(f"{len(violations)} file(s) violate the size budget (max {args.max}, baseline {args.baseline})")
+        print(
+            f"{len(violations)} file(s) violate the size budget "
+            f"(max {args.max}, baseline {args.baseline})"
+        )
         return 1
     print(f"ok: {len(files)} files within budget (max {args.max})")
     return 0

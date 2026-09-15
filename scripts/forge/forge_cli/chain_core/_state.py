@@ -12,47 +12,244 @@ import time
 from typing import Callable, Iterable
 
 
-_MERGE_SCOPE_OVERLAY = {
-    "LC_ALL": "C",
-    "LANG": "C",
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_CONFIG_GLOBAL": "/dev/null",
-    "GIT_ATTR_NOSYSTEM": "1",
-    "GIT_OPTIONAL_LOCKS": "0",
-    "GIT_NO_REPLACE_OBJECTS": "1",
-    "GIT_NO_LAZY_FETCH": "1",
-    "GIT_PAGER": "cat",
-    "PAGER": "cat",
+SCHEMA = "forge-chain/1"
+
+
+KIND = "commit"
+
+
+FRESH_REVIEWER_EVALS_GATE = "fresh-reviewer-evals"
+
+
+FRESH_REVIEWER_EVALS_REQUESTS = "fresh-reviewer-evals-requests"
+
+
+FRESH_REVIEWER_EVALS_REQUESTED_EVENT = "fresh_reviewer_evals_requested"
+
+
+STATES = {
+    "classifying",
+    "verifying",
+    "reviewing",
+    "revising",
+    "awaiting_approval",
+    "authorized",
+    "committing",
+    "closed",
+    "aborted",
 }
 
 
-_MERGE_SCOPE_UNSET = frozenset(
+STATE_KEYS = {
+    "schema",
+    "chain_id",
+    "kind",
+    "state",
+    "created_at",
+    "last_event_at",
+    "inactive_after",
+    "repo_head",
+    "policy_source",
+    "paths",
+    "staging",
+    "candidate",
+    "tier",
+    "steps",
+    "review",
+    "approval",
+    "authorization",
+    "commit_result",
+    "run_binding",
+    "journal_outbox",
+}
+
+
+EVENT_KEYS = {"sequence", "prev_digest", "payload", "digest"}
+
+
+MERGE_STATE_KEYS = frozenset(
     {
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_COMMON_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_NAMESPACE",
-        "GIT_PREFIX",
-        "GIT_EXTERNAL_DIFF",
-        "GIT_DIFF_OPTS",
-        "GIT_SHALLOW_FILE",
-        "GIT_GRAFT_FILE",
+        "schema",
+        "chain_id",
+        "kind",
+        "state",
+        "created_at",
+        "last_event_at",
+        "inactive_after",
+        "owner",
+        "run",
+        "repository",
+        "worktree",
+        "branch",
+        "target",
+        "policy_source",
+        "candidate",
+        "tier",
+        "steps",
+        "review",
+        "approval",
+        "authorization",
+        "integration",
+        "cleanup",
+        "run_binding",
+        "journal_outbox",
     }
 )
 
 
-_MERGE_REMOTE_ONLY_IDENTITY_FIELDS = (
-    "remote",
-    "destination_ref",
-    "candidate_head",
-    "diff_sha256",
-    "policy_commit",
-    "policy_digest",
-    "worktree_identity",
+_MERGE_INACTIVE_ATTEMPT_OBSERVATION_SOURCES = frozenset(
+    {
+        "classifying",
+        "verifying",
+        "reviewing",
+        "revising",
+        "awaiting_approval",
+        "authorized",
+        "reverifying",
+        "reverification_failed",
+        "pushing",
+    }
 )
+
+
+_MERGE_INACTIVE_POST_ATTEMPT_RECOVERY_SOURCES = frozenset(
+    {"authorized", "awaiting_approval", "pushing"}
+)
+
+
+MERGE_EVENT_KEYS = frozenset(
+    {
+        "schema",
+        "chain_id",
+        "sequence",
+        "at",
+        "event",
+        "generation_digest",
+        "previous_digest",
+        "payload",
+        "digest",
+    }
+)
+
+
+MERGE_EVENT_NAMES = frozenset(
+    {
+        "chain_started",
+        "ownership_intent",
+        "ownership_claimed",
+        "ownership_release_intent",
+        "ownership_released",
+        "gate_recorded",
+        "review_requested",
+        "review_attached",
+        "review_disposition",
+        "approval_recorded",
+        "generation_refreshed",
+        "generation_carried_forward",
+        "epoch_intent",
+        "fetch_intent",
+        "fetch_result",
+        "rebase_intent",
+        "rebase_conflict",
+        "rebase_result",
+        "reverification_result",
+        "push_intent",
+        "push_observed",
+        "cleanup_intent",
+        "cleanup_result",
+        "condition_recorded",
+        "lock_release_result",
+        "aborted",
+        "closed",
+        "journal_receipted",
+    }
+)
+
+
+MERGE_CONSEQUENTIAL_EVENTS = frozenset(
+    {
+        "gate_recorded",
+        "review_attached",
+        "approval_recorded",
+        "generation_carried_forward",
+        "push_observed",
+    }
+)
+
+
+TIER_RANK = {"fast": 0, "standard": 1, "hard": 2}
+
+
+INACTIVE_SECONDS = 24 * 60 * 60
+
+
+FENCED_CHILD_ACK_TIMEOUT_SECONDS = 1.0
+
+
+FENCED_CHILD_DRAIN_SECONDS = 0.1
+
+
+FENCED_CHILD_DRAIN_CAP_BYTES = runtime.OUTPUT_CAP_BYTES + 1
+
+
+FENCED_CHILD_STOP_GRACE_SECONDS = 0.25
+
+
+FENCED_CHILD_REAP_SECONDS = 0.5
+
+
+ZERO_DIGEST = "0" * 64
+
+
+COMMON_LOCK_TIMEOUT_SECONDS = 300.0
+
+
+COMMON_LOCK_POLL_SECONDS = 0.05
+
+
+COMMON_LOCK_RECORD_CAP_BYTES = 16384
+
+
+MERGE_SCOPE_BINDING_CAP_BYTES = 16384
+
+
+COMMON_LOCK_INTENT_NAME = "agent-rebase.lock.intent"
+
+
+COMMON_LOCK_DIRECTORY_NAME = "agent-rebase.lockdir"
+
+
+COMMON_LOCK_OWNER_NAME = "owner.json"
+
+
+COMMON_LOCK_FLOCK_NAME = "agent-rebase.lock"
+
+
+COMMON_LOCK_RECOVERY_NAME = "agent-rebase.recover"
+
+
+COMMON_LOCK_INFLIGHT_NAME = "agent-rebase.inflight"
+
+
+CHAIN_ID_RE = re.compile(r"^c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}$")
+
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+
+
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+_WORKTREE_LOCKS_GUARD = threading.Lock()
+
+
+_WORKTREE_LOCKS: dict[str, threading.RLock] = {}
+
+
+_WORKTREE_LOCK_STATE: dict[tuple[str, int], tuple[int, int]] = {}
 
 
 @contextlib.contextmanager
@@ -141,241 +338,44 @@ def _exclusive_descriptor_lock(
         local_lock.release()
 
 
-_WORKTREE_LOCK_STATE: dict[tuple[str, int], tuple[int, int]] = {}
+_MERGE_REMOTE_ONLY_IDENTITY_FIELDS = (
+    "remote",
+    "destination_ref",
+    "candidate_head",
+    "diff_sha256",
+    "policy_commit",
+    "policy_digest",
+    "worktree_identity",
+)
 
 
-_WORKTREE_LOCKS: dict[str, threading.RLock] = {}
-
-
-_WORKTREE_LOCKS_GUARD = threading.Lock()
-
-
-RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-
-
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
-
-
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-CHAIN_ID_RE = re.compile(r"^c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}$")
-
-
-COMMON_LOCK_INFLIGHT_NAME = "agent-rebase.inflight"
-
-
-COMMON_LOCK_RECOVERY_NAME = "agent-rebase.recover"
-
-
-COMMON_LOCK_FLOCK_NAME = "agent-rebase.lock"
-
-
-COMMON_LOCK_OWNER_NAME = "owner.json"
-
-
-COMMON_LOCK_DIRECTORY_NAME = "agent-rebase.lockdir"
-
-
-COMMON_LOCK_INTENT_NAME = "agent-rebase.lock.intent"
-
-
-MERGE_SCOPE_BINDING_CAP_BYTES = 16384
-
-
-COMMON_LOCK_RECORD_CAP_BYTES = 16384
-
-
-COMMON_LOCK_POLL_SECONDS = 0.05
-
-
-COMMON_LOCK_TIMEOUT_SECONDS = 300.0
-
-
-ZERO_DIGEST = "0" * 64
-
-
-FENCED_CHILD_REAP_SECONDS = 0.5
-
-
-FENCED_CHILD_STOP_GRACE_SECONDS = 0.25
-
-
-FENCED_CHILD_DRAIN_CAP_BYTES = runtime.OUTPUT_CAP_BYTES + 1
-
-
-FENCED_CHILD_DRAIN_SECONDS = 0.1
-
-
-FENCED_CHILD_ACK_TIMEOUT_SECONDS = 1.0
-
-
-INACTIVE_SECONDS = 24 * 60 * 60
-
-
-TIER_RANK = {"fast": 0, "standard": 1, "hard": 2}
-
-
-MERGE_CONSEQUENTIAL_EVENTS = frozenset(
+_MERGE_SCOPE_UNSET = frozenset(
     {
-        "gate_recorded",
-        "review_attached",
-        "approval_recorded",
-        "generation_carried_forward",
-        "push_observed",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+        "GIT_PREFIX",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_DIFF_OPTS",
+        "GIT_SHALLOW_FILE",
+        "GIT_GRAFT_FILE",
     }
 )
 
 
-MERGE_EVENT_NAMES = frozenset(
-    {
-        "chain_started",
-        "ownership_intent",
-        "ownership_claimed",
-        "ownership_release_intent",
-        "ownership_released",
-        "gate_recorded",
-        "review_requested",
-        "review_attached",
-        "review_disposition",
-        "approval_recorded",
-        "generation_refreshed",
-        "generation_carried_forward",
-        "epoch_intent",
-        "fetch_intent",
-        "fetch_result",
-        "rebase_intent",
-        "rebase_conflict",
-        "rebase_result",
-        "reverification_result",
-        "push_intent",
-        "push_observed",
-        "cleanup_intent",
-        "cleanup_result",
-        "condition_recorded",
-        "lock_release_result",
-        "aborted",
-        "closed",
-        "journal_receipted",
-    }
-)
-
-
-MERGE_EVENT_KEYS = frozenset(
-    {
-        "schema",
-        "chain_id",
-        "sequence",
-        "at",
-        "event",
-        "generation_digest",
-        "previous_digest",
-        "payload",
-        "digest",
-    }
-)
-
-
-_MERGE_INACTIVE_POST_ATTEMPT_RECOVERY_SOURCES = frozenset(
-    {"authorized", "awaiting_approval", "pushing"}
-)
-
-
-_MERGE_INACTIVE_ATTEMPT_OBSERVATION_SOURCES = frozenset(
-    {
-        "classifying",
-        "verifying",
-        "reviewing",
-        "revising",
-        "awaiting_approval",
-        "authorized",
-        "reverifying",
-        "reverification_failed",
-        "pushing",
-    }
-)
-
-
-MERGE_STATE_KEYS = frozenset(
-    {
-        "schema",
-        "chain_id",
-        "kind",
-        "state",
-        "created_at",
-        "last_event_at",
-        "inactive_after",
-        "owner",
-        "run",
-        "repository",
-        "worktree",
-        "branch",
-        "target",
-        "policy_source",
-        "candidate",
-        "tier",
-        "steps",
-        "review",
-        "approval",
-        "authorization",
-        "integration",
-        "cleanup",
-        "run_binding",
-        "journal_outbox",
-    }
-)
-
-
-EVENT_KEYS = {"sequence", "prev_digest", "payload", "digest"}
-
-
-STATE_KEYS = {
-    "schema",
-    "chain_id",
-    "kind",
-    "state",
-    "created_at",
-    "last_event_at",
-    "inactive_after",
-    "repo_head",
-    "policy_source",
-    "paths",
-    "staging",
-    "candidate",
-    "tier",
-    "steps",
-    "review",
-    "approval",
-    "authorization",
-    "commit_result",
-    "run_binding",
-    "journal_outbox",
+_MERGE_SCOPE_OVERLAY = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_NO_REPLACE_OBJECTS": "1",
+    "GIT_NO_LAZY_FETCH": "1",
+    "GIT_PAGER": "cat",
+    "PAGER": "cat",
 }
-
-
-STATES = {
-    "classifying",
-    "verifying",
-    "reviewing",
-    "revising",
-    "awaiting_approval",
-    "authorized",
-    "committing",
-    "closed",
-    "aborted",
-}
-
-
-FRESH_REVIEWER_EVALS_REQUESTED_EVENT = "fresh_reviewer_evals_requested"
-
-
-FRESH_REVIEWER_EVALS_REQUESTS = "fresh-reviewer-evals-requests"
-
-
-FRESH_REVIEWER_EVALS_GATE = "fresh-reviewer-evals"
-
-
-KIND = "commit"
-
-
-SCHEMA = "forge-chain/1"

@@ -1,5 +1,6 @@
 # Guardrails (installed 2026-09-13 by /refactor-python:guardrails).
-# Setup: pip install --user pre-commit ruff import-linter && pre-commit install
+# Setup: pip install --user pre-commit ruff==0.16.7 import-linter==2.15 && pre-commit install
+# (keep both pins in sync with .github/workflows/guardrails.yml)
 # Runs: ruff lint + format, the vendored file-size budget, and import contracts.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
