@@ -1,0 +1,4418 @@
+{
+  "module": "scripts/forge/forge_cli/engine.py",
+  "total_lines": 12178,
+  "symbols": [
+    {
+      "name": "TERMINAL_STATES",
+      "kind": "assignment",
+      "line": 62,
+      "end_line": 62,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "TERMINAL_TOUCH_VERBS",
+      "kind": "assignment",
+      "line": 65,
+      "end_line": 65,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "STATE_TRANSITIONS",
+      "kind": "assignment",
+      "line": 68,
+      "end_line": 82,
+      "loc": 15,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "TOKEN_TTL_SECONDS",
+      "kind": "assignment",
+      "line": 85,
+      "end_line": 85,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_REQUIRED_MERGE_LIFECYCLE_CONTROLS",
+      "kind": "assignment",
+      "line": 88,
+      "end_line": 95,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "MERGE_LIFECYCLE_CONTROLS",
+      "kind": "assignment",
+      "line": 98,
+      "end_line": 98,
+      "loc": 1,
+      "refs": [
+        "_REQUIRED_MERGE_LIFECYCLE_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_REQUIRED_ARCHIVE_RECHECK_CONTROLS",
+      "kind": "assignment",
+      "line": 101,
+      "end_line": 103,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "ARCHIVE_RECHECK_CONTROLS",
+      "kind": "assignment",
+      "line": 106,
+      "end_line": 106,
+      "loc": 1,
+      "refs": [
+        "_REQUIRED_ARCHIVE_RECHECK_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_CHAIN_CAPABILITY_LOCK",
+      "kind": "assignment",
+      "line": 109,
+      "end_line": 109,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_CHAIN_CAPABILITIES",
+      "kind": "assignment",
+      "line": 112,
+      "end_line": 112,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_ARCHIVE_MODULE",
+      "kind": "assignment",
+      "line": 115,
+      "end_line": 115,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_ARCHIVE_MODULE_LOCK",
+      "kind": "assignment",
+      "line": 118,
+      "end_line": 118,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "CODEX_EXECUTABLE",
+      "kind": "assignment",
+      "line": 121,
+      "end_line": 121,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA",
+      "kind": "assignment",
+      "line": 124,
+      "end_line": 124,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_FRESH_REVIEWER_REQUEST_CANDIDATE_KEYS",
+      "kind": "assignment",
+      "line": 127,
+      "end_line": 139,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "REVIEW_DIRECT_PACKAGE_MAX_BYTES",
+      "kind": "assignment",
+      "line": 144,
+      "end_line": 144,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "REVIEW_MASTER_WINDOW_BYTES",
+      "kind": "assignment",
+      "line": 148,
+      "end_line": 148,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "REVIEW_COMPLETE_PACKAGE_REFUSAL",
+      "kind": "assignment",
+      "line": 151,
+      "end_line": 153,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "PRODUCED_COMMIT_MISMATCH",
+      "kind": "assignment",
+      "line": 156,
+      "end_line": 159,
+      "loc": 4,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "REVIEW_INSTRUCTION",
+      "kind": "assignment",
+      "line": 162,
+      "end_line": 176,
+      "loc": 15,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "REVIEW_LAUNCHER_CODE",
+      "kind": "assignment",
+      "line": 179,
+      "end_line": 322,
+      "loc": 144,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_process_record",
+      "kind": "function",
+      "line": 325,
+      "end_line": 329,
+      "loc": 5,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_cleanup_remote_fetch_observation",
+      "kind": "function",
+      "line": 332,
+      "end_line": 376,
+      "loc": 45,
+      "refs": [
+        "_merge_cleanup_process_record",
+        "_read_merge_git_metadata"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_ingest_sources",
+      "kind": "function",
+      "line": 379,
+      "end_line": 419,
+      "loc": 41,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_install_ingest_sources",
+      "kind": "function",
+      "line": 422,
+      "end_line": 440,
+      "loc": 19,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_capture_ingest_inputs",
+      "kind": "function",
+      "line": 443,
+      "end_line": 461,
+      "loc": 19,
+      "refs": [
+        "_install_ingest_sources",
+        "_read_ingest_sources"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "commit_message_bytes",
+      "kind": "function",
+      "line": 464,
+      "end_line": 467,
+      "loc": 4,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "chain_id_now",
+      "kind": "function",
+      "line": 470,
+      "end_line": 472,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "promoted_tier",
+      "kind": "function",
+      "line": 475,
+      "end_line": 477,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_transition_state",
+      "kind": "function",
+      "line": 480,
+      "end_line": 492,
+      "loc": 13,
+      "refs": [
+        "STATE_TRANSITIONS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_merge_lifecycle_control",
+      "kind": "function",
+      "line": 495,
+      "end_line": 503,
+      "loc": 9,
+      "refs": [
+        "MERGE_LIFECYCLE_CONTROLS",
+        "_REQUIRED_MERGE_LIFECYCLE_CONTROLS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_reset_merge_nonmovement_counter",
+      "kind": "function",
+      "line": 506,
+      "end_line": 510,
+      "loc": 5,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "FinalizeContext",
+      "kind": "class",
+      "line": 514,
+      "end_line": 522,
+      "loc": 9,
+      "refs": [
+        "Engine"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "ProducedCommitContext",
+      "kind": "class",
+      "line": 526,
+      "end_line": 531,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_produced_head_moved",
+      "kind": "function",
+      "line": 534,
+      "end_line": 535,
+      "loc": 2,
+      "refs": [
+        "ProducedCommitContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_produced_single_parent",
+      "kind": "function",
+      "line": 538,
+      "end_line": 539,
+      "loc": 2,
+      "refs": [
+        "ProducedCommitContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_produced_exact_tree",
+      "kind": "function",
+      "line": 542,
+      "end_line": 543,
+      "loc": 2,
+      "refs": [
+        "ProducedCommitContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_produced_exact_message",
+      "kind": "function",
+      "line": 546,
+      "end_line": 547,
+      "loc": 2,
+      "refs": [
+        "ProducedCommitContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "PRODUCED_COMMIT_CHECKS",
+      "kind": "assignment",
+      "line": 550,
+      "end_line": 555,
+      "loc": 6,
+      "refs": [
+        "ProducedCommitContext",
+        "_produced_exact_message",
+        "_produced_exact_tree",
+        "_produced_head_moved",
+        "_produced_single_parent"
+      ],
+      "mutable_state": true
+    },
+    {
+      "name": "_finalize_produced_identity",
+      "kind": "function",
+      "line": 558,
+      "end_line": 619,
+      "loc": 62,
+      "refs": [
+        "FinalizeContext",
+        "PRODUCED_COMMIT_CHECKS",
+        "ProducedCommitContext",
+        "_write_artifact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_record_produced_identity",
+      "kind": "function",
+      "line": 622,
+      "end_line": 644,
+      "loc": 23,
+      "refs": [
+        "FinalizeContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_produced_mismatch_outcome",
+      "kind": "function",
+      "line": 647,
+      "end_line": 666,
+      "loc": 20,
+      "refs": [
+        "PRODUCED_COMMIT_MISMATCH",
+        "_archive_metadata"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_finalize_halt",
+      "kind": "function",
+      "line": 669,
+      "end_line": 671,
+      "loc": 3,
+      "refs": [
+        "FinalizeContext",
+        "_run_halt"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_finalize_lock",
+      "kind": "function",
+      "line": 674,
+      "end_line": 708,
+      "loc": 35,
+      "refs": [
+        "FinalizeContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_finalize_candidate",
+      "kind": "function",
+      "line": 711,
+      "end_line": 766,
+      "loc": 56,
+      "refs": [
+        "FinalizeContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_finalize_evidence",
+      "kind": "function",
+      "line": 769,
+      "end_line": 848,
+      "loc": 80,
+      "refs": [
+        "FinalizeContext",
+        "_mechanical_complete",
+        "_next_incomplete"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_finalize_fresh_reviewer_evals",
+      "kind": "function",
+      "line": 851,
+      "end_line": 875,
+      "loc": 25,
+      "refs": [
+        "FinalizeContext",
+        "_fresh_eval_invalid_refusal",
+        "_validated_fresh_reviewer_manifest"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_finalize_ttl",
+      "kind": "function",
+      "line": 878,
+      "end_line": 882,
+      "loc": 5,
+      "refs": [
+        "FinalizeContext",
+        "_authorization_problem"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_finalize_tree_drift",
+      "kind": "function",
+      "line": 885,
+      "end_line": 897,
+      "loc": 13,
+      "refs": [
+        "FinalizeContext"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "FINALIZE_CHECKS",
+      "kind": "assignment",
+      "line": 900,
+      "end_line": 909,
+      "loc": 10,
+      "refs": [
+        "FinalizeContext",
+        "_finalize_candidate",
+        "_finalize_evidence",
+        "_finalize_fresh_reviewer_evals",
+        "_finalize_halt",
+        "_finalize_lock",
+        "_finalize_produced_identity",
+        "_finalize_tree_drift",
+        "_finalize_ttl"
+      ],
+      "mutable_state": true
+    },
+    {
+      "name": "ContractArgumentParser",
+      "kind": "class",
+      "line": 912,
+      "end_line": 920,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_extract_global_options",
+      "kind": "function",
+      "line": 923,
+      "end_line": 1060,
+      "loc": 138,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_attach_merge_lifecycle_parser",
+      "kind": "function",
+      "line": 1063,
+      "end_line": 1091,
+      "loc": 29,
+      "refs": [
+        "_require_merge_lifecycle_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "GLOBAL_OPTIONS_HELP",
+      "kind": "assignment",
+      "line": 1094,
+      "end_line": 1108,
+      "loc": 15,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "build_parser",
+      "kind": "function",
+      "line": 1111,
+      "end_line": 1218,
+      "loc": 108,
+      "refs": [
+        "ContractArgumentParser",
+        "GLOBAL_OPTIONS_HELP",
+        "_attach_merge_lifecycle_parser"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_message_from_args",
+      "kind": "function",
+      "line": 1221,
+      "end_line": 1242,
+      "loc": 22,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_revision9_cross_options",
+      "kind": "function",
+      "line": 1245,
+      "end_line": 1352,
+      "loc": 108,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "render",
+      "kind": "function",
+      "line": 1355,
+      "end_line": 1376,
+      "loc": 22,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_raw_top_level_command",
+      "kind": "function",
+      "line": 1379,
+      "end_line": 1398,
+      "loc": 20,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_binding_for_commit_event",
+      "kind": "function",
+      "line": 1401,
+      "end_line": 1428,
+      "loc": 28,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_passed_stack_cell_is_intermediate",
+      "kind": "function",
+      "line": 1431,
+      "end_line": 1443,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_build_chain_journal_records",
+      "kind": "function",
+      "line": 1446,
+      "end_line": 1781,
+      "loc": 336,
+      "refs": [
+        "_binding_for_commit_event",
+        "_passed_stack_cell_is_intermediate"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "inspect_common_lock",
+      "kind": "function",
+      "line": 1789,
+      "end_line": 1797,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_new_state",
+      "kind": "function",
+      "line": 1800,
+      "end_line": 1860,
+      "loc": 61,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_commit_start_binding_refusal",
+      "kind": "function",
+      "line": 1863,
+      "end_line": 1870,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_prove_run_task_binding",
+      "kind": "function",
+      "line": 1873,
+      "end_line": 1934,
+      "loc": 62,
+      "refs": [
+        "_commit_start_binding_refusal"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_archive_module",
+      "kind": "function",
+      "line": 1937,
+      "end_line": 1965,
+      "loc": 29,
+      "refs": [
+        "_ARCHIVE_MODULE",
+        "_ARCHIVE_MODULE_LOCK"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_archive_refusal",
+      "kind": "function",
+      "line": 1968,
+      "end_line": 1986,
+      "loc": 19,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "ARCHIVE_CONTAMINATION",
+      "kind": "assignment",
+      "line": 1989,
+      "end_line": 1991,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_archive_contamination_refusal",
+      "kind": "function",
+      "line": 1994,
+      "end_line": 2005,
+      "loc": 12,
+      "refs": [
+        "ARCHIVE_CONTAMINATION"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_nul_git_paths",
+      "kind": "function",
+      "line": 2008,
+      "end_line": 2009,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_archive_close_tree_clean",
+      "kind": "function",
+      "line": 2012,
+      "end_line": 2029,
+      "loc": 18,
+      "refs": [
+        "_nul_git_paths"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_archive_parent_descriptor",
+      "kind": "function",
+      "line": 2033,
+      "end_line": 2078,
+      "loc": 46,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_archive_candidate_at",
+      "kind": "function",
+      "line": 2081,
+      "end_line": 2123,
+      "loc": 43,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_archive_candidate",
+      "kind": "function",
+      "line": 2126,
+      "end_line": 2128,
+      "loc": 3,
+      "refs": [
+        "_archive_parent_descriptor",
+        "_read_archive_candidate_at"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_render_archive_bytes",
+      "kind": "function",
+      "line": 2131,
+      "end_line": 2188,
+      "loc": 58,
+      "refs": [
+        "_archive_module",
+        "_archive_refusal"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_prepare_archive_candidate",
+      "kind": "function",
+      "line": 2191,
+      "end_line": 2289,
+      "loc": 99,
+      "refs": [
+        "_archive_close_tree_clean",
+        "_archive_contamination_refusal",
+        "_archive_parent_descriptor",
+        "_archive_refusal",
+        "_read_archive_candidate_at",
+        "_render_archive_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_archive_recheck",
+      "kind": "function",
+      "line": 2292,
+      "end_line": 2361,
+      "loc": 70,
+      "refs": [
+        "ARCHIVE_RECHECK_CONTROLS",
+        "_REQUIRED_ARCHIVE_RECHECK_CONTROLS",
+        "_archive_close_tree_clean",
+        "_archive_contamination_refusal",
+        "_archive_refusal",
+        "_read_archive_candidate",
+        "_render_archive_bytes"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_archive_metadata",
+      "kind": "function",
+      "line": 2364,
+      "end_line": 2367,
+      "loc": 4,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_env_fingerprint",
+      "kind": "function",
+      "line": 2370,
+      "end_line": 2386,
+      "loc": 17,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_evidence_record",
+      "kind": "function",
+      "line": 2389,
+      "end_line": 2418,
+      "loc": 30,
+      "refs": [
+        "_env_fingerprint"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_review_package_is_oversized",
+      "kind": "function",
+      "line": 2421,
+      "end_line": 2424,
+      "loc": 4,
+      "refs": [
+        "REVIEW_DIRECT_PACKAGE_MAX_BYTES"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_review_complete_package_refusal",
+      "kind": "function",
+      "line": 2427,
+      "end_line": 2443,
+      "loc": 17,
+      "refs": [
+        "REVIEW_COMPLETE_PACKAGE_REFUSAL"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_review_master_window_count",
+      "kind": "function",
+      "line": 2446,
+      "end_line": 2455,
+      "loc": 10,
+      "refs": [
+        "REVIEW_MASTER_WINDOW_BYTES",
+        "_review_complete_package_refusal"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_review_master_transport",
+      "kind": "function",
+      "line": 2458,
+      "end_line": 2472,
+      "loc": 15,
+      "refs": [
+        "REVIEW_MASTER_WINDOW_BYTES",
+        "_review_master_window_count"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_review_master_pointer_prompt",
+      "kind": "function",
+      "line": 2475,
+      "end_line": 2504,
+      "loc": 30,
+      "refs": [
+        "REVIEW_COMPLETE_PACKAGE_REFUSAL",
+        "_review_master_transport"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_review_master_identity",
+      "kind": "function",
+      "line": 2507,
+      "end_line": 2508,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_review_master_leaf_is_valid",
+      "kind": "function",
+      "line": 2511,
+      "end_line": 2520,
+      "loc": 10,
+      "refs": [
+        "_review_master_identity"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_review_master_digest",
+      "kind": "function",
+      "line": 2523,
+      "end_line": 2541,
+      "loc": 19,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_review_master_window",
+      "kind": "function",
+      "line": 2544,
+      "end_line": 2558,
+      "loc": 15,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_assert_review_master_stable",
+      "kind": "function",
+      "line": 2561,
+      "end_line": 2574,
+      "loc": 14,
+      "refs": [
+        "_review_master_leaf_is_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_iter_verified_master_package_windows",
+      "kind": "function",
+      "line": 2577,
+      "end_line": 2670,
+      "loc": 94,
+      "refs": [
+        "REVIEW_MASTER_WINDOW_BYTES",
+        "_assert_review_master_stable",
+        "_read_review_master_digest",
+        "_read_review_master_window",
+        "_review_master_identity",
+        "_review_master_leaf_is_valid"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "iter_verified_master_package_windows",
+      "kind": "function",
+      "line": 2673,
+      "end_line": 2689,
+      "loc": 17,
+      "refs": [
+        "_iter_verified_master_package_windows",
+        "_review_complete_package_refusal"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_write_artifact",
+      "kind": "function",
+      "line": 2692,
+      "end_line": 2728,
+      "loc": 37,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_bound_artifact",
+      "kind": "function",
+      "line": 2731,
+      "end_line": 2802,
+      "loc": 72,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_FreshEvalArtifactIO",
+      "kind": "class",
+      "line": 2806,
+      "end_line": 2909,
+      "loc": 104,
+      "refs": [
+        "_read_bound_artifact",
+        "_write_artifact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_FreshEvalControlAbort",
+      "kind": "class",
+      "line": 2912,
+      "end_line": 2917,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_eval_requests",
+      "kind": "function",
+      "line": 2920,
+      "end_line": 2933,
+      "loc": 14,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_eval_request_for_step",
+      "kind": "function",
+      "line": 2936,
+      "end_line": 2945,
+      "loc": 10,
+      "refs": [
+        "_fresh_eval_requests"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_eval_evaluation",
+      "kind": "function",
+      "line": 2948,
+      "end_line": 3069,
+      "loc": 122,
+      "refs": [
+        "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA",
+        "_FRESH_REVIEWER_REQUEST_CANDIDATE_KEYS",
+        "_FreshEvalControlAbort",
+        "_fresh_eval_requests",
+        "_run_halt"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validated_fresh_reviewer_manifest",
+      "kind": "function",
+      "line": 3072,
+      "end_line": 3125,
+      "loc": 54,
+      "refs": [
+        "_FreshEvalArtifactIO",
+        "_fresh_eval_evaluation",
+        "_fresh_eval_request_for_step"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_reviewer_evidence_package",
+      "kind": "function",
+      "line": 3128,
+      "end_line": 3258,
+      "loc": 131,
+      "refs": [
+        "_FreshEvalArtifactIO",
+        "_read_bound_artifact",
+        "_validated_fresh_reviewer_manifest"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_eval_invalid_refusal",
+      "kind": "function",
+      "line": 3261,
+      "end_line": 3283,
+      "loc": 23,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_record_fresh_eval_terminal",
+      "kind": "function",
+      "line": 3286,
+      "end_line": 3353,
+      "loc": 68,
+      "refs": [
+        "_record_process_step",
+        "_transition_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_record_process_step",
+      "kind": "function",
+      "line": 3356,
+      "end_line": 3401,
+      "loc": 46,
+      "refs": [
+        "_evidence_record",
+        "_write_artifact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_classification_argv",
+      "kind": "function",
+      "line": 3404,
+      "end_line": 3424,
+      "loc": 21,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_classification_environment",
+      "kind": "function",
+      "line": 3427,
+      "end_line": 3455,
+      "loc": 29,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_run_classification",
+      "kind": "function",
+      "line": 3458,
+      "end_line": 3590,
+      "loc": 133,
+      "refs": [
+        "_classification_argv",
+        "_classification_environment",
+        "_env_fingerprint",
+        "_record_process_step",
+        "_transition_state",
+        "promoted_tier"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_invalidate_candidate_evidence",
+      "kind": "function",
+      "line": 3593,
+      "end_line": 3614,
+      "loc": 22,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_candidate_patch_ref",
+      "kind": "function",
+      "line": 3617,
+      "end_line": 3631,
+      "loc": 15,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_candidate_snapshot",
+      "kind": "function",
+      "line": 3634,
+      "end_line": 3654,
+      "loc": 21,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_install_candidate_snapshot",
+      "kind": "function",
+      "line": 3657,
+      "end_line": 3706,
+      "loc": 50,
+      "refs": [
+        "_read_bound_artifact",
+        "_write_artifact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_candidate_review_diff",
+      "kind": "function",
+      "line": 3709,
+      "end_line": 3744,
+      "loc": 36,
+      "refs": [
+        "_candidate_patch_ref",
+        "_read_bound_artifact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_adopt_out_of_band_candidate",
+      "kind": "function",
+      "line": 3747,
+      "end_line": 3793,
+      "loc": 47,
+      "refs": [
+        "_candidate_snapshot",
+        "_install_candidate_snapshot",
+        "_invalidate_candidate_evidence",
+        "_run_classification",
+        "_transition_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_stage_paths",
+      "kind": "function",
+      "line": 3796,
+      "end_line": 3833,
+      "loc": 38,
+      "refs": [
+        "_candidate_snapshot",
+        "_install_candidate_snapshot"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_current_test_paths",
+      "kind": "function",
+      "line": 3836,
+      "end_line": 3851,
+      "loc": 16,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_void_mismatched_gate_one_pair",
+      "kind": "function",
+      "line": 3854,
+      "end_line": 3897,
+      "loc": 44,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_reviewer_pass_claimed",
+      "kind": "function",
+      "line": 3900,
+      "end_line": 3920,
+      "loc": 21,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_fresh_reviewer_block_claimed",
+      "kind": "function",
+      "line": 3923,
+      "end_line": 3940,
+      "loc": 18,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_mechanical_complete",
+      "kind": "function",
+      "line": 3943,
+      "end_line": 3970,
+      "loc": 28,
+      "refs": [
+        "_fresh_eval_invalid_refusal",
+        "_fresh_reviewer_pass_claimed",
+        "_validated_fresh_reviewer_manifest"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_next_incomplete",
+      "kind": "function",
+      "line": 3973,
+      "end_line": 4015,
+      "loc": 43,
+      "refs": [
+        "_fresh_eval_invalid_refusal",
+        "_fresh_reviewer_pass_claimed",
+        "_validated_fresh_reviewer_manifest"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "SecretFinding",
+      "kind": "class",
+      "line": 4019,
+      "end_line": 4025,
+      "loc": 7,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "SECRET_RULES",
+      "kind": "assignment",
+      "line": 4028,
+      "end_line": 4038,
+      "loc": 11,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "PLACEHOLDER_RE",
+      "kind": "assignment",
+      "line": 4041,
+      "end_line": 4043,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "scan_added_secrets",
+      "kind": "function",
+      "line": 4046,
+      "end_line": 4085,
+      "loc": 40,
+      "refs": [
+        "PLACEHOLDER_RE",
+        "SECRET_RULES",
+        "SecretFinding"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_success",
+      "kind": "function",
+      "line": 4088,
+      "end_line": 4114,
+      "loc": 27,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_issue_authorization",
+      "kind": "function",
+      "line": 4117,
+      "end_line": 4138,
+      "loc": 22,
+      "refs": [
+        "TOKEN_TTL_SECONDS",
+        "_archive_metadata",
+        "_archive_recheck",
+        "_transition_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_pid_is_running",
+      "kind": "function",
+      "line": 4141,
+      "end_line": 4163,
+      "loc": 23,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_authorization_problem",
+      "kind": "function",
+      "line": 4166,
+      "end_line": 4238,
+      "loc": 73,
+      "refs": [
+        "TOKEN_TTL_SECONDS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_verify_operator_harness",
+      "kind": "function",
+      "line": 4241,
+      "end_line": 4289,
+      "loc": 49,
+      "refs": [
+        "_record_process_step"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_run_halt",
+      "kind": "function",
+      "line": 4292,
+      "end_line": 4334,
+      "loc": 43,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_peek_chain_state",
+      "kind": "function",
+      "line": 4337,
+      "end_line": 4347,
+      "loc": 11,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_peek_raw_abort_state",
+      "kind": "function",
+      "line": 4350,
+      "end_line": 4358,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_peek_selected_chain",
+      "kind": "function",
+      "line": 4361,
+      "end_line": 4380,
+      "loc": 20,
+      "refs": [
+        "TERMINAL_STATES",
+        "_peek_chain_state"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_command_run_lock_id",
+      "kind": "function",
+      "line": 4383,
+      "end_line": 4432,
+      "loc": 50,
+      "refs": [
+        "_peek_raw_abort_state",
+        "_peek_selected_chain"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "ABORT_DISPOSITION_PRECONDITIONS",
+      "kind": "assignment",
+      "line": 4435,
+      "end_line": 4444,
+      "loc": 10,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "abort_disposition_refusal",
+      "kind": "function",
+      "line": 4447,
+      "end_line": 4508,
+      "loc": 62,
+      "refs": [
+        "ABORT_DISPOSITION_PRECONDITIONS"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_serialize_worktree_command",
+      "kind": "function",
+      "line": 4511,
+      "end_line": 4574,
+      "loc": 64,
+      "refs": [
+        "_command_run_lock_id",
+        "_commit_start_binding_refusal",
+        "_run_halt"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeAdmission",
+      "kind": "class",
+      "line": 4578,
+      "end_line": 4590,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeScopeResult",
+      "kind": "class",
+      "line": 4594,
+      "end_line": 4601,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeCandidateGeneration",
+      "kind": "class",
+      "line": 4605,
+      "end_line": 4610,
+      "loc": 6,
+      "refs": [
+        "MergeScopeResult"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeBootstrapClassification",
+      "kind": "class",
+      "line": 4614,
+      "end_line": 4622,
+      "loc": 9,
+      "refs": [
+        "MergeScopeResult"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_materialize_merge_candidate_tuple",
+      "kind": "function",
+      "line": 4625,
+      "end_line": 4654,
+      "loc": 30,
+      "refs": [
+        "MergeAdmission"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_CANDIDATE_IDENTITY_FIELDS",
+      "kind": "assignment",
+      "line": 4657,
+      "end_line": 4666,
+      "loc": 10,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_retain_or_advance_merge_candidate",
+      "kind": "function",
+      "line": 4669,
+      "end_line": 4690,
+      "loc": 22,
+      "refs": [
+        "MergeAdmission",
+        "_MERGE_CANDIDATE_IDENTITY_FIELDS",
+        "_materialize_merge_candidate_tuple"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_parse_plugin_manifest",
+      "kind": "function",
+      "line": 4693,
+      "end_line": 4751,
+      "loc": 59,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_parse_history_mutation_mode",
+      "kind": "function",
+      "line": 4754,
+      "end_line": 4767,
+      "loc": 14,
+      "refs": [
+        "_parse_plugin_manifest"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_absolute_git_path",
+      "kind": "function",
+      "line": 4770,
+      "end_line": 4791,
+      "loc": 22,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_registered_worktrees",
+      "kind": "function",
+      "line": 4794,
+      "end_line": 4796,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_worktree_status",
+      "kind": "function",
+      "line": 4799,
+      "end_line": 4846,
+      "loc": 48,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_merge_git_metadata",
+      "kind": "function",
+      "line": 4849,
+      "end_line": 4870,
+      "loc": 22,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_owned_rebase_metadata",
+      "kind": "function",
+      "line": 4873,
+      "end_line": 4937,
+      "loc": 65,
+      "refs": [
+        "_read_merge_git_metadata"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_loud_merge_recovery_mode",
+      "kind": "function",
+      "line": 4940,
+      "end_line": 4964,
+      "loc": 25,
+      "refs": [
+        "_merge_owned_rebase_metadata"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_conflict_path_is_canonical",
+      "kind": "function",
+      "line": 4967,
+      "end_line": 4974,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_parse_merge_conflict_paths",
+      "kind": "function",
+      "line": 4977,
+      "end_line": 4994,
+      "loc": 18,
+      "refs": [
+        "_merge_conflict_path_is_canonical"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_normalize_merge_conflict_paths",
+      "kind": "function",
+      "line": 4997,
+      "end_line": 5011,
+      "loc": 15,
+      "refs": [
+        "_merge_conflict_path_is_canonical"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_nonconflict_index_bytes",
+      "kind": "function",
+      "line": 5014,
+      "end_line": 5025,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_nonconflict_status_bytes",
+      "kind": "function",
+      "line": 5028,
+      "end_line": 5051,
+      "loc": 24,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_observe_merge_conflict",
+      "kind": "function",
+      "line": 5054,
+      "end_line": 5070,
+      "loc": 17,
+      "refs": [
+        "_merge_nonconflict_index_bytes",
+        "_merge_nonconflict_status_bytes",
+        "_parse_merge_conflict_paths"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_observe_merge_post_add",
+      "kind": "function",
+      "line": 5073,
+      "end_line": 5100,
+      "loc": 28,
+      "refs": [
+        "_merge_nonconflict_index_bytes",
+        "_merge_nonconflict_status_bytes",
+        "_normalize_merge_conflict_paths"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_conflict_record",
+      "kind": "function",
+      "line": 5103,
+      "end_line": 5122,
+      "loc": 20,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_conflict_record_matches",
+      "kind": "function",
+      "line": 5125,
+      "end_line": 5145,
+      "loc": 21,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_rebase_result_failed",
+      "kind": "function",
+      "line": 5148,
+      "end_line": 5149,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_branch_reflog_proves_integrated",
+      "kind": "function",
+      "line": 5152,
+      "end_line": 5245,
+      "loc": 94,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_rebase_integrated_observation_binding",
+      "kind": "function",
+      "line": 5248,
+      "end_line": 5287,
+      "loc": 40,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_rebase_operation_metadata_absent",
+      "kind": "function",
+      "line": 5290,
+      "end_line": 5308,
+      "loc": 19,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_rebase_integrated_predicate",
+      "kind": "function",
+      "line": 5311,
+      "end_line": 5398,
+      "loc": 88,
+      "refs": [
+        "_merge_branch_reflog_proves_integrated",
+        "_merge_rebase_integrated_observation_binding",
+        "_merge_rebase_operation_metadata_absent"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_environment",
+      "kind": "function",
+      "line": 5401,
+      "end_line": 5408,
+      "loc": 8,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_GitNoLazyFetchQualification",
+      "kind": "class",
+      "line": 5412,
+      "end_line": 5426,
+      "loc": 15,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_git_environment_digest",
+      "kind": "function",
+      "line": 5429,
+      "end_line": 5440,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_git_executable_qualification",
+      "kind": "function",
+      "line": 5443,
+      "end_line": 5473,
+      "loc": 31,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_qualify_git_no_lazy_fetch",
+      "kind": "function",
+      "line": 5476,
+      "end_line": 5518,
+      "loc": 43,
+      "refs": [
+        "_GitNoLazyFetchQualification",
+        "_git_environment_digest",
+        "_git_executable_qualification",
+        "_merge_scope_environment"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_git_no_lazy_fetch_qualification",
+      "kind": "function",
+      "line": 5521,
+      "end_line": 5548,
+      "loc": 28,
+      "refs": [
+        "_GitNoLazyFetchQualification",
+        "_git_environment_digest",
+        "_git_executable_qualification"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_request",
+      "kind": "function",
+      "line": 5551,
+      "end_line": 5571,
+      "loc": 21,
+      "refs": [
+        "MergeAdmission"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_child_result",
+      "kind": "function",
+      "line": 5574,
+      "end_line": 5596,
+      "loc": 23,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeScopeBindingInspection",
+      "kind": "class",
+      "line": 5600,
+      "end_line": 5605,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_unlink_merge_scope_temporary_at",
+      "kind": "function",
+      "line": 5608,
+      "end_line": 5623,
+      "loc": 16,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_classify_merge_scope_binding_at",
+      "kind": "function",
+      "line": 5626,
+      "end_line": 5673,
+      "loc": 48,
+      "refs": [
+        "MergeScopeBindingInspection"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_classify_merge_scope_binding",
+      "kind": "function",
+      "line": 5676,
+      "end_line": 5713,
+      "loc": 38,
+      "refs": [
+        "MergeScopeBindingInspection",
+        "_classify_merge_scope_binding_at"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_resume_merge_scope_binding",
+      "kind": "function",
+      "line": 5716,
+      "end_line": 5804,
+      "loc": 89,
+      "refs": [
+        "_classify_merge_scope_binding_at",
+        "_unlink_merge_scope_temporary_at"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_discover_merge_scope_fence_from_sidecar",
+      "kind": "function",
+      "line": 5807,
+      "end_line": 5917,
+      "loc": 111,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_publish_merge_scope_binding",
+      "kind": "function",
+      "line": 5920,
+      "end_line": 6092,
+      "loc": 173,
+      "refs": [
+        "_merge_scope_child_result",
+        "_unlink_merge_scope_temporary_at"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_scope_proof",
+      "kind": "function",
+      "line": 6095,
+      "end_line": 6122,
+      "loc": 28,
+      "refs": [
+        "MergeAdmission",
+        "MergeScopeResult"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_BOOTSTRAP_CHILD_SOURCE",
+      "kind": "assignment",
+      "line": 6125,
+      "end_line": 6133,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_bootstrap_child_main",
+      "kind": "function",
+      "line": 6136,
+      "end_line": 6335,
+      "loc": 200,
+      "refs": [
+        "_git_environment_digest",
+        "_parse_merge_name_status_output"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_bootstrap_child_argv",
+      "kind": "function",
+      "line": 6338,
+      "end_line": 6363,
+      "loc": 26,
+      "refs": [
+        "MergeAdmission",
+        "_MERGE_BOOTSTRAP_CHILD_SOURCE"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_decode_merge_bootstrap_result",
+      "kind": "function",
+      "line": 6366,
+      "end_line": 6561,
+      "loc": 196,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_parse_merge_name_status_output",
+      "kind": "function",
+      "line": 6564,
+      "end_line": 6598,
+      "loc": 35,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_parse_merge_scope_output",
+      "kind": "function",
+      "line": 6601,
+      "end_line": 6604,
+      "loc": 4,
+      "refs": [
+        "_parse_merge_name_status_output"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_derive_merge_scope",
+      "kind": "function",
+      "line": 6607,
+      "end_line": 6679,
+      "loc": 73,
+      "refs": [
+        "MergeAdmission",
+        "MergeScopeResult",
+        "_merge_scope_environment",
+        "_parse_merge_scope_output"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_DERIVE_MERGE_SCOPE",
+      "kind": "assignment",
+      "line": 6682,
+      "end_line": 6682,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_merge_scope_from_candidate_observation",
+      "kind": "function",
+      "line": 6685,
+      "end_line": 6753,
+      "loc": 69,
+      "refs": [
+        "MergeAdmission",
+        "MergeScopeResult",
+        "_merge_candidate_observation_outputs",
+        "_parse_merge_scope_output"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "bind_merge_candidate_generation",
+      "kind": "function",
+      "line": 6756,
+      "end_line": 7068,
+      "loc": 313,
+      "refs": [
+        "MergeAdmission",
+        "MergeCandidateGeneration",
+        "MergeScopeResult",
+        "_DERIVE_MERGE_SCOPE",
+        "_derive_merge_scope",
+        "_merge_scope_from_candidate_observation",
+        "_merge_worktree_status",
+        "_parse_merge_candidate_observation"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_run_directory",
+      "kind": "function",
+      "line": 7071,
+      "end_line": 7082,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_write_merge_artifact",
+      "kind": "function",
+      "line": 7085,
+      "end_line": 7104,
+      "loc": 20,
+      "refs": [
+        "_merge_run_directory",
+        "_write_artifact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_merge_artifact",
+      "kind": "function",
+      "line": 7107,
+      "end_line": 7141,
+      "loc": 35,
+      "refs": [
+        "_merge_run_directory",
+        "_read_bound_artifact"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_gate_suite",
+      "kind": "function",
+      "line": 7144,
+      "end_line": 7168,
+      "loc": 25,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_gate_current",
+      "kind": "function",
+      "line": 7171,
+      "end_line": 7185,
+      "loc": 15,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MERGE_INITIAL_INTEGRATION",
+      "kind": "assignment",
+      "line": 7188,
+      "end_line": 7198,
+      "loc": 11,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_validate_merge_claim_record",
+      "kind": "function",
+      "line": 7201,
+      "end_line": 7225,
+      "loc": 25,
+      "refs": [
+        "_require_merge_lifecycle_control"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_owner_directory",
+      "kind": "function",
+      "line": 7229,
+      "end_line": 7240,
+      "loc": 12,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_claim_identity",
+      "kind": "function",
+      "line": 7243,
+      "end_line": 7248,
+      "loc": 6,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_read_merge_claim",
+      "kind": "function",
+      "line": 7251,
+      "end_line": 7257,
+      "loc": 7,
+      "refs": [
+        "_merge_owner_directory",
+        "_validate_merge_claim_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_publish_merge_claim",
+      "kind": "function",
+      "line": 7260,
+      "end_line": 7299,
+      "loc": 40,
+      "refs": [
+        "_merge_owner_directory",
+        "_require_merge_lifecycle_control",
+        "_validate_merge_claim_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_publication_failure",
+      "kind": "function",
+      "line": 7302,
+      "end_line": 7404,
+      "loc": 103,
+      "refs": [
+        "_read_merge_claim"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_remove_merge_claim",
+      "kind": "function",
+      "line": 7407,
+      "end_line": 7466,
+      "loc": 60,
+      "refs": [
+        "_merge_claim_identity",
+        "_merge_owner_directory",
+        "_require_merge_lifecycle_control",
+        "_validate_merge_claim_record"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_event_digest",
+      "kind": "function",
+      "line": 7469,
+      "end_line": 7481,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_epoch_fetch_observation_digest",
+      "kind": "function",
+      "line": 7484,
+      "end_line": 7543,
+      "loc": 60,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_released_predecessor",
+      "kind": "function",
+      "line": 7546,
+      "end_line": 7761,
+      "loc": 216,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_resolve_recorded_merge_tip",
+      "kind": "function",
+      "line": 7764,
+      "end_line": 7790,
+      "loc": 27,
+      "refs": [
+        "MergeAdmission"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_inactive",
+      "kind": "function",
+      "line": 7793,
+      "end_line": 7801,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_unpublished_claim_absent",
+      "kind": "function",
+      "line": 7804,
+      "end_line": 7824,
+      "loc": 21,
+      "refs": [
+        "_merge_claim_identity",
+        "_merge_owner_directory"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_has_attempt",
+      "kind": "function",
+      "line": 7827,
+      "end_line": 7831,
+      "loc": 5,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_inactive_epoch_has_no_started_child",
+      "kind": "function",
+      "line": 7834,
+      "end_line": 7873,
+      "loc": 40,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_require_active_merge_epoch",
+      "kind": "function",
+      "line": 7876,
+      "end_line": 7893,
+      "loc": 18,
+      "refs": [
+        "_merge_inactive"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_process_unresolved",
+      "kind": "function",
+      "line": 7896,
+      "end_line": 7929,
+      "loc": 34,
+      "refs": [
+        "inspect_common_lock"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_MergeEpochBudget",
+      "kind": "class",
+      "line": 7933,
+      "end_line": 7959,
+      "loc": 27,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_epoch_suite",
+      "kind": "function",
+      "line": 7962,
+      "end_line": 7979,
+      "loc": 18,
+      "refs": [
+        "_merge_gate_suite"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_remote_observation_intent",
+      "kind": "function",
+      "line": 7982,
+      "end_line": 8009,
+      "loc": 28,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_candidate_observation_outputs",
+      "kind": "function",
+      "line": 8012,
+      "end_line": 8035,
+      "loc": 24,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_parse_merge_candidate_observation",
+      "kind": "function",
+      "line": 8038,
+      "end_line": 8302,
+      "loc": 265,
+      "refs": [
+        "_merge_candidate_observation_outputs",
+        "_parse_plugin_manifest"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "Engine",
+      "kind": "class",
+      "line": 8305,
+      "end_line": 11982,
+      "loc": 3678,
+      "refs": [
+        "CODEX_EXECUTABLE",
+        "FINALIZE_CHECKS",
+        "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA",
+        "FinalizeContext",
+        "PRODUCED_COMMIT_CHECKS",
+        "REVIEW_INSTRUCTION",
+        "REVIEW_LAUNCHER_CODE",
+        "REVIEW_MASTER_WINDOW_BYTES",
+        "TERMINAL_STATES",
+        "TERMINAL_TOUCH_VERBS",
+        "_FreshEvalArtifactIO",
+        "_FreshEvalControlAbort",
+        "_adopt_out_of_band_candidate",
+        "_archive_contamination_refusal",
+        "_archive_metadata",
+        "_archive_recheck",
+        "_authorization_problem",
+        "_candidate_review_diff",
+        "_candidate_snapshot",
+        "_classification_argv",
+        "_classification_environment",
+        "_current_test_paths",
+        "_evidence_record",
+        "_fresh_eval_evaluation",
+        "_fresh_eval_invalid_refusal",
+        "_fresh_reviewer_block_claimed",
+        "_fresh_reviewer_evidence_package",
+        "_install_candidate_snapshot",
+        "_install_ingest_sources",
+        "_invalidate_candidate_evidence",
+        "_issue_authorization",
+        "_mechanical_complete",
+        "_new_state",
+        "_next_incomplete",
+        "_pid_is_running",
+        "_prepare_archive_candidate",
+        "_produced_mismatch_outcome",
+        "_prove_run_task_binding",
+        "_read_bound_artifact",
+        "_read_ingest_sources",
+        "_record_fresh_eval_terminal",
+        "_record_process_step",
+        "_record_produced_identity",
+        "_review_master_pointer_prompt",
+        "_review_master_transport",
+        "_review_master_window_count",
+        "_review_package_is_oversized",
+        "_run_classification",
+        "_run_halt",
+        "_serialize_worktree_command",
+        "_stage_paths",
+        "_success",
+        "_transition_state",
+        "_validated_fresh_reviewer_manifest",
+        "_verify_operator_harness",
+        "_void_mismatched_gate_one_pair",
+        "_write_artifact",
+        "abort_disposition_refusal",
+        "chain_id_now",
+        "commit_message_bytes",
+        "scan_added_secrets"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "__all__",
+      "kind": "assignment",
+      "line": 11985,
+      "end_line": 12177,
+      "loc": 193,
+      "refs": [],
+      "mutable_state": true
+    }
+  ],
+  "edges": [
+    [
+      "MERGE_LIFECYCLE_CONTROLS",
+      "_REQUIRED_MERGE_LIFECYCLE_CONTROLS"
+    ],
+    [
+      "ARCHIVE_RECHECK_CONTROLS",
+      "_REQUIRED_ARCHIVE_RECHECK_CONTROLS"
+    ],
+    [
+      "_merge_cleanup_remote_fetch_observation",
+      "_read_merge_git_metadata"
+    ],
+    [
+      "_merge_cleanup_remote_fetch_observation",
+      "_merge_cleanup_process_record"
+    ],
+    [
+      "_capture_ingest_inputs",
+      "_read_ingest_sources"
+    ],
+    [
+      "_capture_ingest_inputs",
+      "_install_ingest_sources"
+    ],
+    [
+      "_transition_state",
+      "STATE_TRANSITIONS"
+    ],
+    [
+      "_require_merge_lifecycle_control",
+      "_REQUIRED_MERGE_LIFECYCLE_CONTROLS"
+    ],
+    [
+      "_require_merge_lifecycle_control",
+      "MERGE_LIFECYCLE_CONTROLS"
+    ],
+    [
+      "FinalizeContext",
+      "Engine"
+    ],
+    [
+      "_produced_head_moved",
+      "ProducedCommitContext"
+    ],
+    [
+      "_produced_single_parent",
+      "ProducedCommitContext"
+    ],
+    [
+      "_produced_exact_tree",
+      "ProducedCommitContext"
+    ],
+    [
+      "_produced_exact_message",
+      "ProducedCommitContext"
+    ],
+    [
+      "PRODUCED_COMMIT_CHECKS",
+      "_produced_head_moved"
+    ],
+    [
+      "PRODUCED_COMMIT_CHECKS",
+      "ProducedCommitContext"
+    ],
+    [
+      "PRODUCED_COMMIT_CHECKS",
+      "_produced_exact_tree"
+    ],
+    [
+      "PRODUCED_COMMIT_CHECKS",
+      "_produced_single_parent"
+    ],
+    [
+      "PRODUCED_COMMIT_CHECKS",
+      "_produced_exact_message"
+    ],
+    [
+      "_finalize_produced_identity",
+      "ProducedCommitContext"
+    ],
+    [
+      "_finalize_produced_identity",
+      "FinalizeContext"
+    ],
+    [
+      "_finalize_produced_identity",
+      "_write_artifact"
+    ],
+    [
+      "_finalize_produced_identity",
+      "PRODUCED_COMMIT_CHECKS"
+    ],
+    [
+      "_record_produced_identity",
+      "FinalizeContext"
+    ],
+    [
+      "_produced_mismatch_outcome",
+      "_archive_metadata"
+    ],
+    [
+      "_produced_mismatch_outcome",
+      "PRODUCED_COMMIT_MISMATCH"
+    ],
+    [
+      "_finalize_halt",
+      "_run_halt"
+    ],
+    [
+      "_finalize_halt",
+      "FinalizeContext"
+    ],
+    [
+      "_finalize_lock",
+      "FinalizeContext"
+    ],
+    [
+      "_finalize_candidate",
+      "FinalizeContext"
+    ],
+    [
+      "_finalize_evidence",
+      "_next_incomplete"
+    ],
+    [
+      "_finalize_evidence",
+      "_mechanical_complete"
+    ],
+    [
+      "_finalize_evidence",
+      "FinalizeContext"
+    ],
+    [
+      "_finalize_fresh_reviewer_evals",
+      "_fresh_eval_invalid_refusal"
+    ],
+    [
+      "_finalize_fresh_reviewer_evals",
+      "FinalizeContext"
+    ],
+    [
+      "_finalize_fresh_reviewer_evals",
+      "_validated_fresh_reviewer_manifest"
+    ],
+    [
+      "_finalize_ttl",
+      "_authorization_problem"
+    ],
+    [
+      "_finalize_ttl",
+      "FinalizeContext"
+    ],
+    [
+      "_finalize_tree_drift",
+      "FinalizeContext"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_tree_drift"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_lock"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_evidence"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "FinalizeContext"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_fresh_reviewer_evals"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_candidate"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_produced_identity"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_halt"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_ttl"
+    ],
+    [
+      "_attach_merge_lifecycle_parser",
+      "_require_merge_lifecycle_control"
+    ],
+    [
+      "build_parser",
+      "ContractArgumentParser"
+    ],
+    [
+      "build_parser",
+      "GLOBAL_OPTIONS_HELP"
+    ],
+    [
+      "build_parser",
+      "_attach_merge_lifecycle_parser"
+    ],
+    [
+      "_build_chain_journal_records",
+      "_passed_stack_cell_is_intermediate"
+    ],
+    [
+      "_build_chain_journal_records",
+      "_binding_for_commit_event"
+    ],
+    [
+      "_prove_run_task_binding",
+      "_commit_start_binding_refusal"
+    ],
+    [
+      "_archive_module",
+      "_ARCHIVE_MODULE_LOCK"
+    ],
+    [
+      "_archive_module",
+      "_ARCHIVE_MODULE"
+    ],
+    [
+      "_archive_contamination_refusal",
+      "ARCHIVE_CONTAMINATION"
+    ],
+    [
+      "_archive_close_tree_clean",
+      "_nul_git_paths"
+    ],
+    [
+      "_read_archive_candidate",
+      "_archive_parent_descriptor"
+    ],
+    [
+      "_read_archive_candidate",
+      "_read_archive_candidate_at"
+    ],
+    [
+      "_render_archive_bytes",
+      "_archive_module"
+    ],
+    [
+      "_render_archive_bytes",
+      "_archive_refusal"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_archive_close_tree_clean"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_render_archive_bytes"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_archive_parent_descriptor"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_archive_refusal"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_archive_contamination_refusal"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_read_archive_candidate_at"
+    ],
+    [
+      "_archive_recheck",
+      "_archive_close_tree_clean"
+    ],
+    [
+      "_archive_recheck",
+      "_render_archive_bytes"
+    ],
+    [
+      "_archive_recheck",
+      "_archive_refusal"
+    ],
+    [
+      "_archive_recheck",
+      "_archive_contamination_refusal"
+    ],
+    [
+      "_archive_recheck",
+      "_REQUIRED_ARCHIVE_RECHECK_CONTROLS"
+    ],
+    [
+      "_archive_recheck",
+      "ARCHIVE_RECHECK_CONTROLS"
+    ],
+    [
+      "_archive_recheck",
+      "_read_archive_candidate"
+    ],
+    [
+      "_evidence_record",
+      "_env_fingerprint"
+    ],
+    [
+      "_review_package_is_oversized",
+      "REVIEW_DIRECT_PACKAGE_MAX_BYTES"
+    ],
+    [
+      "_review_complete_package_refusal",
+      "REVIEW_COMPLETE_PACKAGE_REFUSAL"
+    ],
+    [
+      "_review_master_window_count",
+      "REVIEW_MASTER_WINDOW_BYTES"
+    ],
+    [
+      "_review_master_window_count",
+      "_review_complete_package_refusal"
+    ],
+    [
+      "_review_master_transport",
+      "REVIEW_MASTER_WINDOW_BYTES"
+    ],
+    [
+      "_review_master_transport",
+      "_review_master_window_count"
+    ],
+    [
+      "_review_master_pointer_prompt",
+      "REVIEW_COMPLETE_PACKAGE_REFUSAL"
+    ],
+    [
+      "_review_master_pointer_prompt",
+      "_review_master_transport"
+    ],
+    [
+      "_review_master_leaf_is_valid",
+      "_review_master_identity"
+    ],
+    [
+      "_assert_review_master_stable",
+      "_review_master_leaf_is_valid"
+    ],
+    [
+      "_iter_verified_master_package_windows",
+      "_review_master_leaf_is_valid"
+    ],
+    [
+      "_iter_verified_master_package_windows",
+      "_read_review_master_digest"
+    ],
+    [
+      "_iter_verified_master_package_windows",
+      "_read_review_master_window"
+    ],
+    [
+      "_iter_verified_master_package_windows",
+      "REVIEW_MASTER_WINDOW_BYTES"
+    ],
+    [
+      "_iter_verified_master_package_windows",
+      "_review_master_identity"
+    ],
+    [
+      "_iter_verified_master_package_windows",
+      "_assert_review_master_stable"
+    ],
+    [
+      "iter_verified_master_package_windows",
+      "_iter_verified_master_package_windows"
+    ],
+    [
+      "iter_verified_master_package_windows",
+      "_review_complete_package_refusal"
+    ],
+    [
+      "_FreshEvalArtifactIO",
+      "_read_bound_artifact"
+    ],
+    [
+      "_FreshEvalArtifactIO",
+      "_write_artifact"
+    ],
+    [
+      "_fresh_eval_request_for_step",
+      "_fresh_eval_requests"
+    ],
+    [
+      "_fresh_eval_evaluation",
+      "_fresh_eval_requests"
+    ],
+    [
+      "_fresh_eval_evaluation",
+      "_FreshEvalControlAbort"
+    ],
+    [
+      "_fresh_eval_evaluation",
+      "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA"
+    ],
+    [
+      "_fresh_eval_evaluation",
+      "_run_halt"
+    ],
+    [
+      "_fresh_eval_evaluation",
+      "_FRESH_REVIEWER_REQUEST_CANDIDATE_KEYS"
+    ],
+    [
+      "_validated_fresh_reviewer_manifest",
+      "_fresh_eval_request_for_step"
+    ],
+    [
+      "_validated_fresh_reviewer_manifest",
+      "_FreshEvalArtifactIO"
+    ],
+    [
+      "_validated_fresh_reviewer_manifest",
+      "_fresh_eval_evaluation"
+    ],
+    [
+      "_fresh_reviewer_evidence_package",
+      "_read_bound_artifact"
+    ],
+    [
+      "_fresh_reviewer_evidence_package",
+      "_FreshEvalArtifactIO"
+    ],
+    [
+      "_fresh_reviewer_evidence_package",
+      "_validated_fresh_reviewer_manifest"
+    ],
+    [
+      "_record_fresh_eval_terminal",
+      "_transition_state"
+    ],
+    [
+      "_record_fresh_eval_terminal",
+      "_record_process_step"
+    ],
+    [
+      "_record_process_step",
+      "_evidence_record"
+    ],
+    [
+      "_record_process_step",
+      "_write_artifact"
+    ],
+    [
+      "_run_classification",
+      "_classification_environment"
+    ],
+    [
+      "_run_classification",
+      "_env_fingerprint"
+    ],
+    [
+      "_run_classification",
+      "_classification_argv"
+    ],
+    [
+      "_run_classification",
+      "_record_process_step"
+    ],
+    [
+      "_run_classification",
+      "_transition_state"
+    ],
+    [
+      "_run_classification",
+      "promoted_tier"
+    ],
+    [
+      "_install_candidate_snapshot",
+      "_read_bound_artifact"
+    ],
+    [
+      "_install_candidate_snapshot",
+      "_write_artifact"
+    ],
+    [
+      "_candidate_review_diff",
+      "_read_bound_artifact"
+    ],
+    [
+      "_candidate_review_diff",
+      "_candidate_patch_ref"
+    ],
+    [
+      "_adopt_out_of_band_candidate",
+      "_invalidate_candidate_evidence"
+    ],
+    [
+      "_adopt_out_of_band_candidate",
+      "_run_classification"
+    ],
+    [
+      "_adopt_out_of_band_candidate",
+      "_install_candidate_snapshot"
+    ],
+    [
+      "_adopt_out_of_band_candidate",
+      "_transition_state"
+    ],
+    [
+      "_adopt_out_of_band_candidate",
+      "_candidate_snapshot"
+    ],
+    [
+      "_stage_paths",
+      "_install_candidate_snapshot"
+    ],
+    [
+      "_stage_paths",
+      "_candidate_snapshot"
+    ],
+    [
+      "_mechanical_complete",
+      "_fresh_eval_invalid_refusal"
+    ],
+    [
+      "_mechanical_complete",
+      "_fresh_reviewer_pass_claimed"
+    ],
+    [
+      "_mechanical_complete",
+      "_validated_fresh_reviewer_manifest"
+    ],
+    [
+      "_next_incomplete",
+      "_fresh_eval_invalid_refusal"
+    ],
+    [
+      "_next_incomplete",
+      "_fresh_reviewer_pass_claimed"
+    ],
+    [
+      "_next_incomplete",
+      "_validated_fresh_reviewer_manifest"
+    ],
+    [
+      "scan_added_secrets",
+      "SECRET_RULES"
+    ],
+    [
+      "scan_added_secrets",
+      "SecretFinding"
+    ],
+    [
+      "scan_added_secrets",
+      "PLACEHOLDER_RE"
+    ],
+    [
+      "_issue_authorization",
+      "_archive_metadata"
+    ],
+    [
+      "_issue_authorization",
+      "_transition_state"
+    ],
+    [
+      "_issue_authorization",
+      "TOKEN_TTL_SECONDS"
+    ],
+    [
+      "_issue_authorization",
+      "_archive_recheck"
+    ],
+    [
+      "_authorization_problem",
+      "TOKEN_TTL_SECONDS"
+    ],
+    [
+      "_verify_operator_harness",
+      "_record_process_step"
+    ],
+    [
+      "_peek_selected_chain",
+      "_peek_chain_state"
+    ],
+    [
+      "_peek_selected_chain",
+      "TERMINAL_STATES"
+    ],
+    [
+      "_command_run_lock_id",
+      "_peek_raw_abort_state"
+    ],
+    [
+      "_command_run_lock_id",
+      "_peek_selected_chain"
+    ],
+    [
+      "abort_disposition_refusal",
+      "ABORT_DISPOSITION_PRECONDITIONS"
+    ],
+    [
+      "_serialize_worktree_command",
+      "_run_halt"
+    ],
+    [
+      "_serialize_worktree_command",
+      "_command_run_lock_id"
+    ],
+    [
+      "_serialize_worktree_command",
+      "_commit_start_binding_refusal"
+    ],
+    [
+      "MergeCandidateGeneration",
+      "MergeScopeResult"
+    ],
+    [
+      "MergeBootstrapClassification",
+      "MergeScopeResult"
+    ],
+    [
+      "_materialize_merge_candidate_tuple",
+      "MergeAdmission"
+    ],
+    [
+      "_retain_or_advance_merge_candidate",
+      "_materialize_merge_candidate_tuple"
+    ],
+    [
+      "_retain_or_advance_merge_candidate",
+      "MergeAdmission"
+    ],
+    [
+      "_retain_or_advance_merge_candidate",
+      "_MERGE_CANDIDATE_IDENTITY_FIELDS"
+    ],
+    [
+      "_parse_history_mutation_mode",
+      "_parse_plugin_manifest"
+    ],
+    [
+      "_merge_owned_rebase_metadata",
+      "_read_merge_git_metadata"
+    ],
+    [
+      "_require_loud_merge_recovery_mode",
+      "_merge_owned_rebase_metadata"
+    ],
+    [
+      "_parse_merge_conflict_paths",
+      "_merge_conflict_path_is_canonical"
+    ],
+    [
+      "_normalize_merge_conflict_paths",
+      "_merge_conflict_path_is_canonical"
+    ],
+    [
+      "_observe_merge_conflict",
+      "_merge_nonconflict_index_bytes"
+    ],
+    [
+      "_observe_merge_conflict",
+      "_merge_nonconflict_status_bytes"
+    ],
+    [
+      "_observe_merge_conflict",
+      "_parse_merge_conflict_paths"
+    ],
+    [
+      "_observe_merge_post_add",
+      "_merge_nonconflict_index_bytes"
+    ],
+    [
+      "_observe_merge_post_add",
+      "_merge_nonconflict_status_bytes"
+    ],
+    [
+      "_observe_merge_post_add",
+      "_normalize_merge_conflict_paths"
+    ],
+    [
+      "_merge_rebase_integrated_predicate",
+      "_merge_branch_reflog_proves_integrated"
+    ],
+    [
+      "_merge_rebase_integrated_predicate",
+      "_merge_rebase_integrated_observation_binding"
+    ],
+    [
+      "_merge_rebase_integrated_predicate",
+      "_merge_rebase_operation_metadata_absent"
+    ],
+    [
+      "_qualify_git_no_lazy_fetch",
+      "_GitNoLazyFetchQualification"
+    ],
+    [
+      "_qualify_git_no_lazy_fetch",
+      "_git_environment_digest"
+    ],
+    [
+      "_qualify_git_no_lazy_fetch",
+      "_merge_scope_environment"
+    ],
+    [
+      "_qualify_git_no_lazy_fetch",
+      "_git_executable_qualification"
+    ],
+    [
+      "_require_git_no_lazy_fetch_qualification",
+      "_GitNoLazyFetchQualification"
+    ],
+    [
+      "_require_git_no_lazy_fetch_qualification",
+      "_git_environment_digest"
+    ],
+    [
+      "_require_git_no_lazy_fetch_qualification",
+      "_git_executable_qualification"
+    ],
+    [
+      "_merge_scope_request",
+      "MergeAdmission"
+    ],
+    [
+      "_classify_merge_scope_binding_at",
+      "MergeScopeBindingInspection"
+    ],
+    [
+      "_classify_merge_scope_binding",
+      "MergeScopeBindingInspection"
+    ],
+    [
+      "_classify_merge_scope_binding",
+      "_classify_merge_scope_binding_at"
+    ],
+    [
+      "_resume_merge_scope_binding",
+      "_classify_merge_scope_binding_at"
+    ],
+    [
+      "_resume_merge_scope_binding",
+      "_unlink_merge_scope_temporary_at"
+    ],
+    [
+      "_publish_merge_scope_binding",
+      "_merge_scope_child_result"
+    ],
+    [
+      "_publish_merge_scope_binding",
+      "_unlink_merge_scope_temporary_at"
+    ],
+    [
+      "_merge_scope_proof",
+      "MergeAdmission"
+    ],
+    [
+      "_merge_scope_proof",
+      "MergeScopeResult"
+    ],
+    [
+      "_merge_bootstrap_child_main",
+      "_parse_merge_name_status_output"
+    ],
+    [
+      "_merge_bootstrap_child_main",
+      "_git_environment_digest"
+    ],
+    [
+      "_merge_bootstrap_child_argv",
+      "_MERGE_BOOTSTRAP_CHILD_SOURCE"
+    ],
+    [
+      "_merge_bootstrap_child_argv",
+      "MergeAdmission"
+    ],
+    [
+      "_parse_merge_scope_output",
+      "_parse_merge_name_status_output"
+    ],
+    [
+      "_derive_merge_scope",
+      "MergeAdmission"
+    ],
+    [
+      "_derive_merge_scope",
+      "_parse_merge_scope_output"
+    ],
+    [
+      "_derive_merge_scope",
+      "_merge_scope_environment"
+    ],
+    [
+      "_derive_merge_scope",
+      "MergeScopeResult"
+    ],
+    [
+      "_merge_scope_from_candidate_observation",
+      "MergeAdmission"
+    ],
+    [
+      "_merge_scope_from_candidate_observation",
+      "_parse_merge_scope_output"
+    ],
+    [
+      "_merge_scope_from_candidate_observation",
+      "_merge_candidate_observation_outputs"
+    ],
+    [
+      "_merge_scope_from_candidate_observation",
+      "MergeScopeResult"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "_derive_merge_scope"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "_parse_merge_candidate_observation"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "MergeAdmission"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "MergeScopeResult"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "_DERIVE_MERGE_SCOPE"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "_merge_scope_from_candidate_observation"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "MergeCandidateGeneration"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "_merge_worktree_status"
+    ],
+    [
+      "_write_merge_artifact",
+      "_merge_run_directory"
+    ],
+    [
+      "_write_merge_artifact",
+      "_write_artifact"
+    ],
+    [
+      "_read_merge_artifact",
+      "_read_bound_artifact"
+    ],
+    [
+      "_read_merge_artifact",
+      "_merge_run_directory"
+    ],
+    [
+      "_validate_merge_claim_record",
+      "_require_merge_lifecycle_control"
+    ],
+    [
+      "_read_merge_claim",
+      "_merge_owner_directory"
+    ],
+    [
+      "_read_merge_claim",
+      "_validate_merge_claim_record"
+    ],
+    [
+      "_publish_merge_claim",
+      "_merge_owner_directory"
+    ],
+    [
+      "_publish_merge_claim",
+      "_validate_merge_claim_record"
+    ],
+    [
+      "_publish_merge_claim",
+      "_require_merge_lifecycle_control"
+    ],
+    [
+      "_merge_publication_failure",
+      "_read_merge_claim"
+    ],
+    [
+      "_remove_merge_claim",
+      "_merge_owner_directory"
+    ],
+    [
+      "_remove_merge_claim",
+      "_merge_claim_identity"
+    ],
+    [
+      "_remove_merge_claim",
+      "_validate_merge_claim_record"
+    ],
+    [
+      "_remove_merge_claim",
+      "_require_merge_lifecycle_control"
+    ],
+    [
+      "_resolve_recorded_merge_tip",
+      "MergeAdmission"
+    ],
+    [
+      "_merge_unpublished_claim_absent",
+      "_merge_owner_directory"
+    ],
+    [
+      "_merge_unpublished_claim_absent",
+      "_merge_claim_identity"
+    ],
+    [
+      "_require_active_merge_epoch",
+      "_merge_inactive"
+    ],
+    [
+      "_merge_process_unresolved",
+      "inspect_common_lock"
+    ],
+    [
+      "_merge_epoch_suite",
+      "_merge_gate_suite"
+    ],
+    [
+      "_parse_merge_candidate_observation",
+      "_parse_plugin_manifest"
+    ],
+    [
+      "_parse_merge_candidate_observation",
+      "_merge_candidate_observation_outputs"
+    ],
+    [
+      "Engine",
+      "_fresh_eval_invalid_refusal"
+    ],
+    [
+      "Engine",
+      "_FreshEvalControlAbort"
+    ],
+    [
+      "Engine",
+      "_pid_is_running"
+    ],
+    [
+      "Engine",
+      "_install_ingest_sources"
+    ],
+    [
+      "Engine",
+      "_classification_argv"
+    ],
+    [
+      "Engine",
+      "PRODUCED_COMMIT_CHECKS"
+    ],
+    [
+      "Engine",
+      "commit_message_bytes"
+    ],
+    [
+      "Engine",
+      "CODEX_EXECUTABLE"
+    ],
+    [
+      "Engine",
+      "FINALIZE_CHECKS"
+    ],
+    [
+      "Engine",
+      "_evidence_record"
+    ],
+    [
+      "Engine",
+      "_FreshEvalArtifactIO"
+    ],
+    [
+      "Engine",
+      "_verify_operator_harness"
+    ],
+    [
+      "Engine",
+      "_archive_metadata"
+    ],
+    [
+      "Engine",
+      "REVIEW_INSTRUCTION"
+    ],
+    [
+      "Engine",
+      "_transition_state"
+    ],
+    [
+      "Engine",
+      "_mechanical_complete"
+    ],
+    [
+      "Engine",
+      "scan_added_secrets"
+    ],
+    [
+      "Engine",
+      "_review_master_pointer_prompt"
+    ],
+    [
+      "Engine",
+      "REVIEW_LAUNCHER_CODE"
+    ],
+    [
+      "Engine",
+      "_fresh_eval_evaluation"
+    ],
+    [
+      "Engine",
+      "_fresh_reviewer_evidence_package"
+    ],
+    [
+      "Engine",
+      "_archive_recheck"
+    ],
+    [
+      "Engine",
+      "_read_bound_artifact"
+    ],
+    [
+      "Engine",
+      "_issue_authorization"
+    ],
+    [
+      "Engine",
+      "_current_test_paths"
+    ],
+    [
+      "Engine",
+      "TERMINAL_STATES"
+    ],
+    [
+      "Engine",
+      "_adopt_out_of_band_candidate"
+    ],
+    [
+      "Engine",
+      "_serialize_worktree_command"
+    ],
+    [
+      "Engine",
+      "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA"
+    ],
+    [
+      "Engine",
+      "_run_halt"
+    ],
+    [
+      "Engine",
+      "_authorization_problem"
+    ],
+    [
+      "Engine",
+      "_run_classification"
+    ],
+    [
+      "Engine",
+      "abort_disposition_refusal"
+    ],
+    [
+      "Engine",
+      "_install_candidate_snapshot"
+    ],
+    [
+      "Engine",
+      "_record_produced_identity"
+    ],
+    [
+      "Engine",
+      "_candidate_review_diff"
+    ],
+    [
+      "Engine",
+      "_candidate_snapshot"
+    ],
+    [
+      "Engine",
+      "_void_mismatched_gate_one_pair"
+    ],
+    [
+      "Engine",
+      "_next_incomplete"
+    ],
+    [
+      "Engine",
+      "_success"
+    ],
+    [
+      "Engine",
+      "chain_id_now"
+    ],
+    [
+      "Engine",
+      "_write_artifact"
+    ],
+    [
+      "Engine",
+      "_produced_mismatch_outcome"
+    ],
+    [
+      "Engine",
+      "_invalidate_candidate_evidence"
+    ],
+    [
+      "Engine",
+      "_archive_contamination_refusal"
+    ],
+    [
+      "Engine",
+      "_record_process_step"
+    ],
+    [
+      "Engine",
+      "_fresh_reviewer_block_claimed"
+    ],
+    [
+      "Engine",
+      "_prove_run_task_binding"
+    ],
+    [
+      "Engine",
+      "_review_master_transport"
+    ],
+    [
+      "Engine",
+      "_classification_environment"
+    ],
+    [
+      "Engine",
+      "FinalizeContext"
+    ],
+    [
+      "Engine",
+      "_review_master_window_count"
+    ],
+    [
+      "Engine",
+      "TERMINAL_TOUCH_VERBS"
+    ],
+    [
+      "Engine",
+      "_read_ingest_sources"
+    ],
+    [
+      "Engine",
+      "_new_state"
+    ],
+    [
+      "Engine",
+      "_prepare_archive_candidate"
+    ],
+    [
+      "Engine",
+      "REVIEW_MASTER_WINDOW_BYTES"
+    ],
+    [
+      "Engine",
+      "_validated_fresh_reviewer_manifest"
+    ],
+    [
+      "Engine",
+      "_review_package_is_oversized"
+    ],
+    [
+      "Engine",
+      "_stage_paths"
+    ],
+    [
+      "Engine",
+      "_record_fresh_eval_terminal"
+    ]
+  ],
+  "hubs": [
+    "FinalizeContext",
+    "MergeAdmission",
+    "_write_artifact",
+    "_read_bound_artifact",
+    "MergeScopeResult",
+    "_transition_state",
+    "ProducedCommitContext",
+    "_validated_fresh_reviewer_manifest",
+    "_require_merge_lifecycle_control",
+    "_fresh_eval_invalid_refusal",
+    "_record_process_step",
+    "_run_halt"
+  ],
+  "fan_in": {
+    "_merge_cleanup_process_record": 1,
+    "_merge_cleanup_remote_fetch_observation": 0,
+    "_read_ingest_sources": 2,
+    "_install_ingest_sources": 2,
+    "_capture_ingest_inputs": 0,
+    "commit_message_bytes": 1,
+    "chain_id_now": 1,
+    "promoted_tier": 1,
+    "_transition_state": 5,
+    "_require_merge_lifecycle_control": 4,
+    "_reset_merge_nonmovement_counter": 0,
+    "FinalizeContext": 10,
+    "ProducedCommitContext": 5,
+    "_produced_head_moved": 0,
+    "_produced_single_parent": 0,
+    "_produced_exact_tree": 0,
+    "_produced_exact_message": 0,
+    "_finalize_produced_identity": 0,
+    "_record_produced_identity": 1,
+    "_produced_mismatch_outcome": 1,
+    "_finalize_halt": 0,
+    "_finalize_lock": 0,
+    "_finalize_candidate": 0,
+    "_finalize_evidence": 0,
+    "_finalize_fresh_reviewer_evals": 0,
+    "_finalize_ttl": 0,
+    "_finalize_tree_drift": 0,
+    "ContractArgumentParser": 1,
+    "_extract_global_options": 0,
+    "_attach_merge_lifecycle_parser": 1,
+    "build_parser": 0,
+    "_message_from_args": 0,
+    "_validate_revision9_cross_options": 0,
+    "render": 0,
+    "_raw_top_level_command": 0,
+    "_binding_for_commit_event": 1,
+    "_passed_stack_cell_is_intermediate": 1,
+    "_build_chain_journal_records": 0,
+    "inspect_common_lock": 1,
+    "_new_state": 1,
+    "_commit_start_binding_refusal": 2,
+    "_prove_run_task_binding": 1,
+    "_archive_module": 1,
+    "_archive_refusal": 3,
+    "_archive_contamination_refusal": 3,
+    "_nul_git_paths": 1,
+    "_archive_close_tree_clean": 2,
+    "_archive_parent_descriptor": 2,
+    "_read_archive_candidate_at": 2,
+    "_read_archive_candidate": 1,
+    "_render_archive_bytes": 2,
+    "_prepare_archive_candidate": 1,
+    "_archive_recheck": 2,
+    "_archive_metadata": 3,
+    "_env_fingerprint": 2,
+    "_evidence_record": 2,
+    "_review_package_is_oversized": 1,
+    "_review_complete_package_refusal": 2,
+    "_review_master_window_count": 2,
+    "_review_master_transport": 2,
+    "_review_master_pointer_prompt": 1,
+    "_review_master_identity": 2,
+    "_review_master_leaf_is_valid": 2,
+    "_read_review_master_digest": 1,
+    "_read_review_master_window": 1,
+    "_assert_review_master_stable": 1,
+    "_iter_verified_master_package_windows": 1,
+    "iter_verified_master_package_windows": 0,
+    "_write_artifact": 6,
+    "_read_bound_artifact": 6,
+    "_FreshEvalArtifactIO": 3,
+    "_FreshEvalControlAbort": 2,
+    "_fresh_eval_requests": 2,
+    "_fresh_eval_request_for_step": 1,
+    "_fresh_eval_evaluation": 2,
+    "_validated_fresh_reviewer_manifest": 5,
+    "_fresh_reviewer_evidence_package": 1,
+    "_fresh_eval_invalid_refusal": 4,
+    "_record_fresh_eval_terminal": 1,
+    "_record_process_step": 4,
+    "_classification_argv": 2,
+    "_classification_environment": 2,
+    "_run_classification": 2,
+    "_invalidate_candidate_evidence": 2,
+    "_candidate_patch_ref": 1,
+    "_candidate_snapshot": 3,
+    "_install_candidate_snapshot": 3,
+    "_candidate_review_diff": 1,
+    "_adopt_out_of_band_candidate": 1,
+    "_stage_paths": 1,
+    "_current_test_paths": 1,
+    "_void_mismatched_gate_one_pair": 1,
+    "_fresh_reviewer_pass_claimed": 2,
+    "_fresh_reviewer_block_claimed": 1,
+    "_mechanical_complete": 2,
+    "_next_incomplete": 2,
+    "SecretFinding": 1,
+    "scan_added_secrets": 1,
+    "_success": 1,
+    "_issue_authorization": 1,
+    "_pid_is_running": 1,
+    "_authorization_problem": 2,
+    "_verify_operator_harness": 1,
+    "_run_halt": 4,
+    "_peek_chain_state": 1,
+    "_peek_raw_abort_state": 1,
+    "_peek_selected_chain": 1,
+    "_command_run_lock_id": 1,
+    "abort_disposition_refusal": 1,
+    "_serialize_worktree_command": 1,
+    "MergeAdmission": 9,
+    "MergeScopeResult": 6,
+    "MergeCandidateGeneration": 1,
+    "MergeBootstrapClassification": 0,
+    "_materialize_merge_candidate_tuple": 1,
+    "_retain_or_advance_merge_candidate": 0,
+    "_parse_plugin_manifest": 2,
+    "_parse_history_mutation_mode": 0,
+    "_absolute_git_path": 0,
+    "_registered_worktrees": 0,
+    "_merge_worktree_status": 1,
+    "_read_merge_git_metadata": 2,
+    "_merge_owned_rebase_metadata": 1,
+    "_require_loud_merge_recovery_mode": 0,
+    "_merge_conflict_path_is_canonical": 2,
+    "_parse_merge_conflict_paths": 1,
+    "_normalize_merge_conflict_paths": 1,
+    "_merge_nonconflict_index_bytes": 2,
+    "_merge_nonconflict_status_bytes": 2,
+    "_observe_merge_conflict": 0,
+    "_observe_merge_post_add": 0,
+    "_merge_conflict_record": 0,
+    "_merge_conflict_record_matches": 0,
+    "_merge_rebase_result_failed": 0,
+    "_merge_branch_reflog_proves_integrated": 1,
+    "_merge_rebase_integrated_observation_binding": 1,
+    "_merge_rebase_operation_metadata_absent": 1,
+    "_merge_rebase_integrated_predicate": 0,
+    "_merge_scope_environment": 2,
+    "_GitNoLazyFetchQualification": 2,
+    "_git_environment_digest": 3,
+    "_git_executable_qualification": 2,
+    "_qualify_git_no_lazy_fetch": 0,
+    "_require_git_no_lazy_fetch_qualification": 0,
+    "_merge_scope_request": 0,
+    "_merge_scope_child_result": 1,
+    "MergeScopeBindingInspection": 2,
+    "_unlink_merge_scope_temporary_at": 2,
+    "_classify_merge_scope_binding_at": 2,
+    "_classify_merge_scope_binding": 0,
+    "_resume_merge_scope_binding": 0,
+    "_discover_merge_scope_fence_from_sidecar": 0,
+    "_publish_merge_scope_binding": 0,
+    "_merge_scope_proof": 0,
+    "_merge_bootstrap_child_main": 0,
+    "_merge_bootstrap_child_argv": 0,
+    "_decode_merge_bootstrap_result": 0,
+    "_parse_merge_name_status_output": 2,
+    "_parse_merge_scope_output": 2,
+    "_derive_merge_scope": 1,
+    "_merge_scope_from_candidate_observation": 1,
+    "bind_merge_candidate_generation": 0,
+    "_merge_run_directory": 2,
+    "_write_merge_artifact": 0,
+    "_read_merge_artifact": 0,
+    "_merge_gate_suite": 1,
+    "_merge_gate_current": 0,
+    "_validate_merge_claim_record": 3,
+    "_merge_owner_directory": 4,
+    "_merge_claim_identity": 2,
+    "_read_merge_claim": 1,
+    "_publish_merge_claim": 0,
+    "_merge_publication_failure": 0,
+    "_remove_merge_claim": 0,
+    "_merge_event_digest": 0,
+    "_merge_epoch_fetch_observation_digest": 0,
+    "_merge_released_predecessor": 0,
+    "_resolve_recorded_merge_tip": 0,
+    "_merge_inactive": 1,
+    "_merge_unpublished_claim_absent": 0,
+    "_merge_has_attempt": 0,
+    "_merge_inactive_epoch_has_no_started_child": 0,
+    "_require_active_merge_epoch": 0,
+    "_merge_process_unresolved": 0,
+    "_MergeEpochBudget": 0,
+    "_merge_epoch_suite": 0,
+    "_remote_observation_intent": 0,
+    "_merge_candidate_observation_outputs": 2,
+    "_parse_merge_candidate_observation": 1,
+    "Engine": 1
+  },
+  "clusters": [
+    [
+      "_read_ingest_sources",
+      "_install_ingest_sources",
+      "_capture_ingest_inputs",
+      "commit_message_bytes",
+      "chain_id_now",
+      "promoted_tier",
+      "_record_produced_identity",
+      "_produced_mismatch_outcome",
+      "_finalize_evidence",
+      "_finalize_ttl",
+      "_new_state",
+      "_commit_start_binding_refusal",
+      "_prove_run_task_binding",
+      "_archive_module",
+      "_archive_refusal",
+      "_archive_contamination_refusal",
+      "_nul_git_paths",
+      "_archive_close_tree_clean",
+      "_archive_parent_descriptor",
+      "_read_archive_candidate_at",
+      "_read_archive_candidate",
+      "_render_archive_bytes",
+      "_prepare_archive_candidate",
+      "_archive_recheck",
+      "_archive_metadata",
+      "_env_fingerprint",
+      "_evidence_record",
+      "_review_package_is_oversized",
+      "_review_complete_package_refusal",
+      "_review_master_window_count",
+      "_review_master_transport",
+      "_review_master_pointer_prompt",
+      "_review_master_identity",
+      "_review_master_leaf_is_valid",
+      "_read_review_master_digest",
+      "_read_review_master_window",
+      "_assert_review_master_stable",
+      "_iter_verified_master_package_windows",
+      "iter_verified_master_package_windows",
+      "_FreshEvalArtifactIO",
+      "_FreshEvalControlAbort",
+      "_fresh_eval_requests",
+      "_fresh_eval_request_for_step",
+      "_fresh_eval_evaluation",
+      "_fresh_reviewer_evidence_package",
+      "_record_fresh_eval_terminal",
+      "_classification_argv",
+      "_classification_environment",
+      "_run_classification",
+      "_invalidate_candidate_evidence",
+      "_candidate_patch_ref",
+      "_candidate_snapshot",
+      "_install_candidate_snapshot",
+      "_candidate_review_diff",
+      "_adopt_out_of_band_candidate",
+      "_stage_paths",
+      "_current_test_paths",
+      "_void_mismatched_gate_one_pair",
+      "_fresh_reviewer_pass_claimed",
+      "_fresh_reviewer_block_claimed",
+      "_mechanical_complete",
+      "_next_incomplete",
+      "SecretFinding",
+      "scan_added_secrets",
+      "_success",
+      "_issue_authorization",
+      "_pid_is_running",
+      "_authorization_problem",
+      "_verify_operator_harness",
+      "_peek_chain_state",
+      "_peek_raw_abort_state",
+      "_peek_selected_chain",
+      "_command_run_lock_id",
+      "abort_disposition_refusal",
+      "_serialize_worktree_command",
+      "Engine"
+    ],
+    [
+      "MergeCandidateGeneration",
+      "_parse_plugin_manifest",
+      "_parse_history_mutation_mode",
+      "_merge_worktree_status",
+      "_merge_scope_environment",
+      "_GitNoLazyFetchQualification",
+      "_git_environment_digest",
+      "_git_executable_qualification",
+      "_qualify_git_no_lazy_fetch",
+      "_require_git_no_lazy_fetch_qualification",
+      "_merge_bootstrap_child_main",
+      "_parse_merge_name_status_output",
+      "_parse_merge_scope_output",
+      "_derive_merge_scope",
+      "_merge_scope_from_candidate_observation",
+      "bind_merge_candidate_generation",
+      "_merge_candidate_observation_outputs",
+      "_parse_merge_candidate_observation"
+    ],
+    [
+      "_merge_scope_child_result",
+      "MergeScopeBindingInspection",
+      "_unlink_merge_scope_temporary_at",
+      "_classify_merge_scope_binding_at",
+      "_classify_merge_scope_binding",
+      "_resume_merge_scope_binding",
+      "_publish_merge_scope_binding"
+    ],
+    [
+      "_binding_for_commit_event",
+      "_passed_stack_cell_is_intermediate",
+      "_build_chain_journal_records"
+    ],
+    [
+      "_validate_merge_claim_record",
+      "_merge_owner_directory",
+      "_merge_claim_identity",
+      "_read_merge_claim",
+      "_publish_merge_claim",
+      "_merge_publication_failure",
+      "_remove_merge_claim",
+      "_merge_unpublished_claim_absent"
+    ],
+    [
+      "_merge_branch_reflog_proves_integrated",
+      "_merge_rebase_integrated_observation_binding",
+      "_merge_rebase_operation_metadata_absent",
+      "_merge_rebase_integrated_predicate"
+    ],
+    [
+      "_merge_released_predecessor"
+    ],
+    [
+      "_decode_merge_bootstrap_result"
+    ],
+    [
+      "_merge_cleanup_process_record",
+      "_merge_cleanup_remote_fetch_observation",
+      "_read_merge_git_metadata",
+      "_merge_owned_rebase_metadata",
+      "_require_loud_merge_recovery_mode"
+    ],
+    [
+      "ContractArgumentParser",
+      "_attach_merge_lifecycle_parser",
+      "build_parser"
+    ],
+    [
+      "_extract_global_options"
+    ],
+    [
+      "_merge_conflict_path_is_canonical",
+      "_parse_merge_conflict_paths",
+      "_normalize_merge_conflict_paths",
+      "_merge_nonconflict_index_bytes",
+      "_merge_nonconflict_status_bytes",
+      "_observe_merge_conflict",
+      "_observe_merge_post_add"
+    ],
+    [
+      "_discover_merge_scope_fence_from_sidecar"
+    ],
+    [
+      "_validate_revision9_cross_options"
+    ],
+    [
+      "_merge_run_directory",
+      "_write_merge_artifact",
+      "_read_merge_artifact"
+    ],
+    [
+      "_finalize_produced_identity"
+    ],
+    [
+      "_merge_epoch_fetch_observation_digest"
+    ],
+    [
+      "_finalize_candidate"
+    ],
+    [
+      "_materialize_merge_candidate_tuple",
+      "_retain_or_advance_merge_candidate"
+    ],
+    [
+      "inspect_common_lock",
+      "_merge_process_unresolved"
+    ],
+    [
+      "_merge_gate_suite",
+      "_merge_epoch_suite"
+    ],
+    [
+      "_merge_inactive_epoch_has_no_started_child"
+    ],
+    [
+      "_finalize_lock"
+    ],
+    [
+      "_merge_scope_proof"
+    ],
+    [
+      "_remote_observation_intent"
+    ],
+    [
+      "_resolve_recorded_merge_tip"
+    ],
+    [
+      "_merge_inactive",
+      "_require_active_merge_epoch"
+    ],
+    [
+      "_MergeEpochBudget"
+    ],
+    [
+      "_merge_bootstrap_child_argv"
+    ],
+    [
+      "_finalize_fresh_reviewer_evals"
+    ],
+    [
+      "_message_from_args"
+    ],
+    [
+      "render"
+    ],
+    [
+      "_absolute_git_path"
+    ],
+    [
+      "_merge_conflict_record_matches"
+    ],
+    [
+      "_merge_scope_request"
+    ],
+    [
+      "_raw_top_level_command"
+    ],
+    [
+      "_merge_conflict_record"
+    ],
+    [
+      "_merge_gate_current"
+    ],
+    [
+      "_finalize_tree_drift"
+    ],
+    [
+      "_merge_event_digest"
+    ],
+    [
+      "MergeBootstrapClassification"
+    ],
+    [
+      "_reset_merge_nonmovement_counter"
+    ],
+    [
+      "_merge_has_attempt"
+    ],
+    [
+      "_finalize_halt"
+    ],
+    [
+      "_registered_worktrees"
+    ],
+    [
+      "_produced_head_moved"
+    ],
+    [
+      "_produced_single_parent"
+    ],
+    [
+      "_produced_exact_tree"
+    ],
+    [
+      "_produced_exact_message"
+    ],
+    [
+      "_merge_rebase_result_failed"
+    ]
+  ],
+  "communities": [
+    [
+      "commit_message_bytes",
+      "chain_id_now",
+      "_record_produced_identity",
+      "_new_state",
+      "_review_package_is_oversized",
+      "_record_fresh_eval_terminal",
+      "_current_test_paths",
+      "_void_mismatched_gate_one_pair",
+      "_fresh_reviewer_block_claimed",
+      "_success",
+      "_pid_is_running",
+      "_verify_operator_harness",
+      "abort_disposition_refusal",
+      "Engine"
+    ],
+    [
+      "MergeCandidateGeneration",
+      "_merge_worktree_status",
+      "_merge_scope_environment",
+      "_GitNoLazyFetchQualification",
+      "_git_environment_digest",
+      "_git_executable_qualification",
+      "_qualify_git_no_lazy_fetch",
+      "_require_git_no_lazy_fetch_qualification",
+      "_merge_bootstrap_child_main",
+      "_parse_merge_name_status_output",
+      "_parse_merge_scope_output",
+      "_derive_merge_scope",
+      "_merge_scope_from_candidate_observation",
+      "bind_merge_candidate_generation",
+      "_merge_candidate_observation_outputs",
+      "_parse_merge_candidate_observation"
+    ],
+    [
+      "_merge_scope_child_result",
+      "MergeScopeBindingInspection",
+      "_unlink_merge_scope_temporary_at",
+      "_classify_merge_scope_binding_at",
+      "_classify_merge_scope_binding",
+      "_resume_merge_scope_binding",
+      "_publish_merge_scope_binding"
+    ],
+    [
+      "_binding_for_commit_event",
+      "_passed_stack_cell_is_intermediate",
+      "_build_chain_journal_records"
+    ],
+    [
+      "_validate_merge_claim_record",
+      "_merge_owner_directory",
+      "_merge_claim_identity",
+      "_read_merge_claim",
+      "_publish_merge_claim",
+      "_merge_publication_failure",
+      "_remove_merge_claim",
+      "_merge_unpublished_claim_absent"
+    ],
+    [
+      "_merge_branch_reflog_proves_integrated",
+      "_merge_rebase_integrated_observation_binding",
+      "_merge_rebase_operation_metadata_absent",
+      "_merge_rebase_integrated_predicate"
+    ],
+    [
+      "_FreshEvalArtifactIO",
+      "_fresh_reviewer_evidence_package"
+    ],
+    [
+      "_produced_mismatch_outcome",
+      "_archive_module",
+      "_archive_refusal",
+      "_render_archive_bytes",
+      "_archive_recheck",
+      "_archive_metadata",
+      "_issue_authorization"
+    ],
+    [
+      "_merge_released_predecessor"
+    ],
+    [
+      "_archive_contamination_refusal",
+      "_archive_parent_descriptor",
+      "_read_archive_candidate_at",
+      "_read_archive_candidate",
+      "_prepare_archive_candidate"
+    ],
+    [
+      "_decode_merge_bootstrap_result"
+    ],
+    [
+      "promoted_tier",
+      "_classification_argv",
+      "_classification_environment",
+      "_run_classification"
+    ],
+    [
+      "_invalidate_candidate_evidence",
+      "_candidate_snapshot",
+      "_install_candidate_snapshot",
+      "_adopt_out_of_band_candidate",
+      "_stage_paths"
+    ],
+    [
+      "_finalize_evidence",
+      "_fresh_reviewer_pass_claimed",
+      "_mechanical_complete",
+      "_next_incomplete"
+    ],
+    [
+      "_merge_cleanup_process_record",
+      "_merge_cleanup_remote_fetch_observation",
+      "_read_merge_git_metadata",
+      "_merge_owned_rebase_metadata",
+      "_require_loud_merge_recovery_mode"
+    ],
+    [
+      "_review_master_identity",
+      "_review_master_leaf_is_valid",
+      "_read_review_master_digest",
+      "_read_review_master_window",
+      "_assert_review_master_stable",
+      "_iter_verified_master_package_windows"
+    ],
+    [
+      "_FreshEvalControlAbort",
+      "_fresh_eval_requests",
+      "_fresh_eval_request_for_step",
+      "_fresh_eval_evaluation"
+    ],
+    [
+      "ContractArgumentParser",
+      "_attach_merge_lifecycle_parser",
+      "build_parser"
+    ],
+    [
+      "_extract_global_options"
+    ],
+    [
+      "_commit_start_binding_refusal",
+      "_prove_run_task_binding",
+      "_serialize_worktree_command"
+    ],
+    [
+      "_discover_merge_scope_fence_from_sidecar"
+    ],
+    [
+      "_validate_revision9_cross_options"
+    ],
+    [
+      "_peek_chain_state",
+      "_peek_raw_abort_state",
+      "_peek_selected_chain",
+      "_command_run_lock_id"
+    ],
+    [
+      "_review_complete_package_refusal",
+      "_review_master_window_count",
+      "_review_master_transport",
+      "_review_master_pointer_prompt",
+      "iter_verified_master_package_windows"
+    ],
+    [
+      "_merge_nonconflict_index_bytes",
+      "_merge_nonconflict_status_bytes",
+      "_observe_merge_conflict",
+      "_observe_merge_post_add"
+    ],
+    [
+      "_read_ingest_sources",
+      "_install_ingest_sources",
+      "_capture_ingest_inputs"
+    ],
+    [
+      "_finalize_ttl",
+      "_authorization_problem"
+    ],
+    [
+      "_parse_plugin_manifest",
+      "_parse_history_mutation_mode"
+    ],
+    [
+      "_merge_run_directory",
+      "_write_merge_artifact",
+      "_read_merge_artifact"
+    ],
+    [
+      "_finalize_produced_identity"
+    ],
+    [
+      "_merge_epoch_fetch_observation_digest"
+    ],
+    [
+      "_finalize_candidate"
+    ],
+    [
+      "_materialize_merge_candidate_tuple",
+      "_retain_or_advance_merge_candidate"
+    ],
+    [
+      "_candidate_patch_ref",
+      "_candidate_review_diff"
+    ],
+    [
+      "_env_fingerprint",
+      "_evidence_record"
+    ],
+    [
+      "SecretFinding",
+      "scan_added_secrets"
+    ],
+    [
+      "inspect_common_lock",
+      "_merge_process_unresolved"
+    ],
+    [
+      "_merge_gate_suite",
+      "_merge_epoch_suite"
+    ],
+    [
+      "_merge_conflict_path_is_canonical",
+      "_parse_merge_conflict_paths",
+      "_normalize_merge_conflict_paths"
+    ],
+    [
+      "_merge_inactive_epoch_has_no_started_child"
+    ],
+    [
+      "_finalize_lock"
+    ],
+    [
+      "_merge_scope_proof"
+    ],
+    [
+      "_remote_observation_intent"
+    ],
+    [
+      "_resolve_recorded_merge_tip"
+    ],
+    [
+      "_merge_inactive",
+      "_require_active_merge_epoch"
+    ],
+    [
+      "_MergeEpochBudget"
+    ],
+    [
+      "_merge_bootstrap_child_argv"
+    ],
+    [
+      "_finalize_fresh_reviewer_evals"
+    ],
+    [
+      "_message_from_args"
+    ],
+    [
+      "render"
+    ],
+    [
+      "_absolute_git_path"
+    ],
+    [
+      "_merge_conflict_record_matches"
+    ],
+    [
+      "_merge_scope_request"
+    ],
+    [
+      "_raw_top_level_command"
+    ],
+    [
+      "_nul_git_paths",
+      "_archive_close_tree_clean"
+    ],
+    [
+      "_merge_conflict_record"
+    ],
+    [
+      "_merge_gate_current"
+    ],
+    [
+      "_finalize_tree_drift"
+    ],
+    [
+      "_merge_event_digest"
+    ],
+    [
+      "MergeBootstrapClassification"
+    ],
+    [
+      "_reset_merge_nonmovement_counter"
+    ],
+    [
+      "_merge_has_attempt"
+    ],
+    [
+      "_finalize_halt"
+    ],
+    [
+      "_registered_worktrees"
+    ],
+    [
+      "_produced_head_moved"
+    ],
+    [
+      "_produced_single_parent"
+    ],
+    [
+      "_produced_exact_tree"
+    ],
+    [
+      "_produced_exact_message"
+    ],
+    [
+      "_merge_rebase_result_failed"
+    ]
+  ],
+  "mutable_state": [
+    "TERMINAL_STATES",
+    "TERMINAL_TOUCH_VERBS",
+    "STATE_TRANSITIONS",
+    "_REQUIRED_MERGE_LIFECYCLE_CONTROLS",
+    "_REQUIRED_ARCHIVE_RECHECK_CONTROLS",
+    "_CHAIN_CAPABILITY_LOCK",
+    "_CHAIN_CAPABILITIES",
+    "_ARCHIVE_MODULE_LOCK",
+    "_FRESH_REVIEWER_REQUEST_CANDIDATE_KEYS",
+    "PRODUCED_COMMIT_CHECKS",
+    "FINALIZE_CHECKS",
+    "PLACEHOLDER_RE",
+    "_DERIVE_MERGE_SCOPE",
+    "_MERGE_INITIAL_INTEGRATION",
+    "__all__"
+  ],
+  "external_dependents": []
+}
