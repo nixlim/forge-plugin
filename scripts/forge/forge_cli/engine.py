@@ -6357,8 +6357,9 @@ def _merge_bootstrap_child_argv(
         "-c",
         _MERGE_BOOTSTRAP_CHILD_SOURCE,
         # phase 3: the re-exec target stays the shim entry point (scripts/forge/cli.py),
-        # which forwards _merge_bootstrap_child_main to this module when loaded standalone.
-        str(Path(__file__).resolve().parents[1] / "cli.py"),
+        # which forwards _merge_bootstrap_child_main to this module when loaded standalone;
+        # resolved from runtime's own location so it does not depend on this file's depth.
+        str(Path(runtime.__file__).resolve().parents[1] / "cli.py"),
         encoded,
     ]
 
