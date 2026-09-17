@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-from tests._cli_loader import load_script, package_module, patch_chain_core  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core, patch_engine  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_merge_adapter_tests", CLI_PATH)
@@ -998,12 +998,11 @@ class MergeGateAdapterTests(MergeAdapterFixture):
             APP,
             "_observe_current_merge_candidate",
             return_value=(repository, object(), ("src/app.py",)),
-        ), mock.patch.object(
-            ENGINE, "_require_active_merge_epoch"
-        ), mock.patch.object(
-            ENGINE, "_merge_epoch_suite", return_value=suite
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
+            "_require_active_merge_epoch"
+        ), patch_engine(
+            "_merge_epoch_suite", return_value=suite
+        ), patch_engine(
             "_merge_run_directory",
             return_value=(
                 self.repo.resolve(),

@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import test_cli_merge_adapters as ADAPTERS
-from tests._cli_loader import package_module, patch_chain_core
+from tests._cli_loader import package_module, patch_chain_core, patch_engine
 
 
 CLI = ADAPTERS.CLI
@@ -221,8 +221,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
         child = os.fork()
         if child == 0:
             try:
-                with mock.patch.object(
-                    ENGINE,
+                with patch_engine(
                     "_publish_merge_scope_binding",
                     side_effect=publish_then_crash,
                 ):
@@ -260,8 +259,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
         child = os.fork()
         if child == 0:
             try:
-                with mock.patch.object(
-                    ENGINE,
+                with patch_engine(
                     "_publish_merge_scope_binding",
                     side_effect=crash_before_publish,
                 ):
@@ -454,8 +452,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             captured.append(copy.deepcopy(result.metadata))
             return publish(*args, **kwargs)
 
-        with mock.patch.object(
-            ENGINE, "_publish_merge_scope_binding", side_effect=capture
+        with patch_engine(
+            "_publish_merge_scope_binding", side_effect=capture
         ):
             outcome = engine.start_chain(
                 str(self.worktree),
@@ -1036,8 +1034,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
 
     def test_publication_failure_is_addressable_and_absent_claim_can_abort(self) -> None:
         starter = CLI.MergeEngine(self.context())
-        with mock.patch.object(
-            ENGINE, "_publish_merge_claim", side_effect=OSError("fixture link failure")
+        with patch_engine(
+            "_publish_merge_claim", side_effect=OSError("fixture link failure")
         ), self.assertRaises(CLI.Refusal) as caught:
             starter.start_chain(str(self.worktree), remote_tip=self.base)
 
@@ -1068,8 +1066,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             raise FileExistsError(published.path)
 
         starter = CLI.MergeEngine(self.context())
-        with mock.patch.object(
-            ENGINE, "_publish_merge_claim", side_effect=publish_then_interrupt
+        with patch_engine(
+            "_publish_merge_claim", side_effect=publish_then_interrupt
         ), self.assertRaises(CLI.Refusal) as caught:
             starter.start_chain(str(self.worktree), remote_tip=self.base)
 
@@ -1098,8 +1096,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             raise FileExistsError(path)
 
         starter = CLI.MergeEngine(self.context())
-        with mock.patch.object(
-            ENGINE, "_publish_merge_claim", side_effect=collide
+        with patch_engine(
+            "_publish_merge_claim", side_effect=collide
         ), self.assertRaises(CLI.FrozenError) as caught:
             starter.start_chain(str(self.worktree), remote_tip=self.base)
         self.assertRegex(
@@ -1109,8 +1107,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
 
     def test_never_published_abort_rejects_a_dangling_claim_symlink(self) -> None:
         starter = CLI.MergeEngine(self.context())
-        with mock.patch.object(
-            ENGINE, "_publish_merge_claim", side_effect=OSError("fixture link failure")
+        with patch_engine(
+            "_publish_merge_claim", side_effect=OSError("fixture link failure")
         ), self.assertRaises(CLI.Refusal) as failed_start:
             starter.start_chain(str(self.worktree), remote_tip=self.base)
         failed = failed_start.exception.chain
@@ -1145,8 +1143,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
                 metadata=None,
             )
 
-        with mock.patch.object(
-            ENGINE,
+        with patch_engine(
             "_decode_merge_bootstrap_result",
             side_effect=fail_composite,
         ), self.assertRaises(CLI.Refusal) as first:
@@ -2816,8 +2813,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             decoded.append(copy.deepcopy(result.metadata))
             return result
 
-        with mock.patch.object(
-            ENGINE, "_decode_merge_bootstrap_result", side_effect=capture_decode
+        with patch_engine(
+            "_decode_merge_bootstrap_result", side_effect=capture_decode
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.start_chain(
                 str(self.worktree), task=self.task_id, remote_tip=self.base
@@ -2878,8 +2875,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             decoded.append(copy.deepcopy(result.metadata))
             return result
 
-        with mock.patch.object(
-            ENGINE, "_decode_merge_bootstrap_result", side_effect=capture_decode
+        with patch_engine(
+            "_decode_merge_bootstrap_result", side_effect=capture_decode
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.start_chain(
                 str(self.worktree), remote_tip=unavailable_tip
@@ -3035,8 +3032,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             os.link(canonical, race_link)
             return original_unlink(*args, **kwargs)
 
-        with mock.patch.object(
-            ENGINE,
+        with patch_engine(
             "_unlink_merge_scope_temporary_at",
             side_effect=add_link_before_unlink,
         ), self.assertRaises(CLI.FrozenError):
@@ -3107,8 +3103,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             side_effect=AssertionError(
                 "bound sidecar recovery must not rerun the composite child"
             ),
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
             "_derive_merge_scope",
             side_effect=AssertionError(
                 "bound sidecar recovery must not rerun name-status"
@@ -3363,8 +3358,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
 
         engine = CLI.MergeEngine(self.context(chain_id=self.chain_id))
         with patch_chain_core("acquire_common_lock", side_effect=short_acquire
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
             "_classify_merge_scope_binding",
             side_effect=AssertionError(
                 "ordinary acquisition must not classify a surviving fence"
@@ -3704,8 +3698,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             side_effect=AssertionError(
                 "unbound sidecar recovery must not rerun the composite child"
             ),
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
             "_derive_merge_scope",
             side_effect=AssertionError(
                 "unbound sidecar recovery must not launch name-status"
@@ -3773,8 +3766,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
         engine = CLI.MergeEngine(self.context(chain_id=self.chain_id))
         with patch_chain_core("run_fenced_command",
             side_effect=AssertionError("both-absent recovery must not refetch"),
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
             "_derive_merge_scope",
             side_effect=AssertionError("both-absent recovery must not derive scope"),
         ), self.assertRaises(CLI.Refusal) as caught:
@@ -3811,8 +3803,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             side_effect=AssertionError(
                 "unbound pre-sidecar recovery must not rerun the composite child"
             ),
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
             "_derive_merge_scope",
             side_effect=AssertionError(
                 "unbound pre-sidecar recovery must not launch name-status"
@@ -3869,8 +3860,7 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
             side_effect=AssertionError(
                 "recovery of a pre-sidecar failure must not rerun the composite"
             ),
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
             "_derive_merge_scope",
             side_effect=AssertionError(
                 "unbound pre-sidecar recovery must not derive scope"
@@ -4026,8 +4016,8 @@ class MergeLifecycleStartTests(ADAPTERS.MergeAdapterFixture):
                 else result
             )
 
-        with mock.patch.object(
-            ENGINE, "_merge_worktree_status", side_effect=inject_one_status_byte
+        with patch_engine(
+            "_merge_worktree_status", side_effect=inject_one_status_byte
         ), self.assertRaisesRegex(
             CLI.FrozenError, "run-scope abort worktree status is not exact clean"
         ):
@@ -4598,8 +4588,8 @@ class MergeLifecycleAbortTests(ADAPTERS.MergeAdapterFixture):
             with self.subTest(state=scalar), mock.patch.object(
                 engine, "_load", return_value=state
             ), patch_chain_core("_merge_containment", return_value=("none", ())
-            ), mock.patch.object(
-                ENGINE, "_merge_process_unresolved", return_value=False
+            ), patch_engine(
+                "_merge_process_unresolved", return_value=False
             ), self.assertRaises(CLI.Refusal) as caught:
                 engine.abort()
             self.assertEqual(
@@ -4620,8 +4610,8 @@ class MergeLifecycleAbortTests(ADAPTERS.MergeAdapterFixture):
         )
 
         with mock.patch.object(engine, "_load", return_value=base), patch_chain_core("_merge_containment", return_value=("none", ())
-        ), mock.patch.object(
-            ENGINE, "_merge_process_unresolved", return_value=True
+        ), patch_engine(
+            "_merge_process_unresolved", return_value=True
         ), self.assertRaises(CLI.Refusal) as caught:
             engine.abort()
         self.assertEqual(
@@ -4634,8 +4624,8 @@ class MergeLifecycleAbortTests(ADAPTERS.MergeAdapterFixture):
         attempted = copy.deepcopy(base)
         attempted["integration"]["push"] = {"attempted_heads": [self.candidate_head]}
         with mock.patch.object(engine, "_load", return_value=attempted), patch_chain_core("_merge_containment", return_value=("all-false", (False,))
-        ), mock.patch.object(
-            ENGINE, "_merge_process_unresolved", return_value=False
+        ), patch_engine(
+            "_merge_process_unresolved", return_value=False
         ), mock.patch.object(
             engine, "_release_to_aborted_locked"
         ) as release, self.assertRaises(CLI.Refusal) as caught:
@@ -4651,8 +4641,8 @@ class MergeLifecycleAbortTests(ADAPTERS.MergeAdapterFixture):
         with mock.patch.object(
             engine, "_load", return_value=base
         ), patch_chain_core("_merge_containment", return_value=("none", ())
-        ), mock.patch.object(
-            ENGINE, "_merge_process_unresolved", side_effect=[False, True]
+        ), patch_engine(
+            "_merge_process_unresolved", side_effect=[False, True]
         ), mock.patch.object(
             engine, "_halt"
         ), patch_chain_core("acquire_common_lock", return_value=contextlib.nullcontext()
@@ -5328,8 +5318,7 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
                 if control == "dormant-parser-gate"
                 else contextlib.nullcontext()
             )
-            with self.subTest(control=control), activation, mock.patch.object(
-                ENGINE,
+            with self.subTest(control=control), activation, patch_engine(
                 "MERGE_LIFECYCLE_CONTROLS",
                 CLI.MERGE_LIFECYCLE_CONTROLS - {control},
             ), self.assertRaisesRegex(

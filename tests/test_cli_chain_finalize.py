@@ -22,7 +22,7 @@ CLI_PATH = ROOT / "scripts/forge/cli.py"
 CHAIN_ID = "c-2026-08-21T120000Z-0001"
 
 
-from tests._cli_loader import load_script, package_module, patch_chain_core  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core, patch_engine  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_chain_finalize_tests", CLI_PATH)
@@ -1176,8 +1176,8 @@ class FinalizeCrashBoundaryTests(FinalizeFixture):
                 raise RuntimeError("crash before commit_identity_checked")
             return original_record(context)
 
-        with self.patched_helpers(), mock.patch.object(
-            ENGINE, "_record_produced_identity", side_effect=crash_before_record
+        with self.patched_helpers(), patch_engine(
+            "_record_produced_identity", side_effect=crash_before_record
         ):
             with self.assertRaisesRegex(
                 RuntimeError, "crash before commit_identity_checked"
@@ -1556,7 +1556,7 @@ class CommittingStateTests(FinalizeFixture):
                 "commit skip",
             ),
         }
-        with mock.patch.object(ENGINE, "_run_halt", autospec=True) as halt:
+        with patch_engine("_run_halt", autospec=True) as halt:
             for verb, (invoke, observed) in verbs.items():
                 with self.subTest(verb=verb):
                     with self.assertRaises(CLI.Refusal) as raised:
