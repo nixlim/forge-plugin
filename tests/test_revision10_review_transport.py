@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-from tests._cli_loader import load_script, package_module
+from tests._cli_loader import load_script, package_module, patch_engine
 
 
 CLI = load_script("forge_cli_revision10_review_transport_tests", CLI_PATH)
@@ -57,7 +57,7 @@ class Revision10MasterReaderTests(unittest.TestCase):
         data = b"abcdefghijklmn"
         master = self.write_master("master.bin", data)
 
-        with mock.patch.object(ENGINE, "REVIEW_MASTER_WINDOW_BYTES", 4):
+        with patch_engine("REVIEW_MASTER_WINDOW_BYTES", 4):
             windows = list(
                 ENGINE.iter_verified_master_package_windows(
                     master, len(data), sha256(data)
@@ -105,7 +105,7 @@ class Revision10MasterReaderTests(unittest.TestCase):
         data = b"abcdefghijkl"
         master = self.write_master("mutated.bin", data)
 
-        with mock.patch.object(ENGINE, "REVIEW_MASTER_WINDOW_BYTES", 4):
+        with patch_engine("REVIEW_MASTER_WINDOW_BYTES", 4):
             windows = ENGINE.iter_verified_master_package_windows(
                 master, len(data), sha256(data)
             )
@@ -122,7 +122,7 @@ class Revision10MasterReaderTests(unittest.TestCase):
         for mutation in ("truncate", "grow"):
             with self.subTest(mutation=mutation):
                 master = self.write_master(f"{mutation}.bin", data)
-                with mock.patch.object(ENGINE, "REVIEW_MASTER_WINDOW_BYTES", 4):
+                with patch_engine("REVIEW_MASTER_WINDOW_BYTES", 4):
                     windows = ENGINE.iter_verified_master_package_windows(
                         master, len(data), sha256(data)
                     )
@@ -140,7 +140,7 @@ class Revision10MasterReaderTests(unittest.TestCase):
         master = self.write_master("identity.bin", data)
         replacement = self.write_master("replacement.bin", data)
 
-        with mock.patch.object(ENGINE, "REVIEW_MASTER_WINDOW_BYTES", 4):
+        with patch_engine("REVIEW_MASTER_WINDOW_BYTES", 4):
             windows = ENGINE.iter_verified_master_package_windows(
                 master, len(data), sha256(data)
             )
@@ -152,7 +152,7 @@ class Revision10MasterReaderTests(unittest.TestCase):
         data = b"abcdefghijkl"
         master = self.write_master("restored.bin", data)
 
-        with mock.patch.object(ENGINE, "REVIEW_MASTER_WINDOW_BYTES", 4):
+        with patch_engine("REVIEW_MASTER_WINDOW_BYTES", 4):
             windows = ENGINE.iter_verified_master_package_windows(
                 master, len(data), sha256(data)
             )
@@ -239,7 +239,7 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
             candidate_diff,
         )
         contexts = [
-            mock.patch.object(ENGINE, "_mechanical_complete", return_value=True),
+            patch_engine("_mechanical_complete", return_value=True),
             mock.patch.object(engine, "_review_package", return_value=package_parts),
         ]
         if reviewer == "review-cheap":
@@ -382,8 +382,8 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assert_standard_oversized_package_is_pointer_only()
 
     def test_disabling_threshold_check_restores_embedded_prompt_and_kills_assertion(self) -> None:
-        with mock.patch.object(
-            ENGINE, "_review_package_is_oversized", return_value=False
+        with patch_engine(
+            "_review_package_is_oversized", return_value=False
         ), self.assertRaises(AssertionError):
             self.assert_standard_oversized_package_is_pointer_only()
 

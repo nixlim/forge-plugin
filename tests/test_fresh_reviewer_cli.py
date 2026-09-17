@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from tests._cli_loader import load_cli, package_module
+from tests._cli_loader import load_cli, package_module, patch_engine
 from tests._fresh_eval_support import (
     CANDIDATE,
     FRESH,
@@ -180,7 +180,7 @@ class FreshReviewerCLIFixture(unittest.TestCase):
 
     @contextlib.contextmanager
     def no_halt(self):
-        with mock.patch.object(ENGINE, "_run_halt", return_value=None):
+        with patch_engine("_run_halt", return_value=None):
             yield
 
     def run_fresh(
@@ -532,7 +532,7 @@ class FreshReviewerCLIGateTests(FreshReviewerCLIFixture):
                 chain=state,
             )
 
-        with mock.patch.object(ENGINE, "_run_halt", side_effect=halt), mock.patch.object(
+        with patch_engine("_run_halt", side_effect=halt), mock.patch.object(
             FRESH, "NativeReviewerLauncher", return_value=launcher
         ):
             code, envelope = self.invoke(

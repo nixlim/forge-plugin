@@ -34,7 +34,7 @@ ENVELOPE_KEYS = {
 }
 
 
-from tests._cli_loader import load_script, package_module, patch_chain_core  # shared loader
+from tests._cli_loader import load_script, package_module, patch_chain_core, patch_engine
 
 
 CLI = load_script("forge_revision9_ingest_negative_cli", CLI_PATH)
@@ -65,8 +65,8 @@ class Revision9IngestPredicateNegativeTests(
             RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(
             RUNTIME, "PLUGIN_ROOT", ROOT
-        ), mock.patch.object(
-            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), patch_engine(
+            "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 

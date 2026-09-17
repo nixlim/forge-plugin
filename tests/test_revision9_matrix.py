@@ -20,7 +20,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 ARCHIVE_PATH = ROOT / "scripts" / "forge" / "archive-run.py"
 
 
-from tests._cli_loader import load_cached as load_module, package_module, patch_chain_core  # cli split phase 0: one shared loader
+from tests._cli_loader import load_cached as load_module, package_module, patch_chain_core, patch_engine  # cli split phase 0: one shared loader
 
 
 def canonical(value: object) -> bytes:
@@ -53,8 +53,8 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
         environment.update(getattr(self, "cli_environment_overrides", {}))
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
             RUNTIME, "SCRIPT_DIR", self.helpers
-        ), mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT), mock.patch.object(
-            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT), patch_engine(
+            "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 

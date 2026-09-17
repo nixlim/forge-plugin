@@ -48,6 +48,17 @@ def _is_cli_shaped_alias(target: str) -> bool:
     return tail == "module" or "cli" in tail.split("_")
 
 
+def _is_engine_module_alias(target: str) -> bool:
+    """Recognize aliases of the canonical ``forge_cli.engine`` module (``ENGINE``,
+    ``CLI.engine``, ``forge_cli.engine``) but never an ``Engine`` instance held in a
+    lower-case name such as ``engine`` or ``self.engine``, nor the ``Engine`` class."""
+
+    prefix, _, tail = target.rpartition(".")
+    if tail == "ENGINE":
+        return True
+    return tail == "engine" and bool(prefix) and _is_cli_shaped_alias(prefix)
+
+
 def _literal_string(node: ast.AST) -> str | None:
     try:
         value = ast.literal_eval(node)
@@ -56,38 +67,53 @@ def _literal_string(node: ast.AST) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _write_site(node: ast.Call) -> tuple[str, str, str] | None:
+    """Return ``(target, name, operation)`` for a patch/setattr call, else ``None``."""
+
+    function = _dotted_name(node.func)
+    if function is None:
+        return None
+    target: str | None = None
+    name: str | None = None
+    operation = "patches"
+    if function.endswith("patch.object") and len(node.args) >= 2:
+        target = _dotted_name(node.args[0])
+        name = _literal_string(node.args[1])
+    elif (function == "patch" or function.endswith(".patch")) and node.args:
+        dotted_target = _literal_string(node.args[0])
+        if dotted_target is not None and "." in dotted_target:
+            target, name = dotted_target.rsplit(".", 1)
+    elif function in {"setattr", "builtins.setattr"} and len(node.args) >= 2:
+        target = _dotted_name(node.args[0])
+        name = _literal_string(node.args[1])
+        operation = "sets"
+    if target is None or name is None:
+        return None
+    return target, name, operation
+
+
 def _moved_shim_patch_offenders(path: Path, text: str) -> list[str]:
-    """Find writes whose target is a per-load shim rather than a canonical module."""
+    """Find writes whose target is a per-load shim rather than a canonical module, and
+    module-level patches on ``forge_cli.engine`` that bypass ``patch_engine`` (a root-only
+    patch silently stops intercepting a control once it lives in a package submodule)."""
 
     offenders: list[str] = []
     tree = ast.parse(text, filename=str(path))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        function = _dotted_name(node.func)
-        target: str | None = None
-        name: str | None = None
-        operation = "patches"
-        if function is not None and function.endswith("patch.object") and len(node.args) >= 2:
-            target = _dotted_name(node.args[0])
-            name = _literal_string(node.args[1])
-        elif function is not None and (
-            function == "patch" or function.endswith(".patch")
-        ) and node.args:
-            dotted_target = _literal_string(node.args[0])
-            if dotted_target is not None and "." in dotted_target:
-                target, name = dotted_target.rsplit(".", 1)
-        elif function in {"setattr", "builtins.setattr"} and len(node.args) >= 2:
-            target = _dotted_name(node.args[0])
-            name = _literal_string(node.args[1])
-            operation = "sets"
-        if (
-            target is not None
-            and name in MOVED_NAMES
-            and _is_cli_shaped_alias(target)
-        ):
+        site = _write_site(node)
+        if site is None:
+            continue
+        target, name, operation = site
+        if name in MOVED_NAMES and _is_cli_shaped_alias(target):
             offenders.append(
                 f"{path.name}:{node.lineno}: {operation} moved name {name} on {target}"
+            )
+        elif operation == "patches" and _is_engine_module_alias(target):
+            offenders.append(
+                f"{path.name}:{node.lineno}: patches engine name {name} on {target}"
+                " outside patch_engine"
             )
     return offenders
 
@@ -174,13 +200,105 @@ mock.patch.object(archive.journal_builders, "CODEX_EXECUTABLE", value)
 mock.patch.object(ENGINE, "CODEX_EXECUTABLE", value)
 """
         offenders = _moved_shim_patch_offenders(Path("synthetic.py"), source)
-        self.assertEqual(len(offenders), 7)
+        self.assertEqual(len(offenders), 8)
         self.assertTrue(any(" on CLI" in offender for offender in offenders))
         self.assertTrue(any(" on module" in offender for offender in offenders))
         self.assertTrue(any(" on self.cli" in offender for offender in offenders))
         self.assertTrue(any(" on suite.CLI" in offender for offender in offenders))
         self.assertTrue(any(" on subject_cli" in offender for offender in offenders))
         self.assertFalse(any("builders" in offender for offender in offenders))
+        self.assertEqual(
+            [offender for offender in offenders if "ENGINE" in offender],
+            ["synthetic.py:11: patches engine name CODEX_EXECUTABLE on ENGINE"
+             " outside patch_engine"],
+        )
+
+    def test_engine_patch_sweep_rejects_raw_module_patches_and_accepts_the_helper(
+        self,
+    ) -> None:
+        """Every module-level patch form on forge_cli.engine is an offender (engine split
+        step E0); patch_engine, Engine-instance patches, stdlib attributes of the module
+        and patches on the Engine class itself are not."""
+        rejected = """
+mock.patch.object(ENGINE, "_run_halt", value)
+patch.object(ENGINE, '_run_halt', value)
+mock.patch.object(
+    ENGINE, "REVIEW_MASTER_WINDOW_BYTES", 4
+)
+mock.patch.object(CLI.engine, "_run_halt", value)
+mock.patch.object(suite.ENGINE, "_run_halt", value)
+mock.patch("forge_cli.engine._run_halt", value)
+patch('forge_cli.engine.CODEX_EXECUTABLE', value)
+"""
+        offenders = _moved_shim_patch_offenders(Path("synthetic.py"), rejected)
+        self.assertEqual(len(offenders), 7)
+        self.assertTrue(all("outside patch_engine" in offender for offender in offenders))
+        self.assertTrue(any(" on CLI.engine " in offender for offender in offenders))
+        self.assertTrue(any(" on suite.ENGINE " in offender for offender in offenders))
+        self.assertEqual(
+            sum(" on forge_cli.engine " in offender for offender in offenders), 2
+        )
+        accepted = """
+patch_engine("_run_halt", value)
+patch_engine("REVIEW_MASTER_WINDOW_BYTES", 4)
+with patch_engine(
+    "_publish_merge_claim", side_effect=publish_then_interrupt
+):
+    pass
+mock.patch.object(engine, "_halt", value)
+mock.patch.object(engine, "_load", value)
+mock.patch.object(self.engine, "_release_lock", value)
+mock.patch.object(ENGINE.subprocess, "Popen", value)
+mock.patch.object(CLI.Engine, "_emit_decision", value)
+mock.patch.object(CLI.MergeEngine, "finalize", value)
+mock.patch.object(root, self._name, value)
+"""
+        self.assertEqual(_moved_shim_patch_offenders(Path("synthetic.py"), accepted), [])
+
+    def test_patch_engine_reaches_every_engine_module_and_restores(self) -> None:
+        """patch_engine is mock.patch.object on the canonical engine root plus every
+        forge_cli.engine.* submodule binding the name, restoring all of them on exit."""
+        engine = _cli_loader.package_module("engine")
+        cli = _cli_loader.load_cli("_cli_loader_test_patch_engine")
+        modules = _cli_loader._engine_modules()
+        self.assertIs(modules[0], engine)
+        self.assertEqual(
+            [module.__name__ for module in modules[1:]],
+            sorted(module.__name__ for module in modules[1:]),
+        )
+        for module in modules[1:]:
+            self.assertTrue(module.__name__.startswith("forge_cli.engine."))
+        name = "scan_added_secrets"
+        originals = {
+            module.__name__: vars(module)[name] for module in modules if name in vars(module)
+        }
+        sentinel = object()
+        with _cli_loader.patch_engine(name, sentinel) as value:
+            self.assertIs(value, sentinel)
+            self.assertIs(engine.scan_added_secrets, sentinel)
+            self.assertIs(cli.scan_added_secrets, sentinel)
+            for module in modules:
+                if module.__name__ in originals:
+                    self.assertIs(vars(module)[name], sentinel, module.__name__)
+        for module in modules:
+            if module.__name__ in originals:
+                self.assertIs(vars(module)[name], originals[module.__name__], module.__name__)
+        self.assertIs(cli.scan_added_secrets, originals[engine.__name__])
+        # start()/stop() pair like mock.patch.object, and a MagicMock default.
+        patcher = _cli_loader.patch_engine("CODEX_EXECUTABLE", "/fake/codex")
+        self.assertEqual(patcher.start(), "/fake/codex")
+        self.assertEqual(engine.CODEX_EXECUTABLE, "/fake/codex")
+        patcher.stop()
+        self.assertNotEqual(engine.CODEX_EXECUTABLE, "/fake/codex")
+        with _cli_loader.patch_engine("_run_halt") as halt:
+            self.assertIsInstance(halt, mock.MagicMock)
+            self.assertIs(engine._run_halt, halt)
+        self.assertIsNot(engine._run_halt, halt)
+        # A name the root does not bind is refused, like mock.patch.object.
+        with self.assertRaises(AttributeError):
+            with _cli_loader.patch_engine("no_such_engine_control_xyz", sentinel):
+                pass
+        self.assertNotIn("no_such_engine_control_xyz", vars(engine))
 
     def test_chain_core_is_canonical_and_forwarded_by_the_shim(self) -> None:
         """Phase 2b: the process/lock/storage component is one canonical module."""

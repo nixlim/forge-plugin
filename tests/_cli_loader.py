@@ -73,35 +73,47 @@ def package_module(name: str) -> ModuleType:
     return importlib.import_module(f"forge_cli.{name}")
 
 
-def _chain_core_modules() -> list[ModuleType]:
-    """The canonical ``forge_cli.chain_core`` module plus, once it is a package, every
+def _package_modules(package: str) -> list[ModuleType]:
+    """The canonical ``forge_cli.<package>`` module plus, once it is a package, every
     submodule of it (imported so their globals exist), root first."""
 
-    root = package_module("chain_core")
+    root = package_module(package)
     modules = [root]
     for info in pkgutil.iter_modules(getattr(root, "__path__", [])):
-        modules.append(importlib.import_module(f"forge_cli.chain_core.{info.name}"))
+        modules.append(importlib.import_module(f"forge_cli.{package}.{info.name}"))
     return modules
 
 
-class _ChainCorePatch:
-    """``mock.patch.object`` applied to every module of ``forge_cli.chain_core`` that
+def _chain_core_modules() -> list[ModuleType]:
+    return _package_modules("chain_core")
+
+
+def _engine_modules() -> list[ModuleType]:
+    return _package_modules("engine")
+
+
+class _PackagePatch:
+    """``mock.patch.object`` applied to every module of ``forge_cli.<package>`` that
     binds ``name``, so one test patch keeps intercepting a control after it moves out of
     the package root: the root binding receives the patch first (its replacement value
     is what ``with ... as m`` yields, exactly as ``mock.patch.object`` does), and every
     submodule that also binds the name is patched with that same object. A name the root
-    does not bind is refused, like ``mock.patch.object`` without ``create=True``."""
+    does not bind is refused, like ``mock.patch.object`` without ``create=True``. On a
+    package that is still a single module it is exactly ``mock.patch.object``."""
 
-    def __init__(self, name: str, args: tuple, kwargs: dict) -> None:
+    def __init__(self, package: str, name: str, args: tuple, kwargs: dict) -> None:
+        self._package = package
         self._name = name
         self._args = args
         self._kwargs = kwargs
         self._active: list = []
 
     def __enter__(self):
-        root, *rest = _chain_core_modules()
+        root, *rest = _package_modules(self._package)
         if self._name not in vars(root):
-            raise AttributeError(f"forge_cli.chain_core has no attribute {self._name!r}")
+            raise AttributeError(
+                f"forge_cli.{self._package} has no attribute {self._name!r}"
+            )
         first = mock.patch.object(root, self._name, *self._args, **self._kwargs)
         value = first.__enter__()
         self._active.append(first)
@@ -129,11 +141,23 @@ class _ChainCorePatch:
         self.__exit__(None, None, None)
 
 
-def patch_chain_core(name: str, /, *args, **kwargs) -> _ChainCorePatch:
+def patch_chain_core(name: str, /, *args, **kwargs) -> _PackagePatch:
     """Patch ``name`` on the canonical ``forge_cli.chain_core`` module and on every
-    package submodule that binds it (see :class:`_ChainCorePatch`); a context manager
+    package submodule that binds it (see :class:`_PackagePatch`); a context manager
     with the ``mock.patch.object(package_module("chain_core"), name, ...)`` signature.
     Use it for every patch of a chain-core control so tests are indifferent to which
     file inside the package a control lives in."""
 
-    return _ChainCorePatch(name, args, kwargs)
+    return _PackagePatch("chain_core", name, args, kwargs)
+
+
+def patch_engine(name: str, /, *args, **kwargs) -> _PackagePatch:
+    """Patch ``name`` on the canonical ``forge_cli.engine`` module (the package root
+    once the engine is a package) and on every ``forge_cli.engine.*`` submodule that
+    binds it (see :class:`_PackagePatch`); a context manager with the
+    ``mock.patch.object(package_module("engine"), name, ...)`` signature. Use it for
+    every module-level patch of an engine control so tests are indifferent to which
+    file inside the package a control lives in; patches on ``Engine`` instances are
+    not module patches and stay as ``mock.patch.object``."""
+
+    return _PackagePatch("engine", name, args, kwargs)
