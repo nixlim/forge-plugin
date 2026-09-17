@@ -108,6 +108,7 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/chain_core/_state.py" = ["C901", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/chain_core/_storage.py" = ["B904", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/engine.py" = ["B904", "B905", "C901", "E501", "F811", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
+"scripts/forge/forge_cli/engine/*.py" = ["B904", "B905", "C901", "E501", "F811", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
 "scripts/forge/forge_cli/envelope.py" = ["PLR0913", "UP035"]
 "scripts/forge/forge_cli/fresh_evals.py" = ["B905", "C901", "E501", "F401", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
 "scripts/forge/forge_cli/policy.py" = ["B904", "C901", "I001", "UP035"]
