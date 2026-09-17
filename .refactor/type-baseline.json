@@ -100,7 +100,8 @@
   "var-annotated::Need type annotation for \"owners_path\"": 2,
   "var-annotated::Need type annotation for \"parent\"": 9,
   "var-annotated::Need type annotation for \"root\"": 14,
-  "var-annotated::Need type annotation for \"verdict_name\"": 1
+  "var-annotated::Need type annotation for \"verdict_name\"": 1,
+  "import-untyped::Skipping analyzing \"forge_cli.engine._engine\": module is installed, but missing library stubs or py.typed marker": 2
  },
  "examples": {
   "index::Invalid index type \"str | None\" for \"dict[str, str]\"; expected type \"str\"": "scripts/forge/forge_cli/policy.py:119",
@@ -199,6 +200,7 @@
   "misc::List comprehension has incompatible type List[None]; expected List[bool]": "scripts/forge/forge_cli/app.py:6846",
   "index::Value of type \"dict[str, Any] | None\" is not indexable": "scripts/forge/forge_cli/app.py:9689",
   "arg-type::Argument 2 to \"_merge_conflict_record_matches\" has incompatible type \"dict[str, Any] | None\"; expected \"Mapping[str, Any]\"": "scripts/forge/forge_cli/app.py:9568",
-  "arg-type::Argument \"scope_request\" to \"_validate_merge_scope_proof\" has incompatible type \"dict[str, Any] | None\"; expected \"Mapping[str, Any]\"": "scripts/forge/forge_cli/app.py:10047"
+  "arg-type::Argument \"scope_request\" to \"_validate_merge_scope_proof\" has incompatible type \"dict[str, Any] | None\"; expected \"Mapping[str, Any]\"": "scripts/forge/forge_cli/app.py:10047",
+  "import-untyped::Skipping analyzing \"forge_cli.engine._engine\": module is installed, but missing library stubs or py.typed marker": "scripts/forge/forge_cli/engine/_command_lock.py:9 (and _finalize.py from wave 4); TYPE_CHECKING-guarded import of a module created in wave 5 \u2014 allowance withdrawn at the wave-5 gate"
  }
 }
