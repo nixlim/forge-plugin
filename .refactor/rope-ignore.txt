@@ -1,4 +1,4 @@
-# Resources rope_move.py must not see while splitting forge_cli.chain_core (read by the
+# Resources rope_move.py must not see while splitting forge_cli.engine (formerly chain_core; read by the
 # plugin's rope_move.py, one glob per line). Importers outside the package stay untouched:
 # `forge_cli.chain_core` re-exports every moved name, `scripts/forge/cli.py` forwards
 # `chain_core.__all__`, and tests patch through `patch_chain_core` (tests/_cli_loader.py).
@@ -6,7 +6,7 @@
 # read tests/test_e2e_smoke.py and tests/test_revision9_cli_surfaces.py.
 tests
 scripts/forge/cli.py
-scripts/forge/forge_cli/engine.py
+scripts/forge/forge_cli/chain_core
 scripts/forge/forge_cli/app.py
 scripts/forge/forge_cli/fresh_evals.py
 scripts/forge/forge_cli/candidate.py
