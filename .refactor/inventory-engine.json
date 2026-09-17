@@ -2422,11 +2422,11 @@
     ],
     [
       "_merge_cleanup_remote_fetch_observation",
-      "_read_merge_git_metadata"
+      "_merge_cleanup_process_record"
     ],
     [
       "_merge_cleanup_remote_fetch_observation",
-      "_merge_cleanup_process_record"
+      "_read_merge_git_metadata"
     ],
     [
       "_capture_ingest_inputs",
@@ -2442,11 +2442,11 @@
     ],
     [
       "_require_merge_lifecycle_control",
-      "_REQUIRED_MERGE_LIFECYCLE_CONTROLS"
+      "MERGE_LIFECYCLE_CONTROLS"
     ],
     [
       "_require_merge_lifecycle_control",
-      "MERGE_LIFECYCLE_CONTROLS"
+      "_REQUIRED_MERGE_LIFECYCLE_CONTROLS"
     ],
     [
       "FinalizeContext",
@@ -2470,14 +2470,6 @@
     ],
     [
       "PRODUCED_COMMIT_CHECKS",
-      "_produced_head_moved"
-    ],
-    [
-      "PRODUCED_COMMIT_CHECKS",
-      "ProducedCommitContext"
-    ],
-    [
-      "PRODUCED_COMMIT_CHECKS",
       "_produced_exact_tree"
     ],
     [
@@ -2486,15 +2478,23 @@
     ],
     [
       "PRODUCED_COMMIT_CHECKS",
+      "_produced_head_moved"
+    ],
+    [
+      "PRODUCED_COMMIT_CHECKS",
+      "ProducedCommitContext"
+    ],
+    [
+      "PRODUCED_COMMIT_CHECKS",
       "_produced_exact_message"
     ],
     [
       "_finalize_produced_identity",
-      "ProducedCommitContext"
+      "FinalizeContext"
     ],
     [
       "_finalize_produced_identity",
-      "FinalizeContext"
+      "PRODUCED_COMMIT_CHECKS"
     ],
     [
       "_finalize_produced_identity",
@@ -2502,7 +2502,7 @@
     ],
     [
       "_finalize_produced_identity",
-      "PRODUCED_COMMIT_CHECKS"
+      "ProducedCommitContext"
     ],
     [
       "_record_produced_identity",
@@ -2510,19 +2510,19 @@
     ],
     [
       "_produced_mismatch_outcome",
-      "_archive_metadata"
-    ],
-    [
-      "_produced_mismatch_outcome",
       "PRODUCED_COMMIT_MISMATCH"
     ],
     [
-      "_finalize_halt",
-      "_run_halt"
+      "_produced_mismatch_outcome",
+      "_archive_metadata"
     ],
     [
       "_finalize_halt",
       "FinalizeContext"
+    ],
+    [
+      "_finalize_halt",
+      "_run_halt"
     ],
     [
       "_finalize_lock",
@@ -2534,7 +2534,7 @@
     ],
     [
       "_finalize_evidence",
-      "_next_incomplete"
+      "FinalizeContext"
     ],
     [
       "_finalize_evidence",
@@ -2542,6 +2542,10 @@
     ],
     [
       "_finalize_evidence",
+      "_next_incomplete"
+    ],
+    [
+      "_finalize_fresh_reviewer_evals",
       "FinalizeContext"
     ],
     [
@@ -2550,19 +2554,15 @@
     ],
     [
       "_finalize_fresh_reviewer_evals",
-      "FinalizeContext"
-    ],
-    [
-      "_finalize_fresh_reviewer_evals",
       "_validated_fresh_reviewer_manifest"
     ],
     [
       "_finalize_ttl",
-      "_authorization_problem"
+      "FinalizeContext"
     ],
     [
       "_finalize_ttl",
-      "FinalizeContext"
+      "_authorization_problem"
     ],
     [
       "_finalize_tree_drift",
@@ -2570,31 +2570,7 @@
     ],
     [
       "FINALIZE_CHECKS",
-      "_finalize_tree_drift"
-    ],
-    [
-      "FINALIZE_CHECKS",
-      "_finalize_lock"
-    ],
-    [
-      "FINALIZE_CHECKS",
-      "_finalize_evidence"
-    ],
-    [
-      "FINALIZE_CHECKS",
       "FinalizeContext"
-    ],
-    [
-      "FINALIZE_CHECKS",
-      "_finalize_fresh_reviewer_evals"
-    ],
-    [
-      "FINALIZE_CHECKS",
-      "_finalize_candidate"
-    ],
-    [
-      "FINALIZE_CHECKS",
-      "_finalize_produced_identity"
     ],
     [
       "FINALIZE_CHECKS",
@@ -2602,7 +2578,31 @@
     ],
     [
       "FINALIZE_CHECKS",
+      "_finalize_candidate"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_tree_drift"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_evidence"
+    ],
+    [
+      "FINALIZE_CHECKS",
       "_finalize_ttl"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_fresh_reviewer_evals"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_lock"
+    ],
+    [
+      "FINALIZE_CHECKS",
+      "_finalize_produced_identity"
     ],
     [
       "_attach_merge_lifecycle_parser",
@@ -2622,11 +2622,11 @@
     ],
     [
       "_build_chain_journal_records",
-      "_passed_stack_cell_is_intermediate"
+      "_binding_for_commit_event"
     ],
     [
       "_build_chain_journal_records",
-      "_binding_for_commit_event"
+      "_passed_stack_cell_is_intermediate"
     ],
     [
       "_prove_run_task_binding",
@@ -2634,11 +2634,11 @@
     ],
     [
       "_archive_module",
-      "_ARCHIVE_MODULE_LOCK"
+      "_ARCHIVE_MODULE"
     ],
     [
       "_archive_module",
-      "_ARCHIVE_MODULE"
+      "_ARCHIVE_MODULE_LOCK"
     ],
     [
       "_archive_contamination_refusal",
@@ -2650,63 +2650,43 @@
     ],
     [
       "_read_archive_candidate",
-      "_archive_parent_descriptor"
+      "_read_archive_candidate_at"
     ],
     [
       "_read_archive_candidate",
-      "_read_archive_candidate_at"
+      "_archive_parent_descriptor"
+    ],
+    [
+      "_render_archive_bytes",
+      "_archive_refusal"
     ],
     [
       "_render_archive_bytes",
       "_archive_module"
     ],
     [
-      "_render_archive_bytes",
-      "_archive_refusal"
-    ],
-    [
-      "_prepare_archive_candidate",
-      "_archive_close_tree_clean"
-    ],
-    [
       "_prepare_archive_candidate",
       "_render_archive_bytes"
-    ],
-    [
-      "_prepare_archive_candidate",
-      "_archive_parent_descriptor"
-    ],
-    [
-      "_prepare_archive_candidate",
-      "_archive_refusal"
-    ],
-    [
-      "_prepare_archive_candidate",
-      "_archive_contamination_refusal"
     ],
     [
       "_prepare_archive_candidate",
       "_read_archive_candidate_at"
     ],
     [
-      "_archive_recheck",
-      "_archive_close_tree_clean"
-    ],
-    [
-      "_archive_recheck",
-      "_render_archive_bytes"
-    ],
-    [
-      "_archive_recheck",
-      "_archive_refusal"
-    ],
-    [
-      "_archive_recheck",
+      "_prepare_archive_candidate",
       "_archive_contamination_refusal"
     ],
     [
-      "_archive_recheck",
-      "_REQUIRED_ARCHIVE_RECHECK_CONTROLS"
+      "_prepare_archive_candidate",
+      "_archive_refusal"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_archive_close_tree_clean"
+    ],
+    [
+      "_prepare_archive_candidate",
+      "_archive_parent_descriptor"
     ],
     [
       "_archive_recheck",
@@ -2715,6 +2695,26 @@
     [
       "_archive_recheck",
       "_read_archive_candidate"
+    ],
+    [
+      "_archive_recheck",
+      "_render_archive_bytes"
+    ],
+    [
+      "_archive_recheck",
+      "_archive_contamination_refusal"
+    ],
+    [
+      "_archive_recheck",
+      "_archive_refusal"
+    ],
+    [
+      "_archive_recheck",
+      "_archive_close_tree_clean"
+    ],
+    [
+      "_archive_recheck",
+      "_REQUIRED_ARCHIVE_RECHECK_CONTROLS"
     ],
     [
       "_evidence_record",
@@ -2762,11 +2762,7 @@
     ],
     [
       "_iter_verified_master_package_windows",
-      "_review_master_leaf_is_valid"
-    ],
-    [
-      "_iter_verified_master_package_windows",
-      "_read_review_master_digest"
+      "REVIEW_MASTER_WINDOW_BYTES"
     ],
     [
       "_iter_verified_master_package_windows",
@@ -2774,7 +2770,7 @@
     ],
     [
       "_iter_verified_master_package_windows",
-      "REVIEW_MASTER_WINDOW_BYTES"
+      "_assert_review_master_stable"
     ],
     [
       "_iter_verified_master_package_windows",
@@ -2782,7 +2778,11 @@
     ],
     [
       "_iter_verified_master_package_windows",
-      "_assert_review_master_stable"
+      "_review_master_leaf_is_valid"
+    ],
+    [
+      "_iter_verified_master_package_windows",
+      "_read_review_master_digest"
     ],
     [
       "iter_verified_master_package_windows",
@@ -2794,18 +2794,14 @@
     ],
     [
       "_FreshEvalArtifactIO",
-      "_read_bound_artifact"
-    ],
-    [
-      "_FreshEvalArtifactIO",
       "_write_artifact"
     ],
     [
-      "_fresh_eval_request_for_step",
-      "_fresh_eval_requests"
+      "_FreshEvalArtifactIO",
+      "_read_bound_artifact"
     ],
     [
-      "_fresh_eval_evaluation",
+      "_fresh_eval_request_for_step",
       "_fresh_eval_requests"
     ],
     [
@@ -2814,11 +2810,15 @@
     ],
     [
       "_fresh_eval_evaluation",
-      "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA"
+      "_run_halt"
     ],
     [
       "_fresh_eval_evaluation",
-      "_run_halt"
+      "_fresh_eval_requests"
+    ],
+    [
+      "_fresh_eval_evaluation",
+      "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA"
     ],
     [
       "_fresh_eval_evaluation",
@@ -2826,11 +2826,11 @@
     ],
     [
       "_validated_fresh_reviewer_manifest",
-      "_fresh_eval_request_for_step"
+      "_FreshEvalArtifactIO"
     ],
     [
       "_validated_fresh_reviewer_manifest",
-      "_FreshEvalArtifactIO"
+      "_fresh_eval_request_for_step"
     ],
     [
       "_validated_fresh_reviewer_manifest",
@@ -2838,11 +2838,11 @@
     ],
     [
       "_fresh_reviewer_evidence_package",
-      "_read_bound_artifact"
+      "_FreshEvalArtifactIO"
     ],
     [
       "_fresh_reviewer_evidence_package",
-      "_FreshEvalArtifactIO"
+      "_read_bound_artifact"
     ],
     [
       "_fresh_reviewer_evidence_package",
@@ -2858,15 +2858,11 @@
     ],
     [
       "_record_process_step",
-      "_evidence_record"
-    ],
-    [
-      "_record_process_step",
       "_write_artifact"
     ],
     [
-      "_run_classification",
-      "_classification_environment"
+      "_record_process_step",
+      "_evidence_record"
     ],
     [
       "_run_classification",
@@ -2875,6 +2871,10 @@
     [
       "_run_classification",
       "_classification_argv"
+    ],
+    [
+      "_run_classification",
+      "_classification_environment"
     ],
     [
       "_run_classification",
@@ -2890,11 +2890,11 @@
     ],
     [
       "_install_candidate_snapshot",
-      "_read_bound_artifact"
+      "_write_artifact"
     ],
     [
       "_install_candidate_snapshot",
-      "_write_artifact"
+      "_read_bound_artifact"
     ],
     [
       "_candidate_review_diff",
@@ -2918,10 +2918,14 @@
     ],
     [
       "_adopt_out_of_band_candidate",
-      "_transition_state"
+      "_candidate_snapshot"
     ],
     [
       "_adopt_out_of_band_candidate",
+      "_transition_state"
+    ],
+    [
+      "_stage_paths",
       "_candidate_snapshot"
     ],
     [
@@ -2929,8 +2933,8 @@
       "_install_candidate_snapshot"
     ],
     [
-      "_stage_paths",
-      "_candidate_snapshot"
+      "_mechanical_complete",
+      "_fresh_reviewer_pass_claimed"
     ],
     [
       "_mechanical_complete",
@@ -2938,11 +2942,11 @@
     ],
     [
       "_mechanical_complete",
-      "_fresh_reviewer_pass_claimed"
+      "_validated_fresh_reviewer_manifest"
     ],
     [
-      "_mechanical_complete",
-      "_validated_fresh_reviewer_manifest"
+      "_next_incomplete",
+      "_fresh_reviewer_pass_claimed"
     ],
     [
       "_next_incomplete",
@@ -2950,15 +2954,7 @@
     ],
     [
       "_next_incomplete",
-      "_fresh_reviewer_pass_claimed"
-    ],
-    [
-      "_next_incomplete",
       "_validated_fresh_reviewer_manifest"
-    ],
-    [
-      "scan_added_secrets",
-      "SECRET_RULES"
     ],
     [
       "scan_added_secrets",
@@ -2966,15 +2962,11 @@
     ],
     [
       "scan_added_secrets",
+      "SECRET_RULES"
+    ],
+    [
+      "scan_added_secrets",
       "PLACEHOLDER_RE"
-    ],
-    [
-      "_issue_authorization",
-      "_archive_metadata"
-    ],
-    [
-      "_issue_authorization",
-      "_transition_state"
     ],
     [
       "_issue_authorization",
@@ -2983,6 +2975,14 @@
     [
       "_issue_authorization",
       "_archive_recheck"
+    ],
+    [
+      "_issue_authorization",
+      "_transition_state"
+    ],
+    [
+      "_issue_authorization",
+      "_archive_metadata"
     ],
     [
       "_authorization_problem",
@@ -2994,19 +2994,19 @@
     ],
     [
       "_peek_selected_chain",
-      "_peek_chain_state"
-    ],
-    [
-      "_peek_selected_chain",
       "TERMINAL_STATES"
     ],
     [
-      "_command_run_lock_id",
-      "_peek_raw_abort_state"
+      "_peek_selected_chain",
+      "_peek_chain_state"
     ],
     [
       "_command_run_lock_id",
       "_peek_selected_chain"
+    ],
+    [
+      "_command_run_lock_id",
+      "_peek_raw_abort_state"
     ],
     [
       "abort_disposition_refusal",
@@ -3042,11 +3042,11 @@
     ],
     [
       "_retain_or_advance_merge_candidate",
-      "MergeAdmission"
+      "_MERGE_CANDIDATE_IDENTITY_FIELDS"
     ],
     [
       "_retain_or_advance_merge_candidate",
-      "_MERGE_CANDIDATE_IDENTITY_FIELDS"
+      "MergeAdmission"
     ],
     [
       "_parse_history_mutation_mode",
@@ -3070,22 +3070,14 @@
     ],
     [
       "_observe_merge_conflict",
-      "_merge_nonconflict_index_bytes"
-    ],
-    [
-      "_observe_merge_conflict",
-      "_merge_nonconflict_status_bytes"
-    ],
-    [
-      "_observe_merge_conflict",
       "_parse_merge_conflict_paths"
     ],
     [
-      "_observe_merge_post_add",
+      "_observe_merge_conflict",
       "_merge_nonconflict_index_bytes"
     ],
     [
-      "_observe_merge_post_add",
+      "_observe_merge_conflict",
       "_merge_nonconflict_status_bytes"
     ],
     [
@@ -3093,8 +3085,12 @@
       "_normalize_merge_conflict_paths"
     ],
     [
-      "_merge_rebase_integrated_predicate",
-      "_merge_branch_reflog_proves_integrated"
+      "_observe_merge_post_add",
+      "_merge_nonconflict_index_bytes"
+    ],
+    [
+      "_observe_merge_post_add",
+      "_merge_nonconflict_status_bytes"
     ],
     [
       "_merge_rebase_integrated_predicate",
@@ -3105,28 +3101,32 @@
       "_merge_rebase_operation_metadata_absent"
     ],
     [
-      "_qualify_git_no_lazy_fetch",
-      "_GitNoLazyFetchQualification"
+      "_merge_rebase_integrated_predicate",
+      "_merge_branch_reflog_proves_integrated"
     ],
     [
       "_qualify_git_no_lazy_fetch",
       "_git_environment_digest"
-    ],
-    [
-      "_qualify_git_no_lazy_fetch",
-      "_merge_scope_environment"
     ],
     [
       "_qualify_git_no_lazy_fetch",
       "_git_executable_qualification"
     ],
     [
-      "_require_git_no_lazy_fetch_qualification",
+      "_qualify_git_no_lazy_fetch",
       "_GitNoLazyFetchQualification"
+    ],
+    [
+      "_qualify_git_no_lazy_fetch",
+      "_merge_scope_environment"
     ],
     [
       "_require_git_no_lazy_fetch_qualification",
       "_git_environment_digest"
+    ],
+    [
+      "_require_git_no_lazy_fetch_qualification",
+      "_GitNoLazyFetchQualification"
     ],
     [
       "_require_git_no_lazy_fetch_qualification",
@@ -3142,11 +3142,11 @@
     ],
     [
       "_classify_merge_scope_binding",
-      "MergeScopeBindingInspection"
+      "_classify_merge_scope_binding_at"
     ],
     [
       "_classify_merge_scope_binding",
-      "_classify_merge_scope_binding_at"
+      "MergeScopeBindingInspection"
     ],
     [
       "_resume_merge_scope_binding",
@@ -3154,6 +3154,10 @@
     ],
     [
       "_resume_merge_scope_binding",
+      "_unlink_merge_scope_temporary_at"
+    ],
+    [
+      "_publish_merge_scope_binding",
       "_unlink_merge_scope_temporary_at"
     ],
     [
@@ -3161,24 +3165,20 @@
       "_merge_scope_child_result"
     ],
     [
-      "_publish_merge_scope_binding",
-      "_unlink_merge_scope_temporary_at"
+      "_merge_scope_proof",
+      "MergeScopeResult"
     ],
     [
       "_merge_scope_proof",
       "MergeAdmission"
     ],
     [
-      "_merge_scope_proof",
-      "MergeScopeResult"
+      "_merge_bootstrap_child_main",
+      "_git_environment_digest"
     ],
     [
       "_merge_bootstrap_child_main",
       "_parse_merge_name_status_output"
-    ],
-    [
-      "_merge_bootstrap_child_main",
-      "_git_environment_digest"
     ],
     [
       "_merge_bootstrap_child_argv",
@@ -3194,11 +3194,7 @@
     ],
     [
       "_derive_merge_scope",
-      "MergeAdmission"
-    ],
-    [
-      "_derive_merge_scope",
-      "_parse_merge_scope_output"
+      "MergeScopeResult"
     ],
     [
       "_derive_merge_scope",
@@ -3206,14 +3202,10 @@
     ],
     [
       "_derive_merge_scope",
-      "MergeScopeResult"
-    ],
-    [
-      "_merge_scope_from_candidate_observation",
       "MergeAdmission"
     ],
     [
-      "_merge_scope_from_candidate_observation",
+      "_derive_merge_scope",
       "_parse_merge_scope_output"
     ],
     [
@@ -3225,28 +3217,20 @@
       "MergeScopeResult"
     ],
     [
+      "_merge_scope_from_candidate_observation",
+      "MergeAdmission"
+    ],
+    [
+      "_merge_scope_from_candidate_observation",
+      "_parse_merge_scope_output"
+    ],
+    [
       "bind_merge_candidate_generation",
       "_derive_merge_scope"
     ],
     [
       "bind_merge_candidate_generation",
-      "_parse_merge_candidate_observation"
-    ],
-    [
-      "bind_merge_candidate_generation",
       "MergeAdmission"
-    ],
-    [
-      "bind_merge_candidate_generation",
-      "MergeScopeResult"
-    ],
-    [
-      "bind_merge_candidate_generation",
-      "_DERIVE_MERGE_SCOPE"
-    ],
-    [
-      "bind_merge_candidate_generation",
-      "_merge_scope_from_candidate_observation"
     ],
     [
       "bind_merge_candidate_generation",
@@ -3257,12 +3241,28 @@
       "_merge_worktree_status"
     ],
     [
-      "_write_merge_artifact",
-      "_merge_run_directory"
+      "bind_merge_candidate_generation",
+      "_DERIVE_MERGE_SCOPE"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "_parse_merge_candidate_observation"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "_merge_scope_from_candidate_observation"
+    ],
+    [
+      "bind_merge_candidate_generation",
+      "MergeScopeResult"
     ],
     [
       "_write_merge_artifact",
       "_write_artifact"
+    ],
+    [
+      "_write_merge_artifact",
+      "_merge_run_directory"
     ],
     [
       "_read_merge_artifact",
@@ -3286,15 +3286,15 @@
     ],
     [
       "_publish_merge_claim",
+      "_require_merge_lifecycle_control"
+    ],
+    [
+      "_publish_merge_claim",
       "_merge_owner_directory"
     ],
     [
       "_publish_merge_claim",
       "_validate_merge_claim_record"
-    ],
-    [
-      "_publish_merge_claim",
-      "_require_merge_lifecycle_control"
     ],
     [
       "_merge_publication_failure",
@@ -3302,19 +3302,19 @@
     ],
     [
       "_remove_merge_claim",
-      "_merge_owner_directory"
-    ],
-    [
-      "_remove_merge_claim",
       "_merge_claim_identity"
     ],
     [
       "_remove_merge_claim",
-      "_validate_merge_claim_record"
+      "_require_merge_lifecycle_control"
     ],
     [
       "_remove_merge_claim",
-      "_require_merge_lifecycle_control"
+      "_merge_owner_directory"
+    ],
+    [
+      "_remove_merge_claim",
+      "_validate_merge_claim_record"
     ],
     [
       "_resolve_recorded_merge_tip",
@@ -3322,11 +3322,11 @@
     ],
     [
       "_merge_unpublished_claim_absent",
-      "_merge_owner_directory"
+      "_merge_claim_identity"
     ],
     [
       "_merge_unpublished_claim_absent",
-      "_merge_claim_identity"
+      "_merge_owner_directory"
     ],
     [
       "_require_active_merge_epoch",
@@ -3342,79 +3342,15 @@
     ],
     [
       "_parse_merge_candidate_observation",
-      "_parse_plugin_manifest"
-    ],
-    [
-      "_parse_merge_candidate_observation",
       "_merge_candidate_observation_outputs"
     ],
     [
-      "Engine",
-      "_fresh_eval_invalid_refusal"
+      "_parse_merge_candidate_observation",
+      "_parse_plugin_manifest"
     ],
     [
       "Engine",
-      "_FreshEvalControlAbort"
-    ],
-    [
-      "Engine",
-      "_pid_is_running"
-    ],
-    [
-      "Engine",
-      "_install_ingest_sources"
-    ],
-    [
-      "Engine",
-      "_classification_argv"
-    ],
-    [
-      "Engine",
-      "PRODUCED_COMMIT_CHECKS"
-    ],
-    [
-      "Engine",
-      "commit_message_bytes"
-    ],
-    [
-      "Engine",
-      "CODEX_EXECUTABLE"
-    ],
-    [
-      "Engine",
-      "FINALIZE_CHECKS"
-    ],
-    [
-      "Engine",
-      "_evidence_record"
-    ],
-    [
-      "Engine",
-      "_FreshEvalArtifactIO"
-    ],
-    [
-      "Engine",
-      "_verify_operator_harness"
-    ],
-    [
-      "Engine",
-      "_archive_metadata"
-    ],
-    [
-      "Engine",
-      "REVIEW_INSTRUCTION"
-    ],
-    [
-      "Engine",
-      "_transition_state"
-    ],
-    [
-      "Engine",
-      "_mechanical_complete"
-    ],
-    [
-      "Engine",
-      "scan_added_secrets"
+      "FinalizeContext"
     ],
     [
       "Engine",
@@ -3422,7 +3358,7 @@
     ],
     [
       "Engine",
-      "REVIEW_LAUNCHER_CODE"
+      "REVIEW_MASTER_WINDOW_BYTES"
     ],
     [
       "Engine",
@@ -3430,27 +3366,123 @@
     ],
     [
       "Engine",
-      "_fresh_reviewer_evidence_package"
-    ],
-    [
-      "Engine",
       "_archive_recheck"
     ],
     [
       "Engine",
-      "_read_bound_artifact"
+      "_run_halt"
     ],
     [
       "Engine",
-      "_issue_authorization"
+      "_evidence_record"
     ],
     [
       "Engine",
-      "_current_test_paths"
+      "_invalidate_candidate_evidence"
+    ],
+    [
+      "Engine",
+      "_review_package_is_oversized"
+    ],
+    [
+      "Engine",
+      "_write_artifact"
+    ],
+    [
+      "Engine",
+      "_record_produced_identity"
+    ],
+    [
+      "Engine",
+      "_classification_argv"
+    ],
+    [
+      "Engine",
+      "FINALIZE_CHECKS"
+    ],
+    [
+      "Engine",
+      "PRODUCED_COMMIT_CHECKS"
+    ],
+    [
+      "Engine",
+      "_install_candidate_snapshot"
+    ],
+    [
+      "Engine",
+      "_fresh_reviewer_block_claimed"
     ],
     [
       "Engine",
       "TERMINAL_STATES"
+    ],
+    [
+      "Engine",
+      "_review_master_window_count"
+    ],
+    [
+      "Engine",
+      "_transition_state"
+    ],
+    [
+      "Engine",
+      "_candidate_review_diff"
+    ],
+    [
+      "Engine",
+      "TERMINAL_TOUCH_VERBS"
+    ],
+    [
+      "Engine",
+      "_install_ingest_sources"
+    ],
+    [
+      "Engine",
+      "_authorization_problem"
+    ],
+    [
+      "Engine",
+      "REVIEW_INSTRUCTION"
+    ],
+    [
+      "Engine",
+      "_next_incomplete"
+    ],
+    [
+      "Engine",
+      "_validated_fresh_reviewer_manifest"
+    ],
+    [
+      "Engine",
+      "_produced_mismatch_outcome"
+    ],
+    [
+      "Engine",
+      "_pid_is_running"
+    ],
+    [
+      "Engine",
+      "_success"
+    ],
+    [
+      "Engine",
+      "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA"
+    ],
+    [
+      "Engine",
+      "_classification_environment"
+    ],
+    [
+      "Engine",
+      "_run_classification"
+    ],
+    [
+      "Engine",
+      "_read_ingest_sources"
+    ],
+    [
+      "Engine",
+      "_review_master_transport"
     ],
     [
       "Engine",
@@ -3462,71 +3494,7 @@
     ],
     [
       "Engine",
-      "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA"
-    ],
-    [
-      "Engine",
-      "_run_halt"
-    ],
-    [
-      "Engine",
-      "_authorization_problem"
-    ],
-    [
-      "Engine",
-      "_run_classification"
-    ],
-    [
-      "Engine",
-      "abort_disposition_refusal"
-    ],
-    [
-      "Engine",
-      "_install_candidate_snapshot"
-    ],
-    [
-      "Engine",
-      "_record_produced_identity"
-    ],
-    [
-      "Engine",
-      "_candidate_review_diff"
-    ],
-    [
-      "Engine",
-      "_candidate_snapshot"
-    ],
-    [
-      "Engine",
-      "_void_mismatched_gate_one_pair"
-    ],
-    [
-      "Engine",
-      "_next_incomplete"
-    ],
-    [
-      "Engine",
-      "_success"
-    ],
-    [
-      "Engine",
-      "chain_id_now"
-    ],
-    [
-      "Engine",
-      "_write_artifact"
-    ],
-    [
-      "Engine",
-      "_produced_mismatch_outcome"
-    ],
-    [
-      "Engine",
-      "_invalidate_candidate_evidence"
-    ],
-    [
-      "Engine",
-      "_archive_contamination_refusal"
+      "_verify_operator_harness"
     ],
     [
       "Engine",
@@ -3534,35 +3502,27 @@
     ],
     [
       "Engine",
-      "_fresh_reviewer_block_claimed"
+      "_fresh_reviewer_evidence_package"
     ],
     [
       "Engine",
-      "_prove_run_task_binding"
+      "commit_message_bytes"
     ],
     [
       "Engine",
-      "_review_master_transport"
+      "_current_test_paths"
     ],
     [
       "Engine",
-      "_classification_environment"
+      "_read_bound_artifact"
     ],
     [
       "Engine",
-      "FinalizeContext"
+      "_archive_metadata"
     ],
     [
       "Engine",
-      "_review_master_window_count"
-    ],
-    [
-      "Engine",
-      "TERMINAL_TOUCH_VERBS"
-    ],
-    [
-      "Engine",
-      "_read_ingest_sources"
+      "_record_fresh_eval_terminal"
     ],
     [
       "Engine",
@@ -3570,19 +3530,23 @@
     ],
     [
       "Engine",
-      "_prepare_archive_candidate"
+      "abort_disposition_refusal"
     ],
     [
       "Engine",
-      "REVIEW_MASTER_WINDOW_BYTES"
+      "_archive_contamination_refusal"
     ],
     [
       "Engine",
-      "_validated_fresh_reviewer_manifest"
+      "_FreshEvalArtifactIO"
     ],
     [
       "Engine",
-      "_review_package_is_oversized"
+      "REVIEW_LAUNCHER_CODE"
+    ],
+    [
+      "Engine",
+      "_candidate_snapshot"
     ],
     [
       "Engine",
@@ -3590,7 +3554,43 @@
     ],
     [
       "Engine",
-      "_record_fresh_eval_terminal"
+      "_prepare_archive_candidate"
+    ],
+    [
+      "Engine",
+      "_void_mismatched_gate_one_pair"
+    ],
+    [
+      "Engine",
+      "_prove_run_task_binding"
+    ],
+    [
+      "Engine",
+      "_issue_authorization"
+    ],
+    [
+      "Engine",
+      "chain_id_now"
+    ],
+    [
+      "Engine",
+      "_FreshEvalControlAbort"
+    ],
+    [
+      "Engine",
+      "_fresh_eval_invalid_refusal"
+    ],
+    [
+      "Engine",
+      "CODEX_EXECUTABLE"
+    ],
+    [
+      "Engine",
+      "_mechanical_complete"
+    ],
+    [
+      "Engine",
+      "scan_added_secrets"
     ]
   ],
   "hubs": [

@@ -1,0 +1,409 @@
+{
+ "planPath": ".refactor/plan-engine.md",
+ "pkgDir": "scripts/forge/forge_cli",
+ "sourceModule": "scripts/forge/forge_cli/engine/__init__.py",
+ "waves": [
+  [
+   {
+    "cluster": "state",
+    "dest": "scripts/forge/forge_cli/engine/_state.py",
+    "symbols": [
+     "TERMINAL_STATES",
+     "TERMINAL_TOUCH_VERBS",
+     "STATE_TRANSITIONS",
+     "TOKEN_TTL_SECONDS",
+     "_REQUIRED_MERGE_LIFECYCLE_CONTROLS",
+     "MERGE_LIFECYCLE_CONTROLS",
+     "_REQUIRED_ARCHIVE_RECHECK_CONTROLS",
+     "ARCHIVE_RECHECK_CONTROLS",
+     "_CHAIN_CAPABILITY_LOCK",
+     "_CHAIN_CAPABILITIES",
+     "CODEX_EXECUTABLE",
+     "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA",
+     "_FRESH_REVIEWER_REQUEST_CANDIDATE_KEYS",
+     "REVIEW_DIRECT_PACKAGE_MAX_BYTES",
+     "REVIEW_MASTER_WINDOW_BYTES",
+     "REVIEW_COMPLETE_PACKAGE_REFUSAL",
+     "PRODUCED_COMMIT_MISMATCH",
+     "REVIEW_INSTRUCTION",
+     "REVIEW_LAUNCHER_CODE",
+     "GLOBAL_OPTIONS_HELP",
+     "ARCHIVE_CONTAMINATION",
+     "SECRET_RULES",
+     "PLACEHOLDER_RE",
+     "ABORT_DISPOSITION_PRECONDITIONS",
+     "_MERGE_CANDIDATE_IDENTITY_FIELDS",
+     "_MERGE_BOOTSTRAP_CHILD_SOURCE",
+     "_DERIVE_MERGE_SCOPE",
+     "_MERGE_INITIAL_INTEGRATION"
+    ]
+   }
+  ],
+  [
+   {
+    "cluster": "core",
+    "dest": "scripts/forge/forge_cli/engine/_core.py",
+    "symbols": [
+     "commit_message_bytes",
+     "chain_id_now",
+     "promoted_tier",
+     "_transition_state",
+     "_require_merge_lifecycle_control",
+     "inspect_common_lock",
+     "_commit_start_binding_refusal",
+     "_archive_refusal",
+     "_archive_contamination_refusal",
+     "_archive_metadata",
+     "_env_fingerprint",
+     "_evidence_record",
+     "_write_artifact",
+     "_read_bound_artifact",
+     "_fresh_eval_invalid_refusal",
+     "_record_process_step",
+     "_run_halt",
+     "MergeAdmission",
+     "MergeScopeResult",
+     "MergeCandidateGeneration",
+     "MergeBootstrapClassification"
+    ]
+   }
+  ],
+  [
+   {
+    "cluster": "journal",
+    "dest": "scripts/forge/forge_cli/engine/_journal.py",
+    "symbols": [
+     "_read_ingest_sources",
+     "_install_ingest_sources",
+     "_capture_ingest_inputs",
+     "_binding_for_commit_event",
+     "_passed_stack_cell_is_intermediate",
+     "_build_chain_journal_records"
+    ]
+   },
+   {
+    "cluster": "parser",
+    "dest": "scripts/forge/forge_cli/engine/_parser.py",
+    "symbols": [
+     "ContractArgumentParser",
+     "_extract_global_options",
+     "_attach_merge_lifecycle_parser",
+     "build_parser",
+     "_raw_top_level_command"
+    ]
+   },
+   {
+    "cluster": "cli options",
+    "dest": "scripts/forge/forge_cli/engine/_cli_options.py",
+    "symbols": [
+     "_message_from_args",
+     "_validate_revision9_cross_options",
+     "render"
+    ]
+   },
+   {
+    "cluster": "command lock",
+    "dest": "scripts/forge/forge_cli/engine/_command_lock.py",
+    "symbols": [
+     "_new_state",
+     "_prove_run_task_binding",
+     "_peek_chain_state",
+     "_peek_raw_abort_state",
+     "_peek_selected_chain",
+     "_command_run_lock_id",
+     "abort_disposition_refusal",
+     "_serialize_worktree_command"
+    ]
+   },
+   {
+    "cluster": "archive",
+    "dest": "scripts/forge/forge_cli/engine/_archive.py",
+    "symbols": [
+     "_ARCHIVE_MODULE",
+     "_ARCHIVE_MODULE_LOCK",
+     "_archive_module",
+     "_nul_git_paths",
+     "_archive_close_tree_clean",
+     "_archive_parent_descriptor",
+     "_read_archive_candidate_at",
+     "_read_archive_candidate",
+     "_render_archive_bytes",
+     "_prepare_archive_candidate",
+     "_archive_recheck"
+    ]
+   },
+   {
+    "cluster": "review transport",
+    "dest": "scripts/forge/forge_cli/engine/_review_transport.py",
+    "symbols": [
+     "_review_package_is_oversized",
+     "_review_complete_package_refusal",
+     "_review_master_window_count",
+     "_review_master_transport",
+     "_review_master_pointer_prompt",
+     "_review_master_identity",
+     "_review_master_leaf_is_valid",
+     "_read_review_master_digest",
+     "_read_review_master_window",
+     "_assert_review_master_stable",
+     "_iter_verified_master_package_windows",
+     "iter_verified_master_package_windows"
+    ]
+   },
+   {
+    "cluster": "fresh eval",
+    "dest": "scripts/forge/forge_cli/engine/_fresh_eval.py",
+    "symbols": [
+     "_FreshEvalArtifactIO",
+     "_FreshEvalControlAbort",
+     "_fresh_eval_requests",
+     "_fresh_eval_request_for_step",
+     "_fresh_eval_evaluation",
+     "_validated_fresh_reviewer_manifest"
+    ]
+   },
+   {
+    "cluster": "classification",
+    "dest": "scripts/forge/forge_cli/engine/_classification.py",
+    "symbols": [
+     "_classification_argv",
+     "_classification_environment",
+     "_run_classification"
+    ]
+   },
+   {
+    "cluster": "merge candidate",
+    "dest": "scripts/forge/forge_cli/engine/_merge_candidate.py",
+    "symbols": [
+     "_reset_merge_nonmovement_counter",
+     "_materialize_merge_candidate_tuple",
+     "_retain_or_advance_merge_candidate",
+     "_merge_scope_request",
+     "_merge_scope_proof",
+     "_merge_released_predecessor",
+     "_resolve_recorded_merge_tip"
+    ]
+   },
+   {
+    "cluster": "merge worktree",
+    "dest": "scripts/forge/forge_cli/engine/_merge_worktree.py",
+    "symbols": [
+     "_merge_cleanup_process_record",
+     "_read_merge_git_metadata",
+     "_merge_cleanup_remote_fetch_observation",
+     "_parse_plugin_manifest",
+     "_parse_history_mutation_mode",
+     "_absolute_git_path",
+     "_registered_worktrees",
+     "_merge_worktree_status",
+     "_merge_owned_rebase_metadata",
+     "_require_loud_merge_recovery_mode"
+    ]
+   },
+   {
+    "cluster": "merge conflict",
+    "dest": "scripts/forge/forge_cli/engine/_merge_conflict.py",
+    "symbols": [
+     "_merge_conflict_path_is_canonical",
+     "_parse_merge_conflict_paths",
+     "_normalize_merge_conflict_paths",
+     "_merge_nonconflict_index_bytes",
+     "_merge_nonconflict_status_bytes",
+     "_observe_merge_conflict",
+     "_observe_merge_post_add",
+     "_merge_conflict_record",
+     "_merge_conflict_record_matches",
+     "_merge_rebase_result_failed"
+    ]
+   },
+   {
+    "cluster": "merge rebase integrated",
+    "dest": "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py",
+    "symbols": [
+     "_merge_branch_reflog_proves_integrated",
+     "_merge_rebase_integrated_observation_binding",
+     "_merge_rebase_operation_metadata_absent",
+     "_merge_rebase_integrated_predicate"
+    ]
+   },
+   {
+    "cluster": "merge scope derive",
+    "dest": "scripts/forge/forge_cli/engine/_merge_scope_derive.py",
+    "symbols": [
+     "_merge_scope_environment",
+     "_GitNoLazyFetchQualification",
+     "_git_environment_digest",
+     "_git_executable_qualification",
+     "_qualify_git_no_lazy_fetch",
+     "_require_git_no_lazy_fetch_qualification",
+     "_discover_merge_scope_fence_from_sidecar",
+     "_parse_merge_name_status_output",
+     "_parse_merge_scope_output",
+     "_derive_merge_scope"
+    ]
+   },
+   {
+    "cluster": "merge scope binding",
+    "dest": "scripts/forge/forge_cli/engine/_merge_scope_binding.py",
+    "symbols": [
+     "_merge_scope_child_result",
+     "MergeScopeBindingInspection",
+     "_unlink_merge_scope_temporary_at",
+     "_classify_merge_scope_binding_at",
+     "_classify_merge_scope_binding",
+     "_resume_merge_scope_binding",
+     "_publish_merge_scope_binding"
+    ]
+   },
+   {
+    "cluster": "merge bootstrap result",
+    "dest": "scripts/forge/forge_cli/engine/_merge_bootstrap_result.py",
+    "symbols": [
+     "_decode_merge_bootstrap_result"
+    ]
+   },
+   {
+    "cluster": "merge epoch",
+    "dest": "scripts/forge/forge_cli/engine/_merge_epoch.py",
+    "symbols": [
+     "_merge_run_directory",
+     "_write_merge_artifact",
+     "_read_merge_artifact",
+     "_merge_gate_suite",
+     "_merge_gate_current",
+     "_merge_event_digest",
+     "_merge_epoch_fetch_observation_digest",
+     "_merge_inactive",
+     "_merge_has_attempt",
+     "_merge_inactive_epoch_has_no_started_child",
+     "_require_active_merge_epoch",
+     "_merge_process_unresolved",
+     "_MergeEpochBudget",
+     "_merge_epoch_suite",
+     "_remote_observation_intent"
+    ]
+   },
+   {
+    "cluster": "merge claim",
+    "dest": "scripts/forge/forge_cli/engine/_merge_claim.py",
+    "symbols": [
+     "_validate_merge_claim_record",
+     "_merge_owner_directory",
+     "_merge_claim_identity",
+     "_read_merge_claim",
+     "_publish_merge_claim",
+     "_merge_publication_failure",
+     "_remove_merge_claim",
+     "_merge_unpublished_claim_absent"
+    ]
+   }
+  ],
+  [
+   {
+    "cluster": "fresh eval evidence",
+    "dest": "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py",
+    "symbols": [
+     "_fresh_reviewer_evidence_package",
+     "_record_fresh_eval_terminal"
+    ]
+   },
+   {
+    "cluster": "candidate ops",
+    "dest": "scripts/forge/forge_cli/engine/_candidate_ops.py",
+    "symbols": [
+     "_invalidate_candidate_evidence",
+     "_candidate_patch_ref",
+     "_candidate_snapshot",
+     "_install_candidate_snapshot",
+     "_candidate_review_diff",
+     "_adopt_out_of_band_candidate",
+     "_stage_paths"
+    ]
+   },
+   {
+    "cluster": "gate checks",
+    "dest": "scripts/forge/forge_cli/engine/_gate_checks.py",
+    "symbols": [
+     "_current_test_paths",
+     "_void_mismatched_gate_one_pair",
+     "_fresh_reviewer_pass_claimed",
+     "_fresh_reviewer_block_claimed",
+     "_mechanical_complete",
+     "_next_incomplete",
+     "SecretFinding",
+     "scan_added_secrets"
+    ]
+   },
+   {
+    "cluster": "approval",
+    "dest": "scripts/forge/forge_cli/engine/_approval.py",
+    "symbols": [
+     "_success",
+     "_issue_authorization",
+     "_pid_is_running",
+     "_authorization_problem",
+     "_verify_operator_harness"
+    ]
+   },
+   {
+    "cluster": "merge bootstrap child",
+    "dest": "scripts/forge/forge_cli/engine/_merge_bootstrap_child.py",
+    "symbols": [
+     "_merge_bootstrap_child_main",
+     "_merge_bootstrap_child_argv"
+    ]
+   },
+   {
+    "cluster": "merge candidate observation",
+    "dest": "scripts/forge/forge_cli/engine/_merge_candidate_observation.py",
+    "symbols": [
+     "_merge_candidate_observation_outputs",
+     "_parse_merge_candidate_observation"
+    ]
+   }
+  ],
+  [
+   {
+    "cluster": "finalize",
+    "dest": "scripts/forge/forge_cli/engine/_finalize.py",
+    "symbols": [
+     "FinalizeContext",
+     "ProducedCommitContext",
+     "_produced_head_moved",
+     "_produced_single_parent",
+     "_produced_exact_tree",
+     "_produced_exact_message",
+     "PRODUCED_COMMIT_CHECKS",
+     "_finalize_produced_identity",
+     "_record_produced_identity",
+     "_produced_mismatch_outcome",
+     "_finalize_halt",
+     "_finalize_lock",
+     "_finalize_candidate",
+     "_finalize_evidence",
+     "_finalize_fresh_reviewer_evals",
+     "_finalize_ttl",
+     "_finalize_tree_drift",
+     "FINALIZE_CHECKS"
+    ]
+   },
+   {
+    "cluster": "merge candidate generation",
+    "dest": "scripts/forge/forge_cli/engine/_merge_candidate_generation.py",
+    "symbols": [
+     "_merge_scope_from_candidate_observation",
+     "bind_merge_candidate_generation"
+    ]
+   }
+  ],
+  [
+   {
+    "cluster": "engine",
+    "dest": "scripts/forge/forge_cli/engine/_engine.py",
+    "symbols": [
+     "Engine"
+    ]
+   }
+  ]
+ ]
+}
