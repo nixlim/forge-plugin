@@ -97,6 +97,7 @@
       "scripts/forge/forge_cli/chain_core/_state.py",
       "scripts/forge/forge_cli/chain_core/_storage.py",
       "scripts/forge/forge_cli/engine/__init__.py",
+      "scripts/forge/forge_cli/engine/_core.py",
       "scripts/forge/forge_cli/engine/_state.py",
       "scripts/forge/forge_cli/envelope.py",
       "scripts/forge/forge_cli/fresh_evals.py",
@@ -122,19 +123,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "05d5017f9e8054338e431e9aa0a32c72f19be764aac85714054121f9a6990cb8"
+      "result_sha256": "6bdbc9093c25d4a59d1b1f0983429cacbe856981ba1cb0f002e112ea269546d4"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "b16622ef7f240158426342204159664a3863e4559a639f0437ceecd53ca7b6b6"
+      "result_sha256": "83d5bfca4d16a4fe23670dc4ee37d7eda55909664dc18472eb9aae8be5c3b10b"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "f997bf8188820ad10cdcf1bb729917051652847a03dbe46930eb5c39787d6160"
+      "result_sha256": "d4502f75153d9653cb2cdf2a154795c60e0e3689df984fe920bf2f85d077ab69"
     },
     {
       "slot": "push",
@@ -152,13 +153,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "847bef9bc90c6a83b34e4c12af2c348c476d6a5e26ab73475b1f312542092ee6"
+      "result_sha256": "20e0f058e41064bc8599f98235fb62acb3f04615a6cb568c7e9d53243d56bd72"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "bd31da8285b592fdcbdb5dd8e2e1371ee364c9b54e96eb106a5ab21346185768"
+      "result_sha256": "b73fc5192b8f53c2e50eee7d9e3cf301240a04ad114c96e30ad420adf6633f16"
     }
   ]
 }
