@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests._cli_loader import package_module
+from tests._cli_loader import package_module, patch_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1830,8 +1830,8 @@ class Revision9RealIngestArchiveTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         # cli split phase 2a: the path roots are canonical runtime controls.
         with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
             cli.runtime, "SCRIPT_DIR", self.helpers
-        ), mock.patch.object(cli.runtime, "PLUGIN_ROOT", ROOT), mock.patch.object(
-            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), mock.patch.object(cli.runtime, "PLUGIN_ROOT", ROOT), patch_engine(
+            "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 

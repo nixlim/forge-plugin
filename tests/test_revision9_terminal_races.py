@@ -24,7 +24,7 @@ CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 HARNESS_TIMEOUT_SECONDS = 45.0
 
 
-from tests._cli_loader import load_cached as load_script, package_module  # cli split phase 0: one shared loader
+from tests._cli_loader import load_cached as load_script, package_module, patch_engine  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_revision9_terminal_race_cli", CLI_PATH)
@@ -123,8 +123,7 @@ def _race_worker(
             RUNTIME, "SCRIPT_DIR", Path(str(config["helpers"]))
         ), mock.patch.object(
             RUNTIME, "PLUGIN_ROOT", ROOT
-        ), mock.patch.object(
-            ENGINE,
+        ), patch_engine(
             "CODEX_EXECUTABLE",
             str(Path(str(config["helpers"])) / "fake-codex"),
         ):
@@ -210,8 +209,8 @@ class Revision9TerminalRaceTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(
             RUNTIME, "PLUGIN_ROOT", ROOT
-        ), mock.patch.object(
-            ENGINE, "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), patch_engine(
+            "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
         ):
             yield
 
