@@ -75,7 +75,7 @@ const VERDICT = { type: 'object', required: ['verdict'], properties: { verdict: 
 
 const brief = (c) =>
   `Cluster: ${c.cluster}\nSource module: ${SRC}\nDestination module: ${c.dest}\nSymbols to move, in this order: ${c.symbols.join(', ')}\n` +
-  `Snapshot: ${SNAP}\nPackage dir for the gate: ${PKG}\nScripts: ${S}\n${RULES}\nReturn the JSON report described in your instructions.`
+  `Snapshot: ${SNAP}\nPackage dir for the gate: ${PKG}\nScripts: ${S}\n${RULES}\n${c.notes ? 'Cluster note (from the plan, mandatory): ' + c.notes + '\n' : ''}Return the JSON report described in your instructions.`
 
 const extract = (c, label, extra) => agent(brief(c), { label, phase: 'Extract', agentType: 'refactor-python:extractor', isolation: 'worktree', schema: EXTRACT, ...(extra || {}) })
 
