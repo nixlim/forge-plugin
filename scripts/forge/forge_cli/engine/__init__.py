@@ -1,11 +1,20 @@
-"""Forge CLI commit-chain engine and shared verb helpers (cli split phase 3, bead
-forge-plugin-95e.4).
+"""Forge CLI commit-chain engine package (cli split phase 3, bead forge-plugin-95e.4; split
+into a package by bead forge-plugin-2fc).
 
-Moved verbatim from scripts/forge/cli.py: the Engine class, the finalize pipeline, the
-review/approval/secret-scan helpers, the archive surface, the merge admission/scope/claim
-helpers, and the Revision-12 merge bootstrap child protocol. Runtime controls are read
-through ``forge_cli.runtime``; the journal-record builder is bound onto the
-``runtime._build_chain_journal_records`` seam at import time, exactly as the shim did."""
+This root holds the historical module's ``__all__`` verbatim and re-exports every symbol
+``engine.py`` defined from the submodule that now owns it: constants in ``_state``, hub
+helpers in ``_core``, the ingest capture and journal-record builder in ``_journal`` (which
+binds the builder onto the ``runtime._build_chain_journal_records`` seam at import, exactly
+as the shim did), the argument parser, verb options, per-worktree command lock, archive
+surface, review transport, fresh-eval request/evidence helpers, classification child,
+candidate operations, gate checks, approval, finalize pipeline, the merge
+admission/scope/claim/epoch/conflict/worktree/bootstrap helpers, and the ``Engine`` class in
+``_engine``. Runtime controls are read through ``forge_cli.runtime``. Names the historical
+module merely imported are re-bound here only where an importer or test reads them.
+
+Re-exports are snapshots of the owning module's binding: assigning a control on this root
+does not reach the submodule that reads it (tests patch through ``patch_engine``), and
+``_ARCHIVE_MODULE`` here stays ``None`` while ``_archive._ARCHIVE_MODULE`` holds the cache."""
 
 from __future__ import annotations
 
