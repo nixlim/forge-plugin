@@ -26,7 +26,7 @@
  "tests/test_archive_run.py": 1770,
  "tests/test_audit_commitments.py": 1915,
  "tests/test_candidate_identity.py": 653,
- "tests/test_cli_chain.py": 2640,
+ "tests/test_cli_chain.py": 2635,
  "tests/test_cli_chain_finalize.py": 1520,
  "tests/test_cli_common_lock.py": 2018,
  "tests/test_cli_hook_integration.py": 706,
