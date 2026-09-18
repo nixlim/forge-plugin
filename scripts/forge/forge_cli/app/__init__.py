@@ -39,9 +39,7 @@ from forge_cli.app._admission import (
 from forge_cli.app._candidate_observation import (
     _observe_current_merge_candidate as _observe_current_merge_candidate,
 )
-from forge_cli.app._merge_engine import (
-    MergeEngine,
-)
+from ._merge_engine import MergeEngine as MergeEngine
 
 
 def _route_shared_chain_engine(engine: engine.Engine) -> engine.Engine | MergeEngine:
