@@ -44,10 +44,10 @@ from ._mutation_journal import (
     _persist_deferred_mutation_result as _persist_deferred_mutation_result,
 )
 from forge_cli.app._admission import (
-    prepare_merge_admission,
+    prepare_merge_admission as prepare_merge_admission,
 )
 from forge_cli.app._candidate_observation import (
-    _observe_current_merge_candidate,
+    _observe_current_merge_candidate as _observe_current_merge_candidate,
 )
 
 

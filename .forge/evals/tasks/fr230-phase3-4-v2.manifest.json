@@ -49,6 +49,9 @@
       "scripts/forge/commit-guard.sh",
       "scripts/forge/forge_cli/__init__.py",
       "scripts/forge/forge_cli/app/__init__.py",
+      "scripts/forge/forge_cli/app/_admission.py",
+      "scripts/forge/forge_cli/app/_candidate_observation.py",
+      "scripts/forge/forge_cli/app/_mutation_journal.py",
       "scripts/forge/forge_cli/candidate.py",
       "scripts/forge/forge_cli/chain_core/__init__.py",
       "scripts/forge/forge_cli/chain_core/_activation.py",
@@ -149,19 +152,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "dd17f00bd7199b94fcd2a8252e8128e852342bd5b0d4618a9cc48343a5c60f63"
+      "result_sha256": "f4c4b8adce8998288962a1c885e1df29270132377c523fb2077f7f0aff9b8251"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "34251f6f1597fa537cd4bb7090cbdedc786fcd7499b41ab5de4a1018962a93c3"
+      "result_sha256": "460f8400dd2cf227cd87f1750328c643bef11362fe7bb345ae622d332e2c9029"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "be434742eeaafe5f56ae50df5e63ff64f5d83fc2f18af2b01ca7d94631fbe081"
+      "result_sha256": "1aa88f77963c5cead822daaf0fe147f3c7755177b5a86d68b86d8c0adb7744c2"
     },
     {
       "slot": "push",
@@ -179,13 +182,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "97f09a4ae7746b02873fdacbd44b0c23cd03fd3da3a95b56bc9923f3cba95bee"
+      "result_sha256": "e94ca679b24475d1d209476e0485d8575090ff398849834a1af0e9ee8537c89b"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "55b407722623d24134b884bea8a952adf458a9fbce6fc9f1873c858f2402614b"
+      "result_sha256": "93c892f2b61276e3ea1a66d538a0099c2f2299ad2c9f6c7d24917cb981234284"
     }
   ]
 }
