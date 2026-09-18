@@ -2,7 +2,7 @@
  "pkg": "scripts/forge/forge_cli",
  "ref": "0e41964f3f1d0079d284719b3ee5bf88ce08a036",
  "tool": "mypy",
- "total": 254,
+ "total": 251,
  "errors": {
   "arg-type::Argument \"classify\" to \"_merge_candidate_observation_binding\" has incompatible type \"Any | bool | None\"; expected \"bool\"": 1,
   "arg-type::Argument \"classify\" to \"_merge_candidate_observation_step_names\" has incompatible type \"Any | None\"; expected \"bool\"": 1,
@@ -64,8 +64,6 @@
   "call-arg::Unexpected keyword argument \"expected\" for \"FrozenError\"": 1,
   "call-overload::No overload variant of \"int\" matches argument type \"object\"": 3,
   "dict-item::Dict entry 0 has incompatible type \"str\": \"str\"; expected \"str\": \"dict[Any, Any]\"": 2,
-  "import-not-found::Cannot find implementation or library stub for module named \"codex_orchestrator\"": 1,
-  "import-not-found::Cannot find implementation or library stub for module named \"codex_orchestrator.chain_paths\"": 2,
   "index::Invalid index type \"str | None\" for \"dict[str, str]\"; expected type \"str\"": 1,
   "index::Invalid index type \"str\" for \"str\"; expected type \"SupportsIndex | slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None]\"": 1,
   "index::Value of type \"Any | None\" is not indexable": 11,
@@ -100,8 +98,7 @@
   "var-annotated::Need type annotation for \"owners_path\"": 2,
   "var-annotated::Need type annotation for \"parent\"": 9,
   "var-annotated::Need type annotation for \"root\"": 14,
-  "var-annotated::Need type annotation for \"verdict_name\"": 1,
-  "import-untyped::Skipping analyzing \"forge_cli.engine._engine\": module is installed, but missing library stubs or py.typed marker": 2
+  "var-annotated::Need type annotation for \"verdict_name\"": 1
  },
  "examples": {
   "index::Invalid index type \"str | None\" for \"dict[str, str]\"; expected type \"str\"": "scripts/forge/forge_cli/policy.py:119",

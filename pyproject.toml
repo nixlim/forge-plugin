@@ -61,7 +61,7 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 # chain_core/ package (split 2026-09-13; narrowed per module 2026-09-14, bead forge-plugin-r0b):
 # each entry lists only the codes that module trips, so the ratchet can tighten per file.
-"scripts/forge/forge_cli/chain_core/__init__.py" = ["B010", "E501", "I001"]
+"scripts/forge/forge_cli/chain_core/__init__.py" = ["E501", "I001"]
 "scripts/forge/forge_cli/chain_core/_activation.py" = ["C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/chain_core/_activation_outbox.py" = ["C901", "E501", "I001", "PLR0913", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py" = ["E501", "I001", "UP035"]
@@ -107,8 +107,35 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/chain_core/_repository.py" = ["B904", "E501", "I001", "UP022", "UP035", "UP037"]
 "scripts/forge/forge_cli/chain_core/_state.py" = ["C901", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/chain_core/_storage.py" = ["B904", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/engine.py" = ["B904", "B905", "C901", "E501", "F811", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
-"scripts/forge/forge_cli/engine/*.py" = ["B904", "B905", "C901", "E501", "F811", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
+"scripts/forge/forge_cli/engine/__init__.py" = ["E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_approval.py" = ["E501", "I001", "PLR0911", "UP035"]
+"scripts/forge/forge_cli/engine/_archive.py" = ["C901", "E501", "I001", "PLR0912", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/engine/_candidate_ops.py" = ["B904", "E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_classification.py" = ["C901", "E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_cli_options.py" = ["C901", "E501", "I001", "PLR0912"]
+"scripts/forge/forge_cli/engine/_command_lock.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR1702", "UP035", "UP037"]
+"scripts/forge/forge_cli/engine/_core.py" = ["E501", "I001", "PLR0913", "UP035"]
+"scripts/forge/forge_cli/engine/_engine.py" = ["B904", "C901", "E501", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/engine/_finalize.py" = ["E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_fresh_eval.py" = ["E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_fresh_eval_evidence.py" = ["E501", "I001", "PLR0913", "UP012", "UP035"]
+"scripts/forge/forge_cli/engine/_gate_checks.py" = ["C901", "E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_journal.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_bootstrap_child.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_bootstrap_result.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_candidate.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_candidate_generation.py" = ["C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_candidate_observation.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP012", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_claim.py" = ["E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_conflict.py" = ["E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_epoch.py" = ["B904", "E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_rebase_integrated.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_scope_binding.py" = ["E501", "I001", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_scope_derive.py" = ["C901", "E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_worktree.py" = ["C901", "E501", "I001", "PLR0911", "UP012", "UP035"]
+"scripts/forge/forge_cli/engine/_parser.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_review_transport.py" = ["C901", "E501", "I001", "PLR0912", "UP012", "UP035"]
+"scripts/forge/forge_cli/engine/_state.py" = ["E501", "I001"]
 "scripts/forge/forge_cli/envelope.py" = ["PLR0913", "UP035"]
 "scripts/forge/forge_cli/fresh_evals.py" = ["B905", "C901", "E501", "F401", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
 "scripts/forge/forge_cli/policy.py" = ["B904", "C901", "I001", "UP035"]
@@ -188,6 +215,9 @@ max-nested-blocks = 4
 [tool.importlinter]
 root_packages = ["forge_cli", "codex_orchestrator"]
 include_external_packages = false
+# TYPE_CHECKING-guarded imports are annotations, not runtime edges (engine/_command_lock
+# and engine/_finalize name Engine that way; import-linter 2.15 takes this as a session option).
+exclude_type_checking_imports = true
 
 # forge_cli layering, top to bottom, as documented in docs/specs/forge-plugin-spec.md
 # section 5 (app -> engine -> chain_core -> fresh_evals -> leaf modules).
@@ -243,6 +273,29 @@ layers = [
     "_bootstrap_observation | _candidate_v2 | _chain_state | _fenced_child | _ingest_capture | _ingest_currency | _lock_record_validators | _merge_cleanup_intent | _merge_events | _merge_plan | _merge_rebase | _merge_state_shape | _receipt_snapshot | _repository",
     "_core",
     "_controls",
+    "_state",
+]
+ignore_imports = [
+    "forge_cli.runtime -> codex_orchestrator.batch",
+    "forge_cli.runtime -> codex_orchestrator.builders",
+    "forge_cli.runtime -> codex_orchestrator.journal",
+]
+
+# forge_cli.engine intra-package layering, top to bottom, in the wave order of
+# .refactor/plan-engine.md (wave 5's _engine at the top, wave 0's _state at the bottom;
+# `|` marks modules of one wave that do not import each other). _command_lock and
+# _finalize name Engine only under TYPE_CHECKING (excluded by the session option above); the three ignores
+# mirror the "forge_cli layers" contract exactly. TODO: remove with theirs.
+[[tool.importlinter.contracts]]
+name = "forge_cli.engine layers"
+type = "layers"
+containers = ["forge_cli.engine"]
+layers = [
+    "_engine",
+    "_finalize | _merge_candidate_generation",
+    "_approval | _candidate_ops | _fresh_eval_evidence | _gate_checks | _merge_bootstrap_child | _merge_candidate_observation",
+    "_archive | _classification | _cli_options | _command_lock | _fresh_eval | _journal | _merge_bootstrap_result | _merge_candidate | _merge_claim | _merge_conflict | _merge_epoch | _merge_rebase_integrated | _merge_scope_binding | _merge_scope_derive | _merge_worktree | _parser | _review_transport",
+    "_core",
     "_state",
 ]
 ignore_imports = [

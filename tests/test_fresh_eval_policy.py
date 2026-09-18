@@ -252,7 +252,7 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             "agents/fresh.md",
             "docs/specs/forge-plugin-spec.md",
             "rules/fresh.md",
-            "scripts/forge/forge_cli/engine.py",
+            "scripts/forge/forge_cli/engine/_engine.py",
             "skills/commit/SKILL.md",
             "skills/orchestrate/SKILL.md",
             "system/codex/agents/fresh.toml",
@@ -285,8 +285,8 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             ("reviewer-routing", ".codex/config.toml", ".codex/config.toml"),
             (
                 "reviewer-routing",
-                "scripts/forge/forge_cli/engine.py",
-                "scripts/forge/forge_cli/engine.py",
+                "scripts/forge/forge_cli/engine/**",
+                "scripts/forge/forge_cli/engine/_engine.py",
             ),
             (
                 "reviewer-routing",
@@ -318,8 +318,8 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             ),
             (
                 "model-provider-version",
-                "scripts/forge/forge_cli/engine.py",
-                "scripts/forge/forge_cli/engine.py",
+                "scripts/forge/forge_cli/engine/**",
+                "scripts/forge/forge_cli/engine/_engine.py",
             ),
             (
                 "model-provider-version",

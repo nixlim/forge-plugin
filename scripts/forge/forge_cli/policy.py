@@ -68,11 +68,11 @@ REVIEWER_EVAL_TRIGGER_TABLE = (
     ".claude/agents/** |\n"
     "| reviewer-routing | system/codex/agents/**, system/codex/config.toml, "
     ".codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, "
-    "scripts/forge/forge_cli/engine.py |\n"
+    "scripts/forge/forge_cli/engine/** |\n"
     "| execpolicy | system/codex/rules/**, .codex/rules/** |\n"
     "| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, "
     "system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, "
-    "scripts/forge/forge_cli/engine.py |\n"
+    "scripts/forge/forge_cli/engine/** |\n"
     "| commit-review-prompt | skills/commit/SKILL.md |\n"
 )
 

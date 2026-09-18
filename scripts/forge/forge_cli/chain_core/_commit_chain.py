@@ -1073,6 +1073,18 @@ def _ingest_proof_verifier(
     return _verify_and_build_ingest_records(repository, run_id, inputs)
 
 
+# The Revision-9 seam marker rides on the callables themselves so register_coordination_seams below can
+# tell an already-installed forge seam from a foreign registration (moved from the shim in cli split phase 3 and
+# from the chain_core package root in the engine split, bead forge-plugin-4j7).
+for _seam in (
+    reduce_merge_event,
+    _authorize_chain_batch,
+    _ingest_proof_verifier,
+    _require_no_pending_chain_activation_outbox,
+):
+    _seam._forge_cli_revision9_seam = True  # type: ignore[union-attr]
+
+
 def register_coordination_seams() -> None:
     """Idempotently install task-04 authority in the shared task-03 modules."""
 
