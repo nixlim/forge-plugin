@@ -7,6 +7,7 @@
  "scripts/forge/check-test-quality.py": 786,
  "scripts/forge/commitment_paths.py": 659,
  "scripts/forge/forge_cli/app/__init__.py": 11183,
+ "scripts/forge/forge_cli/app/_merge_engine.py": 10400,
  "scripts/forge/forge_cli/candidate.py": 1195,
  "scripts/forge/forge_cli/chain_core/__init__.py": 659,
  "scripts/forge/forge_cli/chain_core/_activation.py": 576,
