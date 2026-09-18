@@ -85,7 +85,9 @@ module.runtime.PLUGIN_ROOT = Path(plugin_root).resolve()
 import pkgutil
 module.engine.CODEX_EXECUTABLE = codex_executable
 for info in pkgutil.iter_modules(getattr(module.engine, "__path__", [])):
-    importlib.import_module(f"forge_cli.engine.{info.name}").CODEX_EXECUTABLE = codex_executable
+    submodule = importlib.import_module(f"forge_cli.engine.{info.name}")
+    if hasattr(submodule, "CODEX_EXECUTABLE"):
+        submodule.CODEX_EXECUTABLE = codex_executable
 raise SystemExit(module.main(cli_argv))
 """
 
@@ -620,10 +622,7 @@ class ForgeCLIFixture(unittest.TestCase):
             "state": state,
         }
         unsigned = {"sequence": sequence, "prev_digest": previous, "payload": payload}
-        record = {
-            **unsigned,
-            "digest": hashlib.sha256(canonical_bytes(unsigned)).hexdigest(),
-        }
+        record = {**unsigned, "digest": hashlib.sha256(canonical_bytes(unsigned)).hexdigest()}
         with self.events_path(chain_id).open("ab") as handle:
             handle.write(canonical_bytes(record) + b"\n")
         self.state_path(chain_id).write_bytes(canonical_bytes(state) + b"\n")
@@ -754,11 +753,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
             "duplicate nested legacy region\n"
             "<!-- FORGE:REGION project-overview END -->\n"
         )
-        malformed = POLICY.replace(
-            trigger_begin,
-            trigger_begin + foreign_region,
-            1,
-        )
+        malformed = POLICY.replace(trigger_begin, trigger_begin + foreign_region, 1)
         (self.repo / "forge-project.md").write_text(malformed, encoding="utf-8")
         self.git("add", "--", "forge-project.md")
         self.git("commit", "--quiet", "-m", "malformed unrelated region")
