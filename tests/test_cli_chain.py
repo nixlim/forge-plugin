@@ -79,8 +79,13 @@ spec.loader.exec_module(module)
 # cli split phase 2a: the shim reads its path roots through the canonical runtime module.
 module.runtime.SCRIPT_DIR = Path(scripts_dir).resolve()
 module.runtime.PLUGIN_ROOT = Path(plugin_root).resolve()
-# cli split phase 3: executable selection is a canonical engine control.
+# cli split phase 3: executable selection is a canonical engine control; engine split: assign
+# on the package root and on every engine submodule that binds the name (patch_engine's sweep),
+# so the fixture is indifferent to which file inside the package reads it.
+import pkgutil
 module.engine.CODEX_EXECUTABLE = codex_executable
+for info in pkgutil.iter_modules(getattr(module.engine, "__path__", [])):
+    importlib.import_module(f"forge_cli.engine.{info.name}").CODEX_EXECUTABLE = codex_executable
 raise SystemExit(module.main(cli_argv))
 """
 
@@ -209,12 +214,7 @@ for path in paths:
     if rank[tier] > rank[derived]:
         derived = tier
     path_records.append(
-        {
-            "path": path,
-            "categories": categories,
-            "control_floor": control,
-            "tier": tier,
-        }
+        {"path": path, "categories": categories, "control_floor": control, "tier": tier}
     )
 effective = derived
 if args.declared_tier and rank[args.declared_tier] > rank[effective]:
@@ -382,11 +382,7 @@ def policy_with_structural_trigger_defect(kind: str) -> str:
     if kind == "nested":
         return POLICY.replace(begin, begin + begin, 1)
     if kind == "mismatched":
-        return POLICY.replace(
-            end,
-            "<!-- FORGE:REGION reviewer-facing-eval-trigger END -->\n",
-            1,
-        )
+        return POLICY.replace(end, "<!-- FORGE:REGION reviewer-facing-eval-trigger END -->\n", 1)
     if kind == "misordered":
         trigger_paths = "<!-- FORGE:REGION trigger-paths BEGIN -->\n"
         return without_region.replace(trigger_paths, region + trigger_paths, 1)
@@ -623,11 +619,7 @@ class ForgeCLIFixture(unittest.TestCase):
             "event": "fixture_state",
             "state": state,
         }
-        unsigned = {
-            "sequence": sequence,
-            "prev_digest": previous,
-            "payload": payload,
-        }
+        unsigned = {"sequence": sequence, "prev_digest": previous, "payload": payload}
         record = {
             **unsigned,
             "digest": hashlib.sha256(canonical_bytes(unsigned)).hexdigest(),
