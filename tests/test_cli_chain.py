@@ -147,9 +147,9 @@ scripts/**
 |---|---|
 | constitution | rules/** |
 | agent-prompt-template | agents/**, system/codex/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
-| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine.py |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/** |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 <!-- FORGE:REGION guard-denied-commands BEGIN -->
@@ -698,7 +698,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         )
         self.git("add", "--", "forge-project.md")
         self.git("commit", "--quiet", "-m", f"malformed trigger region: {kind}")
-        relative = "scripts/forge/forge_cli/engine.py"
+        relative = "scripts/forge/forge_cli/engine/_engine.py"
         target = self.repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("CONTROL = 1\n", encoding="utf-8")
@@ -762,7 +762,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         (self.repo / "forge-project.md").write_text(malformed, encoding="utf-8")
         self.git("add", "--", "forge-project.md")
         self.git("commit", "--quiet", "-m", "malformed unrelated region")
-        relative = "scripts/forge/forge_cli/engine.py"
+        relative = "scripts/forge/forge_cli/engine/_engine.py"
         target = self.repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("CONTROL = 1\n", encoding="utf-8")

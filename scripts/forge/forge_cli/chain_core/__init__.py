@@ -361,16 +361,9 @@ from ._merge_chain import (
 )
 
 
-# The Revision-9 seam marker rides on the callables themselves so the registrar above can
-# tell an already-installed forge seam from a foreign registration (moved here from the
-# shim in cli split phase 3; the shim no longer defines any seam callable).
-for _seam in (
-    reduce_merge_event,
-    _authorize_chain_batch,
-    _ingest_proof_verifier,
-    _require_no_pending_chain_activation_outbox,
-):
-    setattr(_seam, "_forge_cli_revision9_seam", True)
+# The Revision-9 seam-marker loop lives in ._commit_chain beside register_coordination_seams
+# (bead forge-plugin-4j7 / review finding CON-02); _seam stays re-exported for attribute parity.
+from ._commit_chain import _seam as _seam
 
 
 __all__ = [
