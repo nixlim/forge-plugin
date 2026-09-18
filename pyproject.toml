@@ -58,6 +58,7 @@ max-nested-blocks = 4
 "scripts/forge/commitment_paths.py" = ["C901", "I001", "PLR0911", "PLR0912"]
 "scripts/forge/emit-decision-event.py" = ["C901", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702"]
 "scripts/forge/forge_cli/app.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F401", "F811", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/app/*.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F401", "F811", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
 "scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 # chain_core/ package (split 2026-09-13; narrowed per module 2026-09-14, bead forge-plugin-r0b):
 # each entry lists only the codes that module trips, so the ratchet can tighten per file.
