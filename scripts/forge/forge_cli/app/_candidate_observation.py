@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 from forge_cli import chain_core, engine
-from forge_cli.app._admission import prepare_merge_admission
 from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, V2ReasonCode
 from forge_cli.policy import Policy, PolicyError, parse_policy, sha256_bytes
 

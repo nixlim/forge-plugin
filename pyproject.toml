@@ -57,8 +57,12 @@ max-nested-blocks = 4
 "scripts/forge/cli.py" = ["F401", "I001", "UP035"]
 "scripts/forge/commitment_paths.py" = ["C901", "I001", "PLR0911", "PLR0912"]
 "scripts/forge/emit-decision-event.py" = ["C901", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702"]
-"scripts/forge/forge_cli/app.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F401", "F811", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
-"scripts/forge/forge_cli/app/*.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F401", "F811", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/app/__init__.py" = ["I001"]
+"scripts/forge/forge_cli/app/_admission.py" = ["C901", "I001", "PLR0912", "PLR0915"]
+"scripts/forge/forge_cli/app/_candidate_observation.py" = ["C901", "I001", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_dispatch.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
+"scripts/forge/forge_cli/app/_merge_engine.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/app/_mutation_journal.py" = ["C901", "I001", "UP035"]
 "scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 # chain_core/ package (split 2026-09-13; narrowed per module 2026-09-14, bead forge-plugin-r0b):
 # each entry lists only the codes that module trips, so the ratchet can tighten per file.
@@ -298,6 +302,23 @@ layers = [
     "_archive | _classification | _cli_options | _command_lock | _fresh_eval | _journal | _merge_bootstrap_result | _merge_candidate | _merge_claim | _merge_conflict | _merge_epoch | _merge_rebase_integrated | _merge_scope_binding | _merge_scope_derive | _merge_worktree | _parser | _review_transport",
     "_core",
     "_state",
+]
+ignore_imports = [
+    "forge_cli.runtime -> codex_orchestrator.batch",
+    "forge_cli.runtime -> codex_orchestrator.builders",
+    "forge_cli.runtime -> codex_orchestrator.journal",
+]
+
+[[tool.importlinter.contracts]]
+# forge_cli.app split (bead forge-plugin-hcuo): wave order of .refactor/plan-app.md; the same
+# lazy runtime -> codex_orchestrator cycle as the engine contract is ignored.
+name = "forge_cli.app layers"
+type = "layers"
+containers = ["forge_cli.app"]
+layers = [
+    "_dispatch",
+    "_merge_engine",
+    "_admission | _candidate_observation | _mutation_journal",
 ]
 ignore_imports = [
     "forge_cli.runtime -> codex_orchestrator.batch",

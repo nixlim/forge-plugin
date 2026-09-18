@@ -1,8 +1,17 @@
-"""Forge CLI application layer (cli split phase 3, bead forge-plugin-95e.4).
+"""Forge CLI application layer package (cli split phase 3, bead forge-plugin-95e.4; split
+into a package by bead forge-plugin-hcuo).
 
-Moved verbatim from scripts/forge/cli.py: the MergeEngine class, the shared chain-verb
-router, and the argument-parsing and dispatch entry points; parser construction and other
-helpers are read as ``engine.<name>`` through the canonical ``forge_cli.engine`` module."""
+This root holds the historical module's ``__all__`` verbatim and re-exports every symbol
+``app.py`` defined from the submodule that now owns it: the deferred mutation-journal
+sideband constants and helpers in ``_mutation_journal``, merge-start admission in
+``_admission``, current-candidate observation in ``_candidate_observation``, the
+``MergeEngine`` class in ``_merge_engine``, and the shared chain-verb router, ``dispatch``
+and ``main`` in ``_dispatch``. Parser construction and other helpers are read as
+``engine.<name>`` through the canonical ``forge_cli.engine`` module, and runtime controls
+through ``forge_cli.runtime``.
+
+Re-exports are snapshots of the owning module's binding: assigning a control on this root
+does not reach the submodule that reads it (tests patch through ``patch_app``)."""
 
 from __future__ import annotations
 
@@ -18,10 +27,10 @@ from ._mutation_journal import (
     _validate_deferred_mutation_request as _validate_deferred_mutation_request,
     _persist_deferred_mutation_result as _persist_deferred_mutation_result,
 )
-from forge_cli.app._admission import (
+from ._admission import (
     prepare_merge_admission as prepare_merge_admission,
 )
-from forge_cli.app._candidate_observation import (
+from ._candidate_observation import (
     _observe_current_merge_candidate as _observe_current_merge_candidate,
 )
 from ._merge_engine import MergeEngine as MergeEngine
