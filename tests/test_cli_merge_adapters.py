@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
 
-from tests._cli_loader import load_script, package_module, patch_chain_core, patch_engine  # cli split phase 0: one shared loader
+from tests._cli_loader import load_script, package_module, patch_app, patch_chain_core, patch_engine  # cli split phase 0: one shared loader
 
 
 CLI = load_script("forge_cli_merge_adapter_tests", CLI_PATH)
@@ -994,8 +994,7 @@ class MergeGateAdapterTests(MergeAdapterFixture):
             engine,
             "_run_candidate_observation_locked",
             return_value=(state, object()),
-        ), mock.patch.object(
-            APP,
+        ), patch_app(
             "_observe_current_merge_candidate",
             return_value=(repository, object(), ("src/app.py",)),
         ), patch_engine(
@@ -1040,8 +1039,8 @@ class MergeGateAdapterTests(MergeAdapterFixture):
         )
         self.assertTrue(callable(captured.get("result_transform")))
         raw = mock.sentinel.raw_mutation_result
-        with mock.patch.object(
-            APP, "_persist_deferred_mutation_result", return_value=raw
+        with patch_app(
+            "_persist_deferred_mutation_result", return_value=raw
         ) as persist:
             self.assertIs(captured["result_transform"](raw), raw)
         persist.assert_called_once_with(

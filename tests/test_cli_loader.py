@@ -59,6 +59,16 @@ def _is_engine_module_alias(target: str) -> bool:
     return tail == "engine" and bool(prefix) and _is_cli_shaped_alias(prefix)
 
 
+def _is_app_module_alias(target: str) -> bool:
+    """Recognize aliases of the canonical ``forge_cli.app`` module (``APP``, ``CLI.app``,
+    ``forge_cli.app``) but never the ``MergeEngine`` class nor an instance of it."""
+
+    prefix, _, tail = target.rpartition(".")
+    if tail == "APP":
+        return True
+    return tail == "app" and bool(prefix) and _is_cli_shaped_alias(prefix)
+
+
 def _literal_string(node: ast.AST) -> str | None:
     try:
         value = ast.literal_eval(node)
@@ -94,8 +104,9 @@ def _write_site(node: ast.Call) -> tuple[str, str, str] | None:
 
 def _moved_shim_patch_offenders(path: Path, text: str) -> list[str]:
     """Find writes whose target is a per-load shim rather than a canonical module, and
-    module-level patches on ``forge_cli.engine`` that bypass ``patch_engine`` (a root-only
-    patch silently stops intercepting a control once it lives in a package submodule)."""
+    module-level patches on ``forge_cli.engine`` or ``forge_cli.app`` that bypass
+    ``patch_engine`` / ``patch_app`` (a root-only patch silently stops intercepting a
+    control once it lives in a package submodule)."""
 
     offenders: list[str] = []
     tree = ast.parse(text, filename=str(path))
@@ -114,6 +125,11 @@ def _moved_shim_patch_offenders(path: Path, text: str) -> list[str]:
             offenders.append(
                 f"{path.name}:{node.lineno}: patches engine name {name} on {target}"
                 " outside patch_engine"
+            )
+        elif operation == "patches" and _is_app_module_alias(target):
+            offenders.append(
+                f"{path.name}:{node.lineno}: patches app name {name} on {target}"
+                " outside patch_app"
             )
     return offenders
 
@@ -254,6 +270,79 @@ mock.patch.object(CLI.MergeEngine, "finalize", value)
 mock.patch.object(root, self._name, value)
 """
         self.assertEqual(_moved_shim_patch_offenders(Path("synthetic.py"), accepted), [])
+
+    def test_app_patch_sweep_rejects_raw_module_patches_and_accepts_the_helper(
+        self,
+    ) -> None:
+        """Every module-level patch form on forge_cli.app is an offender (app split step
+        E0); patch_app, MergeEngine class/instance patches and stdlib attributes are not."""
+        rejected = """
+mock.patch.object(APP, "dispatch", value)
+patch.object(APP, '_merge_command_engine', value)
+mock.patch.object(
+    APP, "_observe_current_merge_candidate", side_effect=boom
+)
+mock.patch.object(CLI.app, "dispatch", value)
+mock.patch.object(suite.APP, "dispatch", value)
+mock.patch("forge_cli.app.dispatch", value)
+patch('forge_cli.app._persist_deferred_mutation_result', value)
+"""
+        offenders = _moved_shim_patch_offenders(Path("synthetic.py"), rejected)
+        self.assertEqual(len(offenders), 7)
+        self.assertTrue(all("outside patch_app" in offender for offender in offenders))
+        self.assertTrue(any(" on CLI.app " in offender for offender in offenders))
+        self.assertTrue(any(" on suite.APP " in offender for offender in offenders))
+        self.assertEqual(
+            sum(" on forge_cli.app " in offender for offender in offenders), 2
+        )
+        accepted = """
+patch_app("dispatch", value)
+with patch_app(
+    "_observe_current_merge_candidate", side_effect=boom
+):
+    pass
+mock.patch.object(app, "_halt", value)
+mock.patch.object(self.app, "_release_lock", value)
+mock.patch.object(APP.os, "environ", value)
+mock.patch.object(CLI.MergeEngine, "finalize", value)
+mock.patch.object(CLI.MergeEngine, "_recording_common_lock", value)
+"""
+        self.assertEqual(_moved_shim_patch_offenders(Path("synthetic.py"), accepted), [])
+
+    def test_patch_app_reaches_every_app_module_and_restores(self) -> None:
+        """patch_app is mock.patch.object on the canonical app root plus every
+        forge_cli.app.* submodule binding the name, restoring all of them on exit."""
+        app = _cli_loader.package_module("app")
+        cli = _cli_loader.load_cli("_cli_loader_test_patch_app")
+        modules = _cli_loader._app_modules()
+        self.assertIs(modules[0], app)
+        for module in modules[1:]:
+            self.assertTrue(module.__name__.startswith("forge_cli.app."))
+        name = "dispatch"
+        originals = {
+            module.__name__: vars(module)[name] for module in modules if name in vars(module)
+        }
+        sentinel = object()
+        with _cli_loader.patch_app(name, sentinel) as value:
+            self.assertIs(value, sentinel)
+            self.assertIs(app.dispatch, sentinel)
+            self.assertIs(cli.dispatch, sentinel)
+            for module in modules:
+                if module.__name__ in originals:
+                    self.assertIs(vars(module)[name], sentinel, module.__name__)
+        for module in modules:
+            if module.__name__ in originals:
+                self.assertIs(vars(module)[name], originals[module.__name__], module.__name__)
+        self.assertIs(cli.dispatch, originals[app.__name__])
+        patcher = _cli_loader.patch_app("_merge_command_engine", "fake")
+        self.assertEqual(patcher.start(), "fake")
+        self.assertEqual(app._merge_command_engine, "fake")
+        patcher.stop()
+        self.assertNotEqual(app._merge_command_engine, "fake")
+        with self.assertRaises(AttributeError):
+            with _cli_loader.patch_app("no_such_app_control_xyz", sentinel):
+                pass
+        self.assertNotIn("no_such_app_control_xyz", vars(app))
 
     def test_patch_engine_reaches_every_engine_module_and_restores(self) -> None:
         """patch_engine is mock.patch.object on the canonical engine root plus every

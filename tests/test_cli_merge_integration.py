@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import test_cli_merge_adapters as ADAPTERS
-from tests._cli_loader import package_module, patch_chain_core, patch_engine
+from tests._cli_loader import package_module, patch_app, patch_chain_core, patch_engine
 
 
 CLI = ADAPTERS.CLI
@@ -7723,8 +7723,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 engine,
                 "_review_package",
                 side_effect=AssertionError("review package was inspected after cap"),
-            ) as review_package, mock.patch.object(
-                APP,
+            ) as review_package, patch_app(
                 "_observe_current_merge_candidate",
                 side_effect=AssertionError("candidate evidence was inspected after cap"),
             ) as observe_candidate, patch_engine(

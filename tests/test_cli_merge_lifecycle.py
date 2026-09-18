@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests import test_cli_merge_adapters as ADAPTERS
-from tests._cli_loader import package_module, patch_chain_core, patch_engine
+from tests._cli_loader import package_module, patch_app, patch_chain_core, patch_engine
 
 
 CLI = ADAPTERS.CLI
@@ -5154,8 +5154,8 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
                 schema="forge-cli/2",
             )
 
-        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
-            APP, "dispatch", side_effect=dispatch
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), patch_app(
+            "dispatch", side_effect=dispatch
         ), contextlib.redirect_stdout(io.StringIO()):
             result = CLI.main(
                 [
@@ -5175,8 +5175,8 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(captured, [(self.run_id, "merge", "start")])
 
         output = io.StringIO()
-        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
-            APP, "dispatch", side_effect=AssertionError("dispatch must not run")
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), patch_app(
+            "dispatch", side_effect=AssertionError("dispatch must not run")
         ), contextlib.redirect_stdout(output):
             result = CLI.main(
                 [
@@ -5291,8 +5291,8 @@ class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
             (["merge", "cleanup"], ("cleanup",)),
             (["merge", "abort", "--reason", "stop"], ("abort", "stop")),
         )
-        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), mock.patch.object(
-            APP, "_merge_command_engine", return_value=FakeMerge()
+        with mock.patch.object(RUNTIME, "MERGE_LIFECYCLE_ACTIVE", True), patch_app(
+            "_merge_command_engine", return_value=FakeMerge()
         ):
             for argv, expected in vectors:
                 parsed = CLI.build_parser().parse_args(argv)

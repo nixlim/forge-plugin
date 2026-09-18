@@ -92,6 +92,10 @@ def _engine_modules() -> list[ModuleType]:
     return _package_modules("engine")
 
 
+def _app_modules() -> list[ModuleType]:
+    return _package_modules("app")
+
+
 class _PackagePatch:
     """``mock.patch.object`` applied to every module of ``forge_cli.<package>`` that
     binds ``name``, so one test patch keeps intercepting a control after it moves out of
@@ -161,3 +165,15 @@ def patch_engine(name: str, /, *args, **kwargs) -> _PackagePatch:
     not module patches and stay as ``mock.patch.object``."""
 
     return _PackagePatch("engine", name, args, kwargs)
+
+
+def patch_app(name: str, /, *args, **kwargs) -> _PackagePatch:
+    """Patch ``name`` on the canonical ``forge_cli.app`` module (the package root once
+    the application layer is a package) and on every ``forge_cli.app.*`` submodule that
+    binds it (see :class:`_PackagePatch`); a context manager with the
+    ``mock.patch.object(package_module("app"), name, ...)`` signature. Use it for every
+    module-level patch of an app-layer control so tests are indifferent to which file
+    inside the package a control lives in; patches on ``MergeEngine`` (the class) or
+    its instances are not module patches and stay as ``mock.patch.object``."""
+
+    return _PackagePatch("app", name, args, kwargs)
