@@ -1,0 +1,352 @@
+{
+  "module": "scripts/forge/forge_cli/app.py",
+  "total_lines": 11525,
+  "symbols": [
+    {
+      "name": "_MUTATION_JOURNAL_SCHEMA",
+      "kind": "assignment",
+      "line": 46,
+      "end_line": 46,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MUTATION_JOURNAL_SIDEBAND_PREFIX",
+      "kind": "assignment",
+      "line": 47,
+      "end_line": 47,
+      "loc": 1,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MUTATION_PERSISTENCE_ADVISORY",
+      "kind": "assignment",
+      "line": 48,
+      "end_line": 50,
+      "loc": 3,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_MUTATION_JOURNAL_REQUEST_KEYS",
+      "kind": "assignment",
+      "line": 51,
+      "end_line": 67,
+      "loc": 17,
+      "refs": [],
+      "mutable_state": true
+    },
+    {
+      "name": "_MUTATION_JOURNAL_PREIMAGE_KEYS",
+      "kind": "assignment",
+      "line": 68,
+      "end_line": 80,
+      "loc": 13,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_DeferredMutationRequestError",
+      "kind": "class",
+      "line": 83,
+      "end_line": 84,
+      "loc": 2,
+      "refs": [],
+      "mutable_state": false
+    },
+    {
+      "name": "_mutation_persistence_error",
+      "kind": "function",
+      "line": 87,
+      "end_line": 92,
+      "loc": 6,
+      "refs": [
+        "_DeferredMutationRequestError",
+        "_MUTATION_PERSISTENCE_ADVISORY"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_bounded_mutation_output",
+      "kind": "function",
+      "line": 95,
+      "end_line": 106,
+      "loc": 12,
+      "refs": [
+        "_MUTATION_PERSISTENCE_ADVISORY"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_validate_deferred_mutation_request",
+      "kind": "function",
+      "line": 109,
+      "end_line": 155,
+      "loc": 47,
+      "refs": [
+        "_DeferredMutationRequestError",
+        "_MUTATION_JOURNAL_PREIMAGE_KEYS",
+        "_MUTATION_JOURNAL_REQUEST_KEYS",
+        "_MUTATION_JOURNAL_SCHEMA"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_persist_deferred_mutation_result",
+      "kind": "function",
+      "line": 158,
+      "end_line": 234,
+      "loc": 77,
+      "refs": [
+        "_DeferredMutationRequestError",
+        "_MUTATION_JOURNAL_SIDEBAND_PREFIX",
+        "_bounded_mutation_output",
+        "_mutation_persistence_error",
+        "_validate_deferred_mutation_request"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_route_shared_chain_engine",
+      "kind": "function",
+      "line": 237,
+      "end_line": 255,
+      "loc": 19,
+      "refs": [
+        "MergeEngine"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_merge_command_engine",
+      "kind": "function",
+      "line": 258,
+      "end_line": 270,
+      "loc": 13,
+      "refs": [
+        "MergeEngine"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "dispatch",
+      "kind": "function",
+      "line": 273,
+      "end_line": 421,
+      "loc": 149,
+      "refs": [
+        "_merge_command_engine",
+        "_route_shared_chain_engine"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "main",
+      "kind": "function",
+      "line": 424,
+      "end_line": 540,
+      "loc": 117,
+      "refs": [
+        "dispatch"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "prepare_merge_admission",
+      "kind": "function",
+      "line": 543,
+      "end_line": 740,
+      "loc": 198,
+      "refs": [
+        "main"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "_observe_current_merge_candidate",
+      "kind": "function",
+      "line": 743,
+      "end_line": 937,
+      "loc": 195,
+      "refs": [
+        "main"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "MergeEngine",
+      "kind": "class",
+      "line": 940,
+      "end_line": 11513,
+      "loc": 10574,
+      "refs": [
+        "_observe_current_merge_candidate",
+        "_persist_deferred_mutation_result",
+        "prepare_merge_admission"
+      ],
+      "mutable_state": false
+    },
+    {
+      "name": "__all__",
+      "kind": "assignment",
+      "line": 11516,
+      "end_line": 11524,
+      "loc": 9,
+      "refs": [],
+      "mutable_state": true
+    }
+  ],
+  "edges": [
+    [
+      "_mutation_persistence_error",
+      "_MUTATION_PERSISTENCE_ADVISORY"
+    ],
+    [
+      "_mutation_persistence_error",
+      "_DeferredMutationRequestError"
+    ],
+    [
+      "_bounded_mutation_output",
+      "_MUTATION_PERSISTENCE_ADVISORY"
+    ],
+    [
+      "_validate_deferred_mutation_request",
+      "_MUTATION_JOURNAL_PREIMAGE_KEYS"
+    ],
+    [
+      "_validate_deferred_mutation_request",
+      "_MUTATION_JOURNAL_SCHEMA"
+    ],
+    [
+      "_validate_deferred_mutation_request",
+      "_MUTATION_JOURNAL_REQUEST_KEYS"
+    ],
+    [
+      "_validate_deferred_mutation_request",
+      "_DeferredMutationRequestError"
+    ],
+    [
+      "_persist_deferred_mutation_result",
+      "_mutation_persistence_error"
+    ],
+    [
+      "_persist_deferred_mutation_result",
+      "_MUTATION_JOURNAL_SIDEBAND_PREFIX"
+    ],
+    [
+      "_persist_deferred_mutation_result",
+      "_bounded_mutation_output"
+    ],
+    [
+      "_persist_deferred_mutation_result",
+      "_DeferredMutationRequestError"
+    ],
+    [
+      "_persist_deferred_mutation_result",
+      "_validate_deferred_mutation_request"
+    ],
+    [
+      "_route_shared_chain_engine",
+      "MergeEngine"
+    ],
+    [
+      "_merge_command_engine",
+      "MergeEngine"
+    ],
+    [
+      "dispatch",
+      "_merge_command_engine"
+    ],
+    [
+      "dispatch",
+      "_route_shared_chain_engine"
+    ],
+    [
+      "main",
+      "dispatch"
+    ],
+    [
+      "prepare_merge_admission",
+      "main"
+    ],
+    [
+      "_observe_current_merge_candidate",
+      "main"
+    ],
+    [
+      "MergeEngine",
+      "_persist_deferred_mutation_result"
+    ],
+    [
+      "MergeEngine",
+      "prepare_merge_admission"
+    ],
+    [
+      "MergeEngine",
+      "_observe_current_merge_candidate"
+    ]
+  ],
+  "hubs": [
+    "_DeferredMutationRequestError",
+    "main",
+    "MergeEngine",
+    "_mutation_persistence_error"
+  ],
+  "fan_in": {
+    "_DeferredMutationRequestError": 3,
+    "_mutation_persistence_error": 1,
+    "_bounded_mutation_output": 1,
+    "_validate_deferred_mutation_request": 1,
+    "_persist_deferred_mutation_result": 1,
+    "_route_shared_chain_engine": 1,
+    "_merge_command_engine": 1,
+    "dispatch": 1,
+    "main": 2,
+    "prepare_merge_admission": 1,
+    "_observe_current_merge_candidate": 1,
+    "MergeEngine": 2
+  },
+  "clusters": [
+    [
+      "prepare_merge_admission"
+    ],
+    [
+      "_observe_current_merge_candidate"
+    ],
+    [
+      "_route_shared_chain_engine",
+      "_merge_command_engine",
+      "dispatch"
+    ],
+    [
+      "_bounded_mutation_output",
+      "_validate_deferred_mutation_request",
+      "_persist_deferred_mutation_result"
+    ]
+  ],
+  "communities": [
+    [
+      "prepare_merge_admission"
+    ],
+    [
+      "_observe_current_merge_candidate"
+    ],
+    [
+      "_route_shared_chain_engine",
+      "_merge_command_engine",
+      "dispatch"
+    ],
+    [
+      "_bounded_mutation_output",
+      "_validate_deferred_mutation_request",
+      "_persist_deferred_mutation_result"
+    ]
+  ],
+  "mutable_state": [
+    "_MUTATION_JOURNAL_REQUEST_KEYS",
+    "__all__"
+  ],
+  "external_dependents": []
+}

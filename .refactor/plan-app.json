@@ -1,0 +1,65 @@
+{
+ "planPath": ".refactor/plan-app.md",
+ "pkgDir": "scripts/forge/forge_cli",
+ "sourceModule": "scripts/forge/forge_cli/app/__init__.py",
+ "waves": [
+  [
+   {
+    "cluster": "mutation journal",
+    "dest": "scripts/forge/forge_cli/app/_mutation_journal.py",
+    "symbols": [
+     "_MUTATION_JOURNAL_SCHEMA",
+     "_MUTATION_JOURNAL_SIDEBAND_PREFIX",
+     "_MUTATION_PERSISTENCE_ADVISORY",
+     "_MUTATION_JOURNAL_REQUEST_KEYS",
+     "_MUTATION_JOURNAL_PREIMAGE_KEYS",
+     "_DeferredMutationRequestError",
+     "_mutation_persistence_error",
+     "_bounded_mutation_output",
+     "_validate_deferred_mutation_request",
+     "_persist_deferred_mutation_result"
+    ],
+    "notes": "Leaf; contiguous source lines 46-234 (constants 46-80, class 83-84, defs 87-234); no module-level statement to cut verbatim, no TYPE_CHECKING guard. Imports from package: none. External imports to copy: from typing import Any, Sequence; from pathlib import Path; import dataclasses, json; from forge_cli import chain_core, runtime; from forge_cli.policy import sha256_bytes. Re-export all 10 names on the root with the relative form `from ._mutation_journal import <name> as <name>` (none is in __all__; _MUTATION_JOURNAL_SIDEBAND_PREFIX is read via the root by tests/test_mutation_runner.py:1542 and _persist_deferred_mutation_result is patched via patch_app)."
+   },
+   {
+    "cluster": "admission",
+    "dest": "scripts/forge/forge_cli/app/_admission.py",
+    "symbols": [
+     "prepare_merge_admission"
+    ],
+    "notes": "Leaf; source lines 543-740; the inventory edge to `main` is a local variable (line 596), not a reference. No module-level statement to cut verbatim, no TYPE_CHECKING guard. Imports from package: none. External imports to copy: from pathlib import Path; import os; from forge_cli import chain_core, engine; from forge_cli.envelope import V2ReasonCode; from forge_cli.policy import PolicyError, parse_policy, sha256_bytes."
+   },
+   {
+    "cluster": "candidate observation",
+    "dest": "scripts/forge/forge_cli/app/_candidate_observation.py",
+    "symbols": [
+     "_observe_current_merge_candidate"
+    ],
+    "notes": "Leaf; source lines 743-937; the inventory edge to `main` is a local variable (line 831). No module-level statement to cut verbatim, no TYPE_CHECKING guard. Imports from package: none. External imports to copy: from typing import Any, Mapping; from pathlib import Path; from forge_cli import chain_core, engine; from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, V2ReasonCode; from forge_cli.policy import Policy, PolicyError, parse_policy, sha256_bytes. Patched by tests at test_cli_merge_adapters.py:997 and test_cli_merge_integration.py:7726 through patch_app (E0)."
+   }
+  ],
+  [
+   {
+    "cluster": "merge engine",
+    "dest": "scripts/forge/forge_cli/app/_merge_engine.py",
+    "symbols": [
+     "MergeEngine"
+    ],
+    "notes": "OVER BUDGET by operator ruling (forge-plugin-hcuo): one class, source lines 940-11513, ~10,282 code lines; the extractor does not edit .refactor-baseline.json; the provisional entry \"scripts/forge/forge_cli/app/_merge_engine.py\": 10400 is committed by the orchestrator at the wave-0 close, BEFORE this extractor runs (verify.sh:36 runs check_file_length.py against the baseline; engine precedent e8f6e30 -> 7263e40 -> e23ac60), and the finalize wave re-pins it to the measured count. No module-level statement to cut verbatim, no TYPE_CHECKING guard, no class-body assignment, no decorator from this module. Imports from package: from forge_cli.app._mutation_journal import _persist_deferred_mutation_result; from forge_cli.app._admission import prepare_merge_admission; from forge_cli.app._candidate_observation import _observe_current_merge_candidate. External imports to copy: from typing import Any, Callable, Iterable, Mapping, Sequence; from pathlib import Path; import base64, contextlib, copy, dataclasses, os, re, secrets, socket, stat, sys; from forge_cli import chain_core, engine, runtime; from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal, V2ReasonCode; from forge_cli.policy import Policy, sha256_bytes."
+   }
+  ],
+  [
+   {
+    "cluster": "dispatch",
+    "dest": "scripts/forge/forge_cli/app/_dispatch.py",
+    "symbols": [
+     "_route_shared_chain_engine",
+     "_merge_command_engine",
+     "dispatch",
+     "main"
+    ],
+    "notes": "Contiguous source lines 237-540. No module-level statement to cut verbatim, no TYPE_CHECKING guard (MergeEngine is constructed at runtime, lines 255/263, and named in return annotations 237/258 under `from __future__ import annotations`). Imports from package: from forge_cli.app._merge_engine import MergeEngine. External imports to copy: from typing import Sequence; import argparse, dataclasses, sys; from forge_cli import chain_core, runtime; from forge_cli import engine; from forge_cli import engine as _engine_module (BOTH bindings: dispatch/_merge_command_engine shadow `engine` with a parameter and read the module through _engine_module at lines 261 and 420); from forge_cli.envelope import FrozenError, OUTPUT_SCHEMA, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal, V2ReasonCode. Patched by tests through patch_app (E0): dispatch (test_cli_merge_lifecycle.py:5157, 5178), _merge_command_engine (test_cli_merge_lifecycle.py:5294). scripts/forge/cli.py:131 calls app.main() through the root re-export."
+   }
+  ]
+ ]
+}
