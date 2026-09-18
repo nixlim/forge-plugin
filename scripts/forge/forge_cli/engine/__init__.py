@@ -64,9 +64,8 @@ from ._core import _commit_start_binding_refusal as _commit_start_binding_refusa
 from ._state import _FRESH_REVIEWER_REQUEST_CANDIDATE_KEYS as _FRESH_REVIEWER_REQUEST_CANDIDATE_KEYS
 
 
-# cli split phase 2b: chain_core reaches the journal-record builder through this
-# late-bound runtime seam; tests patch it on forge_cli.runtime.
-runtime._build_chain_journal_records = _build_chain_journal_records
+# cli split phase 2b: ._journal binds the journal-record builder onto the late-bound
+# runtime seam right after its definition; tests patch it on forge_cli.runtime.
 
 
 __all__ = [

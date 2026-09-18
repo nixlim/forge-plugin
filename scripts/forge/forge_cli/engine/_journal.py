@@ -473,3 +473,8 @@ def _build_chain_journal_records(
         state, source_event_digest, binding_review
     )
     return (*activation_preamble, record)
+
+
+# cli split phase 2b: chain_core reaches the journal-record builder through this
+# late-bound runtime seam; tests patch it on forge_cli.runtime.
+runtime._build_chain_journal_records = _build_chain_journal_records

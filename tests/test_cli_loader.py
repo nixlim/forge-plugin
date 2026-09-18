@@ -325,7 +325,7 @@ mock.patch.object(root, self._name, value)
         self.assertIs(again._build_chain_journal_records, engine._build_chain_journal_records)
         self.assertIn(
             "runtime._build_chain_journal_records = _build_chain_journal_records",
-            Path(engine.__file__).read_text(encoding="utf-8"),
+            Path(engine._journal.__file__).read_text(encoding="utf-8"),
         )
         self.assertNotIn("_build_chain_journal_records", core.__all__)
         for seam in (
