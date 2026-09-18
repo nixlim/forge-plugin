@@ -97,7 +97,24 @@
       "scripts/forge/forge_cli/chain_core/_state.py",
       "scripts/forge/forge_cli/chain_core/_storage.py",
       "scripts/forge/forge_cli/engine/__init__.py",
+      "scripts/forge/forge_cli/engine/_archive.py",
+      "scripts/forge/forge_cli/engine/_classification.py",
+      "scripts/forge/forge_cli/engine/_cli_options.py",
+      "scripts/forge/forge_cli/engine/_command_lock.py",
       "scripts/forge/forge_cli/engine/_core.py",
+      "scripts/forge/forge_cli/engine/_fresh_eval.py",
+      "scripts/forge/forge_cli/engine/_journal.py",
+      "scripts/forge/forge_cli/engine/_merge_bootstrap_result.py",
+      "scripts/forge/forge_cli/engine/_merge_candidate.py",
+      "scripts/forge/forge_cli/engine/_merge_claim.py",
+      "scripts/forge/forge_cli/engine/_merge_conflict.py",
+      "scripts/forge/forge_cli/engine/_merge_epoch.py",
+      "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py",
+      "scripts/forge/forge_cli/engine/_merge_scope_binding.py",
+      "scripts/forge/forge_cli/engine/_merge_scope_derive.py",
+      "scripts/forge/forge_cli/engine/_merge_worktree.py",
+      "scripts/forge/forge_cli/engine/_parser.py",
+      "scripts/forge/forge_cli/engine/_review_transport.py",
       "scripts/forge/forge_cli/engine/_state.py",
       "scripts/forge/forge_cli/envelope.py",
       "scripts/forge/forge_cli/fresh_evals.py",
@@ -123,19 +140,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "6bdbc9093c25d4a59d1b1f0983429cacbe856981ba1cb0f002e112ea269546d4"
+      "result_sha256": "0117105725d41a270e21b63444c80049dccb91eec63bafcdc113c2e774b95b76"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "83d5bfca4d16a4fe23670dc4ee37d7eda55909664dc18472eb9aae8be5c3b10b"
+      "result_sha256": "5566643690d32dd61f7697cfe9cc2e97f1966cb57f558c5fceeb635e9ae53381"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "d4502f75153d9653cb2cdf2a154795c60e0e3689df984fe920bf2f85d077ab69"
+      "result_sha256": "a0f0b6e26ae837deac6a0969117e6ea06a2c721763846fa01c47c30479cf52b4"
     },
     {
       "slot": "push",
@@ -153,13 +170,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "20e0f058e41064bc8599f98235fb62acb3f04615a6cb568c7e9d53243d56bd72"
+      "result_sha256": "e277dcf96f6b1e7063e2312c63e54d5d146a409568d25f01147305eddf545ce2"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "b73fc5192b8f53c2e50eee7d9e3cf301240a04ad114c96e30ad420adf6633f16"
+      "result_sha256": "cc74dc6659bb948c0dbcfcbbe23d3ccf3bd5f7f900f09ef6b42279cc4de31948"
     }
   ]
 }
