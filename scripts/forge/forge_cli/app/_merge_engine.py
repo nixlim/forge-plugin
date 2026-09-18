@@ -13,9 +13,9 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from forge_cli import chain_core, runtime, engine
-from forge_cli.app._admission import prepare_merge_admission as prepare_merge_admission
-from forge_cli.app._candidate_observation import _observe_current_merge_candidate as _observe_current_merge_candidate
-from forge_cli.app._mutation_journal import _persist_deferred_mutation_result as _persist_deferred_mutation_result
+from forge_cli.app._admission import prepare_merge_admission
+from forge_cli.app._candidate_observation import _observe_current_merge_candidate
+from forge_cli.app._mutation_journal import _persist_deferred_mutation_result
 from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal, V2ReasonCode
 from forge_cli.policy import Policy, sha256_bytes
 
