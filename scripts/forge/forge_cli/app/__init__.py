@@ -25,7 +25,7 @@ from forge_cli.app._candidate_observation import (
     _observe_current_merge_candidate as _observe_current_merge_candidate,
 )
 from ._merge_engine import MergeEngine as MergeEngine
-from forge_cli.app._dispatch import (
+from ._dispatch import (
     _merge_command_engine as _merge_command_engine,
     _route_shared_chain_engine as _route_shared_chain_engine,
     dispatch as dispatch,
