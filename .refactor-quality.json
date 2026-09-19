@@ -1,0 +1,2 @@
+{"module_target": 500, "module_ceiling": 1000, "function_target": 150, "class_target": 30, "max_parameters": 6,
+ "plain_decorators": ["_serialize_worktree_command"]}
