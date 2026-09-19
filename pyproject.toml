@@ -121,6 +121,7 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/engine/_command_lock.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR1702", "UP035", "UP037"]
 "scripts/forge/forge_cli/engine/_core.py" = ["E501", "I001", "PLR0913", "UP035"]
 "scripts/forge/forge_cli/engine/_engine.py" = ["B904", "C901", "E501", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_*.py" = ["B904", "C901", "E501", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]  # temporary: relocated Engine bodies carry _engine.py's grandfathered codes until the split's finalize narrows this per module (bead forge-plugin-321p)
 "scripts/forge/forge_cli/engine/_finalize.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_fresh_eval.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py" = ["E501", "I001", "PLR0913", "UP012", "UP035"]
