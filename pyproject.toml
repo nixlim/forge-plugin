@@ -120,8 +120,7 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/engine/_cli_options.py" = ["C901", "E501", "I001", "PLR0912"]
 "scripts/forge/forge_cli/engine/_command_lock.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR1702", "UP035", "UP037"]
 "scripts/forge/forge_cli/engine/_core.py" = ["E501", "I001", "PLR0913", "UP035"]
-"scripts/forge/forge_cli/engine/_engine.py" = ["B904", "C901", "E501", "I001", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
-"scripts/forge/forge_cli/engine/_verbs_*.py" = ["B904", "C901", "E501", "PLR0904", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]  # temporary: relocated Engine bodies carry _engine.py's grandfathered codes (minus I001: the mover's manifested import sort must stay active) until the split's finalize narrows this per module (bead forge-plugin-321p)
+"scripts/forge/forge_cli/engine/_engine.py" = ["C901", "E501", "I001", "PLR0911", "UP035"]
 "scripts/forge/forge_cli/engine/_finalize.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_fresh_eval.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py" = ["E501", "I001", "PLR0913", "UP012", "UP035"]
@@ -142,6 +141,15 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/engine/_parser.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_review_transport.py" = ["C901", "E501", "I001", "PLR0912", "UP012", "UP035"]
 "scripts/forge/forge_cli/engine/_state.py" = ["E501", "I001"]
+"scripts/forge/forge_cli/engine/_verbs_decision.py" = ["C901", "E501", "PLR0912"]
+"scripts/forge/forge_cli/engine/_verbs_finalize.py" = ["C901", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_gate.py" = ["C901", "E501", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_gate_evals.py" = ["B904", "C901", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_lifecycle.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_review_collect.py" = ["C901", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_review_request.py" = ["C901", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_status.py" = ["C901", "E501", "PLR0911", "PLR0912", "PLR0913"]
+"scripts/forge/forge_cli/engine/_verbs_tombstone.py" = ["C901", "E501", "UP035"]
 "scripts/forge/forge_cli/envelope.py" = ["PLR0913", "UP035"]
 "scripts/forge/forge_cli/fresh_evals.py" = ["B905", "C901", "E501", "F401", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
 "scripts/forge/forge_cli/policy.py" = ["B904", "C901", "I001", "UP035"]
@@ -298,6 +306,7 @@ type = "layers"
 containers = ["forge_cli.engine"]
 layers = [
     "_engine",
+    "_verbs_decision | _verbs_finalize | _verbs_gate | _verbs_gate_evals | _verbs_lifecycle | _verbs_review_collect | _verbs_review_request | _verbs_status | _verbs_tombstone",
     "_finalize | _merge_candidate_generation",
     "_approval | _candidate_ops | _fresh_eval_evidence | _gate_checks | _merge_bootstrap_child | _merge_candidate_observation",
     "_archive | _classification | _cli_options | _command_lock | _fresh_eval | _journal | _merge_bootstrap_result | _merge_candidate | _merge_claim | _merge_conflict | _merge_epoch | _merge_rebase_integrated | _merge_scope_binding | _merge_scope_derive | _merge_worktree | _parser | _review_transport",

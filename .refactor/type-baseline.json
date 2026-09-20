@@ -2,7 +2,7 @@
  "pkg": "scripts/forge/forge_cli",
  "ref": "b764d5ad2880e820d207166448fe658ca6c01862",
  "tool": "mypy",
- "total": 251,
+ "total": 241,
  "errors": {
   "arg-type::Argument \"classify\" to \"_merge_candidate_observation_binding\" has incompatible type \"Any | bool | None\"; expected \"bool\"": 1,
   "arg-type::Argument \"classify\" to \"_merge_candidate_observation_step_names\" has incompatible type \"Any | None\"; expected \"bool\"": 1,
@@ -37,7 +37,7 @@
   "arg-type::Argument 1 to \"int\" has incompatible type \"dict[str, Any] | int | str | Any | None\"; expected \"str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc\"": 1,
   "arg-type::Argument 1 to \"int\" has incompatible type \"int | None\"; expected \"str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc\"": 4,
   "arg-type::Argument 1 to \"len\" has incompatible type \"list[str] | None\"; expected \"Sized\"": 1,
-  "arg-type::Argument 1 to \"persist\" of \"ChainStore\" has incompatible type \"MutableMapping[str, Any]\"; expected \"dict[str, Any]\"": 14,
+  "arg-type::Argument 1 to \"persist\" of \"ChainStore\" has incompatible type \"MutableMapping[str, Any]\"; expected \"dict[str, Any]\"": 6,
   "arg-type::Argument 1 to \"set\" has incompatible type \"Any | None\"; expected \"Iterable[Any]\"": 1,
   "arg-type::Argument 1 to \"tuple\" has incompatible type \"Any | None\"; expected \"Iterable[str]\"": 1,
   "arg-type::Argument 12 to \"run_fenced_command\" has incompatible type \"**dict[str, Callable[[FencedProcessResult], FencedProcessResult]]\"; expected \"Callable[[], float]\"": 1,
@@ -89,7 +89,6 @@
   "union-attr::Item \"int\" of \"int | HasFileno\" has no attribute \"fileno\"": 1,
   "var-annotated::Need type annotation for \"_name\"": 3,
   "var-annotated::Need type annotation for \"_owners_path\"": 2,
-  "var-annotated::Need type annotation for \"attempt_fd\"": 1,
   "var-annotated::Need type annotation for \"common_lock\"": 6,
   "var-annotated::Need type annotation for \"locked\"": 2,
   "var-annotated::Need type annotation for \"materialized\"": 2,
@@ -97,8 +96,7 @@
   "var-annotated::Need type annotation for \"owners\"": 4,
   "var-annotated::Need type annotation for \"owners_path\"": 2,
   "var-annotated::Need type annotation for \"parent\"": 9,
-  "var-annotated::Need type annotation for \"root\"": 14,
-  "var-annotated::Need type annotation for \"verdict_name\"": 1
+  "var-annotated::Need type annotation for \"root\"": 14
  },
  "examples": {
   "index::Invalid index type \"str | None\" for \"dict[str, str]\"; expected type \"str\"": "scripts/forge/forge_cli/policy.py:119",
