@@ -1,0 +1,1970 @@
+{
+  "name": "Engine",
+  "bases": [],
+  "metaclass": [],
+  "decorators": [],
+  "statements": [],
+  "slots": false,
+  "methods": [
+    {
+      "name": "__init__",
+      "line": 34,
+      "end_line": 35,
+      "decorators": [],
+      "reads": [],
+      "writes": [
+        "ctx"
+      ],
+      "calls": [],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_require_tombstone_control",
+      "line": 38,
+      "end_line": 45,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_tombstone_outcome",
+      "line": 47,
+      "end_line": 62,
+      "decorators": [],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Outcome",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "operator_tombstone",
+      "line": 65,
+      "end_line": 112,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_require_tombstone_control",
+        "_tombstone_outcome",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_require_tombstone_control",
+        "_tombstone_outcome"
+      ],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "journal_batch_recover",
+      "line": 114,
+      "end_line": 136,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Outcome",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "chain_core",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "journal_ingest_chain",
+      "line": 138,
+      "end_line": 253,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Outcome",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "_install_ingest_sources",
+        "_read_ingest_sources",
+        "chain_core",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_chains_for_worktree",
+      "line": 255,
+      "end_line": 271,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "sys"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "select",
+      "line": 273,
+      "end_line": 316,
+      "decorators": [],
+      "reads": [
+        "_chains_for_worktree",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_chains_for_worktree"
+      ],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "ReasonCode",
+        "Refusal",
+        "TERMINAL_STATES"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_live_chain",
+      "line": 318,
+      "end_line": 322,
+      "decorators": [],
+      "reads": [
+        "_chains_for_worktree"
+      ],
+      "writes": [],
+      "calls": [
+        "_chains_for_worktree"
+      ],
+      "globals": [
+        "TERMINAL_STATES"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_record_head_moved",
+      "line": 324,
+      "end_line": 343,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_preflight",
+      "line": 345,
+      "end_line": 456,
+      "decorators": [],
+      "reads": [
+        "_record_head_moved",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_record_head_moved"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "TERMINAL_STATES",
+        "TERMINAL_TOUCH_VERBS",
+        "_adopt_out_of_band_candidate",
+        "_archive_metadata",
+        "_archive_recheck",
+        "_run_halt",
+        "candidate_module",
+        "chain_core",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "status",
+      "line": 459,
+      "end_line": 581,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_record_head_moved",
+        "_recover_committing",
+        "_release_lock",
+        "_require_tombstone_control",
+        "_tombstone_outcome",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_record_head_moved",
+        "_recover_committing",
+        "_release_lock",
+        "_require_tombstone_control",
+        "_tombstone_outcome",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "FINALIZE_CHECKS",
+        "FinalizeContext",
+        "FrozenError",
+        "ReasonCode",
+        "Refusal",
+        "TERMINAL_STATES",
+        "_adopt_out_of_band_candidate",
+        "_run_halt",
+        "_success",
+        "chain_core",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "next_step",
+      "line": 583,
+      "end_line": 615,
+      "decorators": [],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "TERMINAL_STATES",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "start",
+      "line": 618,
+      "end_line": 751,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_live_chain",
+        "_preflight",
+        "ctx",
+        "next_step"
+      ],
+      "writes": [],
+      "calls": [
+        "_live_chain",
+        "_preflight",
+        "next_step"
+      ],
+      "globals": [
+        "FrozenError",
+        "PolicyError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "ReasonCode",
+        "Refusal",
+        "_archive_contamination_refusal",
+        "_archive_recheck",
+        "_new_state",
+        "_prepare_archive_candidate",
+        "_prove_run_task_binding",
+        "_run_classification",
+        "_run_halt",
+        "_stage_paths",
+        "_success",
+        "chain_core",
+        "chain_id_now",
+        "parse_policy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "classify",
+      "line": 754,
+      "end_line": 785,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_wrong_state",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "_run_classification",
+        "_success",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "restage",
+      "line": 788,
+      "end_line": 875,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_wrong_state",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "V2ReasonCode",
+        "_archive_metadata",
+        "_invalidate_candidate_evidence",
+        "_run_classification",
+        "_stage_paths",
+        "_success",
+        "_transition_state",
+        "chain_core",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "abort",
+      "line": 878,
+      "end_line": 972,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_require_tombstone_control",
+        "_tombstone_outcome",
+        "_wrong_state",
+        "ctx",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_require_tombstone_control",
+        "_tombstone_outcome",
+        "_wrong_state",
+        "select"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "TERMINAL_STATES",
+        "V2ReasonCode",
+        "_run_halt",
+        "_success",
+        "_transition_state",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "abort_disposition",
+      "line": 975,
+      "end_line": 1042,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_tombstone_abort_disposition",
+        "_wrong_state",
+        "ctx",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_tombstone_abort_disposition",
+        "_wrong_state",
+        "select"
+      ],
+      "globals": [
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "_success",
+        "abort_disposition_refusal",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_tombstone_abort_disposition",
+      "line": 1044,
+      "end_line": 1158,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Mapping",
+        "Outcome",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "runtime"
+      ],
+      "nested_defs": [
+        "refuse"
+      ],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_wrong_state",
+      "line": 1160,
+      "end_line": 1173,
+      "decorators": [],
+      "reads": [
+        "next_step"
+      ],
+      "writes": [],
+      "calls": [
+        "next_step"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "rebase",
+      "line": 1176,
+      "end_line": 1322,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_wrong_state",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "PolicyError",
+        "ReasonCode",
+        "Refusal",
+        "TERMINAL_STATES",
+        "V2ReasonCode",
+        "_archive_metadata",
+        "_authorization_problem",
+        "_invalidate_candidate_evidence",
+        "_run_classification",
+        "_stage_paths",
+        "_success",
+        "_transition_state",
+        "chain_core",
+        "copy",
+        "parse_policy",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_pending_mutating_gate",
+      "line": 1324,
+      "end_line": 1328,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_resolve_gate",
+      "line": 1330,
+      "end_line": 1401,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "_current_test_paths",
+        "chain_core",
+        "sys"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_fresh_reviewer_evals",
+      "line": 1403,
+      "end_line": 1764,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA",
+        "FrozenError",
+        "Mapping",
+        "ReasonCode",
+        "Refusal",
+        "_FreshEvalArtifactIO",
+        "_FreshEvalControlAbort",
+        "_fresh_eval_evaluation",
+        "_fresh_eval_invalid_refusal",
+        "_next_incomplete",
+        "_record_fresh_eval_terminal",
+        "_success",
+        "_validated_fresh_reviewer_manifest",
+        "candidate_module",
+        "chain_core",
+        "copy",
+        "fresh_eval_module",
+        "re",
+        "secrets",
+        "sha256_bytes",
+        "time"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "gate_run",
+      "line": 1767,
+      "end_line": 2045,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_emit_decision",
+        "_pending_mutating_gate",
+        "_preflight",
+        "_resolve_gate",
+        "_run_fresh_reviewer_evals",
+        "_wrong_state",
+        "ctx",
+        "scan_secrets",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_emit_decision",
+        "_pending_mutating_gate",
+        "_preflight",
+        "_resolve_gate",
+        "_run_fresh_reviewer_evals",
+        "_wrong_state",
+        "scan_secrets",
+        "select"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "V2ReasonCode",
+        "_adopt_out_of_band_candidate",
+        "_archive_metadata",
+        "_candidate_snapshot",
+        "_current_test_paths",
+        "_install_candidate_snapshot",
+        "_invalidate_candidate_evidence",
+        "_record_process_step",
+        "_run_classification",
+        "_success",
+        "_transition_state",
+        "_void_mismatched_gate_one_pair",
+        "candidate_module",
+        "chain_core",
+        "fresh_eval_module",
+        "hashlib",
+        "os",
+        "runtime",
+        "secrets",
+        "sys"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "scan_secrets",
+      "line": 2048,
+      "end_line": 2127,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_wrong_state",
+        "select"
+      ],
+      "globals": [
+        "FrozenError",
+        "ReasonCode",
+        "Refusal",
+        "_adopt_out_of_band_candidate",
+        "_candidate_review_diff",
+        "_evidence_record",
+        "_success",
+        "chain_core",
+        "scan_added_secrets",
+        "sha256_bytes",
+        "time"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "verify",
+      "line": 2130,
+      "end_line": 2239,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "gate_run",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_wrong_state",
+        "gate_run",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "_classification_argv",
+        "_classification_environment",
+        "_issue_authorization",
+        "_mechanical_complete",
+        "_next_incomplete",
+        "_record_process_step",
+        "_success",
+        "_transition_state",
+        "chain_core",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_profiles_for_path",
+      "line": 2242,
+      "end_line": 2274,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Path",
+        "re"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_review_package",
+      "line": 2276,
+      "end_line": 2393,
+      "decorators": [],
+      "reads": [
+        "_profiles_for_path",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_profiles_for_path"
+      ],
+      "globals": [
+        "Path",
+        "REVIEW_INSTRUCTION",
+        "ReasonCode",
+        "Refusal",
+        "_candidate_review_diff",
+        "_fresh_eval_invalid_refusal",
+        "_fresh_reviewer_evidence_package",
+        "chain_core",
+        "fresh_eval_module",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "review_request",
+      "line": 2396,
+      "end_line": 2672,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_review_package",
+        "_wrong_state",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_review_package",
+        "_wrong_state",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "CODEX_EXECUTABLE",
+        "Path",
+        "REVIEW_LAUNCHER_CODE",
+        "REVIEW_MASTER_WINDOW_BYTES",
+        "ReasonCode",
+        "Refusal",
+        "_mechanical_complete",
+        "_pid_is_running",
+        "_review_master_pointer_prompt",
+        "_review_master_transport",
+        "_review_master_window_count",
+        "_review_package_is_oversized",
+        "_success",
+        "_write_artifact",
+        "chain_core",
+        "os",
+        "secrets",
+        "sha256_bytes",
+        "stat",
+        "subprocess",
+        "sys"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_parse_verdict",
+      "line": 2675,
+      "end_line": 2709,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "re"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_apply_verdict",
+      "line": 2711,
+      "end_line": 2791,
+      "decorators": [],
+      "reads": [
+        "_emit_decision",
+        "ctx",
+        "next_step"
+      ],
+      "writes": [],
+      "calls": [
+        "_emit_decision",
+        "next_step"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "_issue_authorization",
+        "_success",
+        "_transition_state",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "review_collect",
+      "line": 2794,
+      "end_line": 2970,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_apply_verdict",
+        "_parse_verdict",
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_apply_verdict",
+        "_parse_verdict",
+        "_preflight",
+        "_wrong_state",
+        "select"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "_pid_is_running",
+        "_read_bound_artifact",
+        "chain_core",
+        "json",
+        "runtime",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "review_attach",
+      "line": 2973,
+      "end_line": 3061,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_apply_verdict",
+        "_parse_verdict",
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_apply_verdict",
+        "_parse_verdict",
+        "_preflight",
+        "_wrong_state",
+        "select"
+      ],
+      "globals": [
+        "Path",
+        "ReasonCode",
+        "Refusal",
+        "_read_bound_artifact",
+        "_write_artifact",
+        "chain_core",
+        "os",
+        "runtime",
+        "stat"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "review_disposition",
+      "line": 3064,
+      "end_line": 3129,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_wrong_state",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "_success",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "approve",
+      "line": 3132,
+      "end_line": 3179,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_preflight",
+        "_wrong_state",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "ReasonCode",
+        "Refusal",
+        "_issue_authorization",
+        "_success",
+        "_verify_operator_harness",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "skip",
+      "line": 3182,
+      "end_line": 3278,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_emit_decision",
+        "_preflight",
+        "_wrong_state",
+        "ctx",
+        "next_step",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_emit_decision",
+        "_preflight",
+        "_wrong_state",
+        "next_step",
+        "select"
+      ],
+      "globals": [
+        "FrozenError",
+        "ReasonCode",
+        "Refusal",
+        "_fresh_reviewer_block_claimed",
+        "_issue_authorization",
+        "_success",
+        "_transition_state",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_emit_decision",
+      "line": 3280,
+      "end_line": 3312,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "runtime",
+        "sys"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "finalize",
+      "line": 3315,
+      "end_line": 3554,
+      "decorators": [
+        "_serialize_worktree_command"
+      ],
+      "reads": [
+        "_emit_decision",
+        "_record_head_moved",
+        "_recover_committing",
+        "_release_lock",
+        "_wrong_state",
+        "ctx",
+        "select"
+      ],
+      "writes": [],
+      "calls": [
+        "_emit_decision",
+        "_record_head_moved",
+        "_recover_committing",
+        "_release_lock",
+        "_wrong_state",
+        "select"
+      ],
+      "globals": [
+        "FINALIZE_CHECKS",
+        "FinalizeContext",
+        "FrozenError",
+        "ReasonCode",
+        "Refusal",
+        "_archive_recheck",
+        "_classification_argv",
+        "_classification_environment",
+        "_produced_mismatch_outcome",
+        "_record_process_step",
+        "_record_produced_identity",
+        "_success",
+        "_transition_state",
+        "chain_core",
+        "commit_message_bytes",
+        "os",
+        "re",
+        "runtime",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_release_lock",
+      "line": 3556,
+      "end_line": 3571,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "os",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_recover_committing",
+      "line": 3573,
+      "end_line": 3710,
+      "decorators": [],
+      "reads": [
+        "_emit_decision",
+        "_release_lock",
+        "ctx",
+        "next_step"
+      ],
+      "writes": [],
+      "calls": [
+        "_emit_decision",
+        "_release_lock",
+        "next_step"
+      ],
+      "globals": [
+        "FINALIZE_CHECKS",
+        "FinalizeContext",
+        "FrozenError",
+        "PRODUCED_COMMIT_CHECKS",
+        "_authorization_problem",
+        "_produced_mismatch_outcome",
+        "_record_produced_identity",
+        "_success",
+        "_transition_state",
+        "chain_core",
+        "os"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    }
+  ],
+  "edges": [
+    [
+      "__init__",
+      "@state:ctx"
+    ],
+    [
+      "_apply_verdict",
+      "@state:ctx"
+    ],
+    [
+      "_apply_verdict",
+      "_emit_decision"
+    ],
+    [
+      "_apply_verdict",
+      "next_step"
+    ],
+    [
+      "_chains_for_worktree",
+      "@state:ctx"
+    ],
+    [
+      "_emit_decision",
+      "@state:ctx"
+    ],
+    [
+      "_live_chain",
+      "_chains_for_worktree"
+    ],
+    [
+      "_pending_mutating_gate",
+      "@state:ctx"
+    ],
+    [
+      "_preflight",
+      "@state:ctx"
+    ],
+    [
+      "_preflight",
+      "_record_head_moved"
+    ],
+    [
+      "_record_head_moved",
+      "@state:ctx"
+    ],
+    [
+      "_recover_committing",
+      "@state:ctx"
+    ],
+    [
+      "_recover_committing",
+      "_emit_decision"
+    ],
+    [
+      "_recover_committing",
+      "_release_lock"
+    ],
+    [
+      "_recover_committing",
+      "next_step"
+    ],
+    [
+      "_release_lock",
+      "@state:ctx"
+    ],
+    [
+      "_resolve_gate",
+      "@state:ctx"
+    ],
+    [
+      "_review_package",
+      "@state:ctx"
+    ],
+    [
+      "_review_package",
+      "_profiles_for_path"
+    ],
+    [
+      "_run_fresh_reviewer_evals",
+      "@state:ctx"
+    ],
+    [
+      "_tombstone_abort_disposition",
+      "@state:ctx"
+    ],
+    [
+      "_wrong_state",
+      "next_step"
+    ],
+    [
+      "abort",
+      "@state:ctx"
+    ],
+    [
+      "abort",
+      "_preflight"
+    ],
+    [
+      "abort",
+      "_require_tombstone_control"
+    ],
+    [
+      "abort",
+      "_tombstone_outcome"
+    ],
+    [
+      "abort",
+      "_wrong_state"
+    ],
+    [
+      "abort",
+      "select"
+    ],
+    [
+      "abort_disposition",
+      "@state:ctx"
+    ],
+    [
+      "abort_disposition",
+      "_preflight"
+    ],
+    [
+      "abort_disposition",
+      "_tombstone_abort_disposition"
+    ],
+    [
+      "abort_disposition",
+      "_wrong_state"
+    ],
+    [
+      "abort_disposition",
+      "select"
+    ],
+    [
+      "approve",
+      "@state:ctx"
+    ],
+    [
+      "approve",
+      "_preflight"
+    ],
+    [
+      "approve",
+      "_wrong_state"
+    ],
+    [
+      "approve",
+      "next_step"
+    ],
+    [
+      "approve",
+      "select"
+    ],
+    [
+      "classify",
+      "@state:ctx"
+    ],
+    [
+      "classify",
+      "_preflight"
+    ],
+    [
+      "classify",
+      "_wrong_state"
+    ],
+    [
+      "classify",
+      "next_step"
+    ],
+    [
+      "classify",
+      "select"
+    ],
+    [
+      "finalize",
+      "@state:ctx"
+    ],
+    [
+      "finalize",
+      "_emit_decision"
+    ],
+    [
+      "finalize",
+      "_record_head_moved"
+    ],
+    [
+      "finalize",
+      "_recover_committing"
+    ],
+    [
+      "finalize",
+      "_release_lock"
+    ],
+    [
+      "finalize",
+      "_wrong_state"
+    ],
+    [
+      "finalize",
+      "select"
+    ],
+    [
+      "gate_run",
+      "@state:ctx"
+    ],
+    [
+      "gate_run",
+      "_emit_decision"
+    ],
+    [
+      "gate_run",
+      "_pending_mutating_gate"
+    ],
+    [
+      "gate_run",
+      "_preflight"
+    ],
+    [
+      "gate_run",
+      "_resolve_gate"
+    ],
+    [
+      "gate_run",
+      "_run_fresh_reviewer_evals"
+    ],
+    [
+      "gate_run",
+      "_wrong_state"
+    ],
+    [
+      "gate_run",
+      "scan_secrets"
+    ],
+    [
+      "gate_run",
+      "select"
+    ],
+    [
+      "journal_batch_recover",
+      "@state:ctx"
+    ],
+    [
+      "journal_ingest_chain",
+      "@state:ctx"
+    ],
+    [
+      "operator_tombstone",
+      "@state:ctx"
+    ],
+    [
+      "operator_tombstone",
+      "_require_tombstone_control"
+    ],
+    [
+      "operator_tombstone",
+      "_tombstone_outcome"
+    ],
+    [
+      "rebase",
+      "@state:ctx"
+    ],
+    [
+      "rebase",
+      "_preflight"
+    ],
+    [
+      "rebase",
+      "_wrong_state"
+    ],
+    [
+      "rebase",
+      "next_step"
+    ],
+    [
+      "rebase",
+      "select"
+    ],
+    [
+      "restage",
+      "@state:ctx"
+    ],
+    [
+      "restage",
+      "_preflight"
+    ],
+    [
+      "restage",
+      "_wrong_state"
+    ],
+    [
+      "restage",
+      "next_step"
+    ],
+    [
+      "restage",
+      "select"
+    ],
+    [
+      "review_attach",
+      "@state:ctx"
+    ],
+    [
+      "review_attach",
+      "_apply_verdict"
+    ],
+    [
+      "review_attach",
+      "_parse_verdict"
+    ],
+    [
+      "review_attach",
+      "_preflight"
+    ],
+    [
+      "review_attach",
+      "_wrong_state"
+    ],
+    [
+      "review_attach",
+      "select"
+    ],
+    [
+      "review_collect",
+      "@state:ctx"
+    ],
+    [
+      "review_collect",
+      "_apply_verdict"
+    ],
+    [
+      "review_collect",
+      "_parse_verdict"
+    ],
+    [
+      "review_collect",
+      "_preflight"
+    ],
+    [
+      "review_collect",
+      "_wrong_state"
+    ],
+    [
+      "review_collect",
+      "select"
+    ],
+    [
+      "review_disposition",
+      "@state:ctx"
+    ],
+    [
+      "review_disposition",
+      "_preflight"
+    ],
+    [
+      "review_disposition",
+      "_wrong_state"
+    ],
+    [
+      "review_disposition",
+      "next_step"
+    ],
+    [
+      "review_disposition",
+      "select"
+    ],
+    [
+      "review_request",
+      "@state:ctx"
+    ],
+    [
+      "review_request",
+      "_preflight"
+    ],
+    [
+      "review_request",
+      "_review_package"
+    ],
+    [
+      "review_request",
+      "_wrong_state"
+    ],
+    [
+      "review_request",
+      "next_step"
+    ],
+    [
+      "review_request",
+      "select"
+    ],
+    [
+      "scan_secrets",
+      "@state:ctx"
+    ],
+    [
+      "scan_secrets",
+      "_preflight"
+    ],
+    [
+      "scan_secrets",
+      "_wrong_state"
+    ],
+    [
+      "scan_secrets",
+      "select"
+    ],
+    [
+      "select",
+      "@state:ctx"
+    ],
+    [
+      "select",
+      "_chains_for_worktree"
+    ],
+    [
+      "skip",
+      "@state:ctx"
+    ],
+    [
+      "skip",
+      "_emit_decision"
+    ],
+    [
+      "skip",
+      "_preflight"
+    ],
+    [
+      "skip",
+      "_wrong_state"
+    ],
+    [
+      "skip",
+      "next_step"
+    ],
+    [
+      "skip",
+      "select"
+    ],
+    [
+      "start",
+      "@state:ctx"
+    ],
+    [
+      "start",
+      "_live_chain"
+    ],
+    [
+      "start",
+      "_preflight"
+    ],
+    [
+      "start",
+      "next_step"
+    ],
+    [
+      "status",
+      "@state:ctx"
+    ],
+    [
+      "status",
+      "_record_head_moved"
+    ],
+    [
+      "status",
+      "_recover_committing"
+    ],
+    [
+      "status",
+      "_release_lock"
+    ],
+    [
+      "status",
+      "_require_tombstone_control"
+    ],
+    [
+      "status",
+      "_tombstone_outcome"
+    ],
+    [
+      "status",
+      "next_step"
+    ],
+    [
+      "status",
+      "select"
+    ],
+    [
+      "verify",
+      "@state:ctx"
+    ],
+    [
+      "verify",
+      "_preflight"
+    ],
+    [
+      "verify",
+      "_wrong_state"
+    ],
+    [
+      "verify",
+      "gate_run"
+    ],
+    [
+      "verify",
+      "next_step"
+    ],
+    [
+      "verify",
+      "select"
+    ]
+  ],
+  "clusters": [
+    [
+      "__init__"
+    ],
+    [
+      "_require_tombstone_control",
+      "_tombstone_outcome",
+      "operator_tombstone",
+      "_record_head_moved",
+      "status",
+      "abort",
+      "finalize",
+      "_release_lock",
+      "_recover_committing"
+    ],
+    [
+      "journal_batch_recover"
+    ],
+    [
+      "journal_ingest_chain"
+    ],
+    [
+      "_chains_for_worktree",
+      "_live_chain",
+      "start"
+    ],
+    [
+      "classify"
+    ],
+    [
+      "restage"
+    ],
+    [
+      "abort_disposition",
+      "_tombstone_abort_disposition"
+    ],
+    [
+      "rebase"
+    ],
+    [
+      "_pending_mutating_gate",
+      "_resolve_gate",
+      "_run_fresh_reviewer_evals",
+      "gate_run",
+      "scan_secrets",
+      "verify"
+    ],
+    [
+      "_profiles_for_path",
+      "_review_package",
+      "review_request"
+    ],
+    [
+      "_parse_verdict",
+      "_apply_verdict",
+      "review_collect",
+      "review_attach"
+    ],
+    [
+      "review_disposition"
+    ],
+    [
+      "approve"
+    ],
+    [
+      "skip"
+    ],
+    [
+      "select"
+    ],
+    [
+      "_preflight"
+    ],
+    [
+      "_wrong_state"
+    ],
+    [
+      "next_step"
+    ],
+    [
+      "_emit_decision"
+    ]
+  ],
+  "hubs": [
+    "@state:ctx",
+    "select",
+    "_preflight",
+    "_wrong_state",
+    "next_step",
+    "_emit_decision"
+  ],
+  "prerequisites": [],
+  "census": [
+    {
+      "path": ".codex-orchestrator/runs/run-20260910-release-0611/evidence/task-06/review-final-iter5-harness/head-guard/scripts/forge/forge_cli/app.py",
+      "line": 4666,
+      "kind": "unbound-call",
+      "text": "engine.Engine._profiles_for_path(path)"
+    },
+    {
+      "path": ".codex-orchestrator/runs/run-20260910-release-0611/evidence/task-06/review-final-iter5-harness/head-guard/scripts/forge/forge_cli/app.py",
+      "line": 4969,
+      "kind": "unbound-call",
+      "text": "engine.Engine._parse_verdict(data, str(state['candidate']['candidate_head']), str(request['package_digest']))"
+    },
+    {
+      "path": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "line": 3749,
+      "kind": "unbound-call",
+      "text": "engine.Engine._profiles_for_path(path)"
+    },
+    {
+      "path": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "line": 4052,
+      "kind": "unbound-call",
+      "text": "engine.Engine._parse_verdict(data, str(state['candidate']['candidate_head']), str(request['package_digest']))"
+    },
+    {
+      "path": "tests/test_cli_chain.py",
+      "line": 2736,
+      "kind": "unbound-call",
+      "text": "module.Engine._profiles_for_path('scripts/inspector.py')"
+    },
+    {
+      "path": "tests/test_cli_chain_finalize.py",
+      "line": 251,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.Engine, '_emit_decision', autospec=True)"
+    },
+    {
+      "path": "tests/test_cli_chain_finalize.py",
+      "line": 1267,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.Engine, '_emit_decision', autospec=True)"
+    },
+    {
+      "path": "tests/test_cli_chain_finalize.py",
+      "line": 1341,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.Engine, '_emit_decision', autospec=True)"
+    },
+    {
+      "path": "tests/test_cli_chain_finalize.py",
+      "line": 1667,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.Engine, 'finalize', side_effect=refusal)"
+    },
+    {
+      "path": "tests/test_revision9_cli_surfaces.py",
+      "line": 5794,
+      "kind": "patch-or-reflection",
+      "text": "inspect.getsource(CLI.Engine.gate_run)"
+    }
+  ],
+  "census_complete": false
+}
