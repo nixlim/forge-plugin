@@ -1,0 +1,5 @@
+baseline b764d5ad2880: 251 | current: 247 | NEW: 0 | GONE: 4
+  GONE 2 arg-type::Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, Any]"
+  GONE 1 var-annotated::Need type annotation for "attempt_fd"
+  GONE 1 var-annotated::Need type annotation for "verdict_name"
+--- current errors in: scripts/forge/forge_cli/engine/_verbs_review_request.py
