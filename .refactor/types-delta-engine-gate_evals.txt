@@ -1,0 +1,7 @@
+baseline b764d5ad2880: 251 | current: 249 | NEW: 0 | GONE: 2
+  GONE 2 arg-type::Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, Any]"
+--- current errors in: scripts/forge/forge_cli/engine/_verbs_gate_evals.py
+  scripts/forge/forge_cli/engine/_verbs_gate_evals.py:266 [assignment] Incompatible types in assignment (expression has type "Any | None", variable has type "str")
+  scripts/forge/forge_cli/engine/_verbs_gate_evals.py:271 [arg-type] Argument 1 to "get" of "dict" has incompatible type "Any | None"; expected "int"
+  scripts/forge/forge_cli/engine/_verbs_gate_evals.py:297 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/engine/_verbs_gate_evals.py:306 [union-attr] Item "None" of "Any | None" has no attribute "get"

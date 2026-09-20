@@ -1,0 +1,392 @@
+from __future__ import annotations
+
+import copy
+import re
+import secrets
+import time
+from typing import Any, Mapping, MutableMapping
+
+from forge_cli import candidate as candidate_module
+from forge_cli import chain_core
+from forge_cli import fresh_evals as fresh_eval_module
+from forge_cli.engine._approval import _success as _success
+from forge_cli.engine._core import _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal
+from forge_cli.engine._fresh_eval import _fresh_eval_evaluation as _fresh_eval_evaluation
+from forge_cli.engine._fresh_eval import _FreshEvalArtifactIO as _FreshEvalArtifactIO
+from forge_cli.engine._fresh_eval import _FreshEvalControlAbort as _FreshEvalControlAbort
+from forge_cli.engine._fresh_eval import (
+    _validated_fresh_reviewer_manifest as _validated_fresh_reviewer_manifest,
+)
+from forge_cli.engine._fresh_eval_evidence import (
+    _record_fresh_eval_terminal as _record_fresh_eval_terminal,
+)
+from forge_cli.engine._gate_checks import _next_incomplete as _next_incomplete
+from forge_cli.engine._state import (
+    FRESH_REVIEWER_EVAL_REQUEST_SCHEMA as FRESH_REVIEWER_EVAL_REQUEST_SCHEMA,
+)
+from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal
+from forge_cli.policy import sha256_bytes
+
+
+def _run_fresh_reviewer_evals(
+    self, state: MutableMapping[str, Any]
+) -> Outcome:
+    gate_id = chain_core.FRESH_REVIEWER_EVALS_GATE
+    policy = self.ctx.policy or chain_core._policy_for_state(self.ctx, state)
+    if not chain_core._fresh_reviewer_evals_required(self.ctx, state):
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            "fresh reviewer evaluation is not triggered for this candidate",
+            expected="a pinned-base reviewer-facing trigger match",
+            observed=", ".join(str(path) for path in state.get("paths", ())),
+            remediation=chain_core._forge_command(state, "verify"),
+            chain=state,
+        )
+
+    runs = state.get("steps", {}).get(gate_id)
+    current_candidate = str(state["candidate"].get("sha256") or "")
+    latest = runs[-1] if isinstance(runs, list) and runs else None
+    if (
+        isinstance(latest, Mapping)
+        and latest.get("candidate") == current_candidate
+        and latest.get("outcome") == "PASS"
+    ):
+        try:
+            _validated_fresh_reviewer_manifest(
+                self.ctx, state, reobserve_index=True
+            )
+        except fresh_eval_module.FreshEvalError as exc:
+            raise _fresh_eval_invalid_refusal(
+                state,
+                str(exc),
+                evidence_refs=tuple(
+                    str(item)
+                    for item in (latest.get("manifest"), latest.get("transcript"))
+                    if isinstance(item, str) and item
+                ),
+            ) from exc
+        except Refusal as exc:
+            raise _fresh_eval_invalid_refusal(
+                state, exc.message, evidence_refs=exc.evidence_refs
+            ) from exc
+        return _success(
+            state,
+            "forge: fresh reviewer eval PASS",
+            chain_core._forge_command(state, "verify"),
+            evidence_refs=tuple(
+                str(item)
+                for item in (latest.get("manifest"), latest.get("transcript"))
+                if isinstance(item, str) and item
+            ),
+        )
+    if (
+        isinstance(latest, Mapping)
+        and latest.get("candidate") == current_candidate
+        and latest.get("outcome") == "BLOCK"
+    ):
+        capped = latest.get("iteration") == 8
+        raise Refusal(
+            ReasonCode.ITERATION_CAP if capped else ReasonCode.EVIDENCE_INCOMPLETE,
+            str(latest.get("diagnostic") or "fresh reviewer evaluation regressed"),
+            expected=(
+                "no ninth candidate/review iteration"
+                if capped
+                else "restaged candidate bytes after a fresh-eval mismatch"
+            ),
+            observed=(
+                "fresh reviewer BLOCK consumed iteration 8"
+                if capped
+                else "unchanged candidate already has a BLOCK result"
+            ),
+            remediation=chain_core._forge_command(
+                state,
+                "commit abort --reason iteration-cap"
+                if capped
+                else "commit restage --paths <path>...",
+            ),
+            chain=state,
+            evidence_refs=tuple(
+                str(item)
+                for item in (latest.get("manifest"), latest.get("transcript"))
+                if isinstance(item, str) and item
+            ),
+        )
+
+    request_history = state.get("steps", {}).get(
+        chain_core.FRESH_REVIEWER_EVALS_REQUESTS
+    )
+    try:
+        candidate_binding = fresh_eval_module.candidate_binding(
+            state["candidate"]
+        )
+    except fresh_eval_module.FreshEvalError as exc:
+        raise _fresh_eval_invalid_refusal(state, str(exc)) from exc
+    if isinstance(request_history, list) and request_history:
+        last_request = request_history[-1]
+        completed_request_ids = {
+            record.get("request_id")
+            for record in (runs if isinstance(runs, list) else [])
+            if isinstance(record, Mapping)
+            and record.get("candidate") == current_candidate
+        }
+        if (
+            isinstance(last_request, Mapping)
+            and last_request.get("candidate") == state["candidate"]
+            and last_request.get("request_id") not in completed_request_ids
+        ):
+            try:
+                _fresh_eval_evaluation(self.ctx, state, last_request)
+            except fresh_eval_module.FreshEvalError as exc:
+                raise _fresh_eval_invalid_refusal(state, str(exc)) from exc
+            diagnostic = (
+                "forge: fresh reviewer eval evidence invalid: "
+                "prior durable request has no terminal step; "
+                "launch outcome is unverifiable"
+            )
+            record = _record_fresh_eval_terminal(
+                self.ctx,
+                state,
+                last_request,
+                exit_code=2,
+                diagnostic=diagnostic,
+                duration_seconds=0.0,
+            )
+            raise _fresh_eval_invalid_refusal(
+                state, diagnostic, evidence_refs=(str(record["transcript"]),)
+            )
+
+    pending = _next_incomplete(self.ctx, state)
+    if pending != gate_id:
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            "fresh reviewer evaluation must run at its ordered Gate-2 position",
+            expected=str(pending or "all mechanical gates complete"),
+            observed=gate_id,
+            remediation=chain_core._forge_command(
+                state, f"gate run {pending}" if pending else "verify"
+            ),
+            chain=state,
+        )
+    if not chain_core._latest_current_pass(state, "strict-evals"):
+        raise Refusal(
+            ReasonCode.EVIDENCE_INCOMPLETE,
+            "fresh reviewer evaluation requires Recorded-baseline integrity PASS",
+            expected="current-candidate strict-evals PASS (Recorded-baseline integrity)",
+            observed=str(state.get("steps", {}).get("strict-evals")),
+            remediation=chain_core._forge_command(
+                state, "gate run strict-evals"
+            ),
+            chain=state,
+        )
+    try:
+        trigger = fresh_eval_module.derive_trigger(
+            self.ctx.repo.candidate_context(),
+            policy,
+            state["candidate"],
+            tuple(str(path) for path in state.get("paths", ())),
+        )
+        if not fresh_eval_module.trigger_required(trigger):
+            raise fresh_eval_module.FreshEvalError(
+                "fresh reviewer gate was invoked for an untriggered candidate"
+            )
+    except fresh_eval_module.FreshEvalError as exc:
+        raise _fresh_eval_invalid_refusal(state, str(exc)) from exc
+
+    iteration = int(state["review"].get("iteration", 0)) + 1
+    if not 1 <= iteration <= 8:
+        raise Refusal(
+            ReasonCode.ITERATION_CAP,
+            "fresh reviewer evaluation cannot exceed iteration cap 8",
+            expected="a fresh-eval iteration from 1 through 8",
+            observed=str(iteration),
+            remediation=chain_core._forge_command(
+                state, "commit abort --reason iteration-cap"
+            ),
+            chain=state,
+        )
+    request_id = secrets.token_hex(16)
+    requested_at = chain_core.iso_z()
+    artifact_prefix = (
+        f"fresh-reviewer-evals/iteration-{iteration:02d}/{request_id}"
+    )
+    try:
+        suite, fixture_packages = fresh_eval_module.prepare_request_plan(
+            self.ctx.repo.candidate_context(), candidate_binding, request_id
+        )
+    except fresh_eval_module.FreshEvalError as exc:
+        raise _fresh_eval_invalid_refusal(state, str(exc)) from exc
+    request = {
+        "schema": FRESH_REVIEWER_EVAL_REQUEST_SCHEMA,
+        "chain_id": state["chain_id"],
+        "request_id": request_id,
+        "requested_at": requested_at,
+        "iteration": iteration,
+        "candidate": copy.deepcopy(state["candidate"]),
+        "paths": list(state["paths"]),
+        "policy_sha": policy.sha,
+        "trigger": copy.deepcopy(trigger),
+        "suite": copy.deepcopy(suite),
+        "fixture_packages": copy.deepcopy(fixture_packages),
+        "artifact_prefix": artifact_prefix,
+    }
+    requests = state["steps"].setdefault(
+        chain_core.FRESH_REVIEWER_EVALS_REQUESTS, []
+    )
+    if not isinstance(requests, list):
+        raise FrozenError(
+            "fresh reviewer request history is malformed",
+            chain_id=str(state["chain_id"]),
+            state=str(state["state"]),
+        )
+    requests.append(request)
+    self.ctx.store.persist(
+        state,
+        chain_core.FRESH_REVIEWER_EVALS_REQUESTED_EVENT,
+        {"request": copy.deepcopy(request)},
+    )
+
+    evaluation = _fresh_eval_evaluation(self.ctx, state, request)
+    artifacts = _FreshEvalArtifactIO(self.ctx, state)
+    started = time.monotonic()
+    try:
+        outcome = fresh_eval_module.collect(evaluation, artifacts, launcher=None)
+    except _FreshEvalControlAbort as exc:
+        raise exc.problem
+    except (Refusal, FrozenError):
+        raise
+    except Exception as exc:
+        outcome = fresh_eval_module.EvaluationOutcome(
+            2,
+            "forge: fresh reviewer eval evidence invalid: "
+            f"unexpected {type(exc).__name__} while collecting evidence",
+        )
+    duration = time.monotonic() - started
+
+    exit_code = getattr(outcome, "exit_code", None)
+    diagnostic = getattr(outcome, "diagnostic", None)
+    manifest = getattr(outcome, "manifest", None)
+    manifest_bytes = getattr(outcome, "manifest_bytes", None)
+    manifest_ref = getattr(outcome, "manifest_ref", None)
+    manifest_digest = getattr(outcome, "manifest_sha256", None)
+    expected_outcome = {0: "PASS", 1: "BLOCK", 2: "INVALID"}.get(exit_code)
+    complete_manifest_binding = bool(
+        isinstance(manifest, Mapping)
+        and isinstance(manifest_bytes, bytes)
+        and 1 <= len(manifest_bytes) <= fresh_eval_module.MANIFEST_CAP_BYTES
+        and isinstance(manifest_ref, str)
+        and manifest_ref
+        and isinstance(manifest_digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", manifest_digest) is not None
+        and sha256_bytes(manifest_bytes) == manifest_digest
+    )
+    no_manifest_binding = bool(
+        manifest is None
+        and manifest_bytes is None
+        and manifest_ref is None
+        and manifest_digest is None
+    )
+    malformed = bool(
+        type(exit_code) is not int
+        or exit_code not in {0, 1, 2}
+        or not isinstance(diagnostic, str)
+        or not diagnostic
+        or (
+            exit_code in {0, 1}
+            and (
+                not complete_manifest_binding
+                or manifest.get("outcome") != expected_outcome
+            )
+        )
+        or (
+            exit_code == 2
+            and not (
+                no_manifest_binding
+                or (
+                    complete_manifest_binding
+                    and manifest.get("outcome") == "INVALID"
+                )
+            )
+        )
+    )
+    if malformed:
+        exit_code = 2
+        diagnostic = (
+            "forge: fresh reviewer eval evidence invalid: "
+            "collector returned a malformed outcome"
+        )
+        manifest = None
+        manifest_bytes = None
+        manifest_ref = None
+        manifest_digest = None
+        expected_outcome = "INVALID"
+
+    assert isinstance(exit_code, int)
+    assert isinstance(diagnostic, str)
+    # Close the collector-to-step race with the last possible live index
+    # observation before the digest-chained terminal event.  A manifest
+    # published for the prior tree remains immutable evidence, but it can
+    # never be cited by a terminal fact for a changed candidate.
+    try:
+        terminal_observation = self.ctx.repo.candidate_observation()
+        terminal_candidate_matches = bool(
+            terminal_observation.authorization_id
+            == candidate_binding["authorization_id"]
+            and terminal_observation.object_format
+            == candidate_binding["object_format"]
+            and terminal_observation.tree_oid == candidate_binding["tree_oid"]
+        )
+    except (OSError, candidate_module.CandidateError):
+        terminal_candidate_matches = False
+    if not terminal_candidate_matches:
+        exit_code = 2
+        diagnostic = (
+            "forge: fresh reviewer eval evidence invalid: "
+            "live index changed before fresh step recording"
+        )
+        manifest = None
+        manifest_bytes = None
+        manifest_ref = None
+        manifest_digest = None
+    record = _record_fresh_eval_terminal(
+        self.ctx,
+        state,
+        request,
+        exit_code=exit_code,
+        diagnostic=diagnostic,
+        duration_seconds=duration,
+        manifest_ref=manifest_ref,
+        manifest_sha256=manifest_digest,
+        manifest_byte_count=(
+            len(manifest_bytes) if isinstance(manifest_bytes, bytes) else None
+        ),
+    )
+    evidence_refs = tuple(
+        item
+        for item in (manifest_ref, record.get("transcript"))
+        if isinstance(item, str) and item
+    )
+    if exit_code == 2:
+        raise _fresh_eval_invalid_refusal(
+            state, diagnostic, evidence_refs=evidence_refs
+        )
+    if exit_code == 1:
+        raise Refusal(
+            ReasonCode.ITERATION_CAP if iteration >= 8 else ReasonCode.EVIDENCE_INCOMPLETE,
+            diagnostic,
+            expected="all complete fresh verdicts equal their expected verdicts",
+            observed="one or more fresh verdicts mismatched",
+            remediation=chain_core._forge_command(
+                state,
+                "commit abort --reason iteration-cap"
+                if iteration >= 8
+                else "commit restage --paths <path>...",
+            ),
+            chain=state,
+            evidence_refs=evidence_refs,
+        )
+    return _success(
+        state,
+        diagnostic,
+        chain_core._forge_command(state, "verify"),
+        evidence_refs=evidence_refs,
+    )
