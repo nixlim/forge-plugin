@@ -1,0 +1,3 @@
+baseline b764d5ad2880: 251 | current: 249 | NEW: 0 | GONE: 2
+  GONE 2 arg-type::Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, Any]"
+--- current errors in: scripts/forge/forge_cli/engine/_verbs_decision.py
