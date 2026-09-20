@@ -1,0 +1,11 @@
+== gate results ==
+PASS mint
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS tests
+GATE: PASS
+EXIT=0
