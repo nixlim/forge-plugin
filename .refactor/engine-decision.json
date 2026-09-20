@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "477b552263dc4cdf0cc73420d392f9fc9f9b4da89ae907a989f096a9f19d5706",
+    "scripts/forge/forge_cli/engine/_verbs_decision.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_decision.py",
+      "class": "Engine",
+      "methods": [
+        "verify",
+        "review_disposition",
+        "approve",
+        "skip"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_decision",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_decision"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_decision.py": [
+          "from __future__ import annotations",
+          "from forge_cli import chain_core, runtime",
+          "from forge_cli.engine._approval import _success as _success, _issue_authorization as _issue_authorization, _verify_operator_harness as _verify_operator_harness",
+          "from forge_cli.engine._classification import _classification_argv as _classification_argv, _classification_environment as _classification_environment",
+          "from forge_cli.engine._core import _transition_state as _transition_state, _record_process_step as _record_process_step",
+          "from forge_cli.engine._gate_checks import _fresh_reviewer_block_claimed as _fresh_reviewer_block_claimed, _mechanical_complete as _mechanical_complete, _next_incomplete as _next_incomplete",
+          "from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "_fresh_reviewer_block_claimed",
+          "_next_incomplete",
+          "_verify_operator_harness"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "e8adba57cceeb4b753e4bcb53525228f0ccf5a99"
+}

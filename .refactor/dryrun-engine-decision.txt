@@ -1,0 +1,770 @@
+--- scripts/forge/forge_cli/engine/_engine.py
++++ scripts/forge/forge_cli/engine/_engine.py
+@@ -10,7 +10,7 @@
+ from pathlib import Path
+ from typing import Any, Mapping, MutableMapping
+ from forge_cli import candidate as candidate_module, chain_core, fresh_evals as fresh_eval_module, runtime
+-from forge_cli.engine._approval import _success as _success, _issue_authorization as _issue_authorization, _pid_is_running as _pid_is_running, _authorization_problem as _authorization_problem, _verify_operator_harness as _verify_operator_harness
++from forge_cli.engine._approval import _success as _success, _issue_authorization as _issue_authorization, _pid_is_running as _pid_is_running, _authorization_problem as _authorization_problem
+ from forge_cli.engine._archive import _archive_recheck as _archive_recheck
+ from forge_cli.engine._candidate_ops import _candidate_review_diff as _candidate_review_diff, _adopt_out_of_band_candidate as _adopt_out_of_band_candidate
+ from forge_cli.engine._classification import _classification_argv as _classification_argv, _classification_environment as _classification_environment
+@@ -18,7 +18,7 @@
+ from forge_cli.engine._core import commit_message_bytes as commit_message_bytes, _transition_state as _transition_state, _archive_metadata as _archive_metadata, _write_artifact as _write_artifact, _read_bound_artifact as _read_bound_artifact, _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal, _record_process_step as _record_process_step, _run_halt as _run_halt
+ from forge_cli.engine._finalize import FinalizeContext as FinalizeContext, PRODUCED_COMMIT_CHECKS as PRODUCED_COMMIT_CHECKS, _record_produced_identity as _record_produced_identity, _produced_mismatch_outcome as _produced_mismatch_outcome, FINALIZE_CHECKS as FINALIZE_CHECKS
+ from forge_cli.engine._fresh_eval_evidence import _fresh_reviewer_evidence_package as _fresh_reviewer_evidence_package
+-from forge_cli.engine._gate_checks import _fresh_reviewer_block_claimed as _fresh_reviewer_block_claimed, _mechanical_complete as _mechanical_complete, _next_incomplete as _next_incomplete
++from forge_cli.engine._gate_checks import _mechanical_complete as _mechanical_complete
+ from forge_cli.engine._review_transport import _review_package_is_oversized as _review_package_is_oversized, _review_master_window_count as _review_master_window_count, _review_master_transport as _review_master_transport, _review_master_pointer_prompt as _review_master_pointer_prompt
+ from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES, TERMINAL_TOUCH_VERBS as TERMINAL_TOUCH_VERBS, CODEX_EXECUTABLE as CODEX_EXECUTABLE, REVIEW_MASTER_WINDOW_BYTES as REVIEW_MASTER_WINDOW_BYTES, REVIEW_INSTRUCTION as REVIEW_INSTRUCTION, REVIEW_LAUNCHER_CODE as REVIEW_LAUNCHER_CODE
+ from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal
+@@ -28,6 +28,7 @@
+ from . import _verbs_lifecycle
+ from . import _verbs_gate
+ from . import _verbs_gate_evals
++from . import _verbs_decision
+ 
+ 
+ class Engine:
+@@ -298,118 +299,7 @@
+     _run_fresh_reviewer_evals = _verbs_gate_evals._run_fresh_reviewer_evals
+     gate_run = _serialize_worktree_command(_verbs_gate.gate_run)
+     scan_secrets = _serialize_worktree_command(_verbs_gate.scan_secrets)
+-
+-    @_serialize_worktree_command
+-    def verify(self) -> Outcome:
+-        state = self.select(include_terminal=False)
+-        self._preflight(state, "verify")
+-        fast_skips = runtime._fast_mechanical_skips(state)
+-        if fast_skips:
+-            raise Refusal(
+-                ReasonCode.EVIDENCE_INCOMPLETE,
+-                "fast tier cannot rely on an operator skip for a mechanical control",
+-                expected="all fast-tier mechanical rows PASS without skips",
+-                observed=", ".join(fast_skips),
+-                remediation=chain_core._forge_command(state, "commit restage --paths <path>..."),
+-                chain=state,
+-            )
+-        if state["state"] != "verifying":
+-            if state["state"] in {"reviewing", "awaiting_approval", "authorized"} and _mechanical_complete(
+-                self.ctx, state
+-            ):
+-                return _success(
+-                    state,
+-                    "mechanical verification already complete; no-op",
+-                    self.next_step(state),
+-                )
+-            self._wrong_state(state, "verifying", "verify")
+-        chain_core._policy_for_state(self.ctx, state)
+-        while True:
+-            step_id = _next_incomplete(self.ctx, state)
+-            if step_id is None:
+-                break
+-            self.gate_run(step_id)
+-            # Continue from the versioned snapshot returned after the gate's
+-            # durable event, never by copying it over an older snapshot.
+-            state = self.ctx.store.load(str(state["chain_id"]))
+-        if state["tier"].get("effective") == "fast":
+-            # Independent finalize-time-style eligibility recomputation at
+-            # authorization entry; actual finalize repeats it.
+-            argv = _classification_argv(self.ctx, state, require_effective="fast")
+-            process = runtime.run_bounded(
+-                argv,
+-                cwd=self.ctx.repo.root,
+-                env=_classification_environment(self.ctx, state),
+-                timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+-                verbose=self.ctx.options.verbose,
+-            )
+-            record = _record_process_step(
+-                self.ctx,
+-                state,
+-                "fast-eligibility",
+-                argv,
+-                process,
+-                details={"kind": "fast-eligibility-recomputation"},
+-            )
+-            if record["result"] != "passed":
+-                raise Refusal(
+-                    ReasonCode.EVIDENCE_INCOMPLETE,
+-                    "fast eligibility recomputation did not remain fast",
+-                    expected="risk_tier.py --require-effective fast exit 0",
+-                    observed=f"exit={process.returncode}",
+-                    remediation=chain_core._forge_command(state, "classify"),
+-                    chain=state,
+-                    evidence_refs=[record["transcript"]],
+-                )
+-            _issue_authorization(state, self.ctx)
+-            self.ctx.store.persist(
+-                state,
+-                "authorized",
+-                {"candidate": state["candidate"]["sha256"], "tier": "fast"},
+-            )
+-        else:
+-            retained = state["review"].get("verdict")
+-            retained_pass = (
+-                isinstance(retained, dict)
+-                and retained.get("verdict") == "PASS"
+-                and retained.get("candidate") == state["candidate"].get("sha256")
+-                # A re-pinned base can retain the presentation diff and its
+-                # older verdict, but a triggered fresh suite changes the Gate-3
+-                # package.  The binding reviewer must inspect that new evidence.
+-                and not chain_core._fresh_reviewer_evals_required(self.ctx, state)
+-            )
+-            if retained_pass:
+-                if state["tier"].get("control") or state["review"].get(
+-                    "operator_cosign_required"
+-                ):
+-                    _transition_state(state, "awaiting_approval")
+-                    state["approval"] = {
+-                        "required_for": (
+-                            "control"
+-                            if state["tier"].get("control")
+-                            else "finding-disposition"
+-                        ),
+-                        "candidate": state["candidate"]["sha256"],
+-                    }
+-                else:
+-                    _issue_authorization(state, self.ctx)
+-                event = "retained_review_reauthorized"
+-            else:
+-                _transition_state(state, "reviewing")
+-                event = "mechanical_verification_complete"
+-            self.ctx.store.persist(
+-                state,
+-                event,
+-                {
+-                    "candidate": state["candidate"]["sha256"],
+-                    "retained_review": retained_pass,
+-                },
+-            )
+-        return _success(
+-            state,
+-            "all required mechanical verification steps are complete",
+-            self.next_step(state),
+-        )
++    verify = _serialize_worktree_command(_verbs_decision.verify)
+ 
+     @staticmethod
+     def _profiles_for_path(path: str) -> list[str]:
+@@ -1232,223 +1122,9 @@
+             exclusive=True,
+         )
+         return self._apply_verdict(state, verdict, verdict_ref)
+-
+-    @_serialize_worktree_command
+-    def review_disposition(
+-        self, finding: int, severity: str, resolution: str
+-    ) -> Outcome:
+-        state = self.select(include_terminal=False)
+-        self._preflight(state, "review disposition")
+-        if state["state"] not in {"reviewing", "revising"}:
+-            self._wrong_state(state, "reviewing or revising", "review disposition")
+-        verdict = state["review"].get("verdict")
+-        findings = verdict.get("findings", []) if isinstance(verdict, dict) else []
+-        if finding < 1 or finding > len(findings):
+-            raise Refusal(
+-                ReasonCode.STATE_PRECONDITION,
+-                f"review finding target does not exist: {finding}",
+-                expected=f"finding number 1..{len(findings)}",
+-                observed=str(finding),
+-                remediation=self.next_step(state),
+-                chain=state,
+-            )
+-        selected = findings[finding - 1]
+-        finding_severity = str(selected.get("severity", ""))
+-        if severity != finding_severity:
+-            raise Refusal(
+-                ReasonCode.STATE_PRECONDITION,
+-                "disposition severity must match the review finding",
+-                expected=finding_severity,
+-                observed=severity,
+-                remediation=chain_core._forge_command(
+-                    state,
+-                    f"review disposition --finding {finding} --severity {finding_severity} --resolution <text>",
+-                ),
+-                chain=state,
+-            )
+-        disposition = {
+-            "finding": finding,
+-            "finding_severity": finding_severity,
+-            "severity": severity,
+-            "resolution": resolution,
+-            "candidate": state["candidate"]["sha256"],
+-            "recorded_at": chain_core.iso_z(),
+-        }
+-        state["review"]["dispositions"].append(disposition)
+-        above_minor = finding_severity in {"CRITICAL", "MAJOR"}
+-        if above_minor:
+-            state["review"]["operator_cosign_required"] = True
+-        self.ctx.store.persist(
+-            state,
+-            "finding_dispositioned",
+-            {"finding": finding, "severity": severity, "operator_cosign": above_minor},
+-        )
+-        if above_minor:
+-            raise Refusal(
+-                ReasonCode.APPROVAL_REQUIRED,
+-                "above-MINOR disposition is parked pending operator co-sign",
+-                expected="operator approval bound to the candidate after a PASS review",
+-                observed=severity,
+-                remediation=(
+-                    chain_core._forge_command(
+-                        state,
+-                        f"commit approve --candidate {state['candidate']['sha256']}",
+-                    )
+-                    if state["state"] == "awaiting_approval"
+-                    else self.next_step(state)
+-                ),
+-                chain=state,
+-            )
+-        return _success(state, f"finding {finding} disposition recorded", self.next_step(state))
+-
+-    @_serialize_worktree_command
+-    def approve(self, candidate: str) -> Outcome:
+-        state = self.select(include_terminal=False)
+-        self._preflight(state, "commit approve")
+-        if state["state"] != "awaiting_approval":
+-            self._wrong_state(state, "awaiting_approval", "commit approve")
+-        expected = str(state["candidate"].get("sha256"))
+-        if candidate != expected:
+-            raise Refusal(
+-                ReasonCode.CANDIDATE_STALE,
+-                "operator approval named a different candidate",
+-                expected=expected,
+-                observed=candidate,
+-                remediation=chain_core._forge_command(state, f"commit approve --candidate {expected}"),
+-                chain=state,
+-            )
+-        review = state["review"].get("verdict")
+-        current_pass = (
+-            isinstance(review, dict)
+-            and review.get("verdict") == "PASS"
+-            and review.get("candidate") == expected
+-        )
+-        review_skipped = chain_core._user_skip(state, "review") is not None
+-        if not current_pass and (state["tier"].get("control") or not review_skipped):
+-            raise Refusal(
+-                ReasonCode.APPROVAL_REQUIRED,
+-                "approval cannot replace a current-candidate PASS review",
+-                expected=f"PASS review naming {expected}",
+-                observed=str(review),
+-                remediation=chain_core._forge_command(state, "review request"),
+-                chain=state,
+-            )
+-        qualification = _verify_operator_harness(self.ctx, state)
+-        state["approval"] = {
+-            "candidate": expected,
+-            "approved_at": chain_core.iso_z(),
+-            "directed_by": "operator",
+-            "qualification": {
+-                "command_digest": qualification["command_digest"],
+-                "env_fingerprint": qualification["env_fingerprint"],
+-                "recorded_at": qualification["recorded_at"],
+-                "transcript": qualification["transcript"],
+-            },
+-        }
+-        _issue_authorization(state, self.ctx)
+-        self.ctx.store.persist(
+-            state, "operator_approved", {"candidate": candidate, "directed_by": "operator"}
+-        )
+-        return _success(state, "operator approval recorded for current candidate", self.next_step(state))
+-
+-    @_serialize_worktree_command
+-    def skip(self, gate_id: str | None, index_drift: bool, reason: str) -> Outcome:
+-        state = self.select(include_terminal=False)
+-        self._preflight(state, "commit skip")
+-        target = "index-drift" if index_drift else str(gate_id)
+-        if not isinstance(reason, str) or not reason:
+-            raise Refusal(
+-                ReasonCode.SKIP_NOT_PERMITTED,
+-                "skip reason must be nonempty",
+-                expected="a nonempty operator reason",
+-                observed=reason,
+-                remediation=self.next_step(state),
+-                chain=state,
+-            )
+-        if target in {
+-            "approval",
+-            "control-review",
+-            "review-final",
+-        } or (
+-            target == "strict-evals" and bool(state.get("tier", {}).get("control"))
+-        ):
+-            raise Refusal(
+-                ReasonCode.SKIP_NOT_PERMITTED,
+-                f"skip does not cover {target}",
+-                expected="a skippable mechanical gate id",
+-                observed=target,
+-                remediation=self.next_step(state),
+-                chain=state,
+-            )
+-        if target == "review":
+-            if state["tier"].get("control"):
+-                raise Refusal(
+-                    ReasonCode.SKIP_NOT_PERMITTED,
+-                    "control-class review cannot be skipped",
+-                    expected="review-final PASS",
+-                    observed="review skip",
+-                    remediation=chain_core._forge_command(state, "review request"),
+-                    chain=state,
+-                )
+-            if state["state"] != "reviewing":
+-                self._wrong_state(state, "reviewing", "commit skip review")
+-        elif target == "index-drift":
+-            if state["state"] not in {"verifying", "reviewing", "awaiting_approval", "authorized"}:
+-                self._wrong_state(state, "a live judgment/finalize state", "commit skip --index-drift")
+-        else:
+-            fresh_block_override = bool(
+-                target == chain_core.FRESH_REVIEWER_EVALS_GATE
+-                and state["state"] == "revising"
+-                and _fresh_reviewer_block_claimed(state)
+-            )
+-            if state["state"] != "verifying" and not fresh_block_override:
+-                self._wrong_state(state, "verifying", f"commit skip {target}")
+-            allowed = set(chain_core._required_steps(self.ctx, state))
+-            if target not in allowed:
+-                raise Refusal(
+-                    ReasonCode.STATE_PRECONDITION,
+-                    f"skip target is not a required configured gate: {target}",
+-                    expected=", ".join(sorted(allowed)),
+-                    observed=target,
+-                    remediation=chain_core._forge_command(state, "verify"),
+-                    chain=state,
+-                )
+-            if fresh_block_override:
+-                # A fresh BLOCK is the only mechanical failure that leaves
+-                # verifying.  The explicit operator skip preserves the
+-                # candidate and evidence, then returns through classification
+-                # before verification resumes.
+-                _transition_state(state, "classifying")
+-        record = {
+-            "directed_by": "operator",
+-            "reason": reason,
+-            "argv_digest": self.ctx.command_digest(self.ctx.options.original_argv),
+-            "journaled_at": chain_core.iso_z(),
+-        }
+-        skips = state["steps"].setdefault("user_skips", {})
+-        if not isinstance(skips, dict):
+-            raise FrozenError(
+-                "user skip container is malformed",
+-                chain_id=str(state["chain_id"]),
+-                state=str(state["state"]),
+-            )
+-        skips[target] = record
+-        if target == "review":
+-            if state["review"].get("operator_cosign_required"):
+-                _transition_state(state, "awaiting_approval")
+-                state["approval"] = {
+-                    "required_for": "finding-disposition",
+-                    "candidate": state["candidate"]["sha256"],
+-                }
+-            else:
+-                _issue_authorization(state, self.ctx)
+-        self.ctx.store.persist(
+-            state,
+-            "operator_skip",
+-            {"gate_id": target, "directed_by": "operator", "reason": reason},
+-        )
+-        self._emit_decision(state, "user_skip", f"skip-{target}")
+-        return _success(state, f"operator skip recorded for {target}", self.next_step(state))
++    review_disposition = _serialize_worktree_command(_verbs_decision.review_disposition)
++    approve = _serialize_worktree_command(_verbs_decision.approve)
++    skip = _serialize_worktree_command(_verbs_decision.skip)
+ 
+     def _emit_decision(self, state: Mapping[str, Any], event: str, reason: str) -> None:
+         candidate = str(state["candidate"].get("sha256") or "")
+--- scripts/forge/forge_cli/engine/_verbs_decision.py
++++ scripts/forge/forge_cli/engine/_verbs_decision.py
+@@ -0,0 +1,344 @@
++from __future__ import annotations
++
++from forge_cli import chain_core, runtime
++from forge_cli.engine._approval import _issue_authorization as _issue_authorization
++from forge_cli.engine._approval import _success as _success
++from forge_cli.engine._approval import _verify_operator_harness as _verify_operator_harness
++from forge_cli.engine._classification import _classification_argv as _classification_argv
++from forge_cli.engine._classification import (
++    _classification_environment as _classification_environment,
++)
++from forge_cli.engine._core import _record_process_step as _record_process_step
++from forge_cli.engine._core import _transition_state as _transition_state
++from forge_cli.engine._gate_checks import (
++    _fresh_reviewer_block_claimed as _fresh_reviewer_block_claimed,
++)
++from forge_cli.engine._gate_checks import _mechanical_complete as _mechanical_complete
++from forge_cli.engine._gate_checks import _next_incomplete as _next_incomplete
++from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal
++
++
++def verify(self) -> Outcome:
++    state = self.select(include_terminal=False)
++    self._preflight(state, "verify")
++    fast_skips = runtime._fast_mechanical_skips(state)
++    if fast_skips:
++        raise Refusal(
++            ReasonCode.EVIDENCE_INCOMPLETE,
++            "fast tier cannot rely on an operator skip for a mechanical control",
++            expected="all fast-tier mechanical rows PASS without skips",
++            observed=", ".join(fast_skips),
++            remediation=chain_core._forge_command(state, "commit restage --paths <path>..."),
++            chain=state,
++        )
++    if state["state"] != "verifying":
++        if state["state"] in {"reviewing", "awaiting_approval", "authorized"} and _mechanical_complete(
++            self.ctx, state
++        ):
++            return _success(
++                state,
++                "mechanical verification already complete; no-op",
++                self.next_step(state),
++            )
++        self._wrong_state(state, "verifying", "verify")
++    chain_core._policy_for_state(self.ctx, state)
++    while True:
++        step_id = _next_incomplete(self.ctx, state)
++        if step_id is None:
++            break
++        self.gate_run(step_id)
++        # Continue from the versioned snapshot returned after the gate's
++        # durable event, never by copying it over an older snapshot.
++        state = self.ctx.store.load(str(state["chain_id"]))
++    if state["tier"].get("effective") == "fast":
++        # Independent finalize-time-style eligibility recomputation at
++        # authorization entry; actual finalize repeats it.
++        argv = _classification_argv(self.ctx, state, require_effective="fast")
++        process = runtime.run_bounded(
++            argv,
++            cwd=self.ctx.repo.root,
++            env=_classification_environment(self.ctx, state),
++            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
++            verbose=self.ctx.options.verbose,
++        )
++        record = _record_process_step(
++            self.ctx,
++            state,
++            "fast-eligibility",
++            argv,
++            process,
++            details={"kind": "fast-eligibility-recomputation"},
++        )
++        if record["result"] != "passed":
++            raise Refusal(
++                ReasonCode.EVIDENCE_INCOMPLETE,
++                "fast eligibility recomputation did not remain fast",
++                expected="risk_tier.py --require-effective fast exit 0",
++                observed=f"exit={process.returncode}",
++                remediation=chain_core._forge_command(state, "classify"),
++                chain=state,
++                evidence_refs=[record["transcript"]],
++            )
++        _issue_authorization(state, self.ctx)
++        self.ctx.store.persist(
++            state,
++            "authorized",
++            {"candidate": state["candidate"]["sha256"], "tier": "fast"},
++        )
++    else:
++        retained = state["review"].get("verdict")
++        retained_pass = (
++            isinstance(retained, dict)
++            and retained.get("verdict") == "PASS"
++            and retained.get("candidate") == state["candidate"].get("sha256")
++            # A re-pinned base can retain the presentation diff and its
++            # older verdict, but a triggered fresh suite changes the Gate-3
++            # package.  The binding reviewer must inspect that new evidence.
++            and not chain_core._fresh_reviewer_evals_required(self.ctx, state)
++        )
++        if retained_pass:
++            if state["tier"].get("control") or state["review"].get(
++                "operator_cosign_required"
++            ):
++                _transition_state(state, "awaiting_approval")
++                state["approval"] = {
++                    "required_for": (
++                        "control"
++                        if state["tier"].get("control")
++                        else "finding-disposition"
++                    ),
++                    "candidate": state["candidate"]["sha256"],
++                }
++            else:
++                _issue_authorization(state, self.ctx)
++            event = "retained_review_reauthorized"
++        else:
++            _transition_state(state, "reviewing")
++            event = "mechanical_verification_complete"
++        self.ctx.store.persist(
++            state,
++            event,
++            {
++                "candidate": state["candidate"]["sha256"],
++                "retained_review": retained_pass,
++            },
++        )
++    return _success(
++        state,
++        "all required mechanical verification steps are complete",
++        self.next_step(state),
++    )
++
++def review_disposition(
++    self, finding: int, severity: str, resolution: str
++) -> Outcome:
++    state = self.select(include_terminal=False)
++    self._preflight(state, "review disposition")
++    if state["state"] not in {"reviewing", "revising"}:
++        self._wrong_state(state, "reviewing or revising", "review disposition")
++    verdict = state["review"].get("verdict")
++    findings = verdict.get("findings", []) if isinstance(verdict, dict) else []
++    if finding < 1 or finding > len(findings):
++        raise Refusal(
++            ReasonCode.STATE_PRECONDITION,
++            f"review finding target does not exist: {finding}",
++            expected=f"finding number 1..{len(findings)}",
++            observed=str(finding),
++            remediation=self.next_step(state),
++            chain=state,
++        )
++    selected = findings[finding - 1]
++    finding_severity = str(selected.get("severity", ""))
++    if severity != finding_severity:
++        raise Refusal(
++            ReasonCode.STATE_PRECONDITION,
++            "disposition severity must match the review finding",
++            expected=finding_severity,
++            observed=severity,
++            remediation=chain_core._forge_command(
++                state,
++                f"review disposition --finding {finding} --severity {finding_severity} --resolution <text>",
++            ),
++            chain=state,
++        )
++    disposition = {
++        "finding": finding,
++        "finding_severity": finding_severity,
++        "severity": severity,
++        "resolution": resolution,
++        "candidate": state["candidate"]["sha256"],
++        "recorded_at": chain_core.iso_z(),
++    }
++    state["review"]["dispositions"].append(disposition)
++    above_minor = finding_severity in {"CRITICAL", "MAJOR"}
++    if above_minor:
++        state["review"]["operator_cosign_required"] = True
++    self.ctx.store.persist(
++        state,
++        "finding_dispositioned",
++        {"finding": finding, "severity": severity, "operator_cosign": above_minor},
++    )
++    if above_minor:
++        raise Refusal(
++            ReasonCode.APPROVAL_REQUIRED,
++            "above-MINOR disposition is parked pending operator co-sign",
++            expected="operator approval bound to the candidate after a PASS review",
++            observed=severity,
++            remediation=(
++                chain_core._forge_command(
++                    state,
++                    f"commit approve --candidate {state['candidate']['sha256']}",
++                )
++                if state["state"] == "awaiting_approval"
++                else self.next_step(state)
++            ),
++            chain=state,
++        )
++    return _success(state, f"finding {finding} disposition recorded", self.next_step(state))
++
++def approve(self, candidate: str) -> Outcome:
++    state = self.select(include_terminal=False)
++    self._preflight(state, "commit approve")
++    if state["state"] != "awaiting_approval":
++        self._wrong_state(state, "awaiting_approval", "commit approve")
++    expected = str(state["candidate"].get("sha256"))
++    if candidate != expected:
++        raise Refusal(
++            ReasonCode.CANDIDATE_STALE,
++            "operator approval named a different candidate",
++            expected=expected,
++            observed=candidate,
++            remediation=chain_core._forge_command(state, f"commit approve --candidate {expected}"),
++            chain=state,
++        )
++    review = state["review"].get("verdict")
++    current_pass = (
++        isinstance(review, dict)
++        and review.get("verdict") == "PASS"
++        and review.get("candidate") == expected
++    )
++    review_skipped = chain_core._user_skip(state, "review") is not None
++    if not current_pass and (state["tier"].get("control") or not review_skipped):
++        raise Refusal(
++            ReasonCode.APPROVAL_REQUIRED,
++            "approval cannot replace a current-candidate PASS review",
++            expected=f"PASS review naming {expected}",
++            observed=str(review),
++            remediation=chain_core._forge_command(state, "review request"),
++            chain=state,
++        )
++    qualification = _verify_operator_harness(self.ctx, state)
++    state["approval"] = {
++        "candidate": expected,
++        "approved_at": chain_core.iso_z(),
++        "directed_by": "operator",
++        "qualification": {
++            "command_digest": qualification["command_digest"],
++            "env_fingerprint": qualification["env_fingerprint"],
++            "recorded_at": qualification["recorded_at"],
++            "transcript": qualification["transcript"],
++        },
++    }
++    _issue_authorization(state, self.ctx)
++    self.ctx.store.persist(
++        state, "operator_approved", {"candidate": candidate, "directed_by": "operator"}
++    )
++    return _success(state, "operator approval recorded for current candidate", self.next_step(state))
++
++def skip(self, gate_id: str | None, index_drift: bool, reason: str) -> Outcome:
++    state = self.select(include_terminal=False)
++    self._preflight(state, "commit skip")
++    target = "index-drift" if index_drift else str(gate_id)
++    if not isinstance(reason, str) or not reason:
++        raise Refusal(
++            ReasonCode.SKIP_NOT_PERMITTED,
++            "skip reason must be nonempty",
++            expected="a nonempty operator reason",
++            observed=reason,
++            remediation=self.next_step(state),
++            chain=state,
++        )
++    if target in {
++        "approval",
++        "control-review",
++        "review-final",
++    } or (
++        target == "strict-evals" and bool(state.get("tier", {}).get("control"))
++    ):
++        raise Refusal(
++            ReasonCode.SKIP_NOT_PERMITTED,
++            f"skip does not cover {target}",
++            expected="a skippable mechanical gate id",
++            observed=target,
++            remediation=self.next_step(state),
++            chain=state,
++        )
++    if target == "review":
++        if state["tier"].get("control"):
++            raise Refusal(
++                ReasonCode.SKIP_NOT_PERMITTED,
++                "control-class review cannot be skipped",
++                expected="review-final PASS",
++                observed="review skip",
++                remediation=chain_core._forge_command(state, "review request"),
++                chain=state,
++            )
++        if state["state"] != "reviewing":
++            self._wrong_state(state, "reviewing", "commit skip review")
++    elif target == "index-drift":
++        if state["state"] not in {"verifying", "reviewing", "awaiting_approval", "authorized"}:
++            self._wrong_state(state, "a live judgment/finalize state", "commit skip --index-drift")
++    else:
++        fresh_block_override = bool(
++            target == chain_core.FRESH_REVIEWER_EVALS_GATE
++            and state["state"] == "revising"
++            and _fresh_reviewer_block_claimed(state)
++        )
++        if state["state"] != "verifying" and not fresh_block_override:
++            self._wrong_state(state, "verifying", f"commit skip {target}")
++        allowed = set(chain_core._required_steps(self.ctx, state))
++        if target not in allowed:
++            raise Refusal(
++                ReasonCode.STATE_PRECONDITION,
++                f"skip target is not a required configured gate: {target}",
++                expected=", ".join(sorted(allowed)),
++                observed=target,
++                remediation=chain_core._forge_command(state, "verify"),
++                chain=state,
++            )
++        if fresh_block_override:
++            # A fresh BLOCK is the only mechanical failure that leaves
++            # verifying.  The explicit operator skip preserves the
++            # candidate and evidence, then returns through classification
++            # before verification resumes.
++            _transition_state(state, "classifying")
++    record = {
++        "directed_by": "operator",
++        "reason": reason,
++        "argv_digest": self.ctx.command_digest(self.ctx.options.original_argv),
++        "journaled_at": chain_core.iso_z(),
++    }
++    skips = state["steps"].setdefault("user_skips", {})
++    if not isinstance(skips, dict):
++        raise FrozenError(
++            "user skip container is malformed",
++            chain_id=str(state["chain_id"]),
++            state=str(state["state"]),
++        )
++    skips[target] = record
++    if target == "review":
++        if state["review"].get("operator_cosign_required"):
++            _transition_state(state, "awaiting_approval")
++            state["approval"] = {
++                "required_for": "finding-disposition",
++                "candidate": state["candidate"]["sha256"],
++            }
++        else:
++            _issue_authorization(state, self.ctx)
++    self.ctx.store.persist(
++        state,
++        "operator_skip",
++        {"gate_id": target, "directed_by": "operator", "reason": reason},
++    )
++    self._emit_decision(state, "user_skip", f"skip-{target}")
++    return _success(state, f"operator skip recorded for {target}", self.next_step(state)){
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "477b552263dc4cdf0cc73420d392f9fc9f9b4da89ae907a989f096a9f19d5706",
+    "scripts/forge/forge_cli/engine/_verbs_decision.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_decision.py",
+      "class": "Engine",
+      "methods": [
+        "verify",
+        "review_disposition",
+        "approve",
+        "skip"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_decision",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_decision"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_decision.py": [
+          "from __future__ import annotations",
+          "from forge_cli import chain_core, runtime",
+          "from forge_cli.engine._approval import _success as _success, _issue_authorization as _issue_authorization, _verify_operator_harness as _verify_operator_harness",
+          "from forge_cli.engine._classification import _classification_argv as _classification_argv, _classification_environment as _classification_environment",
+          "from forge_cli.engine._core import _transition_state as _transition_state, _record_process_step as _record_process_step",
+          "from forge_cli.engine._gate_checks import _fresh_reviewer_block_claimed as _fresh_reviewer_block_claimed, _mechanical_complete as _mechanical_complete, _next_incomplete as _next_incomplete",
+          "from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "_fresh_reviewer_block_claimed",
+          "_next_incomplete",
+          "_verify_operator_harness"
+        ]
+      },
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
