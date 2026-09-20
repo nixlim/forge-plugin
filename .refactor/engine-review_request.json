@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "88cbe203a64c32e7b8a38150f5b8fd8e3c50397ea7d2fc63ea6dc8ce9b14bb6a",
+    "scripts/forge/forge_cli/engine/_verbs_review_request.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_review_request.py",
+      "class": "Engine",
+      "methods": [
+        "_profiles_for_path",
+        "_review_package",
+        "review_request"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_review_request",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_review_request"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_review_request.py": [
+          "from __future__ import annotations",
+          "import os",
+          "import re",
+          "import secrets",
+          "import stat",
+          "import subprocess",
+          "import sys",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, fresh_evals as fresh_eval_module",
+          "from forge_cli.engine._approval import _success as _success, _pid_is_running as _pid_is_running",
+          "from forge_cli.engine._candidate_ops import _candidate_review_diff as _candidate_review_diff",
+          "from forge_cli.engine._core import _write_artifact as _write_artifact, _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal",
+          "from forge_cli.engine._fresh_eval_evidence import _fresh_reviewer_evidence_package as _fresh_reviewer_evidence_package",
+          "from forge_cli.engine._gate_checks import _mechanical_complete as _mechanical_complete",
+          "from forge_cli.engine._review_transport import _review_package_is_oversized as _review_package_is_oversized, _review_master_window_count as _review_master_window_count, _review_master_transport as _review_master_transport, _review_master_pointer_prompt as _review_master_pointer_prompt",
+          "from forge_cli.engine._state import CODEX_EXECUTABLE as CODEX_EXECUTABLE, REVIEW_MASTER_WINDOW_BYTES as REVIEW_MASTER_WINDOW_BYTES, REVIEW_INSTRUCTION as REVIEW_INSTRUCTION, REVIEW_LAUNCHER_CODE as REVIEW_LAUNCHER_CODE",
+          "from forge_cli.envelope import Outcome, ReasonCode, Refusal",
+          "from forge_cli.policy import sha256_bytes"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "CODEX_EXECUTABLE",
+          "REVIEW_INSTRUCTION",
+          "REVIEW_LAUNCHER_CODE",
+          "REVIEW_MASTER_WINDOW_BYTES",
+          "_candidate_review_diff",
+          "_fresh_eval_invalid_refusal",
+          "_fresh_reviewer_evidence_package",
+          "_mechanical_complete",
+          "_review_master_pointer_prompt",
+          "_review_master_transport",
+          "_review_master_window_count",
+          "_review_package_is_oversized",
+          "fresh_eval_module",
+          "secrets",
+          "subprocess"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "e29a442eced02bb0694067ae0282c161f6f2c622"
+}
