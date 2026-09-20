@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "5d19531167a892689bba2948fbbecd1a4c022395096d4a629cfecfe8675287ec",
+    "scripts/forge/forge_cli/engine/_verbs_gate_evals.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_gate_evals.py",
+      "class": "Engine",
+      "methods": [
+        "_run_fresh_reviewer_evals"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_gate_evals",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_gate_evals"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_gate_evals.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import re",
+          "import secrets",
+          "import time",
+          "from typing import Any, Mapping, MutableMapping",
+          "from forge_cli import candidate as candidate_module, chain_core, fresh_evals as fresh_eval_module",
+          "from forge_cli.engine._approval import _success as _success",
+          "from forge_cli.engine._core import _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal",
+          "from forge_cli.engine._fresh_eval import _FreshEvalArtifactIO as _FreshEvalArtifactIO, _FreshEvalControlAbort as _FreshEvalControlAbort, _fresh_eval_evaluation as _fresh_eval_evaluation, _validated_fresh_reviewer_manifest as _validated_fresh_reviewer_manifest",
+          "from forge_cli.engine._fresh_eval_evidence import _record_fresh_eval_terminal as _record_fresh_eval_terminal",
+          "from forge_cli.engine._gate_checks import _next_incomplete as _next_incomplete",
+          "from forge_cli.engine._state import FRESH_REVIEWER_EVAL_REQUEST_SCHEMA as FRESH_REVIEWER_EVAL_REQUEST_SCHEMA",
+          "from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal",
+          "from forge_cli.policy import sha256_bytes"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "FRESH_REVIEWER_EVAL_REQUEST_SCHEMA",
+          "_FreshEvalArtifactIO",
+          "_FreshEvalControlAbort",
+          "_fresh_eval_evaluation",
+          "_record_fresh_eval_terminal",
+          "_validated_fresh_reviewer_manifest",
+          "copy",
+          "time"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "cdfed062ebe95366a4bfee3cca5b8fdaf5a3b6b2"
+}
