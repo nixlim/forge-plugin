@@ -1,0 +1,83 @@
+baseline ref: b764d5ad2880e820d207166448fe658ca6c01862 pkg: scripts/forge/forge_cli total: 251
+current errors: 251 | baseline: 251 | NEW: 0 | GONE: 0
+--- current errors in the two touched files ---
+  scripts/forge/forge_cli/engine/_engine.py:263 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:1262 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:1285 [assignment] Incompatible types in assignment (expression has type "Any | None", variable has type "str")
+  scripts/forge/forge_cli/engine/_engine.py:1290 [arg-type] Argument 1 to "get" of "dict" has incompatible type "Any | None"; expected "int"
+  scripts/forge/forge_cli/engine/_engine.py:1316 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/engine/_engine.py:1325 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/engine/_engine.py:1514 [var-annotated] Need type annotation for "materialized"
+  scripts/forge/forge_cli/engine/_engine.py:1733 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:2183 [var-annotated] Need type annotation for "attempt_fd"
+  scripts/forge/forge_cli/engine/_engine.py:2183 [var-annotated] Need type annotation for "verdict_name"
+  scripts/forge/forge_cli/engine/_engine.py:2383 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:2420 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3264 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3325 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3342 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3347 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/app/_merge_engine.py:325 [arg-type] Argument 1 to "contextmanager" has incompatible type "def _recording_common_lock(self: MergeEngine, common_dir
+  scripts/forge/forge_cli/app/_merge_engine.py:524 [arg-type] Argument 1 to "int" has incompatible type "Any | None"; expected "str | Buffer | SupportsInt | SupportsIndex |
+  scripts/forge/forge_cli/app/_merge_engine.py:525 [arg-type] Argument 1 to "int" has incompatible type "Any | None"; expected "str | Buffer | SupportsInt | SupportsIndex |
+  scripts/forge/forge_cli/app/_merge_engine.py:534 [arg-type] Argument 1 to "int" has incompatible type "Any | None"; expected "str | Buffer | SupportsInt | SupportsIndex |
+  scripts/forge/forge_cli/app/_merge_engine.py:544 [arg-type] Argument 1 to "int" has incompatible type "Any | None"; expected "str | Buffer | SupportsInt | SupportsIndex |
+  scripts/forge/forge_cli/app/_merge_engine.py:547 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:552 [arg-type] Argument 1 to "int" has incompatible type "Any | None"; expected "str | Buffer | SupportsInt | SupportsIndex |
+  scripts/forge/forge_cli/app/_merge_engine.py:778 [assignment] Incompatible types in assignment (expression has type "str | None", variable has type "str")
+  scripts/forge/forge_cli/app/_merge_engine.py:929 [arg-type] Argument 1 to "dict" has incompatible type "Any | None"; expected "SupportsKeysAndGetItem[Any, Any]"
+  scripts/forge/forge_cli/app/_merge_engine.py:952 [arg-type] Argument 1 to "dict" has incompatible type "Any | None"; expected "SupportsKeysAndGetItem[Any, Any]"
+  scripts/forge/forge_cli/app/_merge_engine.py:1458 [arg-type] Argument 1 to "_merge_refusal" has incompatible type "ReasonCode | V2ReasonCode"; expected "V2ReasonCode"
+  scripts/forge/forge_cli/app/_merge_engine.py:1691 [union-attr] Item "None" of "Any | None" has no attribute "__iter__" (not iterable)
+  scripts/forge/forge_cli/app/_merge_engine.py:1712 [arg-type] Argument 1 to "tuple" has incompatible type "Any | None"; expected "Iterable[str]"
+  scripts/forge/forge_cli/app/_merge_engine.py:1836 [arg-type] Argument 2 to "materialize_success" has incompatible type "Mapping[str, Any] | None"; expected "Mapping[str, A
+  scripts/forge/forge_cli/app/_merge_engine.py:2089 [call-arg] Unexpected keyword argument "expected" for "FrozenError"
+  scripts/forge/forge_cli/app/_merge_engine.py:2165 [var-annotated] Need type annotation for "common_lock"
+  scripts/forge/forge_cli/app/_merge_engine.py:2367 [arg-type] Argument "store" to "CommandContext" has incompatible type "MergeChainStore"; expected "ChainStore"
+  scripts/forge/forge_cli/app/_merge_engine.py:2465 [var-annotated] Need type annotation for "common_lock"
+  scripts/forge/forge_cli/app/_merge_engine.py:2625 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:2650 [arg-type] Argument 1 to "dict" has incompatible type "Any | None"; expected "SupportsKeysAndGetItem[Any, Any]"
+  scripts/forge/forge_cli/app/_merge_engine.py:2683 [dict-item] Dict entry 0 has incompatible type "str": "str"; expected "str": "dict[Any, Any]"
+  scripts/forge/forge_cli/app/_merge_engine.py:2687 [dict-item] Dict entry 0 has incompatible type "str": "str"; expected "str": "dict[Any, Any]"
+  scripts/forge/forge_cli/app/_merge_engine.py:3124 [var-annotated] Need type annotation for "common_lock"
+  scripts/forge/forge_cli/app/_merge_engine.py:4011 [index] Value of type "Any | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:4012 [index] Value of type "Any | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:4055 [index] Value of type "Any | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:4068 [index] Value of type "Any | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:4074 [index] Value of type "Any | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:4079 [arg-type] Argument 1 to "deepcopy" has incompatible type "Any | None"; expected "SupportsKeysAndGetItem[Any, Any]"
+  scripts/forge/forge_cli/app/_merge_engine.py:4083 [index] Value of type "Any | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:4167 [index] Value of type "Any | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:4511 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:4512 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:4513 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:4515 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:5470 [arg-type] Argument 12 to "run_fenced_command" has incompatible type "**dict[str, Callable[[FencedProcessResult], FencedP
+  scripts/forge/forge_cli/app/_merge_engine.py:5470 [arg-type] Argument 12 to "run_fenced_command" has incompatible type "**dict[str, Callable[[FencedProcessResult], FencedP
+  scripts/forge/forge_cli/app/_merge_engine.py:5470 [arg-type] Argument 12 to "run_fenced_command" has incompatible type "**dict[str, Callable[[FencedProcessResult], FencedP
+  scripts/forge/forge_cli/app/_merge_engine.py:5470 [arg-type] Argument 12 to "run_fenced_command" has incompatible type "**dict[str, Callable[[FencedProcessResult], FencedP
+  scripts/forge/forge_cli/app/_merge_engine.py:5929 [misc] List comprehension has incompatible type List[None]; expected List[bool]
+  scripts/forge/forge_cli/app/_merge_engine.py:7354 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7361 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7376 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7377 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7378 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7379 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7380 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7381 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7383 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7385 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:7799 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:8591 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/app/_merge_engine.py:8642 [index] Value of type "dict[str, Any] | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:8651 [arg-type] Argument 2 to "_merge_conflict_record_matches" has incompatible type "dict[str, Any] | None"; expected "Mappin
+  scripts/forge/forge_cli/app/_merge_engine.py:8660 [index] Value of type "dict[str, Any] | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:8661 [index] Value of type "dict[str, Any] | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:8767 [index] Value of type "dict[str, Any] | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:8768 [index] Value of type "dict[str, Any] | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:8769 [index] Value of type "dict[str, Any] | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:8772 [index] Value of type "dict[str, Any] | None" is not indexable
+  scripts/forge/forge_cli/app/_merge_engine.py:9130 [arg-type] Argument "scope_request" to "_validate_merge_scope_proof" has incompatible type "dict[str, Any] | None"; expec
+  scripts/forge/forge_cli/app/_merge_engine.py:9511 [var-annotated] Need type annotation for "common_lock"
+  scripts/forge/forge_cli/app/_merge_engine.py:10050 [var-annotated] Need type annotation for "common_lock"
+  scripts/forge/forge_cli/app/_merge_engine.py:10491 [var-annotated] Need type annotation for "common_lock"

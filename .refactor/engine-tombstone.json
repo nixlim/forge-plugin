@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "a527bbe0d6a90258ab58c531f59e0dbc443a3263dca9478d078fba1a1973a752",
+    "scripts/forge/forge_cli/engine/_verbs_tombstone.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_tombstone.py",
+      "class": "Engine",
+      "methods": [
+        "_require_tombstone_control",
+        "_tombstone_outcome",
+        "operator_tombstone",
+        "abort",
+        "abort_disposition",
+        "_tombstone_abort_disposition"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_tombstone",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_tombstone"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_tombstone.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, runtime",
+          "from forge_cli.engine._approval import _success as _success",
+          "from forge_cli.engine._command_lock import abort_disposition_refusal as abort_disposition_refusal",
+          "from forge_cli.engine._core import _transition_state as _transition_state, _run_halt as _run_halt",
+          "from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES",
+          "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "abort_disposition_refusal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "50250426faaec2150e1518369ea8e8eef41dc057"
+}
