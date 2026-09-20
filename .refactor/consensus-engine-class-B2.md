@@ -1,0 +1,3 @@
+AGREE
+
+At `5025042`, `pyproject.toml:124` did include `PLR0904` in the temporary `_verbs_*.py` glob (`git show 5025042:pyproject.toml | nl -ba | sed -n '120,126p'`). However, `git grep -n '^class ' 813246a -- 'scripts/forge/forge_cli/engine/_verbs_*.py'` found no classes, and `ruff check --config 'lint.per-file-ignores = {}' --select PLR0904 scripts/forge/forge_cli/engine/_verbs_*.py` reported no violations. The glob is absent at `813246a`, whose per-module ignores match the measured findings. Therefore no applicable rule occurrence was masked and no effective gate was weakened; the unamended plan deviation belongs in the advisory handover.

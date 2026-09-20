@@ -1,0 +1,3 @@
+AGREE
+
+The regression is real—our probe showed `pickle.dumps(Engine.<verb>)` changing from 18/18 successes at `7e40590` to 0/18 at HEAD, caused by bindings such as `scripts/forge/forge_cli/engine/_engine.py:28` and `functools.wraps` at `_command_lock.py:310`. However, `rg -n 'pickle|copyreg|dill|ProcessPoolExecutor|multiprocessing' scripts hooks tests` found no affected consumer; the class, instances, and bound methods still pickle; and `skills/decompose/references/operations.md:50-51` explicitly permits method-object pickling changes for function shape. Therefore this belongs in advisory handover, not BLOCKING.

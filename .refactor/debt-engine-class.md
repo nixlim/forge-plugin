@@ -37,6 +37,16 @@ incompatible type MutableMapping[str, Any]; expected dict[str, Any]"; 1x `var-an
 accepted as tracked debt. Follow-up: forge-plugin-psvo (`self: "Engine"` under TYPE_CHECKING, a
 header-only change in its own reviewed commit).
 
+## Reflection-metadata change (review advisory, both reviewers; Codex B1 downgraded in consensus)
+
+The 18 class functions wrapped by `_serialize_worktree_command` (and the 3 `staticmethod` bindings) no
+longer pickle as class-level function objects: `functools.wraps` points the wrapper's `__module__` /
+`__qualname__` at the raw `_verbs_*` function, so pickle's by-name lookup finds a different object. They
+pickled at 7e40590. `Engine` instances, bound methods and the class still pickle. No production code,
+hook or test pickles these objects (multiprocessing tests use the fork context with module-level
+targets). The decompose operation contract lists this as an expected function-shape change. No follow-up
+bead: nothing to fix unless a pickling consumer appears (mixins are refused in this package).
+
 ## Non-move edits on the branch (for the handover)
 
 - P0 78d9610 + 5025042: temporary ruff per-file-ignores glob for `engine/_verbs_*.py` (config-only;
