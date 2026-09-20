@@ -1,0 +1,18 @@
+baseline b764d5ad2880: 251 | current: 251 | NEW: 0 | GONE: 0
+--- current errors in: scripts/forge/forge_cli/engine/_engine.py, scripts/forge/forge_cli/engine/_verbs_status.py
+  scripts/forge/forge_cli/engine/_engine.py:124 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:999 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:1022 [assignment] Incompatible types in assignment (expression has type "Any | None", variable has type "str")
+  scripts/forge/forge_cli/engine/_engine.py:1027 [arg-type] Argument 1 to "get" of "dict" has incompatible type "Any | None"; expected "int"
+  scripts/forge/forge_cli/engine/_engine.py:1053 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/engine/_engine.py:1062 [union-attr] Item "None" of "Any | None" has no attribute "get"
+  scripts/forge/forge_cli/engine/_engine.py:1251 [var-annotated] Need type annotation for "materialized"
+  scripts/forge/forge_cli/engine/_engine.py:1470 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:1920 [var-annotated] Need type annotation for "attempt_fd"
+  scripts/forge/forge_cli/engine/_engine.py:1920 [var-annotated] Need type annotation for "verdict_name"
+  scripts/forge/forge_cli/engine/_engine.py:2120 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:2157 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3001 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3062 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3079 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 
+  scripts/forge/forge_cli/engine/_engine.py:3084 [arg-type] Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, 

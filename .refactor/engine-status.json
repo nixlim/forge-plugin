@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "793f517b22f2a8679d66a03411e633c25ecd5101edc1a822fd7ad85fcbb13f7a",
+    "scripts/forge/forge_cli/engine/_verbs_status.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_status.py",
+      "class": "Engine",
+      "methods": [
+        "journal_batch_recover",
+        "journal_ingest_chain",
+        "status"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_status",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_status"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_status.py": [
+          "from __future__ import annotations",
+          "from forge_cli import chain_core, runtime",
+          "from forge_cli.engine._approval import _success as _success",
+          "from forge_cli.engine._candidate_ops import _adopt_out_of_band_candidate as _adopt_out_of_band_candidate",
+          "from forge_cli.engine._core import _run_halt as _run_halt",
+          "from forge_cli.engine._finalize import FinalizeContext as FinalizeContext, FINALIZE_CHECKS as FINALIZE_CHECKS",
+          "from forge_cli.engine._journal import _read_ingest_sources as _read_ingest_sources, _install_ingest_sources as _install_ingest_sources",
+          "from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES",
+          "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal, V2ReasonCode"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "_install_ingest_sources",
+          "_read_ingest_sources"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "009abcf8df8b497673eed450baf1bb37aa7ef8f8"
+}
