@@ -1,0 +1,2 @@
+baseline b764d5ad2880: 251 | current: 251 | NEW: 0 | GONE: 0
+--- current errors in: scripts/forge/forge_cli/engine/_verbs_lifecycle.py

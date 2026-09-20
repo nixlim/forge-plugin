@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "64799b829b4f55332b1410ec70db9947cf45592ffd327dc058bdc83275b00d4c",
+    "scripts/forge/forge_cli/engine/_verbs_lifecycle.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_lifecycle.py",
+      "class": "Engine",
+      "methods": [
+        "_live_chain",
+        "start",
+        "classify",
+        "restage",
+        "rebase"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_lifecycle",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_lifecycle"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_lifecycle.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from typing import Any, Sequence",
+          "from forge_cli import chain_core",
+          "from forge_cli.engine._approval import _success as _success, _authorization_problem as _authorization_problem",
+          "from forge_cli.engine._archive import _prepare_archive_candidate as _prepare_archive_candidate, _archive_recheck as _archive_recheck",
+          "from forge_cli.engine._candidate_ops import _invalidate_candidate_evidence as _invalidate_candidate_evidence, _stage_paths as _stage_paths",
+          "from forge_cli.engine._classification import _run_classification as _run_classification",
+          "from forge_cli.engine._command_lock import _new_state as _new_state, _prove_run_task_binding as _prove_run_task_binding",
+          "from forge_cli.engine._core import chain_id_now as chain_id_now, _transition_state as _transition_state, _archive_contamination_refusal as _archive_contamination_refusal, _archive_metadata as _archive_metadata, _run_halt as _run_halt",
+          "from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES",
+          "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal, V2ReasonCode",
+          "from forge_cli.policy import PolicyError, parse_policy, sha256_bytes"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "PolicyError",
+          "Sequence",
+          "_archive_contamination_refusal",
+          "_new_state",
+          "_prepare_archive_candidate",
+          "_prove_run_task_binding",
+          "_stage_paths",
+          "chain_id_now",
+          "parse_policy"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "30f3cd364658def740534aca9eff3762e8496337"
+}
