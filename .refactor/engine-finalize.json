@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "f894330120ac22624867844140059be23c8d857d27f9cf765922807d14dff674",
+    "scripts/forge/forge_cli/engine/_verbs_finalize.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_finalize.py",
+      "class": "Engine",
+      "methods": [
+        "finalize",
+        "_release_lock",
+        "_recover_committing"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_finalize",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_finalize"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_finalize.py": [
+          "from __future__ import annotations",
+          "import os",
+          "import re",
+          "from typing import Any, MutableMapping",
+          "from forge_cli import chain_core, runtime",
+          "from forge_cli.engine._approval import _success as _success, _authorization_problem as _authorization_problem",
+          "from forge_cli.engine._archive import _archive_recheck as _archive_recheck",
+          "from forge_cli.engine._classification import _classification_argv as _classification_argv, _classification_environment as _classification_environment",
+          "from forge_cli.engine._core import commit_message_bytes as commit_message_bytes, _transition_state as _transition_state, _record_process_step as _record_process_step",
+          "from forge_cli.engine._finalize import FinalizeContext as FinalizeContext, PRODUCED_COMMIT_CHECKS as PRODUCED_COMMIT_CHECKS, _record_produced_identity as _record_produced_identity, _produced_mismatch_outcome as _produced_mismatch_outcome, FINALIZE_CHECKS as FINALIZE_CHECKS",
+          "from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal",
+          "from forge_cli.policy import sha256_bytes"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "FINALIZE_CHECKS",
+          "FinalizeContext",
+          "Outcome",
+          "PRODUCED_COMMIT_CHECKS",
+          "_authorization_problem",
+          "_classification_argv",
+          "_classification_environment",
+          "_produced_mismatch_outcome",
+          "_record_process_step",
+          "_record_produced_identity",
+          "_success",
+          "_transition_state",
+          "commit_message_bytes",
+          "os",
+          "re",
+          "sha256_bytes"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "ec762043f337868b4f9e9dd07773a4ecbccf8409"
+}
