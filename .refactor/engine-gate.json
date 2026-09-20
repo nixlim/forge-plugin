@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/engine/_engine.py": "a25a6654fec46df22961e876dcf7fe2a7aa47a9ae00eb0933613e7ad626f300c",
+    "scripts/forge/forge_cli/engine/_verbs_gate.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/engine/_engine.py",
+      "dest": "scripts/forge/forge_cli/engine/_verbs_gate.py",
+      "class": "Engine",
+      "methods": [
+        "_pending_mutating_gate",
+        "_resolve_gate",
+        "gate_run",
+        "scan_secrets"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_verbs_gate",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "from . import _verbs_gate"
+        ],
+        "scripts/forge/forge_cli/engine/_verbs_gate.py": [
+          "from __future__ import annotations",
+          "import hashlib",
+          "import os",
+          "import secrets",
+          "import sys",
+          "import time",
+          "from typing import Any, Mapping, MutableMapping",
+          "from forge_cli import candidate as candidate_module, chain_core, fresh_evals as fresh_eval_module, runtime",
+          "from forge_cli.engine._approval import _success as _success",
+          "from forge_cli.engine._candidate_ops import _invalidate_candidate_evidence as _invalidate_candidate_evidence, _candidate_snapshot as _candidate_snapshot, _install_candidate_snapshot as _install_candidate_snapshot, _candidate_review_diff as _candidate_review_diff, _adopt_out_of_band_candidate as _adopt_out_of_band_candidate",
+          "from forge_cli.engine._classification import _run_classification as _run_classification",
+          "from forge_cli.engine._core import _transition_state as _transition_state, _archive_metadata as _archive_metadata, _evidence_record as _evidence_record, _record_process_step as _record_process_step",
+          "from forge_cli.engine._gate_checks import _current_test_paths as _current_test_paths, _void_mismatched_gate_one_pair as _void_mismatched_gate_one_pair, scan_added_secrets as scan_added_secrets",
+          "from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/engine/_engine.py": [
+          "V2ReasonCode",
+          "_candidate_snapshot",
+          "_current_test_paths",
+          "_evidence_record",
+          "_install_candidate_snapshot",
+          "_invalidate_candidate_evidence",
+          "_run_classification",
+          "_void_mismatched_gate_one_pair",
+          "hashlib",
+          "scan_added_secrets"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "b7bea4989816fe29c69b734eba6cfbad2fdc2cdb"
+}
