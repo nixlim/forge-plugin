@@ -1,0 +1,4 @@
+baseline b764d5ad2880: 251 | current: 250 | NEW: 0 | GONE: 1
+  GONE 1 arg-type::Argument 1 to "persist" of "ChainStore" has incompatible type "MutableMapping[str, Any]"; expected "dict[str, Any]"
+--- current errors in: scripts/forge/forge_cli/engine/_verbs_gate.py
+  scripts/forge/forge_cli/engine/_verbs_gate.py:218 [var-annotated] Need type annotation for "materialized"
