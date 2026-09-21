@@ -1,0 +1,19 @@
+head=6ee38b6a6293cd7daa0d59f17339e8aa400b5be8 start=2026-09-21T23:32:36Z
+== gate results ==
+PASS mint
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+SKIP bodies-unchanged (no --snapshot)
+PASS tests
+GATE: PASS
+verify_rc=0
+.............
+----------------------------------------------------------------------
+Ran 13 tests in 24.973s
+
+OK
+digest_rc=0
+end=2026-09-21T23:43:37Z

@@ -11,7 +11,7 @@ import socket
 import stat
 import sys
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 from forge_cli import chain_core, runtime, engine
 from forge_cli.app._admission import prepare_merge_admission
 from forge_cli.app._candidate_observation import _observe_current_merge_candidate
@@ -329,7 +329,7 @@ class MergeEngine:
         *,
         chain_id: str,
         operation: str,
-    ) -> Iterable[chain_core.CommonRebaseLock]:
+    ) -> Iterator[chain_core.CommonRebaseLock]:
         def event_intent(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
             payload = event.get("payload")
             delta = payload.get("delta") if isinstance(payload, Mapping) else None

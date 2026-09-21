@@ -1,0 +1,9 @@
+types ok: 234 error(s), all grandfathered (7 fixed since baseline)
+rc=0
+type baseline ratcheted down by 7 (now 234)
+types ok: 234 error(s), all grandfathered (7 fixed since baseline)
+--- removed keys:
+- "total": 241,
++ "total": 234,
+-  "arg-type::Argument 1 to \"contextmanager\" has incompatible type \"def _recording_common_lock(self: MergeEngine, common_dir: Path, *, chain_id: str, operation: str) -> Iterable[CommonRebaseLock]\"; expected \"def (self: MergeEngine, com
+-  "var-annotated::Need type annotation for \"common_lock\"": 6,
