@@ -61,6 +61,7 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/app/_admission.py" = ["C901", "I001", "PLR0912", "PLR0915"]
 "scripts/forge/forge_cli/app/_candidate_observation.py" = ["C901", "I001", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_dispatch.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
+"scripts/forge/forge_cli/app/_engine_*.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F841", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
 "scripts/forge/forge_cli/app/_merge_engine.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
 "scripts/forge/forge_cli/app/_mutation_journal.py" = ["C901", "I001", "UP035"]
 "scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
