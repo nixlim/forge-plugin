@@ -1,0 +1,63 @@
+extraction e03 on HEAD 6e604989d4409f3b8f1d3437460ac9b25e5475a9
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_epoch_ancestry.py --function _run_carried_successor_ancestry --start 280 --end 295 --name _durable_ancestry_containment --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e03-_durable_ancestry_containment.json
+--- scripts/forge/forge_cli/app/_engine_epoch_ancestry.py
++++ scripts/forge/forge_cli/app/_engine_epoch_ancestry.py
+@@ -277,6 +277,10 @@
+         cap=runtime.OUTPUT_CAP_BYTES,
+         verbose=self.ctx.options.verbose,
+     )
++    contained = _durable_ancestry_containment(state, result)
++    return state, contained if type(contained) is bool else None
++
++def _durable_ancestry_containment(state, result):
+     durable = state.get("integration", {}).get("intent")
+     if (
+         not chain_core._epoch_ancestry_record_valid(state, durable)
+@@ -293,4 +297,4 @@
+             schema=REVISION9_OUTPUT_SCHEMA,
+         )
+     contained = durable["child_result"].get("contained")
+-    return state, contained if type(contained) is bool else None
++    return contained
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py": "13c70e0e5110ec5d2839382396607aca2213fc21b40464ab83a62fb4ea2b402f"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+      "function": "_run_carried_successor_ancestry",
+      "name": "_durable_ancestry_containment",
+      "imports": {},
+      "start_line": 280,
+      "end_line": 295,
+      "parameters": [
+        "state",
+        "result"
+      ],
+      "outputs": [
+        "contained"
+      ],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-t2-e03-before.json
+snapshot: 884 bodies across 870 names -> .refactor/merge-engine-t2-e03-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_epoch_ancestry.py --function _run_carried_successor_ancestry --start 280 --end 295 --name _durable_ancestry_containment --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e03-_durable_ancestry_containment.json --apply
+APPLIED tier 2; manifest: .refactor/merge-engine-t2-e03-_durable_ancestry_containment.json
+[exit 0]
+

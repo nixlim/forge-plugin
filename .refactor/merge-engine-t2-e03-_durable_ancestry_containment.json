@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py": "13c70e0e5110ec5d2839382396607aca2213fc21b40464ab83a62fb4ea2b402f"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+      "function": "_run_carried_successor_ancestry",
+      "name": "_durable_ancestry_containment",
+      "imports": {},
+      "start_line": 280,
+      "end_line": 295,
+      "parameters": [
+        "state",
+        "result"
+      ],
+      "outputs": [
+        "contained"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "6e604989d4409f3b8f1d3437460ac9b25e5475a9"
+}

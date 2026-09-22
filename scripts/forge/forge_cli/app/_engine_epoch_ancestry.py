@@ -277,6 +277,10 @@ def _run_carried_successor_ancestry(
         cap=runtime.OUTPUT_CAP_BYTES,
         verbose=self.ctx.options.verbose,
     )
+    contained = _durable_ancestry_containment(state, result)
+    return state, contained if type(contained) is bool else None
+
+def _durable_ancestry_containment(state, result):
     durable = state.get("integration", {}).get("intent")
     if (
         not chain_core._epoch_ancestry_record_valid(state, durable)
@@ -293,4 +297,4 @@ def _run_carried_successor_ancestry(
             schema=REVISION9_OUTPUT_SCHEMA,
         )
     contained = durable["child_result"].get("contained")
-    return state, contained if type(contained) is bool else None
+    return contained
