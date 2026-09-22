@@ -15,14 +15,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS = ROOT / "scripts/codex_orch_tools.py"
+from tests._revision8_constants import RECORDED_AT, ROOT, TOOLS
 
 sys.path.insert(0, str(ROOT / "scripts"))
 from codex_orchestrator import batch, journal  # noqa: E402
 
 
-RECORDED_AT = "2026-08-26T12:00:00Z"
 
 
 class Revision8CoordinationTests(unittest.TestCase):
