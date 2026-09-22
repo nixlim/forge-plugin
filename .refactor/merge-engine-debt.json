@@ -1,0 +1,14 @@
+{
+ "scripts/forge/forge_cli/app/_engine_lock.py": {
+  "reason": "provisional 591 code lines: the single method _recording_common_lock (559 source lines, 5 nested defs) exceeds the 500 module target on its own; tier 1 relocates bodies verbatim and cannot shrink it",
+  "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py candidates from function_inventory.py blocks); residual closure/state design is forge-plugin-g8kf"
+ },
+ "scripts/forge/forge_cli/app/_engine_recover.py": {
+  "reason": "provisional 621 code lines: the single method recover (616 source lines) exceeds the 500 module target on its own; tier 1 relocates bodies verbatim and cannot shrink it",
+  "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py candidates from function_inventory.py blocks); residual closure/state design is forge-plugin-g8kf"
+ },
+ "scripts/forge/forge_cli/app/_engine_recover_conflict.py": {
+  "reason": "provisional 830 code lines: the single method _recover_conflict_locked (843 source lines, 11 nested defs) exceeds the 500 module target on its own; tier 1 relocates bodies verbatim and cannot shrink it",
+  "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py candidates from function_inventory.py blocks); residual closure/state design is forge-plugin-g8kf"
+ }
+}
