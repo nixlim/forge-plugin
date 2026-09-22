@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "500a0a15b079659c9998ac91d08dded60f231a44bc7e0e3e1b4ffdde7fbdd87d",
+    "scripts/forge/forge_cli/app/_engine_start_chain.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_start_chain.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_claim_slot",
+        "_allocate_chain_id",
+        "_initial_merge_state",
+        "_record_bootstrap_failure",
+        "_complete_bootstrap_classification",
+        "start_chain"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_start_chain",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_start_chain"
+        ],
+        "scripts/forge/forge_cli/app/_engine_start_chain.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import os",
+          "import secrets",
+          "import socket",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.app._admission import prepare_merge_admission",
+          "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_start_chain.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "prepare_merge_admission",
+          "socket"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "baf2ade35e5587a606ae9ae6c18e7ec45a0a6f42"
+}
