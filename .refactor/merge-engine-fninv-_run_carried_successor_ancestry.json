@@ -1,0 +1,243 @@
+{
+  "function": "_run_carried_successor_ancestry",
+  "line": 33,
+  "end_line": 296,
+  "blocks": [
+    {
+      "start_line": 42,
+      "end_line": 42,
+      "input_candidates": [],
+      "writes": [],
+      "output_candidates": [],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 44,
+      "end_line": 213,
+      "input_candidates": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "ancestry_intent",
+        "argv",
+        "authorization",
+        "bool",
+        "candidate",
+        "candidate_observation",
+        "chain_core",
+        "contained",
+        "copy",
+        "dict",
+        "engine",
+        "epoch",
+        "fetch_observation",
+        "fetched_tip",
+        "integration",
+        "isinstance",
+        "lease",
+        "list",
+        "next_integration",
+        "observation_evidence",
+        "plan",
+        "raw_evidence",
+        "recovery_bridge",
+        "replay_context",
+        "replayed",
+        "replayed_at_tail",
+        "replayed_before_recovery_proof",
+        "resume_intent",
+        "self",
+        "source_intent",
+        "state",
+        "str",
+        "tail",
+        "type"
+      ],
+      "writes": [
+        "ancestry_intent",
+        "ancestry_intent_digest",
+        "argv",
+        "authorization",
+        "candidate",
+        "candidate_observation",
+        "contained",
+        "epoch",
+        "fetch_observation",
+        "integration",
+        "next_integration",
+        "observation_evidence",
+        "plan",
+        "raw_evidence",
+        "recovery_bridge",
+        "replay_context",
+        "replayed",
+        "replayed_at_tail",
+        "replayed_before_recovery_proof",
+        "source_intent",
+        "state",
+        "tail"
+      ],
+      "output_candidates": [
+        "ancestry_intent",
+        "ancestry_intent_digest",
+        "argv",
+        "contained",
+        "state"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 164
+        }
+      ],
+      "nested": []
+    },
+    {
+      "start_line": 215,
+      "end_line": 225,
+      "input_candidates": [
+        "FrozenError",
+        "OSError",
+        "ancestry_intent",
+        "ancestry_intent_digest",
+        "bool",
+        "fresh",
+        "lease",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "fresh"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 220
+        },
+        {
+          "kind": "Return",
+          "line": 219
+        }
+      ],
+      "nested": [
+        {
+          "name": "intent_current",
+          "line": 215,
+          "free_candidates": [
+            "FrozenError",
+            "OSError",
+            "ancestry_intent",
+            "ancestry_intent_digest",
+            "bool",
+            "lease",
+            "self",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 227,
+      "end_line": 263,
+      "input_candidates": [
+        "ancestry_intent",
+        "ancestry_intent_digest",
+        "bool",
+        "chain_core",
+        "contained",
+        "copy",
+        "int",
+        "lease",
+        "ordinary",
+        "result",
+        "result_integration",
+        "result_intent",
+        "self",
+        "state",
+        "type"
+      ],
+      "writes": [
+        "contained",
+        "ordinary",
+        "result_integration",
+        "result_intent",
+        "state"
+      ],
+      "output_candidates": [
+        "contained",
+        "state"
+      ],
+      "control": [],
+      "nested": [
+        {
+          "name": "persist",
+          "line": 227,
+          "free_candidates": [
+            "ancestry_intent",
+            "ancestry_intent_digest",
+            "bool",
+            "chain_core",
+            "copy",
+            "int",
+            "lease",
+            "self",
+            "type"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 265,
+      "end_line": 296,
+      "input_candidates": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "ancestry_intent_digest",
+        "argv",
+        "bool",
+        "chain_core",
+        "contained",
+        "durable",
+        "engine",
+        "environment",
+        "intent_current",
+        "isinstance",
+        "lock",
+        "persist",
+        "result",
+        "runtime",
+        "self",
+        "state",
+        "str",
+        "type"
+      ],
+      "writes": [
+        "contained",
+        "durable",
+        "environment",
+        "result"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 296
+        }
+      ],
+      "nested": []
+    }
+  ],
+  "note": "Conservative candidates; rope infers inputs/outputs. Control inside complete loops may be legal."
+}

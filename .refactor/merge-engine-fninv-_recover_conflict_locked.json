@@ -1,0 +1,647 @@
+{
+  "function": "_recover_conflict_locked",
+  "line": 15,
+  "end_line": 857,
+  "blocks": [
+    {
+      "start_line": 25,
+      "end_line": 127,
+      "input_candidates": [
+        "Mapping",
+        "Path",
+        "abort_marker",
+        "abort_rebase",
+        "abort_result_pending",
+        "bool",
+        "chain_core",
+        "conflict_observation_pending",
+        "continuation_marker",
+        "continuation_phase",
+        "continue_rebase",
+        "copy",
+        "durable_intent",
+        "durable_phase",
+        "environment",
+        "epoch",
+        "integrated_observation_pending",
+        "integration",
+        "isinstance",
+        "lease",
+        "observation_pending",
+        "os",
+        "pre_rebase",
+        "prior_conflict",
+        "prior_intent",
+        "reflog_action",
+        "resume_abort",
+        "resume_continue",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "abort_marker",
+        "abort_result_pending",
+        "conflict_observation_pending",
+        "continuation_marker",
+        "continuation_phase",
+        "durable_intent",
+        "durable_phase",
+        "environment",
+        "epoch",
+        "identity",
+        "integrated_observation_pending",
+        "integration",
+        "observation_pending",
+        "pre_rebase",
+        "prior_conflict",
+        "prior_intent",
+        "reflog_action",
+        "resume_abort",
+        "resume_continue",
+        "worktree"
+      ],
+      "output_candidates": [
+        "conflict_observation_pending",
+        "continuation_phase",
+        "durable_intent",
+        "environment",
+        "identity",
+        "integration",
+        "observation_pending",
+        "pre_rebase",
+        "prior_conflict",
+        "prior_intent",
+        "resume_abort",
+        "resume_continue",
+        "worktree"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 104
+        },
+        {
+          "kind": "Return",
+          "line": 106
+        },
+        {
+          "kind": "Return",
+          "line": 110
+        }
+      ],
+      "nested": []
+    },
+    {
+      "start_line": 129,
+      "end_line": 704,
+      "input_candidates": [
+        "Any",
+        "FrozenError",
+        "KeyError",
+        "Mapping",
+        "OSError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "Sequence",
+        "TypeError",
+        "V2ReasonCode",
+        "ValueError",
+        "all",
+        "bool",
+        "candidate",
+        "chain_core",
+        "classify_continue_result",
+        "conflict",
+        "conflict_digest",
+        "conflict_observation_pending",
+        "continuation_phase",
+        "continue_environment",
+        "continue_rebase",
+        "copy",
+        "current_conflict",
+        "dict",
+        "disposition",
+        "durable_intent",
+        "durable_paths",
+        "engine",
+        "environment",
+        "exact_stage_success",
+        "fresh",
+        "fresh_paths",
+        "identity",
+        "int",
+        "integrated_observation",
+        "integration",
+        "isinstance",
+        "lease",
+        "list",
+        "lock",
+        "mark_foreign",
+        "marker",
+        "name",
+        "next_conflict",
+        "normal",
+        "object",
+        "observation",
+        "observation_pending",
+        "operation",
+        "ordinary_nonzero",
+        "paths",
+        "persist_continue",
+        "persist_stage",
+        "phase",
+        "phase_intent_valid",
+        "post_add",
+        "pre_rebase",
+        "prior_conflict",
+        "prior_intent",
+        "rebase_intent",
+        "rebase_intent_current",
+        "rebase_intent_digest",
+        "refuse_changed_conflict",
+        "restoration_observation",
+        "restored",
+        "result",
+        "result_class",
+        "result_intent",
+        "resume_continue",
+        "runtime",
+        "selected_paths",
+        "self",
+        "sha256_bytes",
+        "source_paths",
+        "stage_intent",
+        "stage_intent_current",
+        "stage_intent_digest",
+        "stage_result",
+        "staged",
+        "state",
+        "stored_paths",
+        "str",
+        "succeeded",
+        "tuple",
+        "type",
+        "updated",
+        "updated_conflict",
+        "value",
+        "worktree"
+      ],
+      "writes": [
+        "conflict",
+        "conflict_digest",
+        "continuation_phase",
+        "continue_environment",
+        "current_conflict",
+        "disposition",
+        "durable_paths",
+        "fresh",
+        "fresh_paths",
+        "integrated_observation",
+        "marker",
+        "name",
+        "next_conflict",
+        "normal",
+        "observation",
+        "observed_head",
+        "ordinary_nonzero",
+        "post_add",
+        "rebase_intent",
+        "rebase_intent_digest",
+        "restoration_observation",
+        "restored",
+        "result",
+        "result_class",
+        "result_intent",
+        "selected_paths",
+        "source_paths",
+        "stage_intent",
+        "stage_intent_digest",
+        "stage_result",
+        "staged",
+        "state",
+        "stored_paths",
+        "succeeded",
+        "updated",
+        "updated_conflict",
+        "value"
+      ],
+      "output_candidates": [
+        "current_conflict",
+        "fresh",
+        "restoration_observation",
+        "restored",
+        "result",
+        "result_class",
+        "result_intent",
+        "state",
+        "succeeded",
+        "updated",
+        "updated_conflict"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 704
+        },
+        {
+          "kind": "Return",
+          "line": 177
+        },
+        {
+          "kind": "Return",
+          "line": 193
+        },
+        {
+          "kind": "Return",
+          "line": 376
+        },
+        {
+          "kind": "Return",
+          "line": 412
+        },
+        {
+          "kind": "Return",
+          "line": 229
+        },
+        {
+          "kind": "Return",
+          "line": 232
+        },
+        {
+          "kind": "Return",
+          "line": 335
+        },
+        {
+          "kind": "Return",
+          "line": 338
+        },
+        {
+          "kind": "Return",
+          "line": 354
+        },
+        {
+          "kind": "Return",
+          "line": 624
+        },
+        {
+          "kind": "Return",
+          "line": 289
+        },
+        {
+          "kind": "Return",
+          "line": 478
+        },
+        {
+          "kind": "Return",
+          "line": 633
+        },
+        {
+          "kind": "Return",
+          "line": 320
+        },
+        {
+          "kind": "Return",
+          "line": 486
+        }
+      ],
+      "nested": [
+        {
+          "name": "mark_foreign",
+          "line": 158,
+          "free_candidates": [
+            "lease",
+            "self"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "refuse_changed_conflict",
+          "line": 162,
+          "free_candidates": [
+            "V2ReasonCode",
+            "chain_core",
+            "state"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "phase_intent_valid",
+          "line": 174,
+          "free_candidates": [
+            "Mapping",
+            "all",
+            "bool",
+            "conflict",
+            "conflict_digest",
+            "identity",
+            "isinstance",
+            "list",
+            "selected_paths"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "exact_stage_success",
+          "line": 191,
+          "free_candidates": [
+            "Mapping",
+            "bool",
+            "chain_core",
+            "int",
+            "isinstance",
+            "str",
+            "type"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "classify_continue_result",
+          "line": 208,
+          "free_candidates": [
+            "KeyError",
+            "Mapping",
+            "OSError",
+            "Refusal",
+            "ValueError",
+            "bool",
+            "chain_core",
+            "copy",
+            "engine",
+            "identity",
+            "int",
+            "isinstance",
+            "lease",
+            "lock",
+            "mark_foreign",
+            "pre_rebase",
+            "selected_paths",
+            "self",
+            "str",
+            "type"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "rebase_intent_current",
+          "line": 619,
+          "free_candidates": [
+            "FrozenError",
+            "KeyError",
+            "OSError",
+            "Refusal",
+            "ValueError",
+            "bool",
+            "lease",
+            "rebase_intent",
+            "rebase_intent_digest",
+            "self",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "persist_continue",
+          "line": 635,
+          "free_candidates": [
+            "FrozenError",
+            "REVISION9_OUTPUT_SCHEMA",
+            "bool",
+            "chain_core",
+            "copy",
+            "dict",
+            "identity",
+            "isinstance",
+            "lease",
+            "self",
+            "str"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "stage_intent_current",
+          "line": 473,
+          "free_candidates": [
+            "FrozenError",
+            "KeyError",
+            "OSError",
+            "Refusal",
+            "ValueError",
+            "bool",
+            "lease",
+            "self",
+            "stage_intent",
+            "stage_intent_digest",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "persist_stage",
+          "line": 488,
+          "free_candidates": [
+            "chain_core",
+            "copy",
+            "lease",
+            "self",
+            "stage_intent"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 706,
+      "end_line": 800,
+      "input_candidates": [
+        "FrozenError",
+        "KeyError",
+        "OSError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "ValueError",
+        "abort_intent",
+        "abort_intent_current",
+        "bool",
+        "chain_core",
+        "copy",
+        "dict",
+        "environment",
+        "fresh",
+        "identity",
+        "integration",
+        "intent_digest",
+        "isinstance",
+        "lease",
+        "lock",
+        "persist_abort",
+        "result",
+        "result_intent",
+        "resume_abort",
+        "runtime",
+        "self",
+        "state",
+        "str",
+        "succeeded",
+        "updated",
+        "updated_conflict",
+        "worktree"
+      ],
+      "writes": [
+        "abort_intent",
+        "fresh",
+        "intent_digest",
+        "result_intent",
+        "state",
+        "succeeded",
+        "updated",
+        "updated_conflict"
+      ],
+      "output_candidates": [
+        "state",
+        "updated"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 726
+        },
+        {
+          "kind": "Return",
+          "line": 735
+        }
+      ],
+      "nested": [
+        {
+          "name": "abort_intent_current",
+          "line": 721,
+          "free_candidates": [
+            "FrozenError",
+            "KeyError",
+            "OSError",
+            "Refusal",
+            "ValueError",
+            "abort_intent",
+            "bool",
+            "intent_digest",
+            "lease",
+            "self",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "persist_abort",
+          "line": 737,
+          "free_candidates": [
+            "FrozenError",
+            "REVISION9_OUTPUT_SCHEMA",
+            "bool",
+            "chain_core",
+            "copy",
+            "dict",
+            "identity",
+            "isinstance",
+            "lease",
+            "self",
+            "str"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 802,
+      "end_line": 821,
+      "input_candidates": [
+        "Mapping",
+        "chain_core",
+        "current_abort_marker",
+        "current_conflict",
+        "identity",
+        "isinstance",
+        "lease",
+        "raw_abort_result",
+        "result_class",
+        "self",
+        "state"
+      ],
+      "writes": [
+        "current_abort_marker",
+        "current_conflict",
+        "raw_abort_result",
+        "result_class"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 821
+        }
+      ],
+      "nested": []
+    },
+    {
+      "start_line": 823,
+      "end_line": 857,
+      "input_candidates": [
+        "Mapping",
+        "bool",
+        "copy",
+        "engine",
+        "isinstance",
+        "lease",
+        "lock",
+        "pre_rebase",
+        "restoration_observation",
+        "restored",
+        "self",
+        "state",
+        "updated"
+      ],
+      "writes": [
+        "restoration_observation",
+        "restored",
+        "state",
+        "updated"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 835
+        },
+        {
+          "kind": "Return",
+          "line": 857
+        }
+      ],
+      "nested": []
+    }
+  ],
+  "note": "Conservative candidates; rope infers inputs/outputs. Control inside complete loops may be legal."
+}

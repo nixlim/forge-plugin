@@ -1,0 +1,71 @@
+{
+  "function": "abort",
+  "line": 14,
+  "end_line": 270,
+  "blocks": [
+    {
+      "start_line": 15,
+      "end_line": 270,
+      "input_candidates": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "attempted",
+        "binding",
+        "chain_core",
+        "claim",
+        "common_lock",
+        "containment",
+        "current",
+        "current_containment",
+        "current_inactive",
+        "engine",
+        "fresh_observation",
+        "inactive",
+        "isinstance",
+        "lease",
+        "next_step",
+        "preconditions",
+        "prior_observation",
+        "reason",
+        "self",
+        "state",
+        "str",
+        "terminal_disposition",
+        "worktree"
+      ],
+      "writes": [
+        "_current_vector",
+        "_vector",
+        "attempted",
+        "binding",
+        "claim",
+        "common_lock",
+        "containment",
+        "current",
+        "current_containment",
+        "current_inactive",
+        "fresh_observation",
+        "inactive",
+        "lease",
+        "next_step",
+        "preconditions",
+        "prior_observation",
+        "state",
+        "terminal_disposition",
+        "worktree"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 266
+        }
+      ],
+      "nested": []
+    }
+  ],
+  "note": "Conservative candidates; rope infers inputs/outputs. Control inside complete loops may be legal."
+}

@@ -1,0 +1,385 @@
+{
+  "function": "_recording_common_lock",
+  "line": 52,
+  "end_line": 610,
+  "blocks": [
+    {
+      "start_line": 59,
+      "end_line": 70,
+      "input_candidates": [
+        "Any",
+        "Mapping",
+        "delta",
+        "event",
+        "integration",
+        "intent",
+        "isinstance",
+        "payload",
+        "str"
+      ],
+      "writes": [
+        "delta",
+        "integration",
+        "intent",
+        "payload"
+      ],
+      "output_candidates": [
+        "integration",
+        "intent"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 70
+        }
+      ],
+      "nested": [
+        {
+          "name": "event_intent",
+          "line": 59,
+          "free_candidates": [
+            "Mapping",
+            "isinstance"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 72,
+      "end_line": 84,
+      "input_candidates": [
+        "Mapping",
+        "any",
+        "bool",
+        "carries_fence_digest",
+        "digest",
+        "isinstance",
+        "list",
+        "member",
+        "object",
+        "str",
+        "value"
+      ],
+      "writes": [
+        "member"
+      ],
+      "output_candidates": [
+        "member"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 84
+        },
+        {
+          "kind": "Return",
+          "line": 78
+        },
+        {
+          "kind": "Return",
+          "line": 83
+        },
+        {
+          "kind": "Return",
+          "line": 77
+        }
+      ],
+      "nested": [
+        {
+          "name": "carries_fence_digest",
+          "line": 72,
+          "free_candidates": [
+            "Mapping",
+            "any",
+            "carries_fence_digest",
+            "isinstance",
+            "list"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 86,
+      "end_line": 434,
+      "input_candidates": [
+        "Any",
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "any",
+        "attributed",
+        "attributed_cleanup",
+        "attributed_delta",
+        "attributed_payload",
+        "authorizer",
+        "base",
+        "bool",
+        "by_digest",
+        "carries_fence_digest",
+        "chain_core",
+        "chain_id",
+        "classification_integration",
+        "classification_state",
+        "cleanup_intent",
+        "copied",
+        "copy",
+        "current_intent",
+        "cursor",
+        "dict",
+        "engine",
+        "epoch",
+        "event",
+        "event_intent",
+        "events",
+        "expected",
+        "expected_intents",
+        "fence",
+        "gate_result",
+        "inspection",
+        "int",
+        "integration",
+        "intent",
+        "intent_digest",
+        "isinstance",
+        "len",
+        "list",
+        "matched",
+        "member",
+        "name",
+        "next",
+        "operation_name",
+        "plan",
+        "replay",
+        "request",
+        "result_events",
+        "result_persisted",
+        "reversed",
+        "self",
+        "sha256_bytes",
+        "state",
+        "str",
+        "suite"
+      ],
+      "writes": [
+        "attributed",
+        "attributed_cleanup",
+        "attributed_delta",
+        "attributed_payload",
+        "authorizer",
+        "base",
+        "by_digest",
+        "classification_integration",
+        "classification_state",
+        "cleanup_intent",
+        "copied",
+        "current_intent",
+        "cursor",
+        "epoch",
+        "event",
+        "events",
+        "expected",
+        "expected_intents",
+        "gate_result",
+        "inspection",
+        "integration",
+        "intent",
+        "intent_digest",
+        "matched",
+        "member",
+        "name",
+        "operation_name",
+        "plan",
+        "request",
+        "result_events",
+        "result_persisted",
+        "suite"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 430
+        },
+        {
+          "kind": "Return",
+          "line": 218
+        },
+        {
+          "kind": "Return",
+          "line": 289
+        },
+        {
+          "kind": "Continue",
+          "line": 296
+        },
+        {
+          "kind": "Break",
+          "line": 316
+        }
+      ],
+      "nested": [
+        {
+          "name": "lifecycle_classification",
+          "line": 86,
+          "free_candidates": [
+            "FrozenError",
+            "Mapping",
+            "REVISION9_OUTPUT_SCHEMA",
+            "any",
+            "bool",
+            "carries_fence_digest",
+            "chain_core",
+            "chain_id",
+            "copy",
+            "dict",
+            "engine",
+            "event_intent",
+            "int",
+            "isinstance",
+            "len",
+            "list",
+            "next",
+            "reversed",
+            "self",
+            "sha256_bytes",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 436,
+      "end_line": 583,
+      "input_candidates": [
+        "Any",
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "classification",
+        "current",
+        "dict",
+        "engine",
+        "fence",
+        "isinstance",
+        "lease",
+        "lifecycle_classification",
+        "proof",
+        "proof_event_digest",
+        "recorded_at",
+        "replay",
+        "reservation",
+        "retained",
+        "selected_chain",
+        "self",
+        "sha256_bytes",
+        "state",
+        "str",
+        "tail_payload",
+        "unsigned"
+      ],
+      "writes": [
+        "classification",
+        "current",
+        "lease",
+        "proof",
+        "proof_event_digest",
+        "recorded_at",
+        "replay",
+        "retained",
+        "selected_chain",
+        "state",
+        "tail_payload",
+        "unsigned"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 575
+        }
+      ],
+      "nested": [
+        {
+          "name": "classify_reserved_fence",
+          "line": 436,
+          "free_candidates": [
+            "FrozenError",
+            "Mapping",
+            "REVISION9_OUTPUT_SCHEMA",
+            "V2ReasonCode",
+            "chain_core",
+            "engine",
+            "isinstance",
+            "lifecycle_classification",
+            "self",
+            "sha256_bytes",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 585,
+      "end_line": 588,
+      "input_candidates": [
+        "Any",
+        "OSError",
+        "dict",
+        "str"
+      ],
+      "writes": [],
+      "output_candidates": [],
+      "control": [],
+      "nested": [
+        {
+          "name": "unexpected_split_recovery_proof",
+          "line": 585,
+          "free_candidates": [
+            "OSError"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 590,
+      "end_line": 610,
+      "input_candidates": [
+        "acquired",
+        "chain_core",
+        "chain_id",
+        "classify_reserved_fence",
+        "common_dir",
+        "exc",
+        "lock",
+        "operation",
+        "self",
+        "unexpected_split_recovery_proof"
+      ],
+      "writes": [
+        "acquired",
+        "lock"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Yield",
+          "line": 607
+        }
+      ],
+      "nested": []
+    }
+  ],
+  "note": "Conservative candidates; rope infers inputs/outputs. Control inside complete loops may be legal."
+}

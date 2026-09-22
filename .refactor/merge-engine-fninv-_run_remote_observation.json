@@ -1,0 +1,468 @@
+{
+  "function": "_run_remote_observation",
+  "line": 15,
+  "end_line": 509,
+  "blocks": [
+    {
+      "start_line": 26,
+      "end_line": 52,
+      "input_candidates": [
+        "ValueError",
+        "budget",
+        "budget_member",
+        "chain_core",
+        "copy",
+        "engine",
+        "integration",
+        "intent",
+        "lease",
+        "phase",
+        "push_intent_digest",
+        "selected_budget",
+        "self",
+        "sha256_bytes",
+        "state"
+      ],
+      "writes": [
+        "integration",
+        "intent",
+        "intent_digest",
+        "push_intent_digest",
+        "selected_budget",
+        "state"
+      ],
+      "output_candidates": [
+        "intent",
+        "intent_digest",
+        "state"
+      ],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 54,
+      "end_line": 59,
+      "input_candidates": [
+        "FrozenError",
+        "OSError",
+        "bool",
+        "fresh",
+        "intent",
+        "lease",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "fresh"
+      ],
+      "output_candidates": [
+        "fresh"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 59
+        },
+        {
+          "kind": "Return",
+          "line": 58
+        }
+      ],
+      "nested": [
+        {
+          "name": "intent_current",
+          "line": 54,
+          "free_candidates": [
+            "FrozenError",
+            "OSError",
+            "intent",
+            "lease",
+            "self",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 61,
+      "end_line": 62,
+      "input_candidates": [
+        "chain_core",
+        "state"
+      ],
+      "writes": [
+        "fetch_argv",
+        "heads"
+      ],
+      "output_candidates": [
+        "fetch_argv",
+        "heads"
+      ],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 64,
+      "end_line": 102,
+      "input_candidates": [
+        "Path",
+        "chain_core",
+        "copy",
+        "exists",
+        "heads",
+        "intent",
+        "lease",
+        "list",
+        "next_integration",
+        "oid",
+        "progress",
+        "result",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "exists",
+        "next_integration",
+        "oid",
+        "progress",
+        "state"
+      ],
+      "output_candidates": [
+        "exists",
+        "next_integration",
+        "oid",
+        "progress",
+        "state"
+      ],
+      "control": [],
+      "nested": [
+        {
+          "name": "persist",
+          "line": 64,
+          "free_candidates": [
+            "Path",
+            "chain_core",
+            "copy",
+            "heads",
+            "intent",
+            "lease",
+            "list",
+            "self",
+            "str"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 104,
+      "end_line": 257,
+      "input_candidates": [
+        "FrozenError",
+        "Mapping",
+        "OSError",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "allow_inactive_observation",
+        "any",
+        "bool",
+        "chain_core",
+        "completed",
+        "containment_argv",
+        "containment_current",
+        "containment_digest",
+        "containment_intent",
+        "containment_result",
+        "copy",
+        "cursor",
+        "dict",
+        "durable",
+        "engine",
+        "enumerate",
+        "environment",
+        "evidence",
+        "exists",
+        "fetch_argv",
+        "fetch_evidence",
+        "fetch_result",
+        "fresh",
+        "head",
+        "heads",
+        "intent_current",
+        "intent_digest",
+        "isinstance",
+        "item",
+        "lease",
+        "list",
+        "lock",
+        "next_integration",
+        "oid",
+        "ordinary",
+        "os",
+        "persist",
+        "persist_containment",
+        "progress",
+        "result",
+        "result_integration",
+        "result_progress",
+        "runtime",
+        "self",
+        "sha256_bytes",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "completed",
+        "containment_argv",
+        "containment_digest",
+        "containment_intent",
+        "containment_result",
+        "cursor",
+        "durable",
+        "environment",
+        "evidence",
+        "exists",
+        "fetch_evidence",
+        "fetch_result",
+        "fresh",
+        "head",
+        "item",
+        "next_integration",
+        "oid",
+        "ordinary",
+        "progress",
+        "result_integration",
+        "result_progress",
+        "state"
+      ],
+      "output_candidates": [
+        "completed",
+        "exists",
+        "fetch_result",
+        "head",
+        "item",
+        "next_integration",
+        "oid",
+        "progress",
+        "state"
+      ],
+      "control": [
+        {
+          "kind": "Break",
+          "line": 151
+        },
+        {
+          "kind": "Break",
+          "line": 156
+        },
+        {
+          "kind": "Return",
+          "line": 183
+        },
+        {
+          "kind": "Return",
+          "line": 182
+        }
+      ],
+      "nested": [
+        {
+          "name": "containment_current",
+          "line": 176,
+          "free_candidates": [
+            "FrozenError",
+            "OSError",
+            "containment_intent",
+            "lease",
+            "self",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "persist_containment",
+          "line": 185,
+          "free_candidates": [
+            "bool",
+            "chain_core",
+            "containment_intent",
+            "copy",
+            "head",
+            "lease",
+            "list",
+            "oid",
+            "self",
+            "str"
+          ],
+          "nonlocal_names": [
+            "state",
+            "progress"
+          ],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 259,
+      "end_line": 272,
+      "input_candidates": [
+        "all",
+        "bool",
+        "complete_containment",
+        "completed",
+        "exists",
+        "heads",
+        "item",
+        "len",
+        "progress",
+        "type"
+      ],
+      "writes": [
+        "_head",
+        "complete_containment",
+        "completed",
+        "exists",
+        "item",
+        "oid",
+        "vector_values"
+      ],
+      "output_candidates": [
+        "exists",
+        "oid",
+        "vector_values"
+      ],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 274,
+      "end_line": 281,
+      "input_candidates": [
+        "copy",
+        "intent",
+        "lease",
+        "restored_integration",
+        "self",
+        "state"
+      ],
+      "writes": [
+        "restored_integration",
+        "state"
+      ],
+      "output_candidates": [
+        "state"
+      ],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 283,
+      "end_line": 509,
+      "input_candidates": [
+        "Any",
+        "KeyError",
+        "Mapping",
+        "OSError",
+        "Refusal",
+        "ValueError",
+        "admission",
+        "all",
+        "attempted_vector",
+        "attempts",
+        "bool",
+        "candidate_observation",
+        "carried_generation",
+        "chain_core",
+        "classification",
+        "contained",
+        "contains_intended",
+        "copy",
+        "count",
+        "current_contained",
+        "dict",
+        "engine",
+        "exists",
+        "fetch_result",
+        "head",
+        "independent",
+        "int",
+        "isinstance",
+        "landed",
+        "lease",
+        "len",
+        "list",
+        "lock",
+        "member",
+        "name",
+        "next_integration",
+        "next_push",
+        "next_state",
+        "observation_delta",
+        "observed",
+        "oid",
+        "phase",
+        "prior_candidate",
+        "prior_count",
+        "proposed",
+        "push",
+        "reversed",
+        "self",
+        "state",
+        "str",
+        "transition_payload",
+        "vector_values",
+        "zip"
+      ],
+      "writes": [
+        "admission",
+        "attempted_vector",
+        "attempts",
+        "candidate_observation",
+        "carried_generation",
+        "classification",
+        "contained",
+        "contains_intended",
+        "count",
+        "current_contained",
+        "head",
+        "independent",
+        "landed",
+        "member",
+        "name",
+        "next_integration",
+        "next_push",
+        "next_state",
+        "observation_delta",
+        "observed",
+        "prior_candidate",
+        "prior_count",
+        "proposed",
+        "push",
+        "state",
+        "transition_payload"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Break",
+          "line": 381
+        },
+        {
+          "kind": "Return",
+          "line": 509
+        }
+      ],
+      "nested": []
+    }
+  ],
+  "note": "Conservative candidates; rope infers inputs/outputs. Control inside complete loops may be legal."
+}

@@ -1,0 +1,434 @@
+{
+  "function": "_run_bootstrap_generation_composite",
+  "line": 68,
+  "end_line": 479,
+  "blocks": [
+    {
+      "start_line": 80,
+      "end_line": 80,
+      "input_candidates": [],
+      "writes": [],
+      "output_candidates": [],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 82,
+      "end_line": 95,
+      "input_candidates": [
+        "Any",
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "admission",
+        "chain_core",
+        "dict",
+        "engine",
+        "fetch_intent_digest",
+        "remote_tip",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "fetch_argv",
+        "fetch_intent_digest",
+        "holder",
+        "operation",
+        "scope_request"
+      ],
+      "output_candidates": [
+        "fetch_argv",
+        "fetch_intent_digest",
+        "holder",
+        "operation",
+        "scope_request"
+      ],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 97,
+      "end_line": 103,
+      "input_candidates": [
+        "bool",
+        "engine",
+        "fetch_intent_digest",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 98
+        }
+      ],
+      "nested": [
+        {
+          "name": "intent_current",
+          "line": 97,
+          "free_candidates": [
+            "engine",
+            "fetch_intent_digest",
+            "self",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 105,
+      "end_line": 149,
+      "input_candidates": [
+        "Any",
+        "Mapping",
+        "admission",
+        "attempt",
+        "binding",
+        "chain_core",
+        "copy",
+        "dict",
+        "integration",
+        "isinstance",
+        "operation_nonce",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "integration",
+        "state"
+      ],
+      "output_candidates": [
+        "integration",
+        "state"
+      ],
+      "control": [],
+      "nested": [
+        {
+          "name": "failed_result",
+          "line": 105,
+          "free_candidates": [
+            "Mapping",
+            "admission",
+            "attempt",
+            "chain_core",
+            "copy",
+            "dict",
+            "isinstance",
+            "operation_nonce",
+            "self",
+            "str"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 151,
+      "end_line": 265,
+      "input_candidates": [
+        "Any",
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "admission",
+        "any",
+        "attempt",
+        "binding",
+        "candidate",
+        "chain_core",
+        "changed",
+        "copy",
+        "desired",
+        "dict",
+        "engine",
+        "fixed_tip",
+        "generation_number",
+        "int",
+        "integration",
+        "isinstance",
+        "iteration",
+        "journal",
+        "metadata",
+        "name",
+        "object",
+        "operation_nonce",
+        "out_of_scope",
+        "path",
+        "pattern",
+        "proof",
+        "retained_review",
+        "review",
+        "runtime",
+        "scope",
+        "scope_record",
+        "self",
+        "snapshot",
+        "state",
+        "str",
+        "tuple",
+        "type",
+        "value"
+      ],
+      "writes": [
+        "_batch",
+        "_builders",
+        "candidate",
+        "changed",
+        "desired",
+        "integration",
+        "iteration",
+        "journal",
+        "name",
+        "out_of_scope",
+        "path",
+        "pattern",
+        "proof",
+        "retained_review",
+        "review",
+        "scope",
+        "scope_record",
+        "snapshot",
+        "state",
+        "value"
+      ],
+      "output_candidates": [
+        "candidate",
+        "proof",
+        "scope",
+        "state"
+      ],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 265
+        }
+      ],
+      "nested": [
+        {
+          "name": "materialize_success",
+          "line": 151,
+          "free_candidates": [
+            "FrozenError",
+            "Mapping",
+            "REVISION9_OUTPUT_SCHEMA",
+            "admission",
+            "any",
+            "attempt",
+            "chain_core",
+            "copy",
+            "dict",
+            "engine",
+            "generation_number",
+            "int",
+            "isinstance",
+            "operation_nonce",
+            "runtime",
+            "self",
+            "str",
+            "tuple",
+            "type"
+          ],
+          "nonlocal_names": [
+            "state"
+          ],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 267,
+      "end_line": 343,
+      "input_candidates": [
+        "Any",
+        "Mapping",
+        "OSError",
+        "Refusal",
+        "TypeError",
+        "ValueError",
+        "binding",
+        "bool",
+        "candidate",
+        "chain_core",
+        "complete",
+        "copy",
+        "dict",
+        "engine",
+        "error",
+        "exc",
+        "failed_result",
+        "fence",
+        "fence_error",
+        "fetch_intent_digest",
+        "fixed_tip",
+        "holder",
+        "isinstance",
+        "lock",
+        "materialize_success",
+        "metadata",
+        "object",
+        "operation",
+        "proof",
+        "result",
+        "scope",
+        "scope_request",
+        "self",
+        "state",
+        "str"
+      ],
+      "writes": [
+        "_evidence",
+        "binding",
+        "candidate",
+        "complete",
+        "error",
+        "fence",
+        "fence_error",
+        "fixed_tip",
+        "metadata",
+        "proof",
+        "scope"
+      ],
+      "output_candidates": [
+        "binding",
+        "candidate",
+        "proof",
+        "scope"
+      ],
+      "control": [],
+      "nested": [
+        {
+          "name": "persist",
+          "line": 267,
+          "free_candidates": [
+            "Any",
+            "Mapping",
+            "OSError",
+            "Refusal",
+            "TypeError",
+            "ValueError",
+            "bool",
+            "chain_core",
+            "copy",
+            "dict",
+            "engine",
+            "exc",
+            "failed_result",
+            "fetch_intent_digest",
+            "holder",
+            "isinstance",
+            "lock",
+            "materialize_success",
+            "object",
+            "operation",
+            "scope_request",
+            "self",
+            "state",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    },
+    {
+      "start_line": 345,
+      "end_line": 434,
+      "input_candidates": [
+        "OSError",
+        "V2ReasonCode",
+        "admission",
+        "chain_core",
+        "composite_result",
+        "engine",
+        "environment",
+        "exc",
+        "failed_result",
+        "fetch_argv",
+        "fetch_intent_digest",
+        "holder",
+        "intent_current",
+        "lock",
+        "operation",
+        "persist",
+        "raw",
+        "reason",
+        "refusal",
+        "remote_tip",
+        "runtime",
+        "scope_failure",
+        "self",
+        "state",
+        "str",
+        "verb"
+      ],
+      "writes": [
+        "composite_result",
+        "environment",
+        "reason",
+        "refusal",
+        "scope_failure",
+        "state"
+      ],
+      "output_candidates": [
+        "state"
+      ],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 436,
+      "end_line": 479,
+      "input_candidates": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "binding",
+        "bool",
+        "candidate",
+        "chain_core",
+        "copy",
+        "dict",
+        "engine",
+        "exceeded",
+        "fetch_digest",
+        "holder",
+        "isinstance",
+        "proof",
+        "scope",
+        "self",
+        "state",
+        "str",
+        "verb"
+      ],
+      "writes": [
+        "binding",
+        "candidate",
+        "exceeded",
+        "fetch_digest",
+        "proof",
+        "scope",
+        "state"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 474
+        }
+      ],
+      "nested": []
+    }
+  ],
+  "note": "Conservative candidates; rope infers inputs/outputs. Control inside complete loops may be legal."
+}

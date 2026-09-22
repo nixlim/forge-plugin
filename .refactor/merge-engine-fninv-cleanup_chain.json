@@ -1,0 +1,321 @@
+{
+  "function": "cleanup_chain",
+  "line": 13,
+  "end_line": 465,
+  "blocks": [
+    {
+      "start_line": 14,
+      "end_line": 14,
+      "input_candidates": [],
+      "writes": [],
+      "output_candidates": [],
+      "control": [],
+      "nested": []
+    },
+    {
+      "start_line": 16,
+      "end_line": 465,
+      "input_candidates": [
+        "Any",
+        "FileNotFoundError",
+        "FrozenError",
+        "Mapping",
+        "OSError",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "binding",
+        "bool",
+        "branch",
+        "branch_delete_argv",
+        "branch_evidence",
+        "branch_observation_argv",
+        "branch_result_evidence",
+        "branch_subject",
+        "chain_core",
+        "child_complete",
+        "claim_status",
+        "cleanup_replay",
+        "common_lock",
+        "contained",
+        "containment",
+        "containment_argv",
+        "containment_evidence",
+        "containment_subject",
+        "control",
+        "current",
+        "destination_ref",
+        "dict",
+        "engine",
+        "evidence",
+        "exists",
+        "fail_step",
+        "head",
+        "int",
+        "isinstance",
+        "landed_head",
+        "lease",
+        "list",
+        "local_subject",
+        "message",
+        "observation",
+        "observe_branch",
+        "observe_branch_deletion",
+        "observe_containment",
+        "observe_remote_fetch",
+        "observe_worktree",
+        "observe_worktree_removal",
+        "ordinary",
+        "os",
+        "outcome",
+        "passed",
+        "path",
+        "path_exists",
+        "path_presence",
+        "registered",
+        "remote_argv",
+        "remote_evidence",
+        "remote_observation",
+        "remote_subject",
+        "remote_tip",
+        "result",
+        "resumed_release",
+        "returncodes",
+        "self",
+        "state",
+        "str",
+        "summary",
+        "tuple",
+        "type",
+        "worktree",
+        "worktree_evidence",
+        "worktree_observation_argv",
+        "worktree_remove_argv",
+        "worktree_result_evidence"
+      ],
+      "writes": [
+        "_branch_observation",
+        "_branch_result",
+        "_completed_disposition",
+        "_containment_result",
+        "_disposition",
+        "_remote_result",
+        "_vector",
+        "_worktree_observation",
+        "_worktree_result",
+        "binding",
+        "branch",
+        "branch_delete_argv",
+        "branch_evidence",
+        "branch_observation_argv",
+        "branch_result_evidence",
+        "branch_subject",
+        "claim_status",
+        "cleanup_replay",
+        "common_lock",
+        "contained",
+        "containment",
+        "containment_argv",
+        "containment_evidence",
+        "containment_subject",
+        "control",
+        "current",
+        "destination_ref",
+        "exists",
+        "head",
+        "landed_head",
+        "lease",
+        "local_subject",
+        "observation",
+        "ordinary",
+        "outcome",
+        "passed",
+        "path_exists",
+        "registered",
+        "remote_argv",
+        "remote_evidence",
+        "remote_observation",
+        "remote_subject",
+        "remote_tip",
+        "repository",
+        "results",
+        "resumed_release",
+        "state",
+        "summary",
+        "worktree",
+        "worktree_evidence",
+        "worktree_observation_argv",
+        "worktree_remove_argv",
+        "worktree_result_evidence"
+      ],
+      "output_candidates": [],
+      "control": [
+        {
+          "kind": "Return",
+          "line": 32
+        },
+        {
+          "kind": "Return",
+          "line": 67
+        },
+        {
+          "kind": "Return",
+          "line": 96
+        },
+        {
+          "kind": "Return",
+          "line": 113
+        },
+        {
+          "kind": "Return",
+          "line": 155
+        },
+        {
+          "kind": "Return",
+          "line": 196
+        },
+        {
+          "kind": "Return",
+          "line": 119
+        },
+        {
+          "kind": "Return",
+          "line": 263
+        },
+        {
+          "kind": "Return",
+          "line": 324
+        },
+        {
+          "kind": "Return",
+          "line": 421
+        },
+        {
+          "kind": "Return",
+          "line": 110
+        },
+        {
+          "kind": "Return",
+          "line": 112
+        },
+        {
+          "kind": "Return",
+          "line": 360
+        },
+        {
+          "kind": "Return",
+          "line": 461
+        }
+      ],
+      "nested": [
+        {
+          "name": "child_complete",
+          "line": 92,
+          "free_candidates": [
+            "bool",
+            "int",
+            "returncodes",
+            "type"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "path_presence",
+          "line": 106,
+          "free_candidates": [
+            "FileNotFoundError",
+            "OSError",
+            "os"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "fail_step",
+          "line": 115,
+          "free_candidates": [
+            "V2ReasonCode",
+            "chain_core",
+            "current"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "observe_remote_fetch",
+          "line": 141,
+          "free_candidates": [
+            "Path",
+            "child_complete",
+            "current",
+            "destination_ref",
+            "engine",
+            "str"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "observe_containment",
+          "line": 184,
+          "free_candidates": [
+            "child_complete",
+            "landed_head",
+            "remote_tip"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "observe_branch",
+          "line": 246,
+          "free_candidates": [
+            "branch_subject",
+            "chain_core",
+            "engine"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "observe_worktree",
+          "line": 292,
+          "free_candidates": [
+            "chain_core",
+            "engine",
+            "local_subject",
+            "path_presence",
+            "str",
+            "worktree"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "observe_branch_deletion",
+          "line": 410,
+          "free_candidates": [
+            "branch_subject",
+            "child_complete"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        },
+        {
+          "name": "observe_worktree_removal",
+          "line": 348,
+          "free_candidates": [
+            "child_complete",
+            "path_presence",
+            "str",
+            "worktree"
+          ],
+          "nonlocal_names": [],
+          "mutable_closure_possible": true
+        }
+      ]
+    }
+  ],
+  "note": "Conservative candidates; rope infers inputs/outputs. Control inside complete loops may be legal."
+}
