@@ -1,0 +1,96 @@
+extraction e08 on HEAD e58c0df7a43b6ad57e591fa2bd342bfc44ed764e
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_bootstrap.py --function _run_bootstrap_generation_composite --start 413 --end 428 --name _incomplete_bootstrap_refusal --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e08-_incomplete_bootstrap_refusal.json
+--- scripts/forge/forge_cli/app/_engine_bootstrap.py
++++ scripts/forge/forge_cli/app/_engine_bootstrap.py
+@@ -410,22 +410,7 @@
+     )
+     if not holder.get("complete"):
+         scope_failure = admission.run_task is not None
+-        reason = (
+-            V2ReasonCode.RUN_TASK_BINDING_INVALID
+-            if scope_failure
+-            else V2ReasonCode.FETCH_FAILED
+-        )
+-        refusal = chain_core._merge_refusal(
+-            reason,
+-            (
+-                f"forge: {verb} refused — run/task scope derivation is invalid"
+-                if scope_failure
+-                else f"forge: {verb} refused — fixed target fetch failed"
+-            ),
+-            expected="one complete composite bootstrap child",
+-            observed=str(holder.get("error") or composite_result.evidence()),
+-            chain=state,
+-        )
++        refusal = _incomplete_bootstrap_refusal(scope_failure, verb, holder, composite_result, state)
+         if scope_failure:
+             state = self._release_to_aborted(
+                 state, reason="run/task scope derivation is invalid"
+@@ -506,3 +491,22 @@
+             chain=state,
+         )
+     return state
++
++def _incomplete_bootstrap_refusal(scope_failure, verb, holder, composite_result, state):
++    reason = (
++        V2ReasonCode.RUN_TASK_BINDING_INVALID
++        if scope_failure
++        else V2ReasonCode.FETCH_FAILED
++    )
++    refusal = chain_core._merge_refusal(
++        reason,
++        (
++            f"forge: {verb} refused — run/task scope derivation is invalid"
++            if scope_failure
++            else f"forge: {verb} refused — fixed target fetch failed"
++        ),
++        expected="one complete composite bootstrap child",
++        observed=str(holder.get("error") or composite_result.evidence()),
++        chain=state,
++    )
++    return refusal
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_bootstrap.py": "84d60213e614c10724812bdbbb6f5f381c85d865ba974d329d00e47a4f8a7153"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "function": "_run_bootstrap_generation_composite",
+      "name": "_incomplete_bootstrap_refusal",
+      "imports": {},
+      "start_line": 413,
+      "end_line": 428,
+      "parameters": [
+        "scope_failure",
+        "verb",
+        "holder",
+        "composite_result",
+        "state"
+      ],
+      "outputs": [
+        "refusal"
+      ],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-t2-e08-before.json
+snapshot: 888 bodies across 874 names -> .refactor/merge-engine-t2-e08-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_bootstrap.py --function _run_bootstrap_generation_composite --start 413 --end 428 --name _incomplete_bootstrap_refusal --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e08-_incomplete_bootstrap_refusal.json --apply
+APPLIED tier 2; manifest: .refactor/merge-engine-t2-e08-_incomplete_bootstrap_refusal.json
+[exit 0]
+

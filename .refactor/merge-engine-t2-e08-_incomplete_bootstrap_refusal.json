@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_bootstrap.py": "84d60213e614c10724812bdbbb6f5f381c85d865ba974d329d00e47a4f8a7153"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "function": "_run_bootstrap_generation_composite",
+      "name": "_incomplete_bootstrap_refusal",
+      "imports": {},
+      "start_line": 413,
+      "end_line": 428,
+      "parameters": [
+        "scope_failure",
+        "verb",
+        "holder",
+        "composite_result",
+        "state"
+      ],
+      "outputs": [
+        "refusal"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "e58c0df7a43b6ad57e591fa2bd342bfc44ed764e"
+}

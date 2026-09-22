@@ -410,22 +410,7 @@ def _run_bootstrap_generation_composite(
     )
     if not holder.get("complete"):
         scope_failure = admission.run_task is not None
-        reason = (
-            V2ReasonCode.RUN_TASK_BINDING_INVALID
-            if scope_failure
-            else V2ReasonCode.FETCH_FAILED
-        )
-        refusal = chain_core._merge_refusal(
-            reason,
-            (
-                f"forge: {verb} refused — run/task scope derivation is invalid"
-                if scope_failure
-                else f"forge: {verb} refused — fixed target fetch failed"
-            ),
-            expected="one complete composite bootstrap child",
-            observed=str(holder.get("error") or composite_result.evidence()),
-            chain=state,
-        )
+        refusal = _incomplete_bootstrap_refusal(scope_failure, verb, holder, composite_result, state)
         if scope_failure:
             state = self._release_to_aborted(
                 state, reason="run/task scope derivation is invalid"
@@ -506,3 +491,22 @@ def _refuse_exceeded_bootstrap_scope(scope, self, state, proof, verb):
             chain=state,
         )
     return state
+
+def _incomplete_bootstrap_refusal(scope_failure, verb, holder, composite_result, state):
+    reason = (
+        V2ReasonCode.RUN_TASK_BINDING_INVALID
+        if scope_failure
+        else V2ReasonCode.FETCH_FAILED
+    )
+    refusal = chain_core._merge_refusal(
+        reason,
+        (
+            f"forge: {verb} refused — run/task scope derivation is invalid"
+            if scope_failure
+            else f"forge: {verb} refused — fixed target fetch failed"
+        ),
+        expected="one complete composite bootstrap child",
+        observed=str(holder.get("error") or composite_result.evidence()),
+        chain=state,
+    )
+    return refusal
