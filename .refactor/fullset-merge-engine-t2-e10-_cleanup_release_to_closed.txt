@@ -1,0 +1,12 @@
+== full
+$ bash .refactor/merge-engine-full-set.sh .refactor/fullset-merge-engine-t2-e10-_cleanup_release_to_closed
+tests.test_cli_merge_lifecycle rc=0 Ran 115 tests in 113.948s
+tests.test_cli_merge_adapters rc=0 Ran 25 tests in 28.360s
+tests.test_cli_merge_store rc=0 Ran 11 tests in 0.621s
+tests.test_cli_merge_integration_shard2 rc=0 Ran 27 tests in 143.655s
+tests.test_cli_loader rc=0 Ran 14 tests in 1.229s
+tests.test_cli_merge_integration rc=0 Ran 28 tests in 161.931s
+tests.test_cli_merge_integration_shard1 rc=0 Ran 27 tests in 178.187s
+full set: 7/7 modules OK, xargs rc=0, wall=179s
+[exit 0]
+

@@ -440,26 +440,30 @@ def cleanup_chain(self: "MergeEngine") -> Outcome:
                         "forge: merge cleanup failed — branch-delete did not PASS",
                     )
 
-                with self.store.event_lock(str(current["chain_id"])):
-                    cleanup_replay = self.store._read_replay_locked(
-                        str(current["chain_id"])
-                    )
-                summary = chain_core._merge_cleanup_history_summary(
-                    cleanup_replay.events
-                )
-                if not (
-                    summary.get("remote_containment") is not None
-                    and summary.get("worktree_complete") is True
-                    and summary.get("branch_complete") is True
-                ):
-                    raise FrozenError(
-                        "cleanup did not durably complete every required step",
-                        chain_id=str(current["chain_id"]),
-                        schema=REVISION9_OUTPUT_SCHEMA,
-                    )
-                current = self._release_to_closed_locked(current, lease)
+                current = _cleanup_release_to_closed(self, current, lease)
     return engine._success(
         current,
         f"merge chain {current['chain_id']} cleanup is durably closed",
         "none — merge chain closed",
     )
+
+def _cleanup_release_to_closed(self, current, lease):
+    with self.store.event_lock(str(current["chain_id"])):
+        cleanup_replay = self.store._read_replay_locked(
+            str(current["chain_id"])
+        )
+    summary = chain_core._merge_cleanup_history_summary(
+        cleanup_replay.events
+    )
+    if not (
+        summary.get("remote_containment") is not None
+        and summary.get("worktree_complete") is True
+        and summary.get("branch_complete") is True
+    ):
+        raise FrozenError(
+            "cleanup did not durably complete every required step",
+            chain_id=str(current["chain_id"]),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    current = self._release_to_closed_locked(current, lease)
+    return current

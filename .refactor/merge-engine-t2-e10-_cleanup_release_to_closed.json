@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_cleanup.py": "652327739a2083805f1fadb3282b8d80fa35d342012953e3e17a17f08f67f5dd"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_cleanup.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_cleanup.py",
+      "function": "cleanup_chain",
+      "name": "_cleanup_release_to_closed",
+      "imports": {},
+      "start_line": 443,
+      "end_line": 460,
+      "parameters": [
+        "self",
+        "current",
+        "lease"
+      ],
+      "outputs": [
+        "current"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "4c47ab8f4082db15bc89e5af9cd45cea42572805"
+}
