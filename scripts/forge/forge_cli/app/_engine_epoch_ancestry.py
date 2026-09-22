@@ -116,51 +116,7 @@ def _run_carried_successor_ancestry(
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
         if source_intent.get("phase") == "result":
-            replayed = replay_context.get("epoch_ancestry_observation")
-            tail = replay_context.get("_authenticated_tail_event")
-            recovery_bridge = replay_context.get(
-                "recovery_proof_bridge"
-            )
-            replayed_at_tail = bool(
-                isinstance(replayed, Mapping)
-                and isinstance(tail, Mapping)
-                and replayed.get("digest") == tail.get("digest")
-            )
-            replayed_before_recovery_proof = bool(
-                isinstance(replayed, Mapping)
-                and isinstance(tail, Mapping)
-                and isinstance(recovery_bridge, Mapping)
-                and tail.get("digest")
-                == recovery_bridge.get("event_digest")
-                and recovery_bridge.get("previous_digest")
-                == replayed.get("digest")
-                and (
-                    recovery_bridge.get("operation") == "containment"
-                    and recovery_bridge.get("intent_digest")
-                    == source_intent.get("intent_event_digest")
-                    and recovery_bridge.get("classification")
-                    == "containment-result-persisted"
-                    or recovery_bridge.get("operation") is None
-                    and recovery_bridge.get("intent_digest") is None
-                    and recovery_bridge.get("classification")
-                    == "owner-death-only"
-                )
-            )
-            if (
-                not isinstance(replayed, Mapping)
-                or not (
-                    replayed_at_tail or replayed_before_recovery_proof
-                )
-                or replayed.get("evidence") != source_intent
-            ):
-                raise FrozenError(
-                    "interrupted carried successor ancestry result is unauthenticated",
-                    chain_id=str(state["chain_id"]),
-                    schema=REVISION9_OUTPUT_SCHEMA,
-                )
-            contained = source_intent.get("child_result", {}).get(
-                "contained"
-            )
+            contained = _replayed_ancestry_containment(replay_context, source_intent, state)
             return state, contained if type(contained) is bool else None
         ancestry_intent = copy.deepcopy(dict(source_intent))
         argv = list(ancestry_intent["argv"])
@@ -297,4 +253,52 @@ def _durable_ancestry_containment(state, result):
             schema=REVISION9_OUTPUT_SCHEMA,
         )
     contained = durable["child_result"].get("contained")
+    return contained
+
+def _replayed_ancestry_containment(replay_context, source_intent, state):
+    replayed = replay_context.get("epoch_ancestry_observation")
+    tail = replay_context.get("_authenticated_tail_event")
+    recovery_bridge = replay_context.get(
+        "recovery_proof_bridge"
+    )
+    replayed_at_tail = bool(
+        isinstance(replayed, Mapping)
+        and isinstance(tail, Mapping)
+        and replayed.get("digest") == tail.get("digest")
+    )
+    replayed_before_recovery_proof = bool(
+        isinstance(replayed, Mapping)
+        and isinstance(tail, Mapping)
+        and isinstance(recovery_bridge, Mapping)
+        and tail.get("digest")
+        == recovery_bridge.get("event_digest")
+        and recovery_bridge.get("previous_digest")
+        == replayed.get("digest")
+        and (
+            recovery_bridge.get("operation") == "containment"
+            and recovery_bridge.get("intent_digest")
+            == source_intent.get("intent_event_digest")
+            and recovery_bridge.get("classification")
+            == "containment-result-persisted"
+            or recovery_bridge.get("operation") is None
+            and recovery_bridge.get("intent_digest") is None
+            and recovery_bridge.get("classification")
+            == "owner-death-only"
+        )
+    )
+    if (
+        not isinstance(replayed, Mapping)
+        or not (
+            replayed_at_tail or replayed_before_recovery_proof
+        )
+        or replayed.get("evidence") != source_intent
+    ):
+        raise FrozenError(
+            "interrupted carried successor ancestry result is unauthenticated",
+            chain_id=str(state["chain_id"]),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    contained = source_intent.get("child_result", {}).get(
+        "contained"
+    )
     return contained

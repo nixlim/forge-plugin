@@ -1,0 +1,152 @@
+extraction e04 on HEAD 913f27513634285b7a89609e89e799368b5bc0aa
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_epoch_ancestry.py --function _run_carried_successor_ancestry --start 119 --end 163 --name _replayed_ancestry_containment --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e04-_replayed_ancestry_containment.json
+--- scripts/forge/forge_cli/app/_engine_epoch_ancestry.py
++++ scripts/forge/forge_cli/app/_engine_epoch_ancestry.py
+@@ -116,51 +116,7 @@
+                 schema=REVISION9_OUTPUT_SCHEMA,
+             )
+         if source_intent.get("phase") == "result":
+-            replayed = replay_context.get("epoch_ancestry_observation")
+-            tail = replay_context.get("_authenticated_tail_event")
+-            recovery_bridge = replay_context.get(
+-                "recovery_proof_bridge"
+-            )
+-            replayed_at_tail = bool(
+-                isinstance(replayed, Mapping)
+-                and isinstance(tail, Mapping)
+-                and replayed.get("digest") == tail.get("digest")
+-            )
+-            replayed_before_recovery_proof = bool(
+-                isinstance(replayed, Mapping)
+-                and isinstance(tail, Mapping)
+-                and isinstance(recovery_bridge, Mapping)
+-                and tail.get("digest")
+-                == recovery_bridge.get("event_digest")
+-                and recovery_bridge.get("previous_digest")
+-                == replayed.get("digest")
+-                and (
+-                    recovery_bridge.get("operation") == "containment"
+-                    and recovery_bridge.get("intent_digest")
+-                    == source_intent.get("intent_event_digest")
+-                    and recovery_bridge.get("classification")
+-                    == "containment-result-persisted"
+-                    or recovery_bridge.get("operation") is None
+-                    and recovery_bridge.get("intent_digest") is None
+-                    and recovery_bridge.get("classification")
+-                    == "owner-death-only"
+-                )
+-            )
+-            if (
+-                not isinstance(replayed, Mapping)
+-                or not (
+-                    replayed_at_tail or replayed_before_recovery_proof
+-                )
+-                or replayed.get("evidence") != source_intent
+-            ):
+-                raise FrozenError(
+-                    "interrupted carried successor ancestry result is unauthenticated",
+-                    chain_id=str(state["chain_id"]),
+-                    schema=REVISION9_OUTPUT_SCHEMA,
+-                )
+-            contained = source_intent.get("child_result", {}).get(
+-                "contained"
+-            )
++            contained = _replayed_ancestry_containment(replay_context, source_intent, state)
+             return state, contained if type(contained) is bool else None
+         ancestry_intent = copy.deepcopy(dict(source_intent))
+         argv = list(ancestry_intent["argv"])
+@@ -298,3 +254,51 @@
+         )
+     contained = durable["child_result"].get("contained")
+     return contained
++
++def _replayed_ancestry_containment(replay_context, source_intent, state):
++    replayed = replay_context.get("epoch_ancestry_observation")
++    tail = replay_context.get("_authenticated_tail_event")
++    recovery_bridge = replay_context.get(
++        "recovery_proof_bridge"
++    )
++    replayed_at_tail = bool(
++        isinstance(replayed, Mapping)
++        and isinstance(tail, Mapping)
++        and replayed.get("digest") == tail.get("digest")
++    )
++    replayed_before_recovery_proof = bool(
++        isinstance(replayed, Mapping)
++        and isinstance(tail, Mapping)
++        and isinstance(recovery_bridge, Mapping)
++        and tail.get("digest")
++        == recovery_bridge.get("event_digest")
++        and recovery_bridge.get("previous_digest")
++        == replayed.get("digest")
++        and (
++            recovery_bridge.get("operation") == "containment"
++            and recovery_bridge.get("intent_digest")
++            == source_intent.get("intent_event_digest")
++            and recovery_bridge.get("classification")
++            == "containment-result-persisted"
++            or recovery_bridge.get("operation") is None
++            and recovery_bridge.get("intent_digest") is None
++            and recovery_bridge.get("classification")
++            == "owner-death-only"
++        )
++    )
++    if (
++        not isinstance(replayed, Mapping)
++        or not (
++            replayed_at_tail or replayed_before_recovery_proof
++        )
++        or replayed.get("evidence") != source_intent
++    ):
++        raise FrozenError(
++            "interrupted carried successor ancestry result is unauthenticated",
++            chain_id=str(state["chain_id"]),
++            schema=REVISION9_OUTPUT_SCHEMA,
++        )
++    contained = source_intent.get("child_result", {}).get(
++        "contained"
++    )
++    return contained
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py": "3e09b0dfcd65349c671ef0a585fbf329b2ee8c32b9c249f4731b2826adf44c0e"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+      "function": "_run_carried_successor_ancestry",
+      "name": "_replayed_ancestry_containment",
+      "imports": {},
+      "start_line": 119,
+      "end_line": 163,
+      "parameters": [
+        "replay_context",
+        "source_intent",
+        "state"
+      ],
+      "outputs": [
+        "contained"
+      ],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-t2-e04-before.json
+snapshot: 885 bodies across 871 names -> .refactor/merge-engine-t2-e04-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_epoch_ancestry.py --function _run_carried_successor_ancestry --start 119 --end 163 --name _replayed_ancestry_containment --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e04-_replayed_ancestry_containment.json --apply
+APPLIED tier 2; manifest: .refactor/merge-engine-t2-e04-_replayed_ancestry_containment.json
+[exit 0]
+
