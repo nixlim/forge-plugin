@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "cd788388e226fa31030334445e62a925234184471da913066e005f70f4b6d913",
+    "scripts/forge/forge_cli/app/_engine_finalize.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_finalize.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_park_integrated_review",
+        "_finish_recovered_epoch_locked",
+        "finalize"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_finalize",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_finalize"
+        ],
+        "scripts/forge/forge_cli/app/_engine_finalize.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+          "from forge_cli.envelope import Outcome, V2ReasonCode",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_finalize.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "Outcome",
+          "_observe_current_merge_candidate",
+          "copy"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "4d5cf4652acab98f3ff76a190282b5ba039c5f93"
+}
