@@ -1,0 +1,4 @@
+--- c01 final_mode -> scripts/forge/forge_cli/app/_engine_final_mode.py
+c01 final_mode: gate PASS, mypy NEW 0 GONE 0, dest 177, shell 10138
+c01: paused before commit for operator inspection; evidence: ['.refactor/merge-engine-final_mode.json', '.refactor/merge-engine-c01-before.json', '.refactor/apply-merge-engine-c01-final_mode.txt', '.refactor/gate-merge-engine-c01-final_mode.txt', '.refactor/types-delta-merge-engine-c01-final_mode.txt', '.refactor/fullset-merge-engine-c01-final_mode.txt']
+rc=0

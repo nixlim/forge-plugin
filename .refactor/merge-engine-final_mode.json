@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "3e51b4ccca452ce6cfa41faa030468a932aeac67cca0138d93ee5e44a7b2fd63",
+    "scripts/forge/forge_cli/app/_engine_final_mode.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_final_mode.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_final_mode_unavailable",
+        "_prepare_git_no_lazy_fetch_qualification",
+        "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+        "_final_history_mutation_mode",
+        "_park_invalid_final_history_mode",
+        "_current_merge_authority"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_final_mode",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_final_mode"
+        ],
+        "scripts/forge/forge_cli/app/_engine_final_mode.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, runtime, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_final_mode.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "f4d5128b424321a7e3e87a4ed801754d8aec35ca"
+}
