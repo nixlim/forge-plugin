@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "8abcaecb7f87191dfc407e491ab2576171acc1e379de58a9555918ec62cd6cbe",
+    "scripts/forge/forge_cli/app/_engine_rebase_recovery.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_rebase_recovery.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_record_foreign_git_locked",
+        "_materialize_rebase_success_locked",
+        "_recover_rebase_observation_locked"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_rebase_recovery",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_rebase_recovery"
+        ],
+        "scripts/forge/forge_cli/app/_engine_rebase_recovery.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import os",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_rebase_recovery.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "5bb21a9f386ab1e83970760e94f3d1dde7fee108"
+}
