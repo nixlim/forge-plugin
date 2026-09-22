@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_lock.py": "c449ec8704f875e271a49d8a569a8289a2c9b9aa6e77c2ce227c43be87bbceeb",
+    "scripts/forge/forge_cli/app/_engine_lock_steps.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_lock.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_lock_steps.py",
+      "function": "_recording_common_lock",
+      "name": "_acquire_recording_common_lock",
+      "imports": {
+        "scripts/forge/forge_cli/app/_engine_lock.py": [
+          "from forge_cli.app._engine_lock_steps import _acquire_recording_common_lock"
+        ],
+        "scripts/forge/forge_cli/app/_engine_lock_steps.py": [
+          "from __future__ import annotations",
+          "from forge_cli import chain_core"
+        ]
+      },
+      "start_line": 590,
+      "end_line": 604,
+      "parameters": [
+        "common_dir",
+        "chain_id",
+        "operation",
+        "unexpected_split_recovery_proof",
+        "classify_reserved_fence"
+      ],
+      "outputs": [
+        "lock"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "c81829db90fe5b3c856fa44225df42b4988d7744"
+}

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator, Mapping
 
 from forge_cli import chain_core, engine
+from forge_cli.app._engine_lock_steps import _acquire_recording_common_lock
 from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Refusal, V2ReasonCode
 from forge_cli.policy import sha256_bytes
 
@@ -587,21 +588,7 @@ def _recording_common_lock(
             "reservation lifecycle and death proof were not persisted atomically"
         )
 
-    lock = chain_core.acquire_common_lock(
-        common_dir,
-        owner_kind="merge",
-        chain_id=chain_id,
-        operation=operation,
-        no_transaction_record=operation != "recover",
-        recovery_recorder=(
-            unexpected_split_recovery_proof
-            if operation == "recover"
-            else None
-        ),
-        recovery_classifier=(
-            classify_reserved_fence if operation == "recover" else None
-        ),
-    )
+    lock = _acquire_recording_common_lock(common_dir, chain_id, operation, unexpected_split_recovery_proof, classify_reserved_fence)
     try:
         with lock as acquired:
             yield acquired

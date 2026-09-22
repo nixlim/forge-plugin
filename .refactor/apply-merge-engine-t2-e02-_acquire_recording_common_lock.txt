@@ -1,0 +1,114 @@
+extraction e02 on HEAD c81829db90fe5b3c856fa44225df42b4988d7744
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_lock.py --function _recording_common_lock --start 590 --end 604 --name _acquire_recording_common_lock --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e02-_acquire_recording_common_lock.json --dest scripts/forge/forge_cli/app/_engine_lock_steps.py
+--- scripts/forge/forge_cli/app/_engine_lock.py
++++ scripts/forge/forge_cli/app/_engine_lock.py
+@@ -5,6 +5,7 @@
+ from typing import TYPE_CHECKING, Any, Iterator, Mapping
+ 
+ from forge_cli import chain_core, engine
++from forge_cli.app._engine_lock_steps import _acquire_recording_common_lock
+ from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Refusal, V2ReasonCode
+ from forge_cli.policy import sha256_bytes
+ 
+@@ -587,21 +588,7 @@
+             "reservation lifecycle and death proof were not persisted atomically"
+         )
+ 
+-    lock = chain_core.acquire_common_lock(
+-        common_dir,
+-        owner_kind="merge",
+-        chain_id=chain_id,
+-        operation=operation,
+-        no_transaction_record=operation != "recover",
+-        recovery_recorder=(
+-            unexpected_split_recovery_proof
+-            if operation == "recover"
+-            else None
+-        ),
+-        recovery_classifier=(
+-            classify_reserved_fence if operation == "recover" else None
+-        ),
+-    )
++    lock = _acquire_recording_common_lock(common_dir, chain_id, operation, unexpected_split_recovery_proof, classify_reserved_fence)
+     try:
+         with lock as acquired:
+             yield acquired
+--- scripts/forge/forge_cli/app/_engine_lock_steps.py
++++ scripts/forge/forge_cli/app/_engine_lock_steps.py
+@@ -0,0 +1,22 @@
++from __future__ import annotations
++
++from forge_cli import chain_core
++
++
++def _acquire_recording_common_lock(common_dir, chain_id, operation, unexpected_split_recovery_proof, classify_reserved_fence):
++    lock = chain_core.acquire_common_lock(
++        common_dir,
++        owner_kind="merge",
++        chain_id=chain_id,
++        operation=operation,
++        no_transaction_record=operation != "recover",
++        recovery_recorder=(
++            unexpected_split_recovery_proof
++            if operation == "recover"
++            else None
++        ),
++        recovery_classifier=(
++            classify_reserved_fence if operation == "recover" else None
++        ),
++    )
++    return lock
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_lock.py": "c449ec8704f875e271a49d8a569a8289a2c9b9aa6e77c2ce227c43be87bbceeb",
+    "scripts/forge/forge_cli/app/_engine_lock_steps.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_lock.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_lock_steps.py",
+      "function": "_recording_common_lock",
+      "name": "_acquire_recording_common_lock",
+      "imports": {
+        "scripts/forge/forge_cli/app/_engine_lock.py": [
+          "from forge_cli.app._engine_lock_steps import _acquire_recording_common_lock"
+        ],
+        "scripts/forge/forge_cli/app/_engine_lock_steps.py": [
+          "from __future__ import annotations",
+          "from forge_cli import chain_core"
+        ]
+      },
+      "start_line": 590,
+      "end_line": 604,
+      "parameters": [
+        "common_dir",
+        "chain_id",
+        "operation",
+        "unexpected_split_recovery_proof",
+        "classify_reserved_fence"
+      ],
+      "outputs": [
+        "lock"
+      ],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-t2-e02-before.json
+snapshot: 883 bodies across 869 names -> .refactor/merge-engine-t2-e02-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_lock.py --function _recording_common_lock --start 590 --end 604 --name _acquire_recording_common_lock --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e02-_acquire_recording_common_lock.json --dest scripts/forge/forge_cli/app/_engine_lock_steps.py --apply
+APPLIED tier 2; manifest: .refactor/merge-engine-t2-e02-_acquire_recording_common_lock.json
+[exit 0]
+
