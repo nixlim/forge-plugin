@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "7b9b2c620288e08490199611d44188414ca229a6f9090553a6278a3417dbf735",
+    "scripts/forge/forge_cli/app/_engine_epoch_suite.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_epoch_suite.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_run_epoch_suite"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_epoch_suite",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_epoch_suite"
+        ],
+        "scripts/forge/forge_cli/app/_engine_epoch_suite.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import os",
+          "import re",
+          "import sys",
+          "from typing import Any, Callable, Mapping",
+          "from forge_cli import chain_core, runtime, engine",
+          "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+          "from forge_cli.app._mutation_journal import _persist_deferred_mutation_result",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_epoch_suite.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "Callable",
+          "_persist_deferred_mutation_result",
+          "re",
+          "sys"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "50179408f6845c36b47acb468c3fcc169a7cbd56"
+}
