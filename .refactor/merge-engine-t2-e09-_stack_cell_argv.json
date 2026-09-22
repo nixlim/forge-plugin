@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_epoch_suite.py": "b363f1931508dde894d6d5c5dcf970711e2b21ba4df757be2810c100b93f5746"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_epoch_suite.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_epoch_suite.py",
+      "function": "_run_epoch_suite",
+      "name": "_stack_cell_argv",
+      "imports": {},
+      "start_line": 144,
+      "end_line": 168,
+      "parameters": [
+        "cell_index",
+        "commands",
+        "state",
+        "gate_id",
+        "details",
+        "plan"
+      ],
+      "outputs": [
+        "argv"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "ce5d17dac03b992e42ae2db67fed20514b503ec7"
+}

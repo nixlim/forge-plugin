@@ -141,31 +141,7 @@ def _run_epoch_suite(
                     for prior_member in plan["suite"][:cursor]
                     if prior_member == member
                 )
-                if cell_index > len(commands):
-                    raise FrozenError(
-                        "stack cursor exceeds its committed command cells",
-                        chain_id=str(state["chain_id"]),
-                        observed=gate_id,
-                        schema=REVISION9_OUTPUT_SCHEMA,
-                    )
-                argv = commands[cell_index - 1]
-                details.update(
-                    {
-                        "batch_id": sha256_bytes(
-                            chain_core.canonical_bytes(
-                                {
-                                    "epoch": state["integration"]["epoch"][
-                                        "intent_digest"
-                                    ],
-                                    "suite": plan["suite_digest"],
-                                    "gate": gate_id,
-                                }
-                            )
-                        )[:16],
-                        "cell_count": len(commands),
-                        "cell_index": cell_index,
-                    }
-                )
+                argv = _stack_cell_argv(cell_index, commands, state, gate_id, details, plan)
         holder: dict[str, Any] = {}
 
         def intent_current() -> bool:
@@ -397,3 +373,31 @@ def _run_epoch_suite(
                     str(state["steps"][gate_id][-1]["transcript"])
                 ],
             )
+
+def _stack_cell_argv(cell_index, commands, state, gate_id, details, plan):
+    if cell_index > len(commands):
+        raise FrozenError(
+            "stack cursor exceeds its committed command cells",
+            chain_id=str(state["chain_id"]),
+            observed=gate_id,
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    argv = commands[cell_index - 1]
+    details.update(
+        {
+            "batch_id": sha256_bytes(
+                chain_core.canonical_bytes(
+                    {
+                        "epoch": state["integration"]["epoch"][
+                            "intent_digest"
+                        ],
+                        "suite": plan["suite_digest"],
+                        "gate": gate_id,
+                    }
+                )
+            )[:16],
+            "cell_count": len(commands),
+            "cell_index": cell_index,
+        }
+    )
+    return argv

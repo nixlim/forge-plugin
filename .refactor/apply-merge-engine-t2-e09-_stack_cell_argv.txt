@@ -1,0 +1,115 @@
+extraction e09 on HEAD ce5d17dac03b992e42ae2db67fed20514b503ec7
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_epoch_suite.py --function _run_epoch_suite --start 144 --end 168 --name _stack_cell_argv --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e09-_stack_cell_argv.json
+--- scripts/forge/forge_cli/app/_engine_epoch_suite.py
++++ scripts/forge/forge_cli/app/_engine_epoch_suite.py
+@@ -141,31 +141,7 @@
+                     for prior_member in plan["suite"][:cursor]
+                     if prior_member == member
+                 )
+-                if cell_index > len(commands):
+-                    raise FrozenError(
+-                        "stack cursor exceeds its committed command cells",
+-                        chain_id=str(state["chain_id"]),
+-                        observed=gate_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-                argv = commands[cell_index - 1]
+-                details.update(
+-                    {
+-                        "batch_id": sha256_bytes(
+-                            chain_core.canonical_bytes(
+-                                {
+-                                    "epoch": state["integration"]["epoch"][
+-                                        "intent_digest"
+-                                    ],
+-                                    "suite": plan["suite_digest"],
+-                                    "gate": gate_id,
+-                                }
+-                            )
+-                        )[:16],
+-                        "cell_count": len(commands),
+-                        "cell_index": cell_index,
+-                    }
+-                )
++                argv = _stack_cell_argv(cell_index, commands, state, gate_id, details, plan)
+         holder: dict[str, Any] = {}
+ 
+         def intent_current() -> bool:
+@@ -397,3 +373,31 @@
+                     str(state["steps"][gate_id][-1]["transcript"])
+                 ],
+             )
++
++def _stack_cell_argv(cell_index, commands, state, gate_id, details, plan):
++    if cell_index > len(commands):
++        raise FrozenError(
++            "stack cursor exceeds its committed command cells",
++            chain_id=str(state["chain_id"]),
++            observed=gate_id,
++            schema=REVISION9_OUTPUT_SCHEMA,
++        )
++    argv = commands[cell_index - 1]
++    details.update(
++        {
++            "batch_id": sha256_bytes(
++                chain_core.canonical_bytes(
++                    {
++                        "epoch": state["integration"]["epoch"][
++                            "intent_digest"
++                        ],
++                        "suite": plan["suite_digest"],
++                        "gate": gate_id,
++                    }
++                )
++            )[:16],
++            "cell_count": len(commands),
++            "cell_index": cell_index,
++        }
++    )
++    return argv
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_epoch_suite.py": "b363f1931508dde894d6d5c5dcf970711e2b21ba4df757be2810c100b93f5746"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_epoch_suite.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_epoch_suite.py",
+      "function": "_run_epoch_suite",
+      "name": "_stack_cell_argv",
+      "imports": {},
+      "start_line": 144,
+      "end_line": 168,
+      "parameters": [
+        "cell_index",
+        "commands",
+        "state",
+        "gate_id",
+        "details",
+        "plan"
+      ],
+      "outputs": [
+        "argv"
+      ],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-t2-e09-before.json
+snapshot: 889 bodies across 875 names -> .refactor/merge-engine-t2-e09-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_epoch_suite.py --function _run_epoch_suite --start 144 --end 168 --name _stack_cell_argv --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e09-_stack_cell_argv.json --apply
+APPLIED tier 2; manifest: .refactor/merge-engine-t2-e09-_stack_cell_argv.json
+[exit 0]
+
