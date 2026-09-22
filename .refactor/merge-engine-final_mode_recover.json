@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "6d507a34c416b89cc0c3deca9c3495edcab7b453f6a2165a8da6dd49f0ee49c3",
+    "scripts/forge/forge_cli/app/_engine_final_mode.py": "75b23f92f01254c820e7e41d28f7746cd395d82f8624801178aef28b8637dca4"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_final_mode.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_recover_can_reach_final_mode",
+        "_read_only_recovery_flag_state"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_final_mode",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [],
+        "scripts/forge/forge_cli/app/_engine_final_mode.py": [
+          "from forge_cli.envelope import ReasonCode"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_final_mode.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "8099e866fa827b7bbaf4747d9e4bd1122cd41469"
+}
