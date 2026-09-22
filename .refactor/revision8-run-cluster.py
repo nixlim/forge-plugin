@@ -111,9 +111,9 @@ def preflight(cluster, p):
     rc, dirty = run(["git", "status", "--porcelain", "--untracked-files=no"])
     if rc or dirty.split("\n", 1)[1].split("[exit")[0].strip():
         fail(f"{label}: tracked tree not clean:\n{dirty}")
+    # The planner's id maps (.refactor/idmap-revision8-<family>.json) may pre-exist; collect_ids
+    # regenerates them from the current IDs and refuses a mismatch instead of a pre-existing file.
     keys = ["manifest", "snap", "ids", "log", "gate"]
-    if cluster["shape"] == "class":
-        keys.append("idmap")
     if label != "mixin":
         keys.append("dryrun")
     for key in keys:
@@ -150,6 +150,10 @@ def collect_ids(cluster, p):
             for m in cluster["methods"]
         },
     }
+    if os.path.exists(p["idmap"]):
+        existing = json.load(open(p["idmap"], encoding="utf-8"))
+        if existing != idmap:
+            fail(f"{label}: pre-existing {p['idmap']} differs from the generated id map")
     with open(p["idmap"], "w", encoding="utf-8") as handle:
         json.dump(idmap, handle, indent=2, sort_keys=True)
         handle.write("\n")
