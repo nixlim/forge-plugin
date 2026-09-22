@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "73f52c1cdea2097941860d076e012aaa31736e93dd0b0a36937a83f3dae55b73",
+    "scripts/forge/forge_cli/app/_engine_observation.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_observation.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_candidate_observation_transition",
+        "_restore_candidate_observation_intent_locked",
+        "_restore_bootstrap_fetch_observation_locked",
+        "_run_candidate_observation_locked"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_observation",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_observation"
+        ],
+        "scripts/forge/forge_cli/app/_engine_observation.py": [
+          "from __future__ import annotations",
+          "import base64",
+          "import copy",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, runtime, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_observation.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "base64"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "ba775d86eda6cf74ee6794a729dfd2ebcc6d4969"
+}
