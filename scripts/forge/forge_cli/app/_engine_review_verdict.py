@@ -1,0 +1,325 @@
+from __future__ import annotations
+
+import copy
+import os
+import stat
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Mapping
+
+from forge_cli import chain_core, engine, runtime
+from forge_cli.app._candidate_observation import _observe_current_merge_candidate
+from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Outcome, V2ReasonCode
+
+if TYPE_CHECKING:
+    from forge_cli.app._merge_engine import MergeEngine
+
+def review_attach(self: "MergeEngine", verdict_file: str) -> Outcome:
+    chain_core._require_merge_adapter_control("mandatory-review-final")
+    state = self._preflight_lifecycle(self._load(), "review attach")
+    self._halt(state)
+    review = state.get("review")
+    iteration = review.get("iteration", 0) if isinstance(review, Mapping) else 0
+    if type(iteration) is not int:
+        raise FrozenError(
+            "merge review iteration is malformed",
+            chain_id=str(state["chain_id"]),
+            schema=REVISION9_OUTPUT_SCHEMA,
+        )
+    request = review.get("request") if isinstance(review, Mapping) else None
+    eighth_request_pending = bool(
+        state["state"] == "reviewing"
+        and iteration == 8
+        and isinstance(review, Mapping)
+        and set(review) == {"iteration", "request"}
+        and isinstance(request, Mapping)
+        and request.get("iteration") == 8
+    )
+    if (
+        state["state"] in {"reviewing", "revising"}
+        and iteration >= 8
+        and not eighth_request_pending
+    ):
+        raise chain_core._merge_refusal(
+            V2ReasonCode.ITERATION_CAP,
+            "forge: review attach refused — review iteration cap of 8 is final",
+            expected="status or safe abort after the eighth review cycle",
+            observed=str(iteration),
+            chain=state,
+        )
+    if state["state"] != "reviewing":
+        self._wrong_state(state, "reviewing", "review attach")
+    _repository, _policy, changed_paths = _observe_current_merge_candidate(
+        self.ctx, state, verb="review attach"
+    )
+    if (
+        not isinstance(request, dict)
+        or request.get("reviewer") != "review-final"
+    ):
+        self._wrong_state(state, "a current review-final request", "review attach")
+    engine._read_merge_artifact(
+        self.ctx,
+        state,
+        str(request["package"]),
+        str(request["package_digest"]),
+        "review master package",
+    )
+    source = Path(verdict_file)
+    if not source.is_absolute():
+        source = Path.cwd() / source
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            source,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
+            raise OSError("verdict is not an owner-controlled regular file")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, runtime.OUTPUT_CAP_BYTES + 1 - total)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > runtime.OUTPUT_CAP_BYTES:
+                raise OSError(f"verdict exceeds {runtime.OUTPUT_CAP_BYTES} bytes")
+        data = b"".join(chunks)
+    except OSError as exc:
+        raise chain_core._merge_refusal(
+            V2ReasonCode.REVIEW_VERDICT_INVALID,
+            f"review-final verdict is unreadable: {exc}",
+            observed=str(source),
+            chain=state,
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    try:
+        verdict = engine.Engine._parse_verdict(
+            data,
+            str(state["candidate"]["candidate_head"]),
+            str(request["package_digest"]),
+        )
+    except ValueError as exc:
+        raise chain_core._merge_refusal(
+            V2ReasonCode.REVIEW_VERDICT_INVALID,
+            f"review-final verdict is invalid: {exc}",
+            expected="VERDICT plus exact candidate and master-package citations",
+            observed=str(exc),
+            chain=state,
+        ) from exc
+    verdict_ref = engine._write_merge_artifact(
+        self.ctx,
+        state,
+        f"review/iteration-{review['iteration']:02d}/verdict.txt",
+        data,
+    )
+    verdict.update(
+        {
+            "reviewer_role": "review-final",
+            "iteration": review["iteration"],
+            "recorded_at": chain_core.iso_z(),
+            "verdict_path": verdict_ref,
+        }
+    )
+    current_review = {**copy.deepcopy(review), "verdict": verdict}
+    delta: dict[str, Any] = {"review": current_review}
+    if verdict["verdict"] == "BLOCK":
+        delta["state"] = "revising"
+        if int(review["iteration"]) == 8:
+            current_review["residual_risk"] = {
+                "at": chain_core.iso_z(),
+                "reason": "review iteration cap reached",
+                "findings": copy.deepcopy(verdict["findings"]),
+            }
+    else:
+        control_paths = list(changed_paths) if state["tier"]["control"] else []
+        delta["authorization"] = {
+            "candidate_head": state["candidate"]["candidate_head"],
+            "generation_digest": state["candidate"]["generation_digest"],
+            "diff_summary": (
+                f"{len(changed_paths)} changed path(s); "
+                f"diff_sha256={state['candidate']['diff_sha256']}"
+            ),
+            "control_paths": control_paths,
+            "review_verdict": "PASS",
+            "recorded_at": chain_core.iso_z(),
+        }
+        delta["state"] = (
+            "awaiting_approval"
+            if state["tier"]["control"]
+            else "authorized"
+        )
+    current = self.store.transition(
+        state,
+        "review_attached",
+        {"delta": delta},
+        generation_digest=str(state["candidate"]["generation_digest"]),
+        at=chain_core.iso_z(),
+    )
+    return engine._success(
+        current,
+        f"merge review {verdict['verdict']} recorded",
+        f"forge status --chain-id {state['chain_id']}",
+        evidence_refs=[verdict_ref],
+    )
+
+def review_disposition(
+    self: "MergeEngine", finding: int, severity: str, resolution: str
+) -> Outcome:
+    chain_core._require_merge_adapter_control("mandatory-review-final")
+    state = self._preflight_lifecycle(self._load(), "review disposition")
+    self._halt(state)
+
+    def validated_review(current: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        if current["state"] not in {"reviewing", "revising"}:
+            self._wrong_state(
+                current, "reviewing or revising", "review disposition"
+            )
+        selected_review = current.get("review")
+        iteration = (
+            selected_review.get("iteration", 0)
+            if isinstance(selected_review, Mapping)
+            else 0
+        )
+        if type(iteration) is not int:
+            raise FrozenError(
+                "merge review iteration is malformed",
+                chain_id=str(current["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if iteration >= 8:
+            raise chain_core._merge_refusal(
+                V2ReasonCode.ITERATION_CAP,
+                "forge: review disposition refused — review iteration cap of 8 is final",
+                expected="status or safe abort after the eighth review cycle",
+                observed=str(iteration),
+                chain=current,
+            )
+        verdict = (
+            selected_review.get("verdict")
+            if isinstance(selected_review, dict)
+            else None
+        )
+        findings = verdict.get("findings") if isinstance(verdict, dict) else None
+        if (
+            not isinstance(findings, list)
+            or finding < 1
+            or finding > len(findings)
+        ):
+            self._wrong_state(
+                current, "an attached finding number", "review disposition"
+            )
+        selected = findings[finding - 1]
+        expected_severity = (
+            str(selected.get("severity")) if isinstance(selected, dict) else ""
+        )
+        if severity != expected_severity:
+            raise chain_core._merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: review disposition refused — severity does not match the finding",
+                expected=expected_severity,
+                observed=severity,
+                chain=current,
+            )
+        if not isinstance(resolution, str) or not resolution.strip():
+            raise chain_core._merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: review disposition refused — resolution must be nonempty",
+                observed=resolution,
+                chain=current,
+            )
+        if not isinstance(selected_review, dict):
+            raise FrozenError(
+                "merge review dispositions are malformed",
+                chain_id=str(current["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return selected_review, severity in {"CRITICAL", "MAJOR"}
+
+    # Validate once before waiting, then repeat from the lease-protected
+    # state so concurrent MINOR submissions serialize and two competing
+    # above-MINOR submissions cannot both observe an empty slot.
+    validated_review(state)
+    binding = state.get("run_binding")
+    with self.store._journal_outer(
+        binding if isinstance(binding, Mapping) else None
+    ):
+        with chain_core.acquire_chain_lease(
+            self.store.root,
+            chain_id=str(state["chain_id"]),
+            session=self.store._session(None),
+        ) as lease:
+            fresh = self.store.load_locked(
+                str(state["chain_id"]), lease=lease
+            )
+            fresh = self._preflight_lifecycle(
+                fresh, "review disposition", persist_missing=False
+            )
+            fresh_review, above_minor = validated_review(fresh)
+            slot_occupied = (
+                fresh_review.get("operator_cosign_required") is True
+            )
+            if above_minor and slot_occupied:
+                raise chain_core._merge_refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: review disposition refused — above-MINOR disposition already awaits operator co-sign",
+                    expected="zero outstanding above-MINOR dispositions",
+                    observed="one outstanding above-MINOR disposition",
+                    chain=fresh,
+                )
+            dispositions = copy.deepcopy(
+                fresh_review.get("dispositions", [])
+            )
+            if not isinstance(dispositions, list):
+                raise FrozenError(
+                    "merge review dispositions are malformed",
+                    chain_id=str(fresh["chain_id"]),
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            recorded_at = chain_core.iso_z()
+            dispositions.append(
+                {
+                    "finding": finding,
+                    "severity": severity,
+                    "resolution": resolution.strip(),
+                    "candidate": fresh["candidate"]["candidate_head"],
+                    "generation_digest": fresh["candidate"][
+                        "generation_digest"
+                    ],
+                    "recorded_at": recorded_at,
+                }
+            )
+            current_review = {
+                **copy.deepcopy(fresh_review),
+                "dispositions": dispositions,
+                "operator_cosign_required": slot_occupied or above_minor,
+            }
+            current = self.store.transition_locked(
+                fresh,
+                "review_disposition",
+                {"delta": {"review": current_review}},
+                generation_digest=str(
+                    fresh["candidate"]["generation_digest"]
+                ),
+                lease=lease,
+                at=recorded_at,
+            )
+    if above_minor:
+        raise chain_core._merge_refusal(
+            V2ReasonCode.APPROVAL_REQUIRED,
+            "above-MINOR disposition is parked pending operator co-sign",
+            expected="merge approve for the sole outstanding disposition",
+            observed=severity,
+            chain=current,
+        )
+    return engine._success(
+        current,
+        f"merge finding {finding} disposition recorded",
+        f"forge status --chain-id {state['chain_id']}",
+    )
