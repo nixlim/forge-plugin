@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "7bfa61d456bccd026e9032a21822fac16da3d8982ae4c708415b76a7c04cafaf",
+    "scripts/forge/forge_cli/app/_engine_recover_bootstrap.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_recover_bootstrap.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_recover_merge_bootstrap_scope_binding",
+        "_bootstrap_pending_classification_inputs_locked",
+        "_recover_classifying_bootstrap_v12_locked",
+        "_recover_classifying_bootstrap_locked"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_recover_bootstrap",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_recover_bootstrap"
+        ],
+        "scripts/forge/forge_cli/app/_engine_recover_bootstrap.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_recover_bootstrap.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "d154cda4d03d2c1daa41c20c9ddfb48b63911a4f"
+}
