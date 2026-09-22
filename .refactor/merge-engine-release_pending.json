@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "9dc24be9a1905af5922343a459d57c47b741621323acb18294de394509094eb8",
+    "scripts/forge/forge_cli/app/_engine_release_pending.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_release_pending.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_complete_pending_release_locked",
+        "_resume_pending_release",
+        "_release_historical_landing_locked"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_release_pending",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_release_pending"
+        ],
+        "scripts/forge/forge_cli/app/_engine_release_pending.py": [
+          "from __future__ import annotations",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_release_pending.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "b22153cd658f8126a7048b49500e7dac4cf3f58d"
+}
