@@ -1,0 +1,3 @@
+--- e06 _run_remote_observation 438-457 -> _classify_nonmovement_observation
+STOP: e06: inference differs from plan: ['classification', 'prior_count', 'next_integration', 'count'] -> []
+rc=1

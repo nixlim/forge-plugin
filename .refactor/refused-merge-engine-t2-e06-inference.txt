@@ -1,0 +1,121 @@
+extraction e06 on HEAD 2f5a9874ea5fba486800a0ac782346dc0a37bddf
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_observe_remote.py --function _run_remote_observation --start 438 --end 457 --name _classify_nonmovement_observation --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e06-_classify_nonmovement_observation.json --dest scripts/forge/forge_cli/app/_engine_observe_remote_steps.py
+--- scripts/forge/forge_cli/app/_engine_observe_remote.py
++++ scripts/forge/forge_cli/app/_engine_observe_remote.py
+@@ -6,7 +6,10 @@
+ from typing import TYPE_CHECKING, Any, Mapping
+ 
+ from forge_cli import chain_core, engine, runtime
+-from forge_cli.app._engine_observe_remote_steps import _persist_remote_observation_delta
++from forge_cli.app._engine_observe_remote_steps import (
++    _classify_nonmovement_observation,
++    _persist_remote_observation_delta,
++)
+ from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Refusal
+ from forge_cli.policy import sha256_bytes
+ 
+@@ -435,26 +438,7 @@
+                 }
+             )
+         else:
+-            independent = classification in {"success", "non-fast-forward"}
+-            if independent:
+-                count = prior_count + 1
+-            else:
+-                engine._reset_merge_nonmovement_counter(next_integration)
+-                count = 0
+-            next_state = "awaiting_approval" if count == 8 else "authorized"
+-            next_integration.update(
+-                {
+-                    "condition": (
+-                        "remote-churn"
+-                        if count == 8
+-                        else "non-fast-forward"
+-                        if classification == "non-fast-forward"
+-                        else "remote-moved"
+-                    ),
+-                    "primary_condition": "none",
+-                    "remote_movement_count": count,
+-                }
+-            )
++            _classify_nonmovement_observation(classification, prior_count, next_integration, count)
+         if (
+             engine._merge_inactive(state)
+             and exists in {True, False}
+--- scripts/forge/forge_cli/app/_engine_observe_remote_steps.py
++++ scripts/forge/forge_cli/app/_engine_observe_remote_steps.py
+@@ -3,7 +3,7 @@
+ import copy
+ from typing import Any
+ 
+-from forge_cli import chain_core
++from forge_cli import chain_core, engine
+ 
+ 
+ def _persist_remote_observation_delta(next_integration, next_state, state, carried_generation, self, lease):
+@@ -46,3 +46,25 @@
+         ),
+     )
+     return state
++
++def _classify_nonmovement_observation(classification, prior_count, next_integration, count):
++    independent = classification in {"success", "non-fast-forward"}
++    if independent:
++        count = prior_count + 1
++    else:
++        engine._reset_merge_nonmovement_counter(next_integration)
++        count = 0
++    next_state = "awaiting_approval" if count == 8 else "authorized"
++    next_integration.update(
++        {
++            "condition": (
++                "remote-churn"
++                if count == 8
++                else "non-fast-forward"
++                if classification == "non-fast-forward"
++                else "remote-moved"
++            ),
++            "primary_condition": "none",
++            "remote_movement_count": count,
++        }
++    )
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_observe_remote.py": "92120aeded7f9f3e08dafa3211d69cbe7a44810534e7ae9a9748c35a5d700e4d",
+    "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py": "9c89e458500a37081807f57cdf6cb24bc239e9501f5b377c75918f7eb874d99f"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_observe_remote.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py",
+      "function": "_run_remote_observation",
+      "name": "_classify_nonmovement_observation",
+      "imports": {
+        "scripts/forge/forge_cli/app/_engine_observe_remote.py": [
+          "from forge_cli.app._engine_observe_remote_steps import _classify_nonmovement_observation"
+        ],
+        "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py": [
+          "from forge_cli import engine"
+        ]
+      },
+      "start_line": 438,
+      "end_line": 457,
+      "parameters": [
+        "classification",
+        "prior_count",
+        "next_integration",
+        "count"
+      ],
+      "outputs": [],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+

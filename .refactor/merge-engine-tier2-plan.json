@@ -89,7 +89,8 @@
     "params": 4,
     "outputs": 1
    },
-   "note": "range shifted by +1 after e05 added its import line at the top of the module"
+   "note": "range shifted by +1 after e05 added its import line at the top of the module",
+   "status": "NOT APPLIED: rope inferred parameters [classification, prior_count, next_integration, count] and no output (next_state dropped; count promoted to a parameter) - the else-body rebinds names its sibling branch also rebinds; follow-up bead"
   },
   {
    "id": "e07",
