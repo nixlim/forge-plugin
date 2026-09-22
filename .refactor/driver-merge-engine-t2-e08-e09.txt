@@ -1,0 +1,9 @@
+--- e08 _run_bootstrap_generation_composite 413-428 -> _incomplete_bootstrap_refusal
+e08: gate PASS, mypy NEW 0 GONE 0, params ['scope_failure', 'verb', 'holder', 'composite_result', 'state'] -> ['refusal'], source 485, dest None
+e08 _incomplete_bootstrap_refusal: committed ce5d17d
+--- e09 _run_epoch_suite 144-168 -> _stack_cell_argv
+e09: gate PASS, mypy NEW 0 GONE 0, params ['cell_index', 'commands', 'state', 'gate_id', 'details', 'plan'] -> ['argv'], source 395, dest None
+e09 _stack_cell_argv: committed 3b138b6
+--- e10 cleanup_chain 443-460 -> _cleanup_release_to_closed
+STOP: e10: inference differs from plan: ['self', 'current', 'lease'] -> ['current']
+rc=1

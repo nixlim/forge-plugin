@@ -145,9 +145,10 @@
    "dest": null,
    "priority": false,
    "expect": {
-    "params": 4,
+    "params": 3,
     "outputs": 1
-   }
+   },
+   "note": "scanner listed cleanup_replay and summary (range-local) and missed lease; rope infers (self, current, lease)"
   }
  ],
  "not_eligible": {
