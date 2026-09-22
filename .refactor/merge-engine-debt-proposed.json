@@ -1,0 +1,5 @@
+{
+ "scripts/forge/forge_cli/app/_engine_lock.py": {"reason": "591 code lines: _recording_common_lock alone is 546 code lines (559 source lines, 5 nested defs incl. lifecycle_classification at 349); tier 1 relocates bodies verbatim and cannot shrink it", "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py on _recording_common_lock); residual design change: forge-plugin-g8kf"},
+ "scripts/forge/forge_cli/app/_engine_recover.py": {"reason": "621 code lines: recover alone is 612 code lines (616 source lines); tier 1 relocates bodies verbatim and cannot shrink it", "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py on recover); residual design change: forge-plugin-g8kf"},
+ "scripts/forge/forge_cli/app/_engine_recover_conflict.py": {"reason": "830 code lines: _recover_conflict_locked alone is 820 code lines (843 source lines, 11 nested defs incl. classify_continue_result at 169); tier 1 relocates bodies verbatim and cannot shrink it", "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py on _recover_conflict_locked, first candidate); residual design change: forge-plugin-g8kf"}
+}

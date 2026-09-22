@@ -1,0 +1,32 @@
+assignment ok: 93 methods = 7 stay + 86 moved in 29 clusters
+c01 final_mode: dest=177 src=10138 bindings=6/6 remove=None | == c01 final_mode -> _engine_final_mode.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 560cc17
+c02 gate: dest=396 src=9762 bindings=5/5 remove=None | == c02 gate -> _engine_gate.py: total=234 baseline=234 NEW=0 GONE=0 | PASS adf8ea7
+c03 final_mode_recover: dest=312 src=9634 bindings=2/2 remove=None | == c03 final_mode_recover -> _engine_final_mode.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 41ce352
+c04 lifecycle: dest=318 src=9331 bindings=5/5 remove=None | == c04 lifecycle -> _engine_lifecycle.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 78d7dd5
+c05 review_request: dest=231 src=9113 bindings=3/3 remove=None | == c05 review_request -> _engine_review_request.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 239074e
+c06 review_verdict: dest=315 src=8811 bindings=2/2 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['stat']} | == c06 review_verdict -> _engine_review_verdict.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 8cb3461
+c07 refresh: dest=291 src=8536 bindings=4/4 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['dataclasses']} | == c07 refresh -> _engine_refresh.py: total=234 baseline=234 NEW=0 GONE=0 | PASS ce6a5e3
+c08 start_chain: dest=454 src=8100 bindings=6/6 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['prepare_merge_admission', 'socket']} | == c08 start_chain -> _engine_start_chain.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 2efc671
+c09 bootstrap: dest=479 src=7632 bindings=4/4 remove=None | == c09 bootstrap -> _engine_bootstrap.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 23900c8
+c10 release_aborted: dest=321 src=7324 bindings=3/3 remove=None | == c10 release_aborted -> _engine_release_aborted.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 7039024
+c11 abort: dest=419 src=6917 bindings=2/2 remove=None | == c11 abort -> _engine_abort.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 415b089
+c12 release_pending: dest=277 src=6651 bindings=3/3 remove=None | == c12 release_pending -> _engine_release_pending.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 65cfe78
+c13 cleanup_child: dest=311 src=6354 bindings=3/3 remove=None | == c13 cleanup_child -> _engine_cleanup_child.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 6e276cb
+c14 cleanup: dest=438 src=5926 bindings=1/1 remove=None | == c14 cleanup -> _engine_cleanup.py: total=234 baseline=234 NEW=0 GONE=0 | PASS d7972b3
+c15 observation: dest=264 src=5675 bindings=4/4 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['base64']} | == c15 observation -> _engine_observation.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 9cb88a8
+c16 lock: dest=591 src=5095 bindings=2/2 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['Iterator']} | == c16 lock -> _engine_lock.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 9bb4fca
+c17 observation_parse: dest=338 src=5022 bindings=3/3 remove=None | == c17 observation_parse -> _engine_observation.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 883604d
+c18 observe_remote: dest=495 src=4539 bindings=1/1 remove=None | == c18 observe_remote -> _engine_observe_remote.py: total=234 baseline=234 NEW=0 GONE=0 | PASS d0178fb
+c19 epoch_fetch: dest=446 src=4109 bindings=6/6 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['Policy']} | == c19 epoch_fetch -> _engine_epoch_fetch.py: total=234 baseline=234 NEW=0 GONE=0 | PASS b20d693
+c20 epoch_ancestry: dest=286 src=3834 bindings=2/2 remove=None | == c20 epoch_ancestry -> _engine_epoch_ancestry.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 6927b6e
+c21 epoch_rebase: dest=449 src=3399 bindings=3/3 remove=None | == c21 epoch_rebase -> _engine_epoch_rebase.py: total=234 baseline=234 NEW=0 GONE=0 | PASS e81f466
+c22 epoch_suite: dest=392 src=3019 bindings=1/1 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['Callable', '_persist_deferred_mutation_result', 're', 'sys']} | == c22 epoch_suite -> _engine_epoch_suite.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 0034920
+c23 epoch_push: dest=251 src=2780 bindings=2/2 remove=None | == c23 epoch_push -> _engine_epoch_push.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 70daa11
+c24 rebase_recovery: dest=356 src=2439 bindings=3/3 remove=None | == c24 rebase_recovery -> _engine_rebase_recovery.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 61b743c
+c25 conflict_observation: dest=240 src=2211 bindings=1/1 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['secrets']} | == c25 conflict_observation -> _engine_conflict_observation.py: total=234 baseline=234 NEW=0 GONE=0 | PASS ec92f1f
+c26 recover_conflict: dest=830 src=1391 bindings=1/1 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['os', 'runtime', 'sha256_bytes']} | == c26 recover_conflict -> _engine_recover_conflict.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 9ae138d
+c27 recover_bootstrap: dest=397 src=1006 bindings=4/4 remove=None | == c27 recover_bootstrap -> _engine_recover_bootstrap.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 82a8196
+c28 recover: dest=621 src=396 bindings=1/1 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['Sequence']} | == c28 recover -> _engine_recover.py: total=234 baseline=234 NEW=0 GONE=0 | PASS 0300265
+c29 finalize: dest=183 src=224 bindings=3/3 remove={'scripts/forge/forge_cli/app/_merge_engine.py': ['Outcome', '_observe_current_merge_candidate', 'copy']} | == c29 finalize -> _engine_finalize.py: total=234 baseline=234 NEW=0 GONE=0 | PASS a0e86fc
+ALL CLUSTERS DONE
+driver exit 0

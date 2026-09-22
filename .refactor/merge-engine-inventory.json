@@ -1,0 +1,4048 @@
+{
+  "name": "MergeEngine",
+  "bases": [],
+  "metaclass": [],
+  "decorators": [],
+  "statements": [
+    "'Dormant merge-family target for explicit shared CLI verbs.'"
+  ],
+  "slots": false,
+  "methods": [
+    {
+      "name": "__init__",
+      "line": 26,
+      "end_line": 30,
+      "decorators": [],
+      "reads": [],
+      "writes": [
+        "_git_no_lazy_fetch_qualification",
+        "ctx"
+      ],
+      "calls": [],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_final_mode_unavailable",
+      "line": 33,
+      "end_line": 43,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "V2ReasonCode",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_prepare_git_no_lazy_fetch_qualification",
+      "line": 45,
+      "end_line": 62,
+      "decorators": [],
+      "reads": [
+        "_final_mode_unavailable",
+        "ctx"
+      ],
+      "writes": [
+        "_git_no_lazy_fetch_qualification"
+      ],
+      "calls": [
+        "_final_mode_unavailable"
+      ],
+      "globals": [
+        "Path",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+      "line": 64,
+      "end_line": 100,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [
+        "_git_no_lazy_fetch_qualification"
+      ],
+      "calls": [],
+      "globals": [
+        "V2ReasonCode",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_recover_can_reach_final_mode",
+      "line": 103,
+      "end_line": 206,
+      "decorators": [
+        "classmethod"
+      ],
+      "reads": [
+        "_current_merge_authority"
+      ],
+      "writes": [],
+      "calls": [
+        "_current_merge_authority"
+      ],
+      "globals": [
+        "Mapping",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "store",
+      "line": 209,
+      "end_line": 216,
+      "decorators": [
+        "property"
+      ],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap",
+      "note": "A function-shape move uses property(...), making its uses Any under mypy even with --annotate-self; prefer leaving this property on the class unless it is large."
+    },
+    {
+      "name": "_load",
+      "line": 218,
+      "end_line": 238,
+      "decorators": [],
+      "reads": [
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "REVISION9_OUTPUT_SCHEMA",
+        "ReasonCode",
+        "Refusal",
+        "V2ReasonCode",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_read_only_recovery_flag_state",
+      "line": 240,
+      "end_line": 268,
+      "decorators": [],
+      "reads": [
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "ReasonCode",
+        "Refusal",
+        "V2ReasonCode",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_halt",
+      "line": 270,
+      "end_line": 285,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Mapping",
+        "Path",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_record_common_release_failure",
+      "line": 287,
+      "end_line": 323,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Refusal",
+        "chain_core",
+        "copy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_recording_common_lock",
+      "line": 326,
+      "end_line": 884,
+      "decorators": [
+        "contextlib.contextmanager"
+      ],
+      "reads": [
+        "_epoch_transition",
+        "_record_common_release_failure",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_record_common_release_failure"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [
+        "event_intent",
+        "carries_fence_digest",
+        "lifecycle_classification",
+        "classify_reserved_fence",
+        "unexpected_split_recovery_proof"
+      ],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_candidate_observation_transition",
+      "line": 886,
+      "end_line": 913,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition"
+      ],
+      "globals": [
+        "Mapping",
+        "chain_core",
+        "copy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_restore_candidate_observation_intent_locked",
+      "line": 915,
+      "end_line": 936,
+      "decorators": [],
+      "reads": [
+        "_candidate_observation_transition"
+      ],
+      "writes": [],
+      "calls": [
+        "_candidate_observation_transition"
+      ],
+      "globals": [
+        "Mapping",
+        "chain_core",
+        "copy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_restore_bootstrap_fetch_observation_locked",
+      "line": 938,
+      "end_line": 954,
+      "decorators": [],
+      "reads": [
+        "_candidate_observation_transition"
+      ],
+      "writes": [],
+      "calls": [
+        "_candidate_observation_transition"
+      ],
+      "globals": [
+        "Mapping",
+        "chain_core",
+        "copy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_candidate_observation_locked",
+      "line": 956,
+      "end_line": 1154,
+      "decorators": [],
+      "reads": [
+        "_candidate_observation_transition",
+        "_restore_candidate_observation_intent_locked",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_candidate_observation_transition",
+        "_restore_candidate_observation_intent_locked",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "base64",
+        "chain_core",
+        "copy",
+        "engine",
+        "runtime",
+        "sha256_bytes"
+      ],
+      "nested_defs": [
+        "restore_source",
+        "intent_current",
+        "persist_observation"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "start",
+      "line": 1156,
+      "end_line": 1170,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "prepare_merge_admission"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "bind_candidate",
+      "line": 1172,
+      "end_line": 1184,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_preflight_lifecycle",
+      "line": 1186,
+      "end_line": 1285,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Mapping",
+        "Path",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_claim_slot",
+      "line": 1287,
+      "end_line": 1354,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_allocate_chain_id",
+      "line": 1356,
+      "end_line": 1367,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_initial_merge_state",
+      "line": 1369,
+      "end_line": 1422,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "copy",
+        "engine",
+        "os",
+        "socket"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_record_bootstrap_failure",
+      "line": 1424,
+      "end_line": 1465,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core",
+        "copy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_bootstrap_fetch_argv",
+      "line": 1468,
+      "end_line": 1497,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_resolved_fetch_tip",
+      "line": 1500,
+      "end_line": 1522,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Path",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_recover_merge_bootstrap_scope_binding",
+      "line": 1524,
+      "end_line": 1581,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_bootstrap_generation_composite",
+      "line": 1583,
+      "end_line": 1994,
+      "decorators": [],
+      "reads": [
+        "_bootstrap_fetch_argv",
+        "_git_no_lazy_fetch_qualification",
+        "_release_scope_exceeded",
+        "_release_to_aborted",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_bootstrap_fetch_argv",
+        "_release_scope_exceeded",
+        "_release_to_aborted"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine",
+        "runtime"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "failed_result",
+        "materialize_success",
+        "persist"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_bootstrap_generation",
+      "line": 1996,
+      "end_line": 2019,
+      "decorators": [],
+      "reads": [
+        "_run_bootstrap_generation_composite"
+      ],
+      "writes": [],
+      "calls": [
+        "_run_bootstrap_generation_composite"
+      ],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_complete_bootstrap_classification",
+      "line": 2021,
+      "end_line": 2127,
+      "decorators": [],
+      "reads": [
+        "_release_scope_exceeded",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_release_scope_exceeded"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "start_chain",
+      "line": 2130,
+      "end_line": 2289,
+      "decorators": [],
+      "reads": [
+        "_allocate_chain_id",
+        "_claim_slot",
+        "_complete_bootstrap_classification",
+        "_git_no_lazy_fetch_qualification",
+        "_initial_merge_state",
+        "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+        "_recording_common_lock",
+        "_run_bootstrap_generation",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_allocate_chain_id",
+        "_claim_slot",
+        "_complete_bootstrap_classification",
+        "_initial_merge_state",
+        "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+        "_recording_common_lock",
+        "_run_bootstrap_generation"
+      ],
+      "globals": [
+        "FrozenError",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine",
+        "prepare_merge_admission",
+        "secrets",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_admission_from_candidate_observation",
+      "line": 2291,
+      "end_line": 2343,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Mapping",
+        "Path",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_admission_for_refresh",
+      "line": 2345,
+      "end_line": 2398,
+      "decorators": [],
+      "reads": [
+        "_admission_from_candidate_observation",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_admission_from_candidate_observation"
+      ],
+      "globals": [
+        "Mapping",
+        "Path",
+        "V2ReasonCode",
+        "chain_core",
+        "dataclasses",
+        "prepare_merge_admission"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_refresh_iteration",
+      "line": 2400,
+      "end_line": 2448,
+      "decorators": [],
+      "reads": [
+        "_wrong_state"
+      ],
+      "writes": [],
+      "calls": [
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "refresh",
+      "line": 2450,
+      "end_line": 2573,
+      "decorators": [],
+      "reads": [
+        "_admission_for_refresh",
+        "_complete_bootstrap_classification",
+        "_git_no_lazy_fetch_qualification",
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+        "_recording_common_lock",
+        "_refresh_iteration",
+        "_run_bootstrap_generation",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_admission_for_refresh",
+        "_complete_bootstrap_classification",
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+        "_recording_common_lock",
+        "_refresh_iteration",
+        "_run_bootstrap_generation"
+      ],
+      "globals": [
+        "Mapping",
+        "Path",
+        "chain_core",
+        "copy",
+        "engine",
+        "secrets"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "approve",
+      "line": 2575,
+      "end_line": 2709,
+      "decorators": [],
+      "reads": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_release_to_aborted",
+      "line": 2711,
+      "end_line": 2840,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_release_to_aborted_locked",
+      "line": 2842,
+      "end_line": 2961,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_tail_event_digest",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_release_scope_exceeded",
+      "line": 2963,
+      "end_line": 3031,
+      "decorators": [],
+      "reads": [
+        "_release_to_aborted"
+      ],
+      "writes": [],
+      "calls": [
+        "_release_to_aborted"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "abort",
+      "line": 3033,
+      "end_line": 3289,
+      "decorators": [],
+      "reads": [
+        "_attempted_release_preconditions_locked",
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_recording_common_lock",
+        "_release_historical_landing_locked",
+        "_release_to_aborted_locked",
+        "_run_remote_observation",
+        "_tail_event_digest",
+        "_wrong_state",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_attempted_release_preconditions_locked",
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_recording_common_lock",
+        "_release_historical_landing_locked",
+        "_release_to_aborted_locked",
+        "_run_remote_observation",
+        "_tail_event_digest",
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "status",
+      "line": 3291,
+      "end_line": 3338,
+      "decorators": [],
+      "reads": [
+        "_load",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_load"
+      ],
+      "globals": [
+        "Mapping",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_wrong_state",
+      "line": 3341,
+      "end_line": 3351,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "V2ReasonCode",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_resolve_gate",
+      "line": 3353,
+      "end_line": 3421,
+      "decorators": [],
+      "reads": [
+        "_wrong_state",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_wrong_state"
+      ],
+      "globals": [
+        "Path",
+        "re",
+        "sys"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_scoped_mutation",
+      "line": 3423,
+      "end_line": 3507,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "engine",
+        "os",
+        "runtime",
+        "sha256_bytes",
+        "sys"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_record_gate_result",
+      "line": 3509,
+      "end_line": 3570,
+      "decorators": [],
+      "reads": [
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core",
+        "copy",
+        "engine",
+        "re"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "gate_run",
+      "line": 3572,
+      "end_line": 3701,
+      "decorators": [],
+      "reads": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_record_gate_result",
+        "_resolve_gate",
+        "_run_scoped_mutation",
+        "_wrong_state",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_record_gate_result",
+        "_resolve_gate",
+        "_run_scoped_mutation",
+        "_wrong_state"
+      ],
+      "globals": [
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "engine",
+        "os",
+        "runtime",
+        "secrets",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "verify",
+      "line": 3703,
+      "end_line": 3738,
+      "decorators": [],
+      "reads": [
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state",
+        "ctx",
+        "gate_run"
+      ],
+      "writes": [],
+      "calls": [
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state",
+        "gate_run"
+      ],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_review_package",
+      "line": 3740,
+      "end_line": 3836,
+      "decorators": [],
+      "reads": [
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "V2ReasonCode",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "review_request",
+      "line": 3838,
+      "end_line": 3951,
+      "decorators": [],
+      "reads": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_review_package",
+        "_wrong_state",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_review_package",
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "copy",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "review_collect",
+      "line": 3953,
+      "end_line": 3963,
+      "decorators": [],
+      "reads": [
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state"
+      ],
+      "writes": [],
+      "calls": [
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state"
+      ],
+      "globals": [
+        "V2ReasonCode",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "review_attach",
+      "line": 3965,
+      "end_line": 4119,
+      "decorators": [],
+      "reads": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime",
+        "stat"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "review_disposition",
+      "line": 4121,
+      "end_line": 4274,
+      "decorators": [],
+      "reads": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_halt",
+        "_load",
+        "_preflight_lifecycle",
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [
+        "validated_review"
+      ],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_epoch_transition",
+      "line": 4276,
+      "end_line": 4301,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Mapping",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_tail_event_digest",
+      "line": 4303,
+      "end_line": 4315,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_sealed_plan",
+      "line": 4318,
+      "end_line": 4332,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core",
+        "copy",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_begin_epoch",
+      "line": 4334,
+      "end_line": 4393,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_sealed_plan"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_sealed_plan"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine",
+        "secrets"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_epoch_fetch_argv",
+      "line": 4396,
+      "end_line": 4407,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_epoch_replay_context",
+      "line": 4409,
+      "end_line": 4427,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "copy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_resolved_epoch_fetch_tip",
+      "line": 4430,
+      "end_line": 4450,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "Path",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_run_carried_successor_ancestry",
+      "line": 4452,
+      "end_line": 4715,
+      "decorators": [],
+      "reads": [
+        "_epoch_replay_context",
+        "_epoch_transition",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_replay_context",
+        "_epoch_transition",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine",
+        "runtime"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "persist"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_epoch_fetch",
+      "line": 4717,
+      "end_line": 4838,
+      "decorators": [],
+      "reads": [
+        "_complete_epoch_fetch_locked",
+        "_epoch_fetch_argv",
+        "_epoch_transition",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_complete_epoch_fetch_locked",
+        "_epoch_fetch_argv",
+        "_epoch_transition",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "persist"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_complete_epoch_fetch_locked",
+      "line": 4840,
+      "end_line": 5052,
+      "decorators": [],
+      "reads": [
+        "_epoch_replay_context",
+        "_epoch_transition",
+        "_record_foreign_git_locked",
+        "_resolved_epoch_fetch_tip",
+        "_run_candidate_observation_locked",
+        "_run_carried_successor_ancestry",
+        "_sealed_plan",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_replay_context",
+        "_epoch_transition",
+        "_record_foreign_git_locked",
+        "_resolved_epoch_fetch_tip",
+        "_run_candidate_observation_locked",
+        "_run_carried_successor_ancestry",
+        "_sealed_plan"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_epoch_rebase",
+      "line": 5054,
+      "end_line": 5207,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_recover_rebase_observation_locked",
+        "_tail_event_digest",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_recover_rebase_observation_locked",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "persist"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_epoch_suite",
+      "line": 5209,
+      "end_line": 5590,
+      "decorators": [],
+      "reads": [
+        "_admission_from_candidate_observation",
+        "_epoch_transition",
+        "_resolve_gate",
+        "_run_candidate_observation_locked",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_admission_from_candidate_observation",
+        "_epoch_transition",
+        "_resolve_gate",
+        "_run_candidate_observation_locked",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "_persist_deferred_mutation_result",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "re",
+        "runtime",
+        "sha256_bytes",
+        "sys"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "persist"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_parse_remote_observation",
+      "line": 5593,
+      "end_line": 5621,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_parse_fetched_remote_observation",
+      "line": 5624,
+      "end_line": 5661,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_head_contained",
+      "line": 5664,
+      "end_line": 5670,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_run_remote_observation",
+      "line": 5672,
+      "end_line": 6166,
+      "decorators": [],
+      "reads": [
+        "_admission_from_candidate_observation",
+        "_epoch_transition",
+        "_parse_fetched_remote_observation",
+        "_run_candidate_observation_locked",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_admission_from_candidate_observation",
+        "_epoch_transition",
+        "_parse_fetched_remote_observation",
+        "_run_candidate_observation_locked",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime",
+        "sha256_bytes"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "persist",
+        "containment_current",
+        "persist_containment"
+      ],
+      "nonlocal_names": [
+        "progress",
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_push_classification",
+      "line": 6169,
+      "end_line": 6199,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_final_history_mutation_mode",
+      "line": 6201,
+      "end_line": 6259,
+      "decorators": [],
+      "reads": [
+        "_final_mode_unavailable",
+        "_git_no_lazy_fetch_qualification",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_final_mode_unavailable"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "engine",
+        "runtime"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_park_invalid_final_history_mode",
+      "line": 6261,
+      "end_line": 6305,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition"
+      ],
+      "globals": [
+        "Mapping",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_epoch_push",
+      "line": 6307,
+      "end_line": 6519,
+      "decorators": [],
+      "reads": [
+        "_current_merge_authority",
+        "_epoch_transition",
+        "_final_history_mutation_mode",
+        "_park_invalid_final_history_mode",
+        "_push_classification",
+        "_run_candidate_observation_locked",
+        "_run_remote_observation",
+        "_tail_event_digest",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_current_merge_authority",
+        "_epoch_transition",
+        "_final_history_mutation_mode",
+        "_park_invalid_final_history_mode",
+        "_push_classification",
+        "_run_candidate_observation_locked",
+        "_run_remote_observation",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "persist"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_park_integrated_review",
+      "line": 6521,
+      "end_line": 6554,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition"
+      ],
+      "globals": [
+        "Mapping",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_release_to_closed_locked",
+      "line": 6556,
+      "end_line": 6666,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_tail_event_digest",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_cleanup_result_locked",
+      "line": 6668,
+      "end_line": 6700,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition"
+      ],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "copy"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_cleanup_child",
+      "line": 6702,
+      "end_line": 6868,
+      "decorators": [],
+      "reads": [
+        "_cleanup_result_locked",
+        "_epoch_transition",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_cleanup_result_locked",
+        "_epoch_transition",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime",
+        "secrets",
+        "sha256_bytes"
+      ],
+      "nested_defs": [
+        "intent_current",
+        "persist"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_current_merge_authority",
+      "line": 6871,
+      "end_line": 6872,
+      "decorators": [
+        "staticmethod"
+      ],
+      "reads": [],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "wrap"
+    },
+    {
+      "name": "_complete_pending_release_locked",
+      "line": 6874,
+      "end_line": 6998,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_resume_pending_release",
+      "line": 7000,
+      "end_line": 7062,
+      "decorators": [],
+      "reads": [
+        "_complete_pending_release_locked",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_complete_pending_release_locked"
+      ],
+      "globals": [
+        "Mapping",
+        "V2ReasonCode",
+        "chain_core"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_attempted_release_preconditions_locked",
+      "line": 7064,
+      "end_line": 7220,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_release_historical_landing_locked",
+      "line": 7222,
+      "end_line": 7311,
+      "decorators": [],
+      "reads": [
+        "_attempted_release_preconditions_locked",
+        "_epoch_transition",
+        "_tail_event_digest",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_attempted_release_preconditions_locked",
+        "_epoch_transition",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "engine",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_record_foreign_git_locked",
+      "line": 7313,
+      "end_line": 7335,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_restore_integrated_rebase_observation_intent_locked",
+      "line": 7337,
+      "end_line": 7396,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition"
+      ],
+      "globals": [
+        "Mapping",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_integrated_rebase_observation_locked",
+      "line": 7398,
+      "end_line": 7633,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_restore_integrated_rebase_observation_intent_locked",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_restore_integrated_rebase_observation_intent_locked",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "Refusal",
+        "chain_core",
+        "copy",
+        "engine",
+        "runtime",
+        "sha256_bytes"
+      ],
+      "nested_defs": [
+        "restore_source",
+        "run_step",
+        "intent_current",
+        "persist_observation"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_materialize_rebase_success_locked",
+      "line": 7635,
+      "end_line": 7750,
+      "decorators": [],
+      "reads": [
+        "_admission_from_candidate_observation",
+        "_epoch_transition",
+        "_run_candidate_observation_locked",
+        "_sealed_plan",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_admission_from_candidate_observation",
+        "_epoch_transition",
+        "_run_candidate_observation_locked",
+        "_sealed_plan"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_recover_rebase_observation_locked",
+      "line": 7752,
+      "end_line": 7958,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_materialize_rebase_success_locked",
+        "_record_foreign_git_locked",
+        "_restore_integrated_rebase_observation_intent_locked",
+        "_run_candidate_observation_locked",
+        "_run_conflict_observation_locked",
+        "_run_integrated_rebase_observation_locked",
+        "ctx"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_materialize_rebase_success_locked",
+        "_record_foreign_git_locked",
+        "_restore_integrated_rebase_observation_intent_locked",
+        "_run_candidate_observation_locked",
+        "_run_conflict_observation_locked",
+        "_run_integrated_rebase_observation_locked"
+      ],
+      "globals": [
+        "Mapping",
+        "Path",
+        "Refusal",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "sha256_bytes"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_finish_recovered_epoch_locked",
+      "line": 7960,
+      "end_line": 7978,
+      "decorators": [],
+      "reads": [
+        "_current_merge_authority",
+        "_park_integrated_review",
+        "_run_epoch_push",
+        "_run_epoch_suite",
+        "_run_remote_observation"
+      ],
+      "writes": [],
+      "calls": [
+        "_current_merge_authority",
+        "_park_integrated_review",
+        "_run_epoch_push",
+        "_run_epoch_suite",
+        "_run_remote_observation"
+      ],
+      "globals": [
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_run_conflict_observation_locked",
+      "line": 7980,
+      "end_line": 8214,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "Refusal",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime",
+        "secrets",
+        "sha256_bytes"
+      ],
+      "nested_defs": [
+        "restore_source_intent",
+        "intent_current",
+        "persist_observation"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_recover_conflict_locked",
+      "line": 8216,
+      "end_line": 9058,
+      "decorators": [],
+      "reads": [
+        "_epoch_transition",
+        "_materialize_rebase_success_locked",
+        "_record_foreign_git_locked",
+        "_run_conflict_observation_locked",
+        "_run_integrated_rebase_observation_locked",
+        "_tail_event_digest",
+        "ctx",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_epoch_transition",
+        "_materialize_rebase_success_locked",
+        "_record_foreign_git_locked",
+        "_run_conflict_observation_locked",
+        "_run_integrated_rebase_observation_locked",
+        "_tail_event_digest"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "Refusal",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine",
+        "os",
+        "runtime",
+        "sha256_bytes"
+      ],
+      "nested_defs": [
+        "mark_foreign",
+        "refuse_changed_conflict",
+        "phase_intent_valid",
+        "exact_stage_success",
+        "classify_continue_result",
+        "rebase_intent_current",
+        "persist_continue",
+        "abort_intent_current",
+        "persist_abort",
+        "stage_intent_current",
+        "persist_stage"
+      ],
+      "nonlocal_names": [
+        "state"
+      ],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_bootstrap_pending_classification_inputs_locked",
+      "line": 9060,
+      "end_line": 9168,
+      "decorators": [],
+      "reads": [
+        "store"
+      ],
+      "writes": [],
+      "calls": [],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_recover_classifying_bootstrap_v12_locked",
+      "line": 9170,
+      "end_line": 9385,
+      "decorators": [],
+      "reads": [
+        "_admission_for_refresh",
+        "_bootstrap_pending_classification_inputs_locked",
+        "_epoch_transition",
+        "_recover_merge_bootstrap_scope_binding",
+        "_release_to_aborted_locked"
+      ],
+      "writes": [],
+      "calls": [
+        "_admission_for_refresh",
+        "_bootstrap_pending_classification_inputs_locked",
+        "_epoch_transition",
+        "_recover_merge_bootstrap_scope_binding",
+        "_release_to_aborted_locked"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [
+        "record_failure"
+      ],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "_recover_classifying_bootstrap_locked",
+      "line": 9387,
+      "end_line": 9401,
+      "decorators": [],
+      "reads": [
+        "_recover_classifying_bootstrap_v12_locked"
+      ],
+      "writes": [],
+      "calls": [
+        "_recover_classifying_bootstrap_v12_locked"
+      ],
+      "globals": [],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "recover",
+      "line": 9404,
+      "end_line": 10019,
+      "decorators": [],
+      "reads": [
+        "_begin_epoch",
+        "_complete_bootstrap_classification",
+        "_complete_epoch_fetch_locked",
+        "_complete_pending_release_locked",
+        "_epoch_transition",
+        "_finish_recovered_epoch_locked",
+        "_halt",
+        "_load",
+        "_prepare_git_no_lazy_fetch_qualification",
+        "_read_only_recovery_flag_state",
+        "_record_foreign_git_locked",
+        "_recording_common_lock",
+        "_recover_can_reach_final_mode",
+        "_recover_classifying_bootstrap_locked",
+        "_recover_conflict_locked",
+        "_recover_rebase_observation_locked",
+        "_release_historical_landing_locked",
+        "_restore_candidate_observation_intent_locked",
+        "_resume_pending_release",
+        "_run_candidate_observation_locked",
+        "_run_epoch_fetch",
+        "_run_epoch_push",
+        "_run_epoch_rebase",
+        "_run_remote_observation",
+        "_tail_event_digest",
+        "_wrong_state",
+        "ctx",
+        "store"
+      ],
+      "writes": [
+        "_git_no_lazy_fetch_qualification"
+      ],
+      "calls": [
+        "_begin_epoch",
+        "_complete_bootstrap_classification",
+        "_complete_epoch_fetch_locked",
+        "_complete_pending_release_locked",
+        "_epoch_transition",
+        "_finish_recovered_epoch_locked",
+        "_halt",
+        "_load",
+        "_prepare_git_no_lazy_fetch_qualification",
+        "_read_only_recovery_flag_state",
+        "_record_foreign_git_locked",
+        "_recording_common_lock",
+        "_recover_can_reach_final_mode",
+        "_recover_classifying_bootstrap_locked",
+        "_recover_conflict_locked",
+        "_recover_rebase_observation_locked",
+        "_release_historical_landing_locked",
+        "_restore_candidate_observation_intent_locked",
+        "_resume_pending_release",
+        "_run_candidate_observation_locked",
+        "_run_epoch_fetch",
+        "_run_epoch_push",
+        "_run_epoch_rebase",
+        "_run_remote_observation",
+        "_tail_event_digest",
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "copy",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "cleanup_chain",
+      "line": 10021,
+      "end_line": 10473,
+      "decorators": [],
+      "reads": [
+        "_complete_pending_release_locked",
+        "_halt",
+        "_load",
+        "_recording_common_lock",
+        "_release_to_closed_locked",
+        "_resume_pending_release",
+        "_run_cleanup_child",
+        "_wrong_state",
+        "store"
+      ],
+      "writes": [],
+      "calls": [
+        "_complete_pending_release_locked",
+        "_halt",
+        "_load",
+        "_recording_common_lock",
+        "_release_to_closed_locked",
+        "_resume_pending_release",
+        "_run_cleanup_child",
+        "_wrong_state"
+      ],
+      "globals": [
+        "FrozenError",
+        "Mapping",
+        "Path",
+        "REVISION9_OUTPUT_SCHEMA",
+        "V2ReasonCode",
+        "chain_core",
+        "engine",
+        "os"
+      ],
+      "nested_defs": [
+        "child_complete",
+        "path_presence",
+        "fail_step",
+        "observe_remote_fetch",
+        "observe_containment",
+        "observe_branch",
+        "observe_worktree",
+        "observe_branch_deletion",
+        "observe_worktree_removal"
+      ],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    },
+    {
+      "name": "finalize",
+      "line": 10475,
+      "end_line": 10596,
+      "decorators": [],
+      "reads": [
+        "_begin_epoch",
+        "_halt",
+        "_load",
+        "_park_integrated_review",
+        "_preflight_lifecycle",
+        "_prepare_git_no_lazy_fetch_qualification",
+        "_recording_common_lock",
+        "_run_candidate_observation_locked",
+        "_run_epoch_fetch",
+        "_run_epoch_push",
+        "_run_epoch_rebase",
+        "_run_epoch_suite",
+        "_run_remote_observation",
+        "_wrong_state",
+        "ctx",
+        "store"
+      ],
+      "writes": [
+        "_git_no_lazy_fetch_qualification"
+      ],
+      "calls": [
+        "_begin_epoch",
+        "_halt",
+        "_load",
+        "_park_integrated_review",
+        "_preflight_lifecycle",
+        "_prepare_git_no_lazy_fetch_qualification",
+        "_recording_common_lock",
+        "_run_candidate_observation_locked",
+        "_run_epoch_fetch",
+        "_run_epoch_push",
+        "_run_epoch_rebase",
+        "_run_epoch_suite",
+        "_run_remote_observation",
+        "_wrong_state"
+      ],
+      "globals": [
+        "Mapping",
+        "Path",
+        "V2ReasonCode",
+        "_observe_current_merge_candidate",
+        "chain_core",
+        "engine"
+      ],
+      "nested_defs": [],
+      "nonlocal_names": [],
+      "mangled": [],
+      "reasons": [],
+      "verdict": "ok"
+    }
+  ],
+  "edges": [
+    [
+      "__init__",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "__init__",
+      "@state:ctx"
+    ],
+    [
+      "_admission_for_refresh",
+      "@state:ctx"
+    ],
+    [
+      "_admission_for_refresh",
+      "_admission_from_candidate_observation"
+    ],
+    [
+      "_begin_epoch",
+      "_epoch_transition"
+    ],
+    [
+      "_begin_epoch",
+      "_sealed_plan"
+    ],
+    [
+      "_candidate_observation_transition",
+      "_epoch_transition"
+    ],
+    [
+      "_cleanup_result_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_complete_bootstrap_classification",
+      "@state:ctx"
+    ],
+    [
+      "_complete_bootstrap_classification",
+      "_release_scope_exceeded"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "@state:ctx"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "_epoch_replay_context"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "_record_foreign_git_locked"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "_resolved_epoch_fetch_tip"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "_run_carried_successor_ancestry"
+    ],
+    [
+      "_complete_epoch_fetch_locked",
+      "_sealed_plan"
+    ],
+    [
+      "_complete_pending_release_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_final_history_mutation_mode",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "_final_history_mutation_mode",
+      "@state:ctx"
+    ],
+    [
+      "_final_history_mutation_mode",
+      "_final_mode_unavailable"
+    ],
+    [
+      "_finish_recovered_epoch_locked",
+      "_current_merge_authority"
+    ],
+    [
+      "_finish_recovered_epoch_locked",
+      "_park_integrated_review"
+    ],
+    [
+      "_finish_recovered_epoch_locked",
+      "_run_epoch_push"
+    ],
+    [
+      "_finish_recovered_epoch_locked",
+      "_run_epoch_suite"
+    ],
+    [
+      "_finish_recovered_epoch_locked",
+      "_run_remote_observation"
+    ],
+    [
+      "_halt",
+      "@state:ctx"
+    ],
+    [
+      "_load",
+      "@state:ctx"
+    ],
+    [
+      "_materialize_rebase_success_locked",
+      "@state:ctx"
+    ],
+    [
+      "_materialize_rebase_success_locked",
+      "_admission_from_candidate_observation"
+    ],
+    [
+      "_materialize_rebase_success_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_materialize_rebase_success_locked",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "_materialize_rebase_success_locked",
+      "_sealed_plan"
+    ],
+    [
+      "_park_integrated_review",
+      "_epoch_transition"
+    ],
+    [
+      "_park_invalid_final_history_mode",
+      "_epoch_transition"
+    ],
+    [
+      "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+      "@state:ctx"
+    ],
+    [
+      "_prepare_git_no_lazy_fetch_qualification",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "_prepare_git_no_lazy_fetch_qualification",
+      "@state:ctx"
+    ],
+    [
+      "_prepare_git_no_lazy_fetch_qualification",
+      "_final_mode_unavailable"
+    ],
+    [
+      "_read_only_recovery_flag_state",
+      "@state:ctx"
+    ],
+    [
+      "_record_foreign_git_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_record_gate_result",
+      "@state:ctx"
+    ],
+    [
+      "_recording_common_lock",
+      "_epoch_transition"
+    ],
+    [
+      "_recording_common_lock",
+      "_record_common_release_failure"
+    ],
+    [
+      "_recover_can_reach_final_mode",
+      "_current_merge_authority"
+    ],
+    [
+      "_recover_classifying_bootstrap_locked",
+      "_recover_classifying_bootstrap_v12_locked"
+    ],
+    [
+      "_recover_classifying_bootstrap_v12_locked",
+      "_admission_for_refresh"
+    ],
+    [
+      "_recover_classifying_bootstrap_v12_locked",
+      "_bootstrap_pending_classification_inputs_locked"
+    ],
+    [
+      "_recover_classifying_bootstrap_v12_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_recover_classifying_bootstrap_v12_locked",
+      "_recover_merge_bootstrap_scope_binding"
+    ],
+    [
+      "_recover_classifying_bootstrap_v12_locked",
+      "_release_to_aborted_locked"
+    ],
+    [
+      "_recover_conflict_locked",
+      "@state:ctx"
+    ],
+    [
+      "_recover_conflict_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_recover_conflict_locked",
+      "_materialize_rebase_success_locked"
+    ],
+    [
+      "_recover_conflict_locked",
+      "_record_foreign_git_locked"
+    ],
+    [
+      "_recover_conflict_locked",
+      "_run_conflict_observation_locked"
+    ],
+    [
+      "_recover_conflict_locked",
+      "_run_integrated_rebase_observation_locked"
+    ],
+    [
+      "_recover_conflict_locked",
+      "_tail_event_digest"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "@state:ctx"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "_materialize_rebase_success_locked"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "_record_foreign_git_locked"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "_restore_integrated_rebase_observation_intent_locked"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "_run_conflict_observation_locked"
+    ],
+    [
+      "_recover_rebase_observation_locked",
+      "_run_integrated_rebase_observation_locked"
+    ],
+    [
+      "_refresh_iteration",
+      "_wrong_state"
+    ],
+    [
+      "_release_historical_landing_locked",
+      "_attempted_release_preconditions_locked"
+    ],
+    [
+      "_release_historical_landing_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_release_historical_landing_locked",
+      "_tail_event_digest"
+    ],
+    [
+      "_release_scope_exceeded",
+      "_release_to_aborted"
+    ],
+    [
+      "_release_to_aborted_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_release_to_aborted_locked",
+      "_tail_event_digest"
+    ],
+    [
+      "_release_to_closed_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_release_to_closed_locked",
+      "_tail_event_digest"
+    ],
+    [
+      "_resolve_gate",
+      "@state:ctx"
+    ],
+    [
+      "_resolve_gate",
+      "_wrong_state"
+    ],
+    [
+      "_restore_bootstrap_fetch_observation_locked",
+      "_candidate_observation_transition"
+    ],
+    [
+      "_restore_candidate_observation_intent_locked",
+      "_candidate_observation_transition"
+    ],
+    [
+      "_restore_integrated_rebase_observation_intent_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_resume_pending_release",
+      "_complete_pending_release_locked"
+    ],
+    [
+      "_review_package",
+      "@state:ctx"
+    ],
+    [
+      "_run_bootstrap_generation",
+      "_run_bootstrap_generation_composite"
+    ],
+    [
+      "_run_bootstrap_generation_composite",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "_run_bootstrap_generation_composite",
+      "_bootstrap_fetch_argv"
+    ],
+    [
+      "_run_bootstrap_generation_composite",
+      "_release_scope_exceeded"
+    ],
+    [
+      "_run_bootstrap_generation_composite",
+      "_release_to_aborted"
+    ],
+    [
+      "_run_candidate_observation_locked",
+      "@state:ctx"
+    ],
+    [
+      "_run_candidate_observation_locked",
+      "_candidate_observation_transition"
+    ],
+    [
+      "_run_candidate_observation_locked",
+      "_restore_candidate_observation_intent_locked"
+    ],
+    [
+      "_run_candidate_observation_locked",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_carried_successor_ancestry",
+      "@state:ctx"
+    ],
+    [
+      "_run_carried_successor_ancestry",
+      "_epoch_replay_context"
+    ],
+    [
+      "_run_carried_successor_ancestry",
+      "_epoch_transition"
+    ],
+    [
+      "_run_carried_successor_ancestry",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_cleanup_child",
+      "@state:ctx"
+    ],
+    [
+      "_run_cleanup_child",
+      "_cleanup_result_locked"
+    ],
+    [
+      "_run_cleanup_child",
+      "_epoch_transition"
+    ],
+    [
+      "_run_cleanup_child",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_conflict_observation_locked",
+      "@state:ctx"
+    ],
+    [
+      "_run_conflict_observation_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_run_conflict_observation_locked",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_epoch_fetch",
+      "@state:ctx"
+    ],
+    [
+      "_run_epoch_fetch",
+      "_complete_epoch_fetch_locked"
+    ],
+    [
+      "_run_epoch_fetch",
+      "_epoch_fetch_argv"
+    ],
+    [
+      "_run_epoch_fetch",
+      "_epoch_transition"
+    ],
+    [
+      "_run_epoch_fetch",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_epoch_push",
+      "@state:ctx"
+    ],
+    [
+      "_run_epoch_push",
+      "_current_merge_authority"
+    ],
+    [
+      "_run_epoch_push",
+      "_epoch_transition"
+    ],
+    [
+      "_run_epoch_push",
+      "_final_history_mutation_mode"
+    ],
+    [
+      "_run_epoch_push",
+      "_park_invalid_final_history_mode"
+    ],
+    [
+      "_run_epoch_push",
+      "_push_classification"
+    ],
+    [
+      "_run_epoch_push",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "_run_epoch_push",
+      "_run_remote_observation"
+    ],
+    [
+      "_run_epoch_push",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_epoch_rebase",
+      "@state:ctx"
+    ],
+    [
+      "_run_epoch_rebase",
+      "_epoch_transition"
+    ],
+    [
+      "_run_epoch_rebase",
+      "_recover_rebase_observation_locked"
+    ],
+    [
+      "_run_epoch_rebase",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_epoch_suite",
+      "@state:ctx"
+    ],
+    [
+      "_run_epoch_suite",
+      "_admission_from_candidate_observation"
+    ],
+    [
+      "_run_epoch_suite",
+      "_epoch_transition"
+    ],
+    [
+      "_run_epoch_suite",
+      "_resolve_gate"
+    ],
+    [
+      "_run_epoch_suite",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "_run_epoch_suite",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_integrated_rebase_observation_locked",
+      "@state:ctx"
+    ],
+    [
+      "_run_integrated_rebase_observation_locked",
+      "_epoch_transition"
+    ],
+    [
+      "_run_integrated_rebase_observation_locked",
+      "_restore_integrated_rebase_observation_intent_locked"
+    ],
+    [
+      "_run_integrated_rebase_observation_locked",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_remote_observation",
+      "@state:ctx"
+    ],
+    [
+      "_run_remote_observation",
+      "_admission_from_candidate_observation"
+    ],
+    [
+      "_run_remote_observation",
+      "_epoch_transition"
+    ],
+    [
+      "_run_remote_observation",
+      "_parse_fetched_remote_observation"
+    ],
+    [
+      "_run_remote_observation",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "_run_remote_observation",
+      "_tail_event_digest"
+    ],
+    [
+      "_run_scoped_mutation",
+      "@state:ctx"
+    ],
+    [
+      "abort",
+      "_attempted_release_preconditions_locked"
+    ],
+    [
+      "abort",
+      "_halt"
+    ],
+    [
+      "abort",
+      "_load"
+    ],
+    [
+      "abort",
+      "_preflight_lifecycle"
+    ],
+    [
+      "abort",
+      "_recording_common_lock"
+    ],
+    [
+      "abort",
+      "_release_historical_landing_locked"
+    ],
+    [
+      "abort",
+      "_release_to_aborted_locked"
+    ],
+    [
+      "abort",
+      "_run_remote_observation"
+    ],
+    [
+      "abort",
+      "_tail_event_digest"
+    ],
+    [
+      "abort",
+      "_wrong_state"
+    ],
+    [
+      "approve",
+      "_halt"
+    ],
+    [
+      "approve",
+      "_load"
+    ],
+    [
+      "approve",
+      "_preflight_lifecycle"
+    ],
+    [
+      "approve",
+      "_wrong_state"
+    ],
+    [
+      "bind_candidate",
+      "@state:ctx"
+    ],
+    [
+      "cleanup_chain",
+      "_complete_pending_release_locked"
+    ],
+    [
+      "cleanup_chain",
+      "_halt"
+    ],
+    [
+      "cleanup_chain",
+      "_load"
+    ],
+    [
+      "cleanup_chain",
+      "_recording_common_lock"
+    ],
+    [
+      "cleanup_chain",
+      "_release_to_closed_locked"
+    ],
+    [
+      "cleanup_chain",
+      "_resume_pending_release"
+    ],
+    [
+      "cleanup_chain",
+      "_run_cleanup_child"
+    ],
+    [
+      "cleanup_chain",
+      "_wrong_state"
+    ],
+    [
+      "finalize",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "finalize",
+      "@state:ctx"
+    ],
+    [
+      "finalize",
+      "_begin_epoch"
+    ],
+    [
+      "finalize",
+      "_halt"
+    ],
+    [
+      "finalize",
+      "_load"
+    ],
+    [
+      "finalize",
+      "_park_integrated_review"
+    ],
+    [
+      "finalize",
+      "_preflight_lifecycle"
+    ],
+    [
+      "finalize",
+      "_prepare_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "finalize",
+      "_recording_common_lock"
+    ],
+    [
+      "finalize",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "finalize",
+      "_run_epoch_fetch"
+    ],
+    [
+      "finalize",
+      "_run_epoch_push"
+    ],
+    [
+      "finalize",
+      "_run_epoch_rebase"
+    ],
+    [
+      "finalize",
+      "_run_epoch_suite"
+    ],
+    [
+      "finalize",
+      "_run_remote_observation"
+    ],
+    [
+      "finalize",
+      "_wrong_state"
+    ],
+    [
+      "gate_run",
+      "@state:ctx"
+    ],
+    [
+      "gate_run",
+      "_halt"
+    ],
+    [
+      "gate_run",
+      "_load"
+    ],
+    [
+      "gate_run",
+      "_preflight_lifecycle"
+    ],
+    [
+      "gate_run",
+      "_record_gate_result"
+    ],
+    [
+      "gate_run",
+      "_resolve_gate"
+    ],
+    [
+      "gate_run",
+      "_run_scoped_mutation"
+    ],
+    [
+      "gate_run",
+      "_wrong_state"
+    ],
+    [
+      "recover",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "recover",
+      "@state:ctx"
+    ],
+    [
+      "recover",
+      "_begin_epoch"
+    ],
+    [
+      "recover",
+      "_complete_bootstrap_classification"
+    ],
+    [
+      "recover",
+      "_complete_epoch_fetch_locked"
+    ],
+    [
+      "recover",
+      "_complete_pending_release_locked"
+    ],
+    [
+      "recover",
+      "_epoch_transition"
+    ],
+    [
+      "recover",
+      "_finish_recovered_epoch_locked"
+    ],
+    [
+      "recover",
+      "_halt"
+    ],
+    [
+      "recover",
+      "_load"
+    ],
+    [
+      "recover",
+      "_prepare_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "recover",
+      "_read_only_recovery_flag_state"
+    ],
+    [
+      "recover",
+      "_record_foreign_git_locked"
+    ],
+    [
+      "recover",
+      "_recording_common_lock"
+    ],
+    [
+      "recover",
+      "_recover_can_reach_final_mode"
+    ],
+    [
+      "recover",
+      "_recover_classifying_bootstrap_locked"
+    ],
+    [
+      "recover",
+      "_recover_conflict_locked"
+    ],
+    [
+      "recover",
+      "_recover_rebase_observation_locked"
+    ],
+    [
+      "recover",
+      "_release_historical_landing_locked"
+    ],
+    [
+      "recover",
+      "_restore_candidate_observation_intent_locked"
+    ],
+    [
+      "recover",
+      "_resume_pending_release"
+    ],
+    [
+      "recover",
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "recover",
+      "_run_epoch_fetch"
+    ],
+    [
+      "recover",
+      "_run_epoch_push"
+    ],
+    [
+      "recover",
+      "_run_epoch_rebase"
+    ],
+    [
+      "recover",
+      "_run_remote_observation"
+    ],
+    [
+      "recover",
+      "_tail_event_digest"
+    ],
+    [
+      "recover",
+      "_wrong_state"
+    ],
+    [
+      "refresh",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "refresh",
+      "_admission_for_refresh"
+    ],
+    [
+      "refresh",
+      "_complete_bootstrap_classification"
+    ],
+    [
+      "refresh",
+      "_halt"
+    ],
+    [
+      "refresh",
+      "_load"
+    ],
+    [
+      "refresh",
+      "_preflight_lifecycle"
+    ],
+    [
+      "refresh",
+      "_prepare_bootstrap_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "refresh",
+      "_recording_common_lock"
+    ],
+    [
+      "refresh",
+      "_refresh_iteration"
+    ],
+    [
+      "refresh",
+      "_run_bootstrap_generation"
+    ],
+    [
+      "review_attach",
+      "@state:ctx"
+    ],
+    [
+      "review_attach",
+      "_halt"
+    ],
+    [
+      "review_attach",
+      "_load"
+    ],
+    [
+      "review_attach",
+      "_preflight_lifecycle"
+    ],
+    [
+      "review_attach",
+      "_wrong_state"
+    ],
+    [
+      "review_collect",
+      "_load"
+    ],
+    [
+      "review_collect",
+      "_preflight_lifecycle"
+    ],
+    [
+      "review_collect",
+      "_wrong_state"
+    ],
+    [
+      "review_disposition",
+      "_halt"
+    ],
+    [
+      "review_disposition",
+      "_load"
+    ],
+    [
+      "review_disposition",
+      "_preflight_lifecycle"
+    ],
+    [
+      "review_disposition",
+      "_wrong_state"
+    ],
+    [
+      "review_request",
+      "@state:ctx"
+    ],
+    [
+      "review_request",
+      "_halt"
+    ],
+    [
+      "review_request",
+      "_load"
+    ],
+    [
+      "review_request",
+      "_preflight_lifecycle"
+    ],
+    [
+      "review_request",
+      "_review_package"
+    ],
+    [
+      "review_request",
+      "_wrong_state"
+    ],
+    [
+      "start",
+      "@state:ctx"
+    ],
+    [
+      "start_chain",
+      "@state:_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "start_chain",
+      "@state:ctx"
+    ],
+    [
+      "start_chain",
+      "_allocate_chain_id"
+    ],
+    [
+      "start_chain",
+      "_claim_slot"
+    ],
+    [
+      "start_chain",
+      "_complete_bootstrap_classification"
+    ],
+    [
+      "start_chain",
+      "_initial_merge_state"
+    ],
+    [
+      "start_chain",
+      "_prepare_bootstrap_git_no_lazy_fetch_qualification"
+    ],
+    [
+      "start_chain",
+      "_recording_common_lock"
+    ],
+    [
+      "start_chain",
+      "_run_bootstrap_generation"
+    ],
+    [
+      "status",
+      "_load"
+    ],
+    [
+      "store",
+      "@state:ctx"
+    ],
+    [
+      "verify",
+      "@state:ctx"
+    ],
+    [
+      "verify",
+      "_load"
+    ],
+    [
+      "verify",
+      "_preflight_lifecycle"
+    ],
+    [
+      "verify",
+      "_wrong_state"
+    ],
+    [
+      "verify",
+      "gate_run"
+    ]
+  ],
+  "clusters": [
+    [
+      "__init__"
+    ],
+    [
+      "_final_mode_unavailable",
+      "_prepare_git_no_lazy_fetch_qualification",
+      "_recover_can_reach_final_mode",
+      "_read_only_recovery_flag_state",
+      "_candidate_observation_transition",
+      "_restore_candidate_observation_intent_locked",
+      "_restore_bootstrap_fetch_observation_locked",
+      "_resolve_gate",
+      "_sealed_plan",
+      "_begin_epoch",
+      "_epoch_fetch_argv",
+      "_epoch_replay_context",
+      "_resolved_epoch_fetch_tip",
+      "_run_carried_successor_ancestry",
+      "_run_epoch_fetch",
+      "_complete_epoch_fetch_locked",
+      "_run_epoch_rebase",
+      "_run_epoch_suite",
+      "_push_classification",
+      "_final_history_mutation_mode",
+      "_park_invalid_final_history_mode",
+      "_run_epoch_push",
+      "_park_integrated_review",
+      "_current_merge_authority",
+      "_record_foreign_git_locked",
+      "_finish_recovered_epoch_locked",
+      "_recover_classifying_bootstrap_locked",
+      "recover",
+      "finalize"
+    ],
+    [
+      "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+      "_claim_slot",
+      "_allocate_chain_id",
+      "_initial_merge_state",
+      "_run_bootstrap_generation",
+      "_complete_bootstrap_classification",
+      "start_chain",
+      "_admission_for_refresh",
+      "_refresh_iteration",
+      "refresh"
+    ],
+    [
+      "store"
+    ],
+    [
+      "_record_common_release_failure"
+    ],
+    [
+      "start"
+    ],
+    [
+      "bind_candidate"
+    ],
+    [
+      "_record_bootstrap_failure"
+    ],
+    [
+      "_bootstrap_fetch_argv",
+      "_run_bootstrap_generation_composite",
+      "_release_to_aborted",
+      "_release_scope_exceeded"
+    ],
+    [
+      "_resolved_fetch_tip"
+    ],
+    [
+      "_recover_merge_bootstrap_scope_binding",
+      "_bootstrap_pending_classification_inputs_locked",
+      "_recover_classifying_bootstrap_v12_locked"
+    ],
+    [
+      "approve"
+    ],
+    [
+      "_release_to_aborted_locked",
+      "abort",
+      "_attempted_release_preconditions_locked",
+      "_release_historical_landing_locked"
+    ],
+    [
+      "status"
+    ],
+    [
+      "_run_scoped_mutation",
+      "_record_gate_result",
+      "gate_run",
+      "verify"
+    ],
+    [
+      "_review_package",
+      "review_request"
+    ],
+    [
+      "review_collect"
+    ],
+    [
+      "review_attach"
+    ],
+    [
+      "review_disposition"
+    ],
+    [
+      "_parse_remote_observation"
+    ],
+    [
+      "_parse_fetched_remote_observation"
+    ],
+    [
+      "_head_contained"
+    ],
+    [
+      "_release_to_closed_locked",
+      "_complete_pending_release_locked",
+      "_resume_pending_release",
+      "cleanup_chain"
+    ],
+    [
+      "_cleanup_result_locked",
+      "_run_cleanup_child"
+    ],
+    [
+      "_restore_integrated_rebase_observation_intent_locked",
+      "_run_integrated_rebase_observation_locked",
+      "_materialize_rebase_success_locked",
+      "_recover_rebase_observation_locked",
+      "_run_conflict_observation_locked",
+      "_recover_conflict_locked"
+    ],
+    [
+      "_epoch_transition"
+    ],
+    [
+      "_tail_event_digest"
+    ],
+    [
+      "_load"
+    ],
+    [
+      "_wrong_state"
+    ],
+    [
+      "_halt"
+    ],
+    [
+      "_preflight_lifecycle"
+    ],
+    [
+      "_run_candidate_observation_locked"
+    ],
+    [
+      "_recording_common_lock"
+    ],
+    [
+      "_run_remote_observation"
+    ],
+    [
+      "_admission_from_candidate_observation"
+    ]
+  ],
+  "hubs": [
+    "@state:ctx",
+    "_epoch_transition",
+    "_tail_event_digest",
+    "_load",
+    "_wrong_state",
+    "_halt",
+    "_preflight_lifecycle",
+    "@state:_git_no_lazy_fetch_qualification",
+    "_run_candidate_observation_locked",
+    "_recording_common_lock",
+    "_run_remote_observation",
+    "_admission_from_candidate_observation"
+  ],
+  "prerequisites": [],
+  "census": [
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 1160,
+      "kind": "unbound-call",
+      "text": "CLI.MergeEngine._push_classification(result, destination)"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 5097,
+      "kind": "unbound-call",
+      "text": "CLI.MergeEngine._push_classification(result(exact), destination)"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 5110,
+      "kind": "unbound-call",
+      "text": "CLI.MergeEngine._push_classification(result(malformed), destination)"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 5248,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.MergeEngine, '_complete_epoch_fetch_locked', side_effect=lambda *_args, **_kwargs: os.kill(os.getpid(), signal.SIGKILL))"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 5311,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.MergeEngine, '_complete_epoch_fetch_locked', side_effect=RawFetchBoundary('park after the durable raw fetch'))"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 5400,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.MergeEngine, '_complete_epoch_fetch_locked', side_effect=RawFetchBoundary('park after the durable raw fetch'))"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 5415,
+      "kind": "unbound-read",
+      "text": "CLI.MergeEngine._run_carried_successor_ancestry"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 5423,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.MergeEngine, '_run_carried_successor_ancestry', autospec=True, side_effect=kill_after_result)"
+    },
+    {
+      "path": "tests/test_cli_merge_integration.py",
+      "line": 6567,
+      "kind": "patch-or-reflection",
+      "text": "mock.patch.object(CLI.MergeEngine, '_head_contained', side_effect=AssertionError('cleanup used unfenced merge-base'))"
+    }
+  ],
+  "census_complete": false
+}

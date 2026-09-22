@@ -1,0 +1,15 @@
+# focused merge test set on the FINAL sim tree (29 clusters applied), exact command:
+# python3 -m unittest tests.test_cli_merge_adapters tests.test_cli_merge_store tests.test_cli_merge_lifecycle tests.test_cli_merge_integration tests.test_cli_merge_integration_shard1 tests.test_cli_merge_integration_shard2 tests.test_cli_loader
+# (tail of the log; the full log stays in the sim scratch)
+# sim HEAD in the trailer may read 7faa07f: that is a0e86fc (c29) plus one evidence-only commit touching only
+# .refactor/merge-engine-sim-results.json and .refactor/merge-engine-sim-final.txt (git diff over scripts/ tests/ pyproject.toml is empty),
+# made while this run was in progress.
+
+..............................forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating merge chains
+forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating commit chains
+.........................................................................................................................................................................................................................
+----------------------------------------------------------------------
+Ran 247 tests in 622.450s
+
+OK
+[exit 0] [wall 623 s] [sim HEAD 7faa07f]

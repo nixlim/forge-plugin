@@ -1,0 +1,15 @@
+# finalize layer row probe (separate worktree of the final sim tree): row inserted between _merge_engine and the _admission row
+    "_engine_abort | _engine_bootstrap | _engine_cleanup | _engine_cleanup_child | _engine_conflict_observation | _engine_epoch_ancestry | _engine_epoch_fetch | _engine_epoch_push | _engine_epoch_rebase | _engine_epoch_suite | _engine_final_mode | _engine_finalize | _engine_gate | _engine_lifecycle | _engine_lock | _engine_observation | _engine_observe_remote | _engine_rebase_recovery | _engine_recover | _engine_recover_bootstrap | _engine_recover_conflict | _engine_refresh | _engine_release_aborted | _engine_release_pending | _engine_review_request | _engine_review_verdict | _engine_start_chain",
+--------------------------------------
+
+forge_cli layers KEPT (3 ignored imports)
+forge_cli.chain_core layers KEPT (3 ignored imports)
+forge_cli.engine layers KEPT (3 ignored imports)
+forge_cli.app layers KEPT (3 ignored imports)
+codex_orchestrator does not import forge_cli KEPT (4 ignored imports)
+
+Contracts: 5 kept, 0 broken.
+[exit ]
+
+# which _engine_* modules import the bottom-row app modules (must sit above them):
+_engine_lifecycle.py _engine_review_request.py _engine_epoch_suite.py _engine_review_verdict.py _engine_epoch_push.py _engine_gate.py _engine_recover.py _engine_epoch_fetch.py _engine_finalize.py _engine_rebase_recovery.py _engine_refresh.py _engine_start_chain.py 

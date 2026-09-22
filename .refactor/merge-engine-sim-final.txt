@@ -1,0 +1,414 @@
+# final sim tree: a0e86fc (29 cluster commits on P0,P1,P2,P0b over d885f97)
+
+## ruff check scripts/forge/forge_cli (glob WITH UP037 in place)
+All checks passed!
+[exit 0]
+
+## check_file_length over the app package (provisional entries in .refactor-baseline.json)
+ok: 33 files within budget (max 500)
+[exit 0]
+
+## code lines per app module (check_file_length semantics)
+    47  scripts/forge/forge_cli/app/__init__.py
+   202  scripts/forge/forge_cli/app/_admission.py
+   200  scripts/forge/forge_cli/app/_candidate_observation.py
+   298  scripts/forge/forge_cli/app/_dispatch.py
+   419  scripts/forge/forge_cli/app/_engine_abort.py
+   479  scripts/forge/forge_cli/app/_engine_bootstrap.py
+   438  scripts/forge/forge_cli/app/_engine_cleanup.py
+   311  scripts/forge/forge_cli/app/_engine_cleanup_child.py
+   240  scripts/forge/forge_cli/app/_engine_conflict_observation.py
+   286  scripts/forge/forge_cli/app/_engine_epoch_ancestry.py
+   446  scripts/forge/forge_cli/app/_engine_epoch_fetch.py
+   251  scripts/forge/forge_cli/app/_engine_epoch_push.py
+   449  scripts/forge/forge_cli/app/_engine_epoch_rebase.py
+   392  scripts/forge/forge_cli/app/_engine_epoch_suite.py
+   312  scripts/forge/forge_cli/app/_engine_final_mode.py
+   183  scripts/forge/forge_cli/app/_engine_finalize.py
+   396  scripts/forge/forge_cli/app/_engine_gate.py
+   318  scripts/forge/forge_cli/app/_engine_lifecycle.py
+   591  scripts/forge/forge_cli/app/_engine_lock.py  over 500 (baseline entry + debt row)
+   338  scripts/forge/forge_cli/app/_engine_observation.py
+   495  scripts/forge/forge_cli/app/_engine_observe_remote.py
+   356  scripts/forge/forge_cli/app/_engine_rebase_recovery.py
+   621  scripts/forge/forge_cli/app/_engine_recover.py  over 500 (baseline entry + debt row)
+   397  scripts/forge/forge_cli/app/_engine_recover_bootstrap.py
+   830  scripts/forge/forge_cli/app/_engine_recover_conflict.py  over 500 (baseline entry + debt row)
+   291  scripts/forge/forge_cli/app/_engine_refresh.py
+   321  scripts/forge/forge_cli/app/_engine_release_aborted.py
+   277  scripts/forge/forge_cli/app/_engine_release_pending.py
+   231  scripts/forge/forge_cli/app/_engine_review_request.py
+   315  scripts/forge/forge_cli/app/_engine_review_verdict.py
+   454  scripts/forge/forge_cli/app/_engine_start_chain.py
+   224  scripts/forge/forge_cli/app/_merge_engine.py
+   184  scripts/forge/forge_cli/app/_mutation_journal.py
+
+## lint-imports (contract unchanged)
+
+---------
+Contracts
+---------
+
+Analyzed 131 files, 1439 dependencies.
+--------------------------------------
+
+forge_cli layers KEPT (3 ignored imports)
+forge_cli.chain_core layers KEPT (3 ignored imports)
+forge_cli.engine layers KEPT (3 ignored imports)
+forge_cli.app layers KEPT (3 ignored imports)
+codex_orchestrator does not import forge_cli KEPT (4 ignored imports)
+
+Contracts: 5 kept, 0 broken.
+[exit 0]
+
+## type check vs the P1 baseline (234)
+types ok: 234 error(s), all grandfathered (0 fixed since baseline)
+[exit 0]
+== final tree: total=234 baseline=234 NEW=0 GONE=0
+
+## per-module ruff codes with the P0 glob DISABLED (finalize per-file-ignores table)
+[ruff exit 1 with glob removed]
+[pyproject.toml restored, tree clean]
+  _engine_abort.py: ['B905', 'C901', 'E501', 'PLR0912', 'PLR0915', 'PLR1702', 'UP035', 'UP037']   counts={'B905': 1, 'C901': 1, 'E501': 2, 'PLR0912': 1, 'PLR0915': 1, 'PLR1702': 1, 'UP035': 1, 'UP037': 2}
+  _engine_bootstrap.py: ['C901', 'PLR0913', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 1, 'PLR0913': 2, 'PLR0915': 1, 'UP035': 1, 'UP037': 2}
+  _engine_cleanup.py: ['C901', 'F841', 'PLR0912', 'PLR0915', 'PLR1702', 'UP035', 'UP037']   counts={'C901': 1, 'F841': 2, 'PLR0912': 1, 'PLR0915': 1, 'PLR1702': 4, 'UP035': 1, 'UP037': 1}
+  _engine_cleanup_child.py: ['PLR0913', 'UP035', 'UP037']   counts={'PLR0913': 1, 'UP035': 1, 'UP037': 3}
+  _engine_conflict_observation.py: ['B023', 'C901', 'PLR0911', 'PLR0915', 'UP035', 'UP037']   counts={'B023': 4, 'C901': 1, 'PLR0911': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 1}
+  _engine_epoch_ancestry.py: ['C901', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 2}
+  _engine_epoch_fetch.py: ['C901', 'PLR0912', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 1, 'PLR0912': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 3}
+  _engine_epoch_push.py: ['C901', 'E501', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 1, 'E501': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 1}
+  _engine_epoch_rebase.py: ['C901', 'E501', 'PLR0911', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 1, 'E501': 1, 'PLR0911': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 3}
+  _engine_epoch_suite.py: ['B023', 'C901', 'E731', 'PLR0912', 'PLR0915', 'PLR1702', 'UP035', 'UP037']   counts={'B023': 29, 'C901': 1, 'E731': 1, 'PLR0912': 1, 'PLR0915': 1, 'PLR1702': 1, 'UP035': 1, 'UP037': 1}
+  _engine_final_mode.py: ['C901', 'PLR0911', 'PLR0912', 'UP035', 'UP037']   counts={'C901': 1, 'PLR0911': 1, 'PLR0912': 1, 'UP035': 1, 'UP037': 6}
+  _engine_finalize.py: ['E501', 'UP035', 'UP037']   counts={'E501': 3, 'UP035': 1, 'UP037': 3}
+  _engine_gate.py: ['PLR0913', 'UP035', 'UP037']   counts={'PLR0913': 1, 'UP035': 1, 'UP037': 5}
+  _engine_lifecycle.py: ['C901', 'E501', 'PLR0912', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 1, 'E501': 1, 'PLR0912': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 5}
+  _engine_lock.py: ['C901', 'PLR0912', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 2, 'PLR0912': 1, 'PLR0915': 2, 'UP035': 1, 'UP037': 2}
+  _engine_observation.py: ['B023', 'PLR0911', 'PLR0913', 'UP012', 'UP035', 'UP037']   counts={'B023': 4, 'PLR0911': 1, 'PLR0913': 1, 'UP012': 1, 'UP035': 1, 'UP037': 4}
+  _engine_observe_remote.py: ['B023', 'B905', 'C901', 'PLR0912', 'PLR0913', 'PLR0915', 'PLR1702', 'UP035', 'UP037']   counts={'B023': 5, 'B905': 1, 'C901': 1, 'PLR0912': 1, 'PLR0913': 1, 'PLR0915': 1, 'PLR1702': 1, 'UP035': 1, 'UP037': 1}
+  _engine_rebase_recovery.py: ['C901', 'PLR0911', 'PLR0912', 'PLR0913', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 1, 'PLR0911': 1, 'PLR0912': 1, 'PLR0913': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 3}
+  _engine_recover.py: ['C901', 'E501', 'PLR0912', 'PLR0915', 'PLR1702', 'UP035', 'UP037']   counts={'C901': 1, 'E501': 1, 'PLR0912': 1, 'PLR0915': 1, 'PLR1702': 13, 'UP035': 1, 'UP037': 1}
+  _engine_recover_bootstrap.py: ['UP035', 'UP037']   counts={'UP035': 1, 'UP037': 4}
+  _engine_recover_conflict.py: ['B904', 'C901', 'E501', 'F841', 'PLR0911', 'PLR0912', 'PLR0913', 'PLR0915', 'UP035', 'UP037']   counts={'B904': 1, 'C901': 2, 'E501': 3, 'F841': 1, 'PLR0911': 2, 'PLR0912': 1, 'PLR0913': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 1}
+  _engine_refresh.py: ['F841', 'UP035', 'UP037']   counts={'F841': 2, 'UP035': 1, 'UP037': 4}
+  _engine_release_aborted.py: ['UP035', 'UP037']   counts={'UP035': 1, 'UP037': 3}
+  _engine_release_pending.py: ['C901', 'PLR0912', 'UP035', 'UP037']   counts={'C901': 1, 'PLR0912': 1, 'UP035': 1, 'UP037': 3}
+  _engine_review_request.py: ['UP012', 'UP035', 'UP037']   counts={'UP012': 2, 'UP035': 1, 'UP037': 3}
+  _engine_review_verdict.py: ['C901', 'E501', 'PLR0912', 'PLR0915', 'UP035', 'UP037']   counts={'C901': 2, 'E501': 1, 'PLR0912': 1, 'PLR0915': 1, 'UP035': 1, 'UP037': 2}
+  _engine_start_chain.py: ['UP035', 'UP037']   counts={'UP035': 1, 'UP037': 6}
+  UNION over _engine_*.py: ['B023', 'B904', 'B905', 'C901', 'E501', 'E731', 'F841', 'PLR0911', 'PLR0912', 'PLR0913', 'PLR0915', 'PLR1702', 'UP012', 'UP035', 'UP037']
+
+## quality.py over the app package
+[exit 1]
+
+{
+  "limits": {
+    "module_target": 500,
+    "module_ceiling": 1000,
+    "function_target": 150,
+    "class_target": 30,
+    "max_parameters": 6,
+    "plain_decorators": [
+      "_serialize_worktree_command"
+    ]
+  },
+  "modules": {
+    "scripts/forge/forge_cli/app/_admission.py": {
+      "code_lines": 202,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "prepare_merge_admission",
+          "line": 10,
+          "size": 198
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_candidate_observation.py": {
+      "code_lines": 200,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_observe_current_merge_candidate",
+          "line": 10,
+          "size": 195
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_dispatch.py": {
+      "code_lines": 298,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_abort.py": {
+      "code_lines": 419,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "abort",
+          "line": 14,
+          "size": 257
+        },
+        {
+          "kind": "function",
+          "name": "_attempted_release_preconditions_locked",
+          "line": 272,
+          "size": 157
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_bootstrap.py": {
+      "code_lines": 479,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_bootstrap_generation_composite",
+          "line": 68,
+          "size": 412
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_cleanup_child.py": {
+      "code_lines": 311,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_cleanup_child",
+          "line": 161,
+          "size": 167
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_cleanup.py": {
+      "code_lines": 438,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "cleanup_chain",
+          "line": 13,
+          "size": 453
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_conflict_observation.py": {
+      "code_lines": 240,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_conflict_observation_locked",
+          "line": 16,
+          "size": 235
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py": {
+      "code_lines": 286,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_carried_successor_ancestry",
+          "line": 33,
+          "size": 264
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_fetch.py": {
+      "code_lines": 446,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_complete_epoch_fetch_locked",
+          "line": 252,
+          "size": 213
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_push.py": {
+      "code_lines": 251,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_epoch_push",
+          "line": 47,
+          "size": 213
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_rebase.py": {
+      "code_lines": 449,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_epoch_rebase",
+          "line": 15,
+          "size": 154
+        },
+        {
+          "kind": "function",
+          "name": "_run_integrated_rebase_observation_locked",
+          "line": 231,
+          "size": 236
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_suite.py": {
+      "code_lines": 392,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_epoch_suite",
+          "line": 18,
+          "size": 382
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_finalize.py": {
+      "code_lines": 183,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_final_mode.py": {
+      "code_lines": 312,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_gate.py": {
+      "code_lines": 396,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_lifecycle.py": {
+      "code_lines": 318,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_lock.py": {
+      "code_lines": 591,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_recording_common_lock",
+          "line": 52,
+          "size": 559
+        },
+        {
+          "kind": "function",
+          "name": "lifecycle_classification",
+          "line": 86,
+          "size": 349
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_observation.
+
+## census + structure probes
+PASS  patch.object(_complete_epoch_fetch_locked): mock installed, side_effect reached through instance, original restored  [module=forge_cli.app._engine_epoch_fetch name=_complete_epoch_fetch_locked]
+PASS  staticmethod binding _push_classification: class dict holds staticmethod, class access yields plain function, instance access too  [type=staticmethod module=forge_cli.app._engine_epoch_push params=['result', 'destination_ref']]
+PASS  autospec patch of _run_carried_successor_ancestry: signature introspectable, self passed, restored  [sig=(self: "'MergeEngine'", state: 'dict[str, Any]', fetched_tip: 'str', lock: 'chain_core.CommonRebaseLock', lease: 'chain_core.ChainLease', *, resume_intent: 'bool' = False) -> 'tuple[dict[str, Any], bool | None]' first_param_annotation="'MergeEngine'"]
+PASS  contextmanager binding _recording_common_lock: function with __wrapped__ generator function in _engine_lock, name preserved  [module=forge_cli.app._engine_lock name=_recording_common_lock qualname=_recording_common_lock return_annotation='Iterator[chain_core.CommonRebaseLock]']
+PASS  patch.object(_head_contained) tripwire: fires while patched; staticmethod object restored afterwards  [staticmethod]
+PASS  classmethod binding _recover_can_reach_final_mode: classmethod in class dict, bound to the class  [module=forge_cli.app._engine_final_mode]
+PASS  store is a property defined in _merge_engine; __init__ defined in _merge_engine  []
+PASS  all 93 method names still in MergeEngine.__dict__  [missing=[]]
+PASS  class body: 7 defs + 86 bindings  [defs=['__init__', 'store', '_load', '_halt', '_wrong_state', '_epoch_transition', '_tail_event_digest'] bindings=86]
+PASS  no _engine_* module imports _merge_engine at runtime or another _engine_* (only the TYPE_CHECKING class import is nested)  [[]]
+PASS  app/__init__.py byte-identical to d885f97 (so __all__ verbatim)  ['MergeEngine' in __all__=True; _engine names in __all__=[]]
+PASS  each _engine_* module imports first in a fresh interpreter  [[]]
+
+probes failed: 0
+[exit 0]
+
+## through-module reader check for pruned imports
+pruned names (union over 11 manifests with removals): 19
+['Callable', 'Iterator', 'Outcome', 'Policy', 'Sequence', '_observe_current_merge_candidate', '_persist_deferred_mutation_result', 'base64', 'copy', 'dataclasses', 'os', 'prepare_merge_admission', 're', 'runtime', 'secrets', 'sha256_bytes', 'socket', 'stat', 'sys']
+
+lines mentioning the module path `_merge_engine` outside the module itself: 35
+  .forge/evals/tasks/fr230-phase3-4-v2.manifest.json:55: "scripts/forge/forge_cli/app/_merge_engine.py",  -> not a reader of a pruned name 
+  .refactor-baseline.json:12: "scripts/forge/forge_cli/app/_merge_engine.py": 10302,  -> not a reader of a pruned name 
+  docs/specs/forge-plugin-spec.md:117: - `scripts/forge/forge_cli/` — the Python-interpreter-loaded package the Forge CLI is being split into (bead forge-plugin-95e): `scripts/forge/cli.py` remains t  -> not a reader of a pruned name 
+  pyproject.toml:64: "scripts/forge/forge_cli/app/_merge_engine.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "P  -> not a reader of a pruned name 
+  pyproject.toml:331: "_merge_engine",  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/__init__.py:8: ``MergeEngine`` class in ``_merge_engine``, and the shared chain-verb router, ``dispatch``  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/__init__.py:36: from ._merge_engine import MergeEngine as MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_dispatch.py:4: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_abort.py:12: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_bootstrap.py:11: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_cleanup.py:11: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_cleanup_child.py:13: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_conflict_observation.py:14: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_epoch_ancestry.py:11: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_epoch_fetch.py:15: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_epoch_push.py:13: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_epoch_rebase.py:13: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_epoch_suite.py:16: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_final_mode.py:17: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_finalize.py:12: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_gate.py:17: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_lifecycle.py:12: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_lock.py:12: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_observation.py:13: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_observe_remote.py:13: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_rebase_recovery.py:14: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_recover.py:12: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_recover_bootstrap.py:10: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_recover_conflict.py:13: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_refresh.py:15: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_release_aborted.py:12: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_release_pending.py:10: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_review_request.py:12: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_review_verdict.py:14: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+  scripts/forge/forge_cli/app/_engine_start_chain.py:16: from forge_cli.app._merge_engine import MergeEngine  -> not a reader of a pruned name 
+
+patch_app/patch_engine/patch_chain_core sites naming a pruned name (EXCLUDED: package-root + pkgutil patching, never through _merge_engine): 4
+
+RESULT: through-module readers of pruned names = 0 -> no cluster needs --retain-module-api
+[exit 0]

@@ -1,0 +1,1477 @@
+[
+ {
+  "id": "c01",
+  "name": "final_mode",
+  "dest": "_engine_final_mode.py",
+  "methods": [
+   "_final_mode_unavailable",
+   "_prepare_git_no_lazy_fetch_qualification",
+   "_prepare_bootstrap_git_no_lazy_fetch_qualification",
+   "_final_history_mutation_mode",
+   "_park_invalid_final_history_mode",
+   "_current_merge_authority"
+  ],
+  "dest_code_lines": 177,
+  "source_code_lines": 10138,
+  "bindings": [
+   "_final_mode_unavailable = staticmethod(_engine_final_mode._final_mode_unavailable)",
+   "_prepare_git_no_lazy_fetch_qualification = _engine_final_mode._prepare_git_no_lazy_fetch_qualification",
+   "_prepare_bootstrap_git_no_lazy_fetch_qualification = _engine_final_mode._prepare_bootstrap_git_no_lazy_fetch_qualification",
+   "_final_history_mutation_mode = _engine_final_mode._final_history_mutation_mode",
+   "_park_invalid_final_history_mode = _engine_final_mode._park_invalid_final_history_mode",
+   "_current_merge_authority = staticmethod(_engine_final_mode._current_merge_authority)"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_final_mode"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_final_mode.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c01 final_mode -> _engine_final_mode.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "560cc17"
+ },
+ {
+  "id": "c02",
+  "name": "gate",
+  "dest": "_engine_gate.py",
+  "methods": [
+   "_resolve_gate",
+   "_run_scoped_mutation",
+   "_record_gate_result",
+   "gate_run",
+   "verify"
+  ],
+  "dest_code_lines": 396,
+  "source_code_lines": 9762,
+  "bindings": [
+   "_resolve_gate = _engine_gate._resolve_gate",
+   "_run_scoped_mutation = _engine_gate._run_scoped_mutation",
+   "_record_gate_result = _engine_gate._record_gate_result",
+   "gate_run = _engine_gate.gate_run",
+   "verify = _engine_gate.verify"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "import re",
+   "import secrets",
+   "import sys",
+   "from pathlib import Path",
+   "from typing import Any, Mapping, Sequence",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from forge_cli.policy import Policy, sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_gate"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_gate.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c02 gate -> _engine_gate.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "adf8ea7"
+ },
+ {
+  "id": "c03",
+  "name": "final_mode_recover",
+  "dest": "_engine_final_mode.py",
+  "methods": [
+   "_recover_can_reach_final_mode",
+   "_read_only_recovery_flag_state"
+  ],
+  "dest_code_lines": 312,
+  "source_code_lines": 9634,
+  "bindings": [
+   "_recover_can_reach_final_mode = classmethod(_engine_final_mode._recover_can_reach_final_mode)",
+   "_read_only_recovery_flag_state = _engine_final_mode._read_only_recovery_flag_state"
+  ],
+  "dest_imports": [
+   "from forge_cli.envelope import ReasonCode"
+  ],
+  "source_imports": [],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_final_mode.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c03 final_mode_recover -> _engine_final_mode.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "41ce352"
+ },
+ {
+  "id": "c04",
+  "name": "lifecycle",
+  "dest": "_engine_lifecycle.py",
+  "methods": [
+   "start",
+   "bind_candidate",
+   "_preflight_lifecycle",
+   "approve",
+   "status"
+  ],
+  "dest_code_lines": 318,
+  "source_code_lines": 9331,
+  "bindings": [
+   "start = _engine_lifecycle.start",
+   "bind_candidate = _engine_lifecycle.bind_candidate",
+   "_preflight_lifecycle = _engine_lifecycle._preflight_lifecycle",
+   "approve = _engine_lifecycle.approve",
+   "status = _engine_lifecycle.status"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.app._admission import prepare_merge_admission",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_lifecycle"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_lifecycle.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c04 lifecycle -> _engine_lifecycle.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "78d7dd5"
+ },
+ {
+  "id": "c05",
+  "name": "review_request",
+  "dest": "_engine_review_request.py",
+  "methods": [
+   "_review_package",
+   "review_request",
+   "review_collect"
+  ],
+  "dest_code_lines": 231,
+  "source_code_lines": 9113,
+  "bindings": [
+   "_review_package = _engine_review_request._review_package",
+   "review_request = _engine_review_request.review_request",
+   "review_collect = _engine_review_request.review_collect"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from typing import Any, Mapping, Sequence",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from forge_cli.policy import Policy, sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_review_request"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_review_request.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c05 review_request -> _engine_review_request.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "239074e"
+ },
+ {
+  "id": "c06",
+  "name": "review_verdict",
+  "dest": "_engine_review_verdict.py",
+  "methods": [
+   "review_attach",
+   "review_disposition"
+  ],
+  "dest_code_lines": 315,
+  "source_code_lines": 8811,
+  "bindings": [
+   "review_attach = _engine_review_verdict.review_attach",
+   "review_disposition = _engine_review_verdict.review_disposition"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "import stat",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_review_verdict"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "stat"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_review_verdict.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c06 review_verdict -> _engine_review_verdict.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "8cb3461"
+ },
+ {
+  "id": "c07",
+  "name": "refresh",
+  "dest": "_engine_refresh.py",
+  "methods": [
+   "_admission_from_candidate_observation",
+   "_admission_for_refresh",
+   "_refresh_iteration",
+   "refresh"
+  ],
+  "dest_code_lines": 291,
+  "source_code_lines": 8536,
+  "bindings": [
+   "_admission_from_candidate_observation = _engine_refresh._admission_from_candidate_observation",
+   "_admission_for_refresh = _engine_refresh._admission_for_refresh",
+   "_refresh_iteration = _engine_refresh._refresh_iteration",
+   "refresh = _engine_refresh.refresh"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import dataclasses",
+   "import secrets",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.app._admission import prepare_merge_admission",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_refresh"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "dataclasses"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_refresh.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c07 refresh -> _engine_refresh.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "ce6a5e3"
+ },
+ {
+  "id": "c08",
+  "name": "start_chain",
+  "dest": "_engine_start_chain.py",
+  "methods": [
+   "_claim_slot",
+   "_allocate_chain_id",
+   "_initial_merge_state",
+   "_record_bootstrap_failure",
+   "_complete_bootstrap_classification",
+   "start_chain"
+  ],
+  "dest_code_lines": 454,
+  "source_code_lines": 8100,
+  "bindings": [
+   "_claim_slot = _engine_start_chain._claim_slot",
+   "_allocate_chain_id = _engine_start_chain._allocate_chain_id",
+   "_initial_merge_state = _engine_start_chain._initial_merge_state",
+   "_record_bootstrap_failure = _engine_start_chain._record_bootstrap_failure",
+   "_complete_bootstrap_classification = _engine_start_chain._complete_bootstrap_classification",
+   "start_chain = _engine_start_chain.start_chain"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "import secrets",
+   "import socket",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.app._admission import prepare_merge_admission",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_start_chain"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "prepare_merge_admission",
+    "socket"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_start_chain.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c08 start_chain -> _engine_start_chain.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "2efc671"
+ },
+ {
+  "id": "c09",
+  "name": "bootstrap",
+  "dest": "_engine_bootstrap.py",
+  "methods": [
+   "_bootstrap_fetch_argv",
+   "_resolved_fetch_tip",
+   "_run_bootstrap_generation_composite",
+   "_run_bootstrap_generation"
+  ],
+  "dest_code_lines": 479,
+  "source_code_lines": 7632,
+  "bindings": [
+   "_bootstrap_fetch_argv = staticmethod(_engine_bootstrap._bootstrap_fetch_argv)",
+   "_resolved_fetch_tip = staticmethod(_engine_bootstrap._resolved_fetch_tip)",
+   "_run_bootstrap_generation_composite = _engine_bootstrap._run_bootstrap_generation_composite",
+   "_run_bootstrap_generation = _engine_bootstrap._run_bootstrap_generation"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_bootstrap"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_bootstrap.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c09 bootstrap -> _engine_bootstrap.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "23900c8"
+ },
+ {
+  "id": "c10",
+  "name": "release_aborted",
+  "dest": "_engine_release_aborted.py",
+  "methods": [
+   "_release_to_aborted",
+   "_release_to_aborted_locked",
+   "_release_scope_exceeded"
+  ],
+  "dest_code_lines": 321,
+  "source_code_lines": 7324,
+  "bindings": [
+   "_release_to_aborted = _engine_release_aborted._release_to_aborted",
+   "_release_to_aborted_locked = _engine_release_aborted._release_to_aborted_locked",
+   "_release_scope_exceeded = _engine_release_aborted._release_scope_exceeded"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_release_aborted"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_release_aborted.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c10 release_aborted -> _engine_release_aborted.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "7039024"
+ },
+ {
+  "id": "c11",
+  "name": "abort",
+  "dest": "_engine_abort.py",
+  "methods": [
+   "abort",
+   "_attempted_release_preconditions_locked"
+  ],
+  "dest_code_lines": 419,
+  "source_code_lines": 6917,
+  "bindings": [
+   "abort = _engine_abort.abort",
+   "_attempted_release_preconditions_locked = _engine_abort._attempted_release_preconditions_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_abort"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_abort.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c11 abort -> _engine_abort.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "415b089"
+ },
+ {
+  "id": "c12",
+  "name": "release_pending",
+  "dest": "_engine_release_pending.py",
+  "methods": [
+   "_complete_pending_release_locked",
+   "_resume_pending_release",
+   "_release_historical_landing_locked"
+  ],
+  "dest_code_lines": 277,
+  "source_code_lines": 6651,
+  "bindings": [
+   "_complete_pending_release_locked = _engine_release_pending._complete_pending_release_locked",
+   "_resume_pending_release = _engine_release_pending._resume_pending_release",
+   "_release_historical_landing_locked = _engine_release_pending._release_historical_landing_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_release_pending"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_release_pending.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c12 release_pending -> _engine_release_pending.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "65cfe78"
+ },
+ {
+  "id": "c13",
+  "name": "cleanup_child",
+  "dest": "_engine_cleanup_child.py",
+  "methods": [
+   "_release_to_closed_locked",
+   "_cleanup_result_locked",
+   "_run_cleanup_child"
+  ],
+  "dest_code_lines": 311,
+  "source_code_lines": 6354,
+  "bindings": [
+   "_release_to_closed_locked = _engine_cleanup_child._release_to_closed_locked",
+   "_cleanup_result_locked = _engine_cleanup_child._cleanup_result_locked",
+   "_run_cleanup_child = _engine_cleanup_child._run_cleanup_child"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "import secrets",
+   "from typing import Any, Callable, Mapping, Sequence",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_cleanup_child"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_cleanup_child.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c13 cleanup_child -> _engine_cleanup_child.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "6e276cb"
+ },
+ {
+  "id": "c14",
+  "name": "cleanup",
+  "dest": "_engine_cleanup.py",
+  "methods": [
+   "cleanup_chain"
+  ],
+  "dest_code_lines": 438,
+  "source_code_lines": 5926,
+  "bindings": [
+   "cleanup_chain = _engine_cleanup.cleanup_chain"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import os",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_cleanup"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_cleanup.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c14 cleanup -> _engine_cleanup.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "d7972b3"
+ },
+ {
+  "id": "c15",
+  "name": "observation",
+  "dest": "_engine_observation.py",
+  "methods": [
+   "_candidate_observation_transition",
+   "_restore_candidate_observation_intent_locked",
+   "_restore_bootstrap_fetch_observation_locked",
+   "_run_candidate_observation_locked"
+  ],
+  "dest_code_lines": 264,
+  "source_code_lines": 5675,
+  "bindings": [
+   "_candidate_observation_transition = _engine_observation._candidate_observation_transition",
+   "_restore_candidate_observation_intent_locked = _engine_observation._restore_candidate_observation_intent_locked",
+   "_restore_bootstrap_fetch_observation_locked = _engine_observation._restore_bootstrap_fetch_observation_locked",
+   "_run_candidate_observation_locked = _engine_observation._run_candidate_observation_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import base64",
+   "import copy",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_observation"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "base64"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_observation.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c15 observation -> _engine_observation.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "9cb88a8"
+ },
+ {
+  "id": "c16",
+  "name": "lock",
+  "dest": "_engine_lock.py",
+  "methods": [
+   "_record_common_release_failure",
+   "_recording_common_lock"
+  ],
+  "dest_code_lines": 591,
+  "source_code_lines": 5095,
+  "bindings": [
+   "_record_common_release_failure = _engine_lock._record_common_release_failure",
+   "_recording_common_lock = contextlib.contextmanager(_engine_lock._recording_common_lock)"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Iterator, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_lock"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "Iterator"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_lock.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c16 lock -> _engine_lock.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "9bb4fca"
+ },
+ {
+  "id": "c17",
+  "name": "observation_parse",
+  "dest": "_engine_observation.py",
+  "methods": [
+   "_parse_remote_observation",
+   "_parse_fetched_remote_observation",
+   "_head_contained"
+  ],
+  "dest_code_lines": 338,
+  "source_code_lines": 5022,
+  "bindings": [
+   "_parse_remote_observation = staticmethod(_engine_observation._parse_remote_observation)",
+   "_parse_fetched_remote_observation = staticmethod(_engine_observation._parse_fetched_remote_observation)",
+   "_head_contained = staticmethod(_engine_observation._head_contained)"
+  ],
+  "dest_imports": [
+   "from pathlib import Path"
+  ],
+  "source_imports": [],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_observation.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c17 observation_parse -> _engine_observation.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "883604d"
+ },
+ {
+  "id": "c18",
+  "name": "observe_remote",
+  "dest": "_engine_observe_remote.py",
+  "methods": [
+   "_run_remote_observation"
+  ],
+  "dest_code_lines": 495,
+  "source_code_lines": 4539,
+  "bindings": [
+   "_run_remote_observation = _engine_observe_remote._run_remote_observation"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_observe_remote"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_observe_remote.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c18 observe_remote -> _engine_observe_remote.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "d0178fb"
+ },
+ {
+  "id": "c19",
+  "name": "epoch_fetch",
+  "dest": "_engine_epoch_fetch.py",
+  "methods": [
+   "_sealed_plan",
+   "_begin_epoch",
+   "_epoch_fetch_argv",
+   "_resolved_epoch_fetch_tip",
+   "_run_epoch_fetch",
+   "_complete_epoch_fetch_locked"
+  ],
+  "dest_code_lines": 446,
+  "source_code_lines": 4109,
+  "bindings": [
+   "_sealed_plan = staticmethod(_engine_epoch_fetch._sealed_plan)",
+   "_begin_epoch = _engine_epoch_fetch._begin_epoch",
+   "_epoch_fetch_argv = staticmethod(_engine_epoch_fetch._epoch_fetch_argv)",
+   "_resolved_epoch_fetch_tip = staticmethod(_engine_epoch_fetch._resolved_epoch_fetch_tip)",
+   "_run_epoch_fetch = _engine_epoch_fetch._run_epoch_fetch",
+   "_complete_epoch_fetch_locked = _engine_epoch_fetch._complete_epoch_fetch_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "import secrets",
+   "from pathlib import Path",
+   "from typing import Any, Mapping, Sequence",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from forge_cli.policy import Policy, sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_epoch_fetch"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "Policy"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_epoch_fetch.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c19 epoch_fetch -> _engine_epoch_fetch.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "b20d693"
+ },
+ {
+  "id": "c20",
+  "name": "epoch_ancestry",
+  "dest": "_engine_epoch_ancestry.py",
+  "methods": [
+   "_epoch_replay_context",
+   "_run_carried_successor_ancestry"
+  ],
+  "dest_code_lines": 286,
+  "source_code_lines": 3834,
+  "bindings": [
+   "_epoch_replay_context = _engine_epoch_ancestry._epoch_replay_context",
+   "_run_carried_successor_ancestry = _engine_epoch_ancestry._run_carried_successor_ancestry"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_epoch_ancestry"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c20 epoch_ancestry -> _engine_epoch_ancestry.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "6927b6e"
+ },
+ {
+  "id": "c21",
+  "name": "epoch_rebase",
+  "dest": "_engine_epoch_rebase.py",
+  "methods": [
+   "_run_epoch_rebase",
+   "_restore_integrated_rebase_observation_intent_locked",
+   "_run_integrated_rebase_observation_locked"
+  ],
+  "dest_code_lines": 449,
+  "source_code_lines": 3399,
+  "bindings": [
+   "_run_epoch_rebase = _engine_epoch_rebase._run_epoch_rebase",
+   "_restore_integrated_rebase_observation_intent_locked = _engine_epoch_rebase._restore_integrated_rebase_observation_intent_locked",
+   "_run_integrated_rebase_observation_locked = _engine_epoch_rebase._run_integrated_rebase_observation_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "from pathlib import Path",
+   "from typing import Any, Mapping, Sequence",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_epoch_rebase"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_epoch_rebase.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c21 epoch_rebase -> _engine_epoch_rebase.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "e81f466"
+ },
+ {
+  "id": "c22",
+  "name": "epoch_suite",
+  "dest": "_engine_epoch_suite.py",
+  "methods": [
+   "_run_epoch_suite"
+  ],
+  "dest_code_lines": 392,
+  "source_code_lines": 3019,
+  "bindings": [
+   "_run_epoch_suite = _engine_epoch_suite._run_epoch_suite"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "import re",
+   "import sys",
+   "from typing import Any, Callable, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.app._mutation_journal import _persist_deferred_mutation_result",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_epoch_suite"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "Callable",
+    "_persist_deferred_mutation_result",
+    "re",
+    "sys"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_epoch_suite.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c22 epoch_suite -> _engine_epoch_suite.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "0034920"
+ },
+ {
+  "id": "c23",
+  "name": "epoch_push",
+  "dest": "_engine_epoch_push.py",
+  "methods": [
+   "_push_classification",
+   "_run_epoch_push"
+  ],
+  "dest_code_lines": 251,
+  "source_code_lines": 2780,
+  "bindings": [
+   "_push_classification = staticmethod(_engine_epoch_push._push_classification)",
+   "_run_epoch_push = _engine_epoch_push._run_epoch_push"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_epoch_push"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_epoch_push.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c23 epoch_push -> _engine_epoch_push.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "70daa11"
+ },
+ {
+  "id": "c24",
+  "name": "rebase_recovery",
+  "dest": "_engine_rebase_recovery.py",
+  "methods": [
+   "_record_foreign_git_locked",
+   "_materialize_rebase_success_locked",
+   "_recover_rebase_observation_locked"
+  ],
+  "dest_code_lines": 356,
+  "source_code_lines": 2439,
+  "bindings": [
+   "_record_foreign_git_locked = _engine_rebase_recovery._record_foreign_git_locked",
+   "_materialize_rebase_success_locked = _engine_rebase_recovery._materialize_rebase_success_locked",
+   "_recover_rebase_observation_locked = _engine_rebase_recovery._recover_rebase_observation_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_rebase_recovery"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_rebase_recovery.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c24 rebase_recovery -> _engine_rebase_recovery.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "61b743c"
+ },
+ {
+  "id": "c25",
+  "name": "conflict_observation",
+  "dest": "_engine_conflict_observation.py",
+  "methods": [
+   "_run_conflict_observation_locked"
+  ],
+  "dest_code_lines": 240,
+  "source_code_lines": 2211,
+  "bindings": [
+   "_run_conflict_observation_locked = _engine_conflict_observation._run_conflict_observation_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "import secrets",
+   "from pathlib import Path",
+   "from typing import Any, Mapping, Sequence",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, Refusal",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_conflict_observation"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "secrets"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_conflict_observation.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c25 conflict_observation -> _engine_conflict_observation.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "ec92f1f"
+ },
+ {
+  "id": "c26",
+  "name": "recover_conflict",
+  "dest": "_engine_recover_conflict.py",
+  "methods": [
+   "_recover_conflict_locked"
+  ],
+  "dest_code_lines": 830,
+  "source_code_lines": 1391,
+  "bindings": [
+   "_recover_conflict_locked = _engine_recover_conflict._recover_conflict_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "import os",
+   "from pathlib import Path",
+   "from typing import Any, Mapping, Sequence",
+   "from forge_cli import chain_core, runtime, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+   "from forge_cli.policy import sha256_bytes",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_recover_conflict"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "os",
+    "runtime",
+    "sha256_bytes"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_recover_conflict.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c26 recover_conflict -> _engine_recover_conflict.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "9ae138d"
+ },
+ {
+  "id": "c27",
+  "name": "recover_bootstrap",
+  "dest": "_engine_recover_bootstrap.py",
+  "methods": [
+   "_recover_merge_bootstrap_scope_binding",
+   "_bootstrap_pending_classification_inputs_locked",
+   "_recover_classifying_bootstrap_v12_locked",
+   "_recover_classifying_bootstrap_locked"
+  ],
+  "dest_code_lines": 397,
+  "source_code_lines": 1006,
+  "bindings": [
+   "_recover_merge_bootstrap_scope_binding = _engine_recover_bootstrap._recover_merge_bootstrap_scope_binding",
+   "_bootstrap_pending_classification_inputs_locked = _engine_recover_bootstrap._bootstrap_pending_classification_inputs_locked",
+   "_recover_classifying_bootstrap_v12_locked = _engine_recover_bootstrap._recover_classifying_bootstrap_v12_locked",
+   "_recover_classifying_bootstrap_locked = _engine_recover_bootstrap._recover_classifying_bootstrap_locked"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_recover_bootstrap"
+  ],
+  "remove_imports": null,
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_recover_bootstrap.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c27 recover_bootstrap -> _engine_recover_bootstrap.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "82a8196"
+ },
+ {
+  "id": "c28",
+  "name": "recover",
+  "dest": "_engine_recover.py",
+  "methods": [
+   "recover"
+  ],
+  "dest_code_lines": 621,
+  "source_code_lines": 396,
+  "bindings": [
+   "recover = _engine_recover.recover"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Mapping, Sequence",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_recover"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "Sequence"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_recover.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c28 recover -> _engine_recover.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "0300265"
+ },
+ {
+  "id": "c29",
+  "name": "finalize",
+  "dest": "_engine_finalize.py",
+  "methods": [
+   "_park_integrated_review",
+   "_finish_recovered_epoch_locked",
+   "finalize"
+  ],
+  "dest_code_lines": 183,
+  "source_code_lines": 224,
+  "bindings": [
+   "_park_integrated_review = _engine_finalize._park_integrated_review",
+   "_finish_recovered_epoch_locked = _engine_finalize._finish_recovered_epoch_locked",
+   "finalize = _engine_finalize.finalize"
+  ],
+  "dest_imports": [
+   "from __future__ import annotations",
+   "import copy",
+   "from pathlib import Path",
+   "from typing import Any, Mapping",
+   "from forge_cli import chain_core, engine",
+   "from forge_cli.app._candidate_observation import _observe_current_merge_candidate",
+   "from forge_cli.envelope import Outcome, V2ReasonCode",
+   "from typing import TYPE_CHECKING"
+  ],
+  "source_imports": [
+   "from . import _engine_finalize"
+  ],
+  "remove_imports": {
+   "scripts/forge/forge_cli/app/_merge_engine.py": [
+    "Outcome",
+    "_observe_current_merge_candidate",
+    "copy"
+   ]
+  },
+  "type_checking_imports": {
+   "scripts/forge/forge_cli/app/_engine_finalize.py": [
+    "from forge_cli.app._merge_engine import MergeEngine"
+   ]
+  },
+  "gate": [
+   "== gate results ==",
+   "PASS compile",
+   "PASS ruff-lint",
+   "PASS file-length",
+   "PASS types",
+   "PASS import-contracts",
+   "PASS bodies-unchanged",
+   "SKIP tests (--fast)",
+   "GATE: PASS"
+  ],
+  "types": "== c29 finalize -> _engine_finalize.py: total=234 baseline=234 NEW=0 GONE=0",
+  "sim_commit": "a0e86fc"
+ }
+]

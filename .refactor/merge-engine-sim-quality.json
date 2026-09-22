@@ -1,0 +1,431 @@
+{
+  "limits": {
+    "module_target": 500,
+    "module_ceiling": 1000,
+    "function_target": 150,
+    "class_target": 30,
+    "max_parameters": 6,
+    "plain_decorators": [
+      "_serialize_worktree_command"
+    ]
+  },
+  "modules": {
+    "scripts/forge/forge_cli/app/_admission.py": {
+      "code_lines": 202,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "prepare_merge_admission",
+          "line": 10,
+          "size": 198
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_candidate_observation.py": {
+      "code_lines": 200,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_observe_current_merge_candidate",
+          "line": 10,
+          "size": 195
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_dispatch.py": {
+      "code_lines": 298,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_abort.py": {
+      "code_lines": 419,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "abort",
+          "line": 14,
+          "size": 257
+        },
+        {
+          "kind": "function",
+          "name": "_attempted_release_preconditions_locked",
+          "line": 272,
+          "size": 157
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_bootstrap.py": {
+      "code_lines": 479,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_bootstrap_generation_composite",
+          "line": 68,
+          "size": 412
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_cleanup_child.py": {
+      "code_lines": 311,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_cleanup_child",
+          "line": 161,
+          "size": 167
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_cleanup.py": {
+      "code_lines": 438,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "cleanup_chain",
+          "line": 13,
+          "size": 453
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_conflict_observation.py": {
+      "code_lines": 240,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_conflict_observation_locked",
+          "line": 16,
+          "size": 235
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py": {
+      "code_lines": 286,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_carried_successor_ancestry",
+          "line": 33,
+          "size": 264
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_fetch.py": {
+      "code_lines": 446,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_complete_epoch_fetch_locked",
+          "line": 252,
+          "size": 213
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_push.py": {
+      "code_lines": 251,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_epoch_push",
+          "line": 47,
+          "size": 213
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_rebase.py": {
+      "code_lines": 449,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_epoch_rebase",
+          "line": 15,
+          "size": 154
+        },
+        {
+          "kind": "function",
+          "name": "_run_integrated_rebase_observation_locked",
+          "line": 231,
+          "size": 236
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_epoch_suite.py": {
+      "code_lines": 392,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_epoch_suite",
+          "line": 18,
+          "size": 382
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_finalize.py": {
+      "code_lines": 183,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_final_mode.py": {
+      "code_lines": 312,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_gate.py": {
+      "code_lines": 396,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_lifecycle.py": {
+      "code_lines": 318,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_lock.py": {
+      "code_lines": 591,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_recording_common_lock",
+          "line": 52,
+          "size": 559
+        },
+        {
+          "kind": "function",
+          "name": "lifecycle_classification",
+          "line": 86,
+          "size": 349
+        }
+      ],
+      "tracking": {
+        "reason": "591 code lines: _recording_common_lock alone is 546 code lines (559 source lines, 5 nested defs incl. lifecycle_classification at 349); tier 1 relocates bodies verbatim and cannot shrink it",
+        "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py on _recording_common_lock); residual design change: forge-plugin-g8kf"
+      }
+    },
+    "scripts/forge/forge_cli/app/_engine_observation.py": {
+      "code_lines": 338,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_candidate_observation_locked",
+          "line": 85,
+          "size": 199
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_observe_remote.py": {
+      "code_lines": 495,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_run_remote_observation",
+          "line": 15,
+          "size": 495
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_rebase_recovery.py": {
+      "code_lines": 356,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_recover_rebase_observation_locked",
+          "line": 157,
+          "size": 207
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_recover_bootstrap.py": {
+      "code_lines": 397,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_recover_classifying_bootstrap_v12_locked",
+          "line": 181,
+          "size": 216
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_recover_conflict.py": {
+      "code_lines": 830,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_recover_conflict_locked",
+          "line": 15,
+          "size": 843
+        },
+        {
+          "kind": "function",
+          "name": "classify_continue_result",
+          "line": 208,
+          "size": 169
+        }
+      ],
+      "tracking": {
+        "reason": "830 code lines: _recover_conflict_locked alone is 820 code lines (843 source lines, 11 nested defs incl. classify_continue_result at 169); tier 1 relocates bodies verbatim and cannot shrink it",
+        "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py on _recover_conflict_locked, first candidate); residual design change: forge-plugin-g8kf"
+      }
+    },
+    "scripts/forge/forge_cli/app/_engine_recover.py": {
+      "code_lines": 621,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "recover",
+          "line": 15,
+          "size": 616
+        }
+      ],
+      "tracking": {
+        "reason": "621 code lines: recover alone is 612 code lines (616 source lines); tier 1 relocates bodies verbatim and cannot shrink it",
+        "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py on recover); residual design change: forge-plugin-g8kf"
+      }
+    },
+    "scripts/forge/forge_cli/app/_engine_refresh.py": {
+      "code_lines": 291,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_release_aborted.py": {
+      "code_lines": 321,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_release_pending.py": {
+      "code_lines": 277,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_review_request.py": {
+      "code_lines": 231,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_review_verdict.py": {
+      "code_lines": 315,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "review_attach",
+          "line": 16,
+          "size": 155
+        },
+        {
+          "kind": "function",
+          "name": "review_disposition",
+          "line": 172,
+          "size": 154
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_engine_start_chain.py": {
+      "code_lines": 454,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "start_chain",
+          "line": 307,
+          "size": 160
+        }
+      ],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/__init__.py": {
+      "code_lines": 47,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_merge_engine.py": {
+      "code_lines": 224,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "scripts/forge/forge_cli/app/_mutation_journal.py": {
+      "code_lines": 184,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    }
+  }
+}

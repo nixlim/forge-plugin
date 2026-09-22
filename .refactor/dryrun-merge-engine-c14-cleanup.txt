@@ -1,0 +1,988 @@
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/move_methods.py --project . --source scripts/forge/forge_cli/app/_merge_engine.py --class MergeEngine --methods cleanup_chain --dest scripts/forge/forge_cli/app/_engine_cleanup.py --import-root scripts/forge --shape function --annotate-self --format-imports --manifest .refactor/merge-engine-cleanup.json
+--- scripts/forge/forge_cli/app/_merge_engine.py
++++ scripts/forge/forge_cli/app/_merge_engine.py
+@@ -26,6 +26,7 @@
+ from . import _engine_abort
+ from . import _engine_release_pending
+ from . import _engine_cleanup_child
++from . import _engine_cleanup
+ 
+ 
+ class MergeEngine:
+@@ -5956,460 +5957,7 @@
+                 f"forge status --chain-id {current['chain_id']}",
+             ),
+         )
+-
+-    def cleanup_chain(self) -> Outcome:
+-        """Remove only the contained worktree and unmoved branch, without force."""
+-
+-        for control in chain_core._REQUIRED_MERGE_INTEGRATION_CONTROLS:
+-            chain_core._require_merge_integration_control(control)
+-        state = self._load()
+-        if state["state"] not in {"pushed", "cleanup_pending"}:
+-            self._wrong_state(state, "pushed or cleanup_pending", "merge cleanup")
+-        self._halt(state)
+-        try:
+-            resumed_release = self._resume_pending_release(
+-                state, expected_target="closed"
+-            )
+-        except chain_core.ChainLeaseUnavailable:
+-            # A publication race after the lock-name observation is resolved
+-            # under the repository-wide exclusion below.
+-            resumed_release = None
+-        if resumed_release is not None:
+-            current, _disposition = resumed_release
+-            return engine._success(
+-                current,
+-                f"merge chain {current['chain_id']} cleanup is durably closed",
+-                "none — merge chain closed",
+-            )
+-        binding = state.get("run_binding")
+-        results: list[dict[str, Any]] = []
+-        with self.store._journal_outer(
+-            binding if isinstance(binding, Mapping) else None
+-        ):
+-            with self._recording_common_lock(
+-                Path(str(state["worktree"]["common_dir"])),
+-                chain_id=str(state["chain_id"]),
+-                operation="cleanup",
+-            ) as common_lock:
+-                with chain_core.acquire_chain_lease(
+-                    self.store.root,
+-                    chain_id=str(state["chain_id"]),
+-                    session=self.store._session(None),
+-                    exclusion=common_lock,
+-                ) as lease:
+-                    current = self.store.load_locked(
+-                        str(state["chain_id"]), lease=lease
+-                    )
+-                    claim_status = current.get("worktree", {}).get(
+-                        "claim", {}
+-                    ).get("status")
+-                    if claim_status in {"releasing", "released"} and current[
+-                        "state"
+-                    ] not in {"closed", "aborted"}:
+-                        current, _completed_disposition = (
+-                            self._complete_pending_release_locked(
+-                                current, lease, expected_target="closed"
+-                            )
+-                        )
+-                        return engine._success(
+-                            current,
+-                            f"merge chain {current['chain_id']} cleanup is durably closed",
+-                            "none — merge chain closed",
+-                        )
+-                    if current["state"] not in {"pushed", "cleanup_pending"}:
+-                        self._wrong_state(
+-                            current, "pushed or cleanup_pending", "merge cleanup"
+-                        )
+-                    containment, _vector = chain_core._merge_containment(current)
+-                    if containment != "current":
+-                        raise FrozenError(
+-                            "cleanup lost current-generation containment truth",
+-                            chain_id=str(current["chain_id"]),
+-                            observed=containment,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                    repository = str(current["repository"])
+-                    landed_head = str(
+-                        current["integration"]["push"]["landed_head"]
+-                    )
+-                    destination_ref = str(
+-                        current["target"]["destination_ref"]
+-                    )
+-
+-                    def child_complete(
+-                        result: chain_core.FencedProcessResult,
+-                        *returncodes: int,
+-                    ) -> bool:
+-                        return bool(
+-                            result.authorized is True
+-                            and type(result.returncode) is int
+-                            and result.returncode in returncodes
+-                            and result.launch_failed is False
+-                            and result.timed_out is False
+-                            and result.output_limit is False
+-                            and result.group_survived is False
+-                        )
+-
+-                    def path_presence(path: Path) -> bool | None:
+-                        try:
+-                            os.lstat(path)
+-                        except FileNotFoundError:
+-                            return False
+-                        except OSError:
+-                            return None
+-                        return True
+-
+-                    def fail_step(
+-                        evidence: Mapping[str, Any], message: str
+-                    ) -> None:
+-                        if evidence.get("outcome") != "failed":
+-                            return
+-                        raise chain_core._merge_refusal(
+-                            V2ReasonCode.CLEANUP_FAILED,
+-                            message,
+-                            observed=chain_core.canonical_bytes(
+-                                evidence.get("observation")
+-                            ).decode("utf-8"),
+-                            remediation=(
+-                                f"forge merge cleanup --chain-id {current['chain_id']}"
+-                            ),
+-                            chain=current,
+-                        )
+-
+-                    remote_subject = {
+-                        "destination_ref": destination_ref,
+-                        "landed_head": landed_head,
+-                    }
+-                    remote_argv = chain_core._merge_cleanup_expected_argv(
+-                        current, "remote-fetch", remote_subject
+-                    )
+-                    assert remote_argv is not None
+-
+-                    def observe_remote_fetch(
+-                        result: chain_core.FencedProcessResult,
+-                    ) -> tuple[str, Mapping[str, Any]]:
+-                        observation = engine._merge_cleanup_remote_fetch_observation(
+-                            result,
+-                            destination_ref,
+-                            Path(str(current["worktree"]["common_dir"])),
+-                        )
+-                        outcome = (
+-                            "passed"
+-                            if child_complete(result, 0)
+-                            and observation["exists"] is True
+-                            else "failed"
+-                        )
+-                        return outcome, observation
+-
+-                    current, _remote_result, remote_evidence = (
+-                        self._run_cleanup_child(
+-                            current,
+-                            common_lock,
+-                            lease,
+-                            operation="remote-fetch",
+-                            fence_operation="remote-observation",
+-                            subject=remote_subject,
+-                            argv=remote_argv,
+-                            observe=observe_remote_fetch,
+-                        )
+-                    )
+-                    fail_step(
+-                        remote_evidence,
+-                        "forge: merge cleanup failed — remote observation did not PASS",
+-                    )
+-                    remote_observation = remote_evidence["observation"]
+-                    remote_tip = str(remote_observation["oid"])
+-                    containment_subject = {
+-                        "landed_head": landed_head,
+-                        "remote_tip": remote_tip,
+-                    }
+-                    containment_argv = chain_core._merge_cleanup_expected_argv(
+-                        current, "remote-containment", containment_subject
+-                    )
+-                    assert containment_argv is not None
+-
+-                    def observe_containment(
+-                        result: chain_core.FencedProcessResult,
+-                    ) -> tuple[str, Mapping[str, Any]]:
+-                        ordinary = child_complete(result, 0, 1)
+-                        contained = (
+-                            result.returncode == 0 if ordinary else None
+-                        )
+-                        observation = {
+-                            "landed_head": landed_head,
+-                            "remote_tip": remote_tip,
+-                            "contained": contained,
+-                        }
+-                        return (
+-                            "passed" if contained is True else "failed",
+-                            observation,
+-                        )
+-
+-                    current, _containment_result, containment_evidence = (
+-                        self._run_cleanup_child(
+-                            current,
+-                            common_lock,
+-                            lease,
+-                            operation="remote-containment",
+-                            fence_operation="containment",
+-                            subject=containment_subject,
+-                            argv=containment_argv,
+-                            observe=observe_containment,
+-                        )
+-                    )
+-                    fail_step(
+-                        containment_evidence,
+-                        "forge: merge cleanup failed — landed HEAD containment is not current",
+-                    )
+-
+-                    with self.store.event_lock(str(current["chain_id"])):
+-                        cleanup_replay = self.store._read_replay_locked(
+-                            str(current["chain_id"])
+-                        )
+-                    summary = chain_core._merge_cleanup_history_summary(
+-                        cleanup_replay.events
+-                    )
+-                    worktree = Path(str(current["worktree"]["path"]))
+-                    local_subject = {
+-                        "path": str(worktree),
+-                        "branch": str(current["branch"]),
+-                        "candidate_head": str(
+-                            current["candidate"]["candidate_head"]
+-                        ),
+-                    }
+-                    branch_subject = {
+-                        "branch": local_subject["branch"],
+-                        "candidate_head": local_subject["candidate_head"],
+-                    }
+-                    if not (
+-                        summary.get("worktree_complete") is True
+-                        and summary.get("branch_complete") is True
+-                    ):
+-                        branch_observation_argv = chain_core._merge_cleanup_expected_argv(
+-                            current, "branch-observation", branch_subject
+-                        )
+-                        assert branch_observation_argv is not None
+-
+-                        def observe_branch(
+-                            result: chain_core.FencedProcessResult,
+-                        ) -> tuple[str, Mapping[str, Any]]:
+-                            observation = chain_core._merge_cleanup_branch_observation(
+-                                engine._merge_cleanup_process_record(result),
+-                                branch_subject["branch"],
+-                            )
+-                            if (
+-                                observation["exists"] is True
+-                                and observation["oid"]
+-                                == branch_subject["candidate_head"]
+-                            ):
+-                                outcome = "passed"
+-                            elif observation["exists"] is False:
+-                                outcome = "already-absent"
+-                            else:
+-                                outcome = "failed"
+-                            return outcome, observation
+-
+-                        current, _branch_observation, branch_evidence = (
+-                            self._run_cleanup_child(
+-                                current,
+-                                common_lock,
+-                                lease,
+-                                operation="branch-observation",
+-                                fence_operation="branch-delete",
+-                                subject=branch_subject,
+-                                argv=branch_observation_argv,
+-                                observe=observe_branch,
+-                            )
+-                        )
+-                        fail_step(
+-                            branch_evidence,
+-                            "forge: merge cleanup failed — recorded branch moved or is unobservable",
+-                        )
+-
+-                    if summary.get("worktree_complete") is not True:
+-                        worktree_observation_argv = (
+-                            chain_core._merge_cleanup_expected_argv(
+-                                current,
+-                                "worktree-observation",
+-                                local_subject,
+-                            )
+-                        )
+-                        assert worktree_observation_argv is not None
+-
+-                        def observe_worktree(
+-                            result: chain_core.FencedProcessResult,
+-                        ) -> tuple[str, Mapping[str, Any]]:
+-                            registered, head, branch = (
+-                                chain_core._merge_cleanup_worktree_inventory(
+-                                    engine._merge_cleanup_process_record(result),
+-                                    str(worktree),
+-                                )
+-                            )
+-                            path_exists = (
+-                                path_presence(worktree)
+-                                if result.authorized is True
+-                                else None
+-                            )
+-                            observation = {
+-                                "path": str(worktree),
+-                                "path_exists": path_exists,
+-                                "registered": registered,
+-                                "head": head,
+-                                "branch": branch,
+-                            }
+-                            if (
+-                                registered is True
+-                                and head == local_subject["candidate_head"]
+-                                and branch == local_subject["branch"]
+-                                and path_exists is True
+-                            ):
+-                                outcome = "passed"
+-                            elif registered is False and path_exists is False:
+-                                outcome = "already-absent"
+-                            else:
+-                                outcome = "failed"
+-                            return outcome, observation
+-
+-                        current, _worktree_observation, worktree_evidence = (
+-                            self._run_cleanup_child(
+-                                current,
+-                                common_lock,
+-                                lease,
+-                                operation="worktree-observation",
+-                                fence_operation="worktree-remove",
+-                                subject=local_subject,
+-                                argv=worktree_observation_argv,
+-                                observe=observe_worktree,
+-                            )
+-                        )
+-                        fail_step(
+-                            worktree_evidence,
+-                            "forge: merge cleanup failed — worktree observation did not PASS",
+-                        )
+-                        if worktree_evidence["outcome"] == "passed":
+-                            worktree_remove_argv = chain_core._merge_cleanup_expected_argv(
+-                                current, "worktree-remove", local_subject
+-                            )
+-                            assert worktree_remove_argv is not None
+-
+-                            def observe_worktree_removal(
+-                                result: chain_core.FencedProcessResult,
+-                            ) -> tuple[str, Mapping[str, Any]]:
+-                                exists = (
+-                                    path_presence(worktree)
+-                                    if result.authorized is True
+-                                    else None
+-                                )
+-                                observation = {
+-                                    "path": str(worktree),
+-                                    "exists": exists,
+-                                }
+-                                return (
+-                                    "passed"
+-                                    if child_complete(result, 0)
+-                                    and exists is False
+-                                    else "failed",
+-                                    observation,
+-                                )
+-
+-                            current, _worktree_result, worktree_result_evidence = (
+-                                self._run_cleanup_child(
+-                                    current,
+-                                    common_lock,
+-                                    lease,
+-                                    operation="worktree-remove",
+-                                    fence_operation="worktree-remove",
+-                                    subject=local_subject,
+-                                    argv=worktree_remove_argv,
+-                                    observe=observe_worktree_removal,
+-                                )
+-                            )
+-                            fail_step(
+-                                worktree_result_evidence,
+-                                "forge: merge cleanup failed — worktree-remove did not PASS",
+-                            )
+-
+-                    with self.store.event_lock(str(current["chain_id"])):
+-                        cleanup_replay = self.store._read_replay_locked(
+-                            str(current["chain_id"])
+-                        )
+-                    summary = chain_core._merge_cleanup_history_summary(
+-                        cleanup_replay.events
+-                    )
+-                    if summary.get("worktree_complete") is not True:
+-                        raise FrozenError(
+-                            "cleanup worktree step did not become durable",
+-                            chain_id=str(current["chain_id"]),
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                    if summary.get("branch_complete") is not True:
+-                        if summary.get("branch_observed_present") is not True:
+-                            raise FrozenError(
+-                                "cleanup branch deletion lacks its fresh unmoved observation",
+-                                chain_id=str(current["chain_id"]),
+-                                schema=REVISION9_OUTPUT_SCHEMA,
+-                            )
+-                        branch_delete_argv = chain_core._merge_cleanup_expected_argv(
+-                            current, "branch-delete", branch_subject
+-                        )
+-                        assert branch_delete_argv is not None
+-
+-                        def observe_branch_deletion(
+-                            result: chain_core.FencedProcessResult,
+-                        ) -> tuple[str, Mapping[str, Any]]:
+-                            passed = child_complete(result, 0)
+-                            observation = {
+-                                "branch": branch_subject["branch"],
+-                                "expected_oid": branch_subject[
+-                                    "candidate_head"
+-                                ],
+-                                "deleted": True if passed else None,
+-                            }
+-                            return (
+-                                "passed" if passed else "failed",
+-                                observation,
+-                            )
+-
+-                        current, _branch_result, branch_result_evidence = (
+-                            self._run_cleanup_child(
+-                                current,
+-                                common_lock,
+-                                lease,
+-                                operation="branch-delete",
+-                                fence_operation="branch-delete",
+-                                subject=branch_subject,
+-                                argv=branch_delete_argv,
+-                                observe=observe_branch_deletion,
+-                            )
+-                        )
+-                        fail_step(
+-                            branch_result_evidence,
+-                            "forge: merge cleanup failed — branch-delete did not PASS",
+-                        )
+-
+-                    with self.store.event_lock(str(current["chain_id"])):
+-                        cleanup_replay = self.store._read_replay_locked(
+-                            str(current["chain_id"])
+-                        )
+-                    summary = chain_core._merge_cleanup_history_summary(
+-                        cleanup_replay.events
+-                    )
+-                    if not (
+-                        summary.get("remote_containment") is not None
+-                        and summary.get("worktree_complete") is True
+-                        and summary.get("branch_complete") is True
+-                    ):
+-                        raise FrozenError(
+-                            "cleanup did not durably complete every required step",
+-                            chain_id=str(current["chain_id"]),
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                    current = self._release_to_closed_locked(current, lease)
+-        return engine._success(
+-            current,
+-            f"merge chain {current['chain_id']} cleanup is durably closed",
+-            "none — merge chain closed",
+-        )
++    cleanup_chain = _engine_cleanup.cleanup_chain
+ 
+     def finalize(self) -> Outcome:
+         """Execute one FR-235 bounded epoch under the ordered lock stack."""
+--- scripts/forge/forge_cli/app/_engine_cleanup.py
++++ scripts/forge/forge_cli/app/_engine_cleanup.py
+@@ -0,0 +1,465 @@
++from __future__ import annotations
++
++import os
++from pathlib import Path
++from typing import TYPE_CHECKING, Any, Mapping
++
++from forge_cli import chain_core, engine
++from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Outcome, V2ReasonCode
++
++if TYPE_CHECKING:
++    from forge_cli.app._merge_engine import MergeEngine
++
++def cleanup_chain(self: "MergeEngine") -> Outcome:
++    """Remove only the contained worktree and unmoved branch, without force."""
++
++    for control in chain_core._REQUIRED_MERGE_INTEGRATION_CONTROLS:
++        chain_core._require_merge_integration_control(control)
++    state = self._load()
++    if state["state"] not in {"pushed", "cleanup_pending"}:
++        self._wrong_state(state, "pushed or cleanup_pending", "merge cleanup")
++    self._halt(state)
++    try:
++        resumed_release = self._resume_pending_release(
++            state, expected_target="closed"
++        )
++    except chain_core.ChainLeaseUnavailable:
++        # A publication race after the lock-name observation is resolved
++        # under the repository-wide exclusion below.
++        resumed_release = None
++    if resumed_release is not None:
++        current, _disposition = resumed_release
++        return engine._success(
++            current,
++            f"merge chain {current['chain_id']} cleanup is durably closed",
++            "none — merge chain closed",
++        )
++    binding = state.get("run_binding")
++    results: list[dict[str, Any]] = []
++    with self.store._journal_outer(
++        binding if isinstance(binding, Mapping) else None
++    ):
++        with self._recording_common_lock(
++            Path(str(state["worktree"]["common_dir"])),
++            chain_id=str(state["chain_id"]),
++            operation="cleanup",
++        ) as common_lock:
++            with chain_core.acquire_chain_lease(
++                self.store.root,
++                chain_id=str(state["chain_id"]),
++                session=self.store._session(None),
++                exclusion=common_lock,
++            ) as lease:
++                current = self.store.load_locked(
++                    str(state["chain_id"]), lease=lease
++                )
++                claim_status = current.get("worktree", {}).get(
++                    "claim", {}
++                ).get("status")
++                if claim_status in {"releasing", "released"} and current[
++                    "state"
++                ] not in {"closed", "aborted"}:
++                    current, _completed_disposition = (
++                        self._complete_pending_release_locked(
++                            current, lease, expected_target="closed"
++                        )
++                    )
++                    return engine._success(
++                        current,
++                        f"merge chain {current['chain_id']} cleanup is durably closed",
++                        "none — merge chain closed",
++                    )
++                if current["state"] not in {"pushed", "cleanup_pending"}:
++                    self._wrong_state(
++                        current, "pushed or cleanup_pending", "merge cleanup"
++                    )
++                containment, _vector = chain_core._merge_containment(current)
++                if containment != "current":
++                    raise FrozenError(
++                        "cleanup lost current-generation containment truth",
++                        chain_id=str(current["chain_id"]),
++                        observed=containment,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++                repository = str(current["repository"])
++                landed_head = str(
++                    current["integration"]["push"]["landed_head"]
++                )
++                destination_ref = str(
++                    current["target"]["destination_ref"]
++                )
++
++                def child_complete(
++                    result: chain_core.FencedProcessResult,
++                    *returncodes: int,
++                ) -> bool:
++                    return bool(
++                        result.authorized is True
++                        and type(result.returncode) is int
++                        and result.returncode in returncodes
++                        and result.launch_failed is False
++                        and result.timed_out is False
++                        and result.output_limit is False
++                        and result.group_survived is False
++                    )
++
++                def path_presence(path: Path) -> bool | None:
++                    try:
++                        os.lstat(path)
++                    except FileNotFoundError:
++                        return False
++                    except OSError:
++                        return None
++                    return True
++
++                def fail_step(
++                    evidence: Mapping[str, Any], message: str
++                ) -> None:
++                    if evidence.get("outcome") != "failed":
++                        return
++                    raise chain_core._merge_refusal(
++                        V2ReasonCode.CLEANUP_FAILED,
++                        message,
++                        observed=chain_core.canonical_bytes(
++                            evidence.get("observation")
++                        ).decode("utf-8"),
++                        remediation=(
++                            f"forge merge cleanup --chain-id {current['chain_id']}"
++                        ),
++                        chain=current,
++                    )
++
++                remote_subject = {
++                    "destination_ref": destination_ref,
++                    "landed_head": landed_head,
++                }
++                remote_argv = chain_core._merge_cleanup_expected_argv(
++                    current, "remote-fetch", remote_subject
++                )
++                assert remote_argv is not None
++
++                def observe_remote_fetch(
++                    result: chain_core.FencedProcessResult,
++                ) -> tuple[str, Mapping[str, Any]]:
++                    observation = engine._merge_cleanup_remote_fetch_observation(
++                        result,
++                        destination_ref,
++                        Path(str(current["worktree"]["common_dir"])),
++                    )
++                    outcome = (
++                        "passed"
++                        if child_complete(result, 0)
++                        and observation["exists"] is True
++                        else "failed"
++                    )
++                    return outcome, observation
++
++                current, _remote_result, remote_evidence = (
++                    self._run_cleanup_child(
++                        current,
++                        common_lock,
++                        lease,
++                        operation="remote-fetch",
++                        fence_operation="remote-observation",
++                        subject=remote_subject,
++                        argv=remote_argv,
++                        observe=observe_remote_fetch,
++                    )
++                )
++                fail_step(
++                    remote_evidence,
++                    "forge: merge cleanup failed — remote observation did not PASS",
++                )
++                remote_observation = remote_evidence["observation"]
++                remote_tip = str(remote_observation["oid"])
++                containment_subject = {
++                    "landed_head": landed_head,
++                    "remote_tip": remote_tip,
++                }
++                containment_argv = chain_core._merge_cleanup_expected_argv(
++                    current, "remote-containment", containment_subject
++                )
++                assert containment_argv is not None
++
++                def observe_containment(
++                    result: chain_core.FencedProcessResult,
++                ) -> tuple[str, Mapping[str, Any]]:
++                    ordinary = child_complete(result, 0, 1)
++                    contained = (
++                        result.returncode == 0 if ordinary else None
++                    )
++                    observation = {
++                        "landed_head": landed_head,
++                        "remote_tip": remote_tip,
++                        "contained": contained,
++                    }
++                    return (
++                        "passed" if contained is True else "failed",
++                        observation,
++                    )
++
++                current, _containment_result, containment_evidence = (
++                    self._run_cleanup_child(
++                        current,
++                        common_lock,
++                        lease,
++                        operation="remote-containment",
++                        fence_operation="containment",
++                        subject=containment_subject,
++                        argv=containment_argv,
++                        observe=observe_containment,
++                    )
++                )
++                fail_step(
++                    containment_evidence,
++                    "forge: merge cleanup failed — landed HEAD containment is not current",
++                )
++
++                with self.store.event_lock(str(current["chain_id"])):
++                    cleanup_replay = self.store._read_replay_locked(
++                        str(current["chain_id"])
++                    )
++                summary = chain_core._merge_cleanup_history_summary(
++                    cleanup_replay.events
++                )
++                worktree = Path(str(current["worktree"]["path"]))
++                local_subject = {
++                    "path": str(worktree),
++                    "branch": str(current["branch"]),
++                    "candidate_head": str(
++                        current["candidate"]["candidate_head"]
++                    ),
++                }
++                branch_subject = {
++                    "branch": local_subject["branch"],
++                    "candidate_head": local_subject["candidate_head"],
++                }
++                if not (
++                    summary.get("worktree_complete") is True
++                    and summary.get("branch_complete") is True
++                ):
++                    branch_observation_argv = chain_core._merge_cleanup_expected_argv(
++                        current, "branch-observation", branch_subject
++                    )
++                    assert branch_observation_argv is not None
++
++                    def observe_branch(
++                        result: chain_core.FencedProcessResult,
++                    ) -> tuple[str, Mapping[str, Any]]:
++                        observation = chain_core._merge_cleanup_branch_observation(
++                            engine._merge_cleanup_process_record(result),
++                            branch_subject["branch"],
++                        )
++                        if (
++                            observation["exists"] is True
++                            and observation["oid"]
++                            == branch_subject["candidate_head"]
++                        ):
++                            outcome = "passed"
++                        elif observation["exists"] is False:
++                            outcome = "already-absent"
++                        else:
++                            outcome = "failed"
++                        return outcome, observation
++
++                    current, _branch_observation, branch_evidence = (
++                        self._run_cleanup_child(
++                            current,
++                            common_lock,
++                            lease,
++                            operation="branch-observation",
++                            fence_operation="branch-delete",
++                            subject=branch_subject,
++                            argv=branch_observation_argv,
++                            observe=observe_branch,
++                        )
++                    )
++                    fail_step(
++                        branch_evidence,
++                        "forge: merge cleanup failed — recorded branch moved or is unobservable",
++                    )
++
++                if summary.get("worktree_complete") is not True:
++                    worktree_observation_argv = (
++                        chain_core._merge_cleanup_expected_argv(
++                            current,
++                            "worktree-observation",
++                            local_subject,
++                        )
++                    )
++                    assert worktree_observation_argv is not None
++
++                    def observe_worktree(
++                        result: chain_core.FencedProcessResult,
++                    ) -> tuple[str, Mapping[str, Any]]:
++                        registered, head, branch = (
++                            chain_core._merge_cleanup_worktree_inventory(
++                                engine._merge_cleanup_process_record(result),
++                                str(worktree),
++                            )
++                        )
++                        path_exists = (
++                            path_presence(worktree)
++                            if result.authorized is True
++                            else None
++                        )
++                        observation = {
++                            "path": str(worktree),
++                            "path_exists": path_exists,
++                            "registered": registered,
++                            "head": head,
++                            "branch": branch,
++                        }
++                        if (
++                            registered is True
++                            and head == local_subject["candidate_head"]
++                            and branch == local_subject["branch"]
++                            and path_exists is True
++                        ):
++                            outcome = "passed"
++                        elif registered is False and path_exists is False:
++                            outcome = "already-absent"
++                        else:
++                            outcome = "failed"
++                        return outcome, observation
++
++                    current, _worktree_observation, worktree_evidence = (
++                        self._run_cleanup_child(
++                            current,
++                            common_lock,
++                            lease,
++                            operation="worktree-observation",
++                            fence_operation="worktree-remove",
++                            subject=local_subject,
++                            argv=worktree_observation_argv,
++                            observe=observe_worktree,
++                        )
++                    )
++                    fail_step(
++                        worktree_evidence,
++                        "forge: merge cleanup failed — worktree observation did not PASS",
++                    )
++                    if worktree_evidence["outcome"] == "passed":
++                        worktree_remove_argv = chain_core._merge_cleanup_expected_argv(
++                            current, "worktree-remove", local_subject
++                        )
++                        assert worktree_remove_argv is not None
++
++                        def observe_worktree_removal(
++                            result: chain_core.FencedProcessResult,
++                        ) -> tuple[str, Mapping[str, Any]]:
++                            exists = (
++                                path_presence(worktree)
++                                if result.authorized is True
++                                else None
++                            )
++                            observation = {
++                                "path": str(worktree),
++                                "exists": exists,
++                            }
++                            return (
++                                "passed"
++                                if child_complete(result, 0)
++                                and exists is False
++                                else "failed",
++                                observation,
++                            )
++
++                        current, _worktree_result, worktree_result_evidence = (
++                            self._run_cleanup_child(
++                                current,
++                                common_lock,
++                                lease,
++                                operation="worktree-remove",
++                                fence_operation="worktree-remove",
++                                subject=local_subject,
++                                argv=worktree_remove_argv,
++                                observe=observe_worktree_removal,
++                            )
++                        )
++                        fail_step(
++                            worktree_result_evidence,
++                            "forge: merge cleanup failed — worktree-remove did not PASS",
++                        )
++
++                with self.store.event_lock(str(current["chain_id"])):
++                    cleanup_replay = self.store._read_replay_locked(
++                        str(current["chain_id"])
++                    )
++                summary = chain_core._merge_cleanup_history_summary(
++                    cleanup_replay.events
++                )
++                if summary.get("worktree_complete") is not True:
++                    raise FrozenError(
++                        "cleanup worktree step did not become durable",
++                        chain_id=str(current["chain_id"]),
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++                if summary.get("branch_complete") is not True:
++                    if summary.get("branch_observed_present") is not True:
++                        raise FrozenError(
++                            "cleanup branch deletion lacks its fresh unmoved observation",
++                            chain_id=str(current["chain_id"]),
++                            schema=REVISION9_OUTPUT_SCHEMA,
++                        )
++                    branch_delete_argv = chain_core._merge_cleanup_expected_argv(
++                        current, "branch-delete", branch_subject
++                    )
++                    assert branch_delete_argv is not None
++
++                    def observe_branch_deletion(
++                        result: chain_core.FencedProcessResult,
++                    ) -> tuple[str, Mapping[str, Any]]:
++                        passed = child_complete(result, 0)
++                        observation = {
++                            "branch": branch_subject["branch"],
++                            "expected_oid": branch_subject[
++                                "candidate_head"
++                            ],
++                            "deleted": True if passed else None,
++                        }
++                        return (
++                            "passed" if passed else "failed",
++                            observation,
++                        )
++
++                    current, _branch_result, branch_result_evidence = (
++                        self._run_cleanup_child(
++                            current,
++                            common_lock,
++                            lease,
++                            operation="branch-delete",
++                            fence_operation="branch-delete",
++                            subject=branch_subject,
++                            argv=branch_delete_argv,
++                            observe=observe_branch_deletion,
++                        )
++                    )
++                    fail_step(
++                        branch_result_evidence,
++                        "forge: merge cleanup failed — branch-delete did not PASS",
++                    )
++
++                with self.store.event_lock(str(current["chain_id"])):
++                    cleanup_replay = self.store._read_replay_locked(
++                        str(current["chain_id"])
++                    )
++                summary = chain_core._merge_cleanup_history_summary(
++                    cleanup_replay.events
++                )
++                if not (
++                    summary.get("remote_containment") is not None
++                    and summary.get("worktree_complete") is True
++                    and summary.get("branch_complete") is True
++                ):
++                    raise FrozenError(
++                        "cleanup did not durably complete every required step",
++                        chain_id=str(current["chain_id"]),
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++                current = self._release_to_closed_locked(current, lease)
++    return engine._success(
++        current,
++        f"merge chain {current['chain_id']} cleanup is durably closed",
++        "none — merge chain closed",
++    )
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "fa95f1edf4534b165d69099cef63a31c230ca225c9999b442a1afb30291b1609",
+    "scripts/forge/forge_cli/app/_engine_cleanup.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_cleanup.py",
+      "class": "MergeEngine",
+      "methods": [
+        "cleanup_chain"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_cleanup",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_cleanup"
+        ],
+        "scripts/forge/forge_cli/app/_engine_cleanup.py": [
+          "from __future__ import annotations",
+          "import os",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_cleanup.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+
+[exit 0]

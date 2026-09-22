@@ -1,0 +1,70 @@
+== gate results ==
+PASS compile
+FAIL ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+SKIP tests (--fast)
+== first failure detail (tail of .refactor-gate.log) ==
+   |
+25 | def _prepare_git_no_lazy_fetch_qualification(
+   -     self: "MergeEngine", state: Mapping[str, Any]
+26 +     self: MergeEngine, state: Mapping[str, Any]
+27 | ) -> None:
+   |
+
+quoted-annotation: [*] Remove quotes from type annotation
+  --> scripts/forge/forge_cli/app/_engine_final_mode.py:45:11
+   |
+44 | def _prepare_bootstrap_git_no_lazy_fetch_qualification(
+45 |     self: "MergeEngine",
+   |           ^^^^^^^^^^^^^
+46 |     admission: engine.MergeAdmission,
+47 |     *,
+   |
+help: Remove quotes
+   |
+44 | def _prepare_bootstrap_git_no_lazy_fetch_qualification(
+   -     self: "MergeEngine",
+45 +     self: MergeEngine,
+46 |     admission: engine.MergeAdmission,
+   |
+
+quoted-annotation: [*] Remove quotes from type annotation
+  --> scripts/forge/forge_cli/app/_engine_final_mode.py:83:11
+   |
+82 | def _final_history_mutation_mode(
+83 |     self: "MergeEngine", state: Mapping[str, Any], lock: chain_core.CommonRebaseLock
+   |           ^^^^^^^^^^^^^
+84 | ) -> tuple[str | None, str]:
+85 |     """Read DM-015 from the exact final intended commit under the lock."""
+   |
+help: Remove quotes
+   |
+82 | def _final_history_mutation_mode(
+   -     self: "MergeEngine", state: Mapping[str, Any], lock: chain_core.CommonRebaseLock
+83 +     self: MergeEngine, state: Mapping[str, Any], lock: chain_core.CommonRebaseLock
+84 | ) -> tuple[str | None, str]:
+   |
+
+quoted-annotation: [*] Remove quotes from type annotation
+   --> scripts/forge/forge_cli/app/_engine_final_mode.py:143:11
+    |
+142 | def _park_invalid_final_history_mode(
+143 |     self: "MergeEngine",
+    |           ^^^^^^^^^^^^^
+144 |     state: dict[str, Any],
+145 |     lease: chain_core.ChainLease,
+    |
+help: Remove quotes
+    |
+142 | def _park_invalid_final_history_mode(
+    -     self: "MergeEngine",
+143 +     self: MergeEngine,
+144 |     state: dict[str, Any],
+    |
+
+Found 4 errors.
+[*] 4 fixable with the `--fix` option.
+GATE: FAIL

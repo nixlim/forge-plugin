@@ -1,0 +1,225 @@
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/move_methods.py --project . --source scripts/forge/forge_cli/app/_merge_engine.py --class MergeEngine --methods _parse_remote_observation,_parse_fetched_remote_observation,_head_contained --dest scripts/forge/forge_cli/app/_engine_observation.py --import-root scripts/forge --shape function --annotate-self --format-imports --manifest .refactor/merge-engine-observation_parse.json
+--- scripts/forge/forge_cli/app/_merge_engine.py
++++ scripts/forge/forge_cli/app/_merge_engine.py
+@@ -1519,86 +1519,9 @@
+                         str(state["steps"][gate_id][-1]["transcript"])
+                     ],
+                 )
+-
+-    @staticmethod
+-    def _parse_remote_observation(
+-        result: chain_core.FencedProcessResult, destination_ref: str
+-    ) -> tuple[bool | None, str | None]:
+-        complete = bool(
+-            result.returncode == 0
+-            and not result.launch_failed
+-            and not result.timed_out
+-            and not result.output_limit
+-            and not result.group_survived
+-        )
+-        if not complete:
+-            return None, None
+-        if not result.output:
+-            return False, None
+-        try:
+-            decoded = result.output.decode("ascii")
+-        except UnicodeDecodeError:
+-            return None, None
+-        rows = decoded.splitlines()
+-        if len(rows) != 1:
+-            return None, None
+-        fields = rows[0].split("\t")
+-        if (
+-            len(fields) != 2
+-            or fields[1] != destination_ref
+-            or chain_core.COMMIT_RE.fullmatch(fields[0]) is None
+-        ):
+-            return None, None
+-        return True, fields[0]
+-
+-    @staticmethod
+-    def _parse_fetched_remote_observation(
+-        result: chain_core.FencedProcessResult,
+-        destination_ref: str,
+-        git_dir: Path,
+-    ) -> tuple[bool | None, str | None]:
+-        """Classify the single fixed-ref observation fetch without a stale ref."""
+-
+-        complete = bool(
+-            result.authorized
+-            and not result.launch_failed
+-            and not result.timed_out
+-            and not result.output_limit
+-            and not result.group_survived
+-            and result.returncode is not None
+-        )
+-        if not complete:
+-            return None, None
+-        if result.returncode != 0:
+-            expected = f"couldn't find remote ref {destination_ref}".encode("utf-8")
+-            return (False, None) if expected in result.output else (None, None)
+-        fetch_head = git_dir / "FETCH_HEAD"
+-        try:
+-            raw = fetch_head.read_bytes()
+-        except OSError:
+-            return None, None
+-        if len(raw) > chain_core.MERGE_SCOPE_BINDING_CAP_BYTES or not raw.endswith(b"\n"):
+-            return None, None
+-        rows = raw.splitlines()
+-        if len(rows) != 1:
+-            return None, None
+-        raw_oid = rows[0].split(b"\t", 1)[0]
+-        try:
+-            oid = raw_oid.decode("ascii")
+-        except UnicodeDecodeError:
+-            return None, None
+-        if chain_core.COMMIT_RE.fullmatch(oid) is None:
+-            return None, None
+-        return True, oid
+-
+-    @staticmethod
+-    def _head_contained(repository: chain_core.Repository, head: str, tip: str) -> bool:
+-        return (
+-            repository.git(
+-                ["merge-base", "--is-ancestor", head, tip], check=False
+-            ).returncode
+-            == 0
+-        )
++    _parse_remote_observation = staticmethod(_engine_observation._parse_remote_observation)
++    _parse_fetched_remote_observation = staticmethod(_engine_observation._parse_fetched_remote_observation)
++    _head_contained = staticmethod(_engine_observation._head_contained)
+ 
+     def _run_remote_observation(
+         self,
+--- scripts/forge/forge_cli/app/_engine_observation.py
++++ scripts/forge/forge_cli/app/_engine_observation.py
+@@ -2,6 +2,7 @@
+ 
+ import base64
+ import copy
++from pathlib import Path
+ from typing import TYPE_CHECKING, Any, Mapping
+ 
+ from forge_cli import chain_core, engine, runtime
+@@ -280,3 +281,80 @@
+             schema=REVISION9_OUTPUT_SCHEMA,
+         )
+     return state, evidence
++
++def _parse_remote_observation(
++    result: chain_core.FencedProcessResult, destination_ref: str
++) -> tuple[bool | None, str | None]:
++    complete = bool(
++        result.returncode == 0
++        and not result.launch_failed
++        and not result.timed_out
++        and not result.output_limit
++        and not result.group_survived
++    )
++    if not complete:
++        return None, None
++    if not result.output:
++        return False, None
++    try:
++        decoded = result.output.decode("ascii")
++    except UnicodeDecodeError:
++        return None, None
++    rows = decoded.splitlines()
++    if len(rows) != 1:
++        return None, None
++    fields = rows[0].split("\t")
++    if (
++        len(fields) != 2
++        or fields[1] != destination_ref
++        or chain_core.COMMIT_RE.fullmatch(fields[0]) is None
++    ):
++        return None, None
++    return True, fields[0]
++
++def _parse_fetched_remote_observation(
++    result: chain_core.FencedProcessResult,
++    destination_ref: str,
++    git_dir: Path,
++) -> tuple[bool | None, str | None]:
++    """Classify the single fixed-ref observation fetch without a stale ref."""
++
++    complete = bool(
++        result.authorized
++        and not result.launch_failed
++        and not result.timed_out
++        and not result.output_limit
++        and not result.group_survived
++        and result.returncode is not None
++    )
++    if not complete:
++        return None, None
++    if result.returncode != 0:
++        expected = f"couldn't find remote ref {destination_ref}".encode("utf-8")
++        return (False, None) if expected in result.output else (None, None)
++    fetch_head = git_dir / "FETCH_HEAD"
++    try:
++        raw = fetch_head.read_bytes()
++    except OSError:
++        return None, None
++    if len(raw) > chain_core.MERGE_SCOPE_BINDING_CAP_BYTES or not raw.endswith(b"\n"):
++        return None, None
++    rows = raw.splitlines()
++    if len(rows) != 1:
++        return None, None
++    raw_oid = rows[0].split(b"\t", 1)[0]
++    try:
++        oid = raw_oid.decode("ascii")
++    except UnicodeDecodeError:
++        return None, None
++    if chain_core.COMMIT_RE.fullmatch(oid) is None:
++        return None, None
++    return True, oid
++
++def _head_contained(repository: chain_core.Repository, head: str, tip: str) -> bool:
++    return (
++        repository.git(
++            ["merge-base", "--is-ancestor", head, tip], check=False
++        ).returncode
++        == 0
++    )
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "74988a4260b1e02942e1ffae16226bdbc3ad60ee0ecab372363d201da8a77d55",
+    "scripts/forge/forge_cli/app/_engine_observation.py": "9efef9a2e92eec505cacfe2c1da61dac5b0274cf940397c09c3a04dd756d15ae"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_observation.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_parse_remote_observation",
+        "_parse_fetched_remote_observation",
+        "_head_contained"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_observation",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [],
+        "scripts/forge/forge_cli/app/_engine_observation.py": [
+          "from pathlib import Path"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_observation.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+
+[exit 0]

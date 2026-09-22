@@ -1,0 +1,8 @@
+test_cli_merge_store rc=0 wall=1s Ran 11 tests in 0.711s
+test_cli_loader rc=0 wall=2s Ran 14 tests in 1.437s
+test_cli_merge_adapters rc=0 wall=27s Ran 25 tests in 27.263s
+test_cli_merge_lifecycle rc=0 wall=105s Ran 115 tests in 105.031s
+test_cli_merge_integration_shard2 rc=0 wall=132s Ran 27 tests in 131.486s
+test_cli_merge_integration rc=0 wall=149s Ran 28 tests in 148.416s
+test_cli_merge_integration_shard1 rc=0 wall=166s Ran 27 tests in 165.886s
+ALLDONE

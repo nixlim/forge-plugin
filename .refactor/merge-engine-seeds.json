@@ -1,0 +1,9 @@
+{
+  "recovery": ["recover", "_recover_conflict_locked", "_recover_rebase_observation_locked", "_recover_classifying_bootstrap_v12_locked"],
+  "observation": ["_run_remote_observation", "_run_candidate_observation_locked", "_run_integrated_rebase_observation_locked", "_run_conflict_observation_locked"],
+  "epoch": ["_run_epoch_suite", "_run_epoch_push", "_complete_epoch_fetch_locked"],
+  "cleanup": ["cleanup_chain", "_run_cleanup_child"],
+  "lock": ["_recording_common_lock"],
+  "bootstrap": ["_run_bootstrap_generation_composite"],
+  "admission": ["start_chain", "_final_mode_unavailable", "_bootstrap_fetch_argv", "_resolved_fetch_tip", "_wrong_state", "_sealed_plan", "_epoch_fetch_argv", "_resolved_epoch_fetch_tip", "_parse_remote_observation", "_parse_fetched_remote_observation", "_head_contained", "_push_classification", "_current_merge_authority"]
+}

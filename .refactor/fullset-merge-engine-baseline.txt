@@ -1,0 +1,21 @@
+head=09f8275d9803362137ac7db60a428f06a00c0e8c
+== run 1 2026-09-22T09:43:11Z
+tests.test_cli_merge_lifecycle rc=0 Ran 115 tests in 110.392s
+tests.test_cli_merge_adapters rc=0 Ran 25 tests in 27.914s
+tests.test_cli_merge_store rc=0 Ran 11 tests in 0.678s
+tests.test_cli_merge_integration_shard2 rc=0 Ran 27 tests in 139.963s
+tests.test_cli_loader rc=0 Ran 14 tests in 1.642s
+tests.test_cli_merge_integration rc=0 Ran 28 tests in 159.962s
+tests.test_cli_merge_integration_shard1 rc=0 Ran 27 tests in 176.438s
+full set: 7/7 modules OK, xargs rc=0, wall=177s
+run 1 rc=0
+== run 2 2026-09-22T09:46:08Z
+tests.test_cli_merge_lifecycle rc=0 Ran 115 tests in 114.409s
+tests.test_cli_merge_adapters rc=0 Ran 25 tests in 29.409s
+tests.test_cli_merge_store rc=0 Ran 11 tests in 0.704s
+tests.test_cli_merge_integration_shard2 rc=0 Ran 27 tests in 145.680s
+tests.test_cli_loader rc=0 Ran 14 tests in 1.571s
+tests.test_cli_merge_integration rc=0 Ran 28 tests in 167.033s
+tests.test_cli_merge_integration_shard1 rc=0 Ran 27 tests in 184.108s
+full set: 7/7 modules OK, xargs rc=0, wall=184s
+run 2 rc=0
