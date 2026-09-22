@@ -1,0 +1,6 @@
+--- e07 _run_bootstrap_generation_composite 450-473 -> _refuse_exceeded_bootstrap_scope
+e07: gate PASS, mypy NEW 0 GONE 0, params ['scope', 'self', 'state', 'proof', 'verb'] -> ['state'], source 482, dest None
+e07 _refuse_exceeded_bootstrap_scope: committed b8ac959
+--- e08 _run_bootstrap_generation_composite 413-428 -> _incomplete_bootstrap_refusal
+STOP: e08: inference differs from plan: ['scope_failure', 'verb', 'holder', 'composite_result', 'state'] -> ['refusal']
+rc=1

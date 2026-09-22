@@ -116,9 +116,10 @@
    "dest": null,
    "priority": false,
    "expect": {
-    "params": 6,
+    "params": 5,
     "outputs": 1
-   }
+   },
+   "note": "scanner estimated 6 inputs; `reason` is assigned inside the range, rope infers 5"
   },
   {
    "id": "e09",
