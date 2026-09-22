@@ -1,0 +1,8 @@
+tests.test_cli_merge_lifecycle rc=0 Ran 115 tests in 133.896s
+tests.test_cli_merge_integration_shard2 rc=0 Ran 27 tests in 160.703s
+tests.test_cli_merge_store rc=0 Ran 11 tests in 0.690s
+tests.test_cli_merge_adapters rc=0 Ran 25 tests in 27.920s
+tests.test_cli_loader rc=0 Ran 14 tests in 1.544s
+tests.test_cli_merge_integration rc=0 Ran 28 tests in 180.061s
+tests.test_cli_merge_integration_shard1 rc=0 Ran 27 tests in 199.460s
+full set: 7/7 modules OK, xargs rc=0, wall=200s

@@ -1,0 +1,19 @@
+................E...........
+======================================================================
+ERROR: test_inactive_older_only_landing_releases_tagged_terminal (tests.test_cli_merge_integration.MergeIntegrationEpochTests.test_inactive_older_only_landing_releases_tagged_terminal)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin/tests/test_cli_merge_integration.py", line 3461, in test_inactive_older_only_landing_releases_tagged_terminal
+    recovered = engine.recover()
+  File "/home/agents/foundry-of-zero/forge-plugin/scripts/forge/forge_cli/app/_engine_recover.py", line 585, in recover
+    next_steps = _recover_next_steps(current, action)
+  File "/home/agents/foundry-of-zero/forge-plugin/scripts/forge/forge_cli/app/_engine_recover_steps.py", line 20, in _recover_next_steps
+    raise chain_core._merge_refusal(
+    ...<4 lines>...
+    )
+forge_cli.envelope.Refusal: forge: merge recover observed push-outcome-unknown
+
+----------------------------------------------------------------------
+Ran 28 tests in 271.251s
+
+FAILED (errors=1)

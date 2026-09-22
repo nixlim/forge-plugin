@@ -1,0 +1,9 @@
+--- e03 _run_carried_successor_ancestry 280-295 -> _durable_ancestry_containment
+e03: gate PASS, mypy NEW 0 GONE 0, params ['state', 'result'] -> ['contained'], source 289, dest None
+e03 _durable_ancestry_containment: committed 913f275
+--- e04 _run_carried_successor_ancestry 119-163 -> _replayed_ancestry_containment
+e04: gate PASS, mypy NEW 0 GONE 0, params ['replay_context', 'source_intent', 'state'] -> ['contained'], source 292, dest None
+e04 _replayed_ancestry_containment: committed 05288f0
+--- e05 _run_remote_observation 471-508 -> _persist_remote_observation_delta
+STOP: e05: full set FAILED (see .refactor/fullset-merge-engine-t2-e05-_persist_remote_observation_delta.txt)
+rc=1

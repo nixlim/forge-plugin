@@ -1,0 +1,13 @@
+== verify.sh (per-cluster focused set)
+$ bash /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/verify.sh --pkg scripts/forge/forge_cli --snapshot .refactor/merge-engine-t2-e05-before.json --manifest .refactor/merge-engine-t2-e05-_persist_remote_observation_delta.json --strict-bodies
+== gate results ==
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS tests
+GATE: PASS
+[exit 0]
+

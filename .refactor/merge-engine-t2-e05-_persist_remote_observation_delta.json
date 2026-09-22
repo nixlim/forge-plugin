@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_observe_remote.py": "200f79c257405998ac39d0946bad67de50889a9849028f4b26cc4616a83c200c",
+    "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_observe_remote.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py",
+      "function": "_run_remote_observation",
+      "name": "_persist_remote_observation_delta",
+      "imports": {
+        "scripts/forge/forge_cli/app/_engine_observe_remote.py": [
+          "from forge_cli.app._engine_observe_remote_steps import _persist_remote_observation_delta"
+        ],
+        "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from typing import Any",
+          "from forge_cli import chain_core"
+        ]
+      },
+      "start_line": 471,
+      "end_line": 508,
+      "parameters": [
+        "next_integration",
+        "next_state",
+        "state",
+        "carried_generation",
+        "self",
+        "lease"
+      ],
+      "outputs": [
+        "state"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "05288f07737caecdcb78c95f572945ad1ad63ea1"
+}

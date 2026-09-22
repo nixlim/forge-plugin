@@ -1,0 +1,14 @@
+== full
+$ bash .refactor/merge-engine-full-set.sh .refactor/fullset-merge-engine-t2-e05-_persist_remote_observation_delta
+tests.test_cli_merge_lifecycle rc=0 Ran 115 tests in 219.162s
+tests.test_cli_merge_integration_shard2 rc=0 Ran 27 tests in 244.673s
+tests.test_cli_merge_store rc=0 Ran 11 tests in 0.762s
+tests.test_cli_loader rc=0 Ran 14 tests in 2.440s
+tests.test_cli_merge_adapters rc=0 Ran 25 tests in 38.767s
+tests.test_cli_merge_integration rc=1 Ran 28 tests in 271.251s
+tests.test_cli_merge_integration_shard1 rc=1 Ran 27 tests in 283.963s
+FULL-SET FAIL: tests.test_cli_merge_integration (see .refactor/fullset-merge-engine-t2-e05-_persist_remote_observation_delta/tests.test_cli_merge_integration.txt)
+FULL-SET FAIL: tests.test_cli_merge_integration_shard1 (see .refactor/fullset-merge-engine-t2-e05-_persist_remote_observation_delta/tests.test_cli_merge_integration_shard1.txt)
+full set: 5/7 modules OK, xargs rc=123, wall=285s
+[exit 1]
+

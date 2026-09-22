@@ -1,0 +1,35 @@
+................F..........
+======================================================================
+FAIL: test_inactive_push_observed_requires_fresh_completed_progress (tests.test_cli_merge_integration.MergeIntegrationEpochTests.test_inactive_push_observed_requires_fresh_completed_progress)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin/tests/test_cli_merge_integration.py", line 2932, in test_inactive_push_observed_requires_fresh_completed_progress
+    self.prepare_older_only_attempts(defer_post_observation=False)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/agents/foundry-of-zero/forge-plugin/tests/test_cli_merge_integration.py", line 662, in prepare_older_only_attempts
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        current["integration"]["push"]["attempted_heads"],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        [older_head, newer_head],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Lists differ: ['c85[20 chars]446267398a8667043'] != ['c85[20 chars]446267398a8667043', '0e8099897bc87b6d1d15ecbf01ae5e7a9d2e6266']
+
+Second list contains 1 additional elements.
+First extra element 1:
+'0e8099897bc87b6d1d15ecbf01ae5e7a9d2e6266'
+
+- ['c85b34e186368735ae5c024446267398a8667043']
+?                                            ^
+
++ ['c85b34e186368735ae5c024446267398a8667043',
+?                                            ^
+
++  '0e8099897bc87b6d1d15ecbf01ae5e7a9d2e6266']
+
+----------------------------------------------------------------------
+Ran 27 tests in 283.963s
+
+FAILED (failures=1)
