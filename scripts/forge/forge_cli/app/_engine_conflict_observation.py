@@ -1,0 +1,250 @@
+from __future__ import annotations
+
+import copy
+import os
+import secrets
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
+
+from forge_cli import chain_core, engine, runtime
+from forge_cli.envelope import FrozenError, Refusal
+from forge_cli.policy import sha256_bytes
+
+if TYPE_CHECKING:
+    from forge_cli.app._merge_engine import MergeEngine
+
+def _run_conflict_observation_locked(
+    self: "MergeEngine",
+    state: dict[str, Any],
+    lock: chain_core.CommonRebaseLock,
+    lease: chain_core.ChainLease,
+    *,
+    kind: str,
+    paths: Sequence[str] = (),
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Run one conflict snapshot as three bounded, durable fenced reads."""
+
+    chain_core._require_merge_integration_control("conflict-continue-contract")
+    if kind not in {"conflict", "post-add"}:
+        raise ValueError("invalid conflict observation kind")
+    try:
+        selected_paths = (
+            engine._normalize_merge_conflict_paths(paths)
+            if kind == "post-add" or paths
+            else ()
+        )
+    except (TypeError, ValueError):
+        return state, None
+    integration = state.get("integration")
+    epoch = integration.get("epoch") if isinstance(integration, Mapping) else None
+    pre_rebase = (
+        integration.get("pre_rebase")
+        if isinstance(integration, Mapping)
+        else None
+    )
+    current_intent = (
+        integration.get("intent") if isinstance(integration, Mapping) else None
+    )
+    phase = current_intent.get("phase") if isinstance(current_intent, Mapping) else None
+    source_intent = (
+        current_intent.get("source_intent")
+        if isinstance(current_intent, Mapping)
+        and isinstance(phase, str)
+        and phase.startswith("forge-conflict-observation:")
+        else current_intent
+    )
+    action = chain_core._merge_rebase_action(state)
+    if (
+        not isinstance(epoch, Mapping)
+        or not isinstance(pre_rebase, Mapping)
+        or not isinstance(source_intent, Mapping)
+        or action is None
+    ):
+        return state, None
+    identity = {
+        "operation_nonce": epoch.get("operation_nonce"),
+        "pre_operation_head": pre_rebase.get("head"),
+        "fetched_tip": pre_rebase.get("fetched_tip"),
+        "branch": state.get("branch"),
+        "generation_digest": pre_rebase.get("generation_digest"),
+        "reflog_action": action,
+    }
+    source_state = copy.deepcopy(state)
+    source_state["integration"]["intent"] = copy.deepcopy(dict(source_intent))
+    if not engine._merge_owned_rebase_metadata(source_state):
+        return state, None
+    commands: tuple[tuple[str, list[str]], ...] = (
+        ("unmerged", ["git", "diff", "--name-only", "--diff-filter=U", "-z", "--"]),
+        ("index", ["git", "ls-files", "--stage", "-z", "--"]),
+        (
+            "status",
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        ),
+    )
+    environment = os.environ.copy()
+    environment.pop("FORGE_SESSION_PID", None)
+    environment.update(
+        {
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_REFLOG_ACTION": action,
+        }
+    )
+    observation_nonce = secrets.token_hex(16)
+    observation_binding = sha256_bytes(
+        chain_core.canonical_bytes(
+            {
+                "kind": kind,
+                "observation_nonce": observation_nonce,
+                "paths": list(selected_paths),
+                "source_intent": source_intent,
+            }
+        )
+    )
+
+    def restore_source_intent() -> None:
+        nonlocal state
+        if state.get("integration", {}).get("intent") == source_intent:
+            return
+        restored = copy.deepcopy(state["integration"])
+        restored["intent"] = copy.deepcopy(dict(source_intent))
+        state = self._epoch_transition(
+            state,
+            lease,
+            "rebase_intent",
+            {"delta": {"integration": restored}},
+        )
+
+    outputs: dict[str, bytes] = {}
+    output_digests: dict[str, str] = {}
+    worktree = Path(str(state["worktree"]["path"]))
+    for name, argv in commands:
+        if not engine._merge_owned_rebase_metadata(
+            {
+                **state,
+                "integration": {
+                    **state["integration"],
+                    "intent": {
+                        "operation": "continue",
+                        **identity,
+                    },
+                },
+            }
+        ):
+            restore_source_intent()
+            return state, None
+        observation_intent = {
+            "operation": "continue",
+            **identity,
+            "phase": f"forge-conflict-observation:{kind}:{name}:intent",
+            "observation_nonce": observation_nonce,
+            "observation_binding": observation_binding,
+            "observation_kind": kind,
+            "observation_step": name,
+            "authorized_paths": list(selected_paths),
+            "prior_output_digests": copy.deepcopy(output_digests),
+            "source_intent": copy.deepcopy(dict(source_intent)),
+            "started_at": chain_core.iso_z(),
+        }
+        updated = copy.deepcopy(state["integration"])
+        updated["intent"] = copy.deepcopy(observation_intent)
+        state = self._epoch_transition(
+            state,
+            lease,
+            "rebase_intent",
+            {"delta": {"integration": updated}},
+        )
+        intent_digest = self._tail_event_digest(state, "rebase_intent")
+
+        def intent_current(
+            expected: Mapping[str, Any] = observation_intent,
+            expected_digest: str = intent_digest,
+        ) -> bool:
+            try:
+                fresh = self.store.load_locked(
+                    str(state["chain_id"]), lease=lease
+                )
+                return bool(
+                    fresh.get("state") == state.get("state")
+                    and fresh.get("integration", {}).get("condition") == "none"
+                    and fresh.get("integration", {}).get("intent") == expected
+                    and self._tail_event_digest(fresh, "rebase_intent")
+                    == expected_digest
+                )
+            except (FrozenError, KeyError, OSError, Refusal, ValueError):
+                return False
+
+        def persist_observation(result: chain_core.FencedProcessResult) -> None:
+            nonlocal state
+            result_intent = {
+                **copy.deepcopy(observation_intent),
+                "phase": f"forge-conflict-observation:{kind}:{name}:result",
+                "child_result": {
+                    "authorized": result.authorized,
+                    "exit": result.returncode,
+                    "inflight_digest": result.fence_digest,
+                    "output_digest": result.output_digest,
+                    "launch_failed": result.launch_failed,
+                    "timed_out": result.timed_out,
+                    "output_limit_exceeded": result.output_limit,
+                    "group_survived": result.group_survived,
+                },
+                "recorded_at": chain_core.iso_z(),
+            }
+            result_integration = copy.deepcopy(state["integration"])
+            result_integration["intent"] = result_intent
+            state = self._epoch_transition(
+                state,
+                lease,
+                "rebase_intent",
+                {"delta": {"integration": result_integration}},
+            )
+
+        result = chain_core.run_fenced_command(
+            lock,
+            operation="continue",
+            intent_digest=intent_digest,
+            intent_validator=intent_current,
+            argv=argv,
+            cwd=worktree,
+            persist_result=persist_observation,
+            env=environment,
+            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
+            cap=runtime.OUTPUT_CAP_BYTES,
+            verbose=self.ctx.options.verbose,
+        )
+        durable_result = state.get("integration", {}).get("intent", {}).get(
+            "child_result"
+        )
+        if (
+            not isinstance(durable_result, Mapping)
+            or durable_result.get("authorized") is not True
+            or durable_result.get("exit") != 0
+            or durable_result.get("launch_failed") is not False
+            or durable_result.get("timed_out") is not False
+            or durable_result.get("output_limit_exceeded") is not False
+            or durable_result.get("group_survived") is not False
+            or durable_result.get("inflight_digest") != result.fence_digest
+            or durable_result.get("output_digest") != result.output_digest
+        ):
+            restore_source_intent()
+            return state, None
+        outputs[name] = result.output
+        output_digests[name] = result.output_digest
+    if not engine._merge_owned_rebase_metadata(state):
+        restore_source_intent()
+        return state, None
+    observation = (
+        engine._observe_merge_conflict(
+            outputs["unmerged"], outputs["index"], outputs["status"]
+        )
+        if kind == "conflict"
+        else engine._observe_merge_post_add(
+            selected_paths,
+            outputs["unmerged"],
+            outputs["index"],
+            outputs["status"],
+        )
+    )
+    restore_source_intent()
+    return state, observation
