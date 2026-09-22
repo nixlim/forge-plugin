@@ -20,46 +20,24 @@ from unittest import mock
 from tests._cli_loader import patch_chain_core  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS = ROOT / "scripts/codex_orch_tools.py"
-FIXTURES = ROOT / "tests/fixtures"
-PREFIX_WEDGE_FIXTURE = ROOT / "tests/_fixtures/prefix-wedge-d77d997"
-UNREPLAYABLE_CHAIN_ID = "c-2026-08-21T223925Z-1490"
-UNREPLAYABLE_CHAIN_FIXTURE = (
-    ROOT / "tests/_fixtures/unreplayable-chain-1490"
+from tests._revision9_coord_constants import (
+    FIXTURES,
+    JOURNAL_FIXTURE_SHA256,
+    OUTPUT_FIXTURE_SHA256,
+    PREFIX_WEDGE_FIXTURE,
+    PREFIX_WEDGE_FIXTURE_SHA256,
+    ROOT,
+    TOOLS,
+    UNREPLAYABLE_CHAIN_FIXTURE,
+    UNREPLAYABLE_CHAIN_FIXTURE_SHA256,
+    UNREPLAYABLE_CHAIN_ID,
+    key,
 )
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import codex_orch_tools as ORCH_TOOLS  # noqa: E402
 from codex_orchestrator import batch, builders, journal  # noqa: E402
 from forge_cli import chain_core as CHAIN_CORE  # noqa: E402
-
-
-JOURNAL_FIXTURE_SHA256 = (
-    "dd0695b47a37506a10efa9f7889855ada36e7cf9d09fdfdae284c57b049eed86"
-)
-OUTPUT_FIXTURE_SHA256 = (
-    "41e563086b48340bb03f35734b6469551d9aab26efe14f12d38f88aebda3aa60"
-)
-PREFIX_WEDGE_FIXTURE_SHA256 = {
-    "intent.json": "0f3f28e6bfaba51a172ca4dc6a54d52bcb18dc5578e1929a8a1cb907a8afc42f",
-    "journal.jsonl": "c7a2e5fb6c56d1ba4e47e968d061a28a3b6fb4b7079d8571402bd1bd4ef73e58",
-    "owner.txt": "e0766d0114f351c944033ff4d0025cceed6b6ba7a33ede13be40239bbfeee284",
-    "receipts.jsonl": "bcbb1b44db79cfa604fb520def49c4dd80b50d82af6f78ea69dcae799fc4aae7",
-    "registry.json": "d92f7d6301da5f0aa5adbc54ca13dc726ee258f758fb798e3d6879bd721f1e25",
-}
-UNREPLAYABLE_CHAIN_FIXTURE_SHA256 = {
-    f"{UNREPLAYABLE_CHAIN_ID}.events.jsonl": (
-        "7563e6cdeca3f2218a288c70520e15136db38e9648cae462ffab0259b8c471f3"
-    ),
-    f"{UNREPLAYABLE_CHAIN_ID}.json": (
-        "db0fae7dd4337fb36e14a50b833a48ba0ed5ff19bc93c6adac21a0e60e87658f"
-    ),
-}
-
-
-def key(label: str) -> str:
-    return hashlib.sha256(label.encode("utf-8")).hexdigest()
 
 
 class Revision9FixtureTests(unittest.TestCase):
