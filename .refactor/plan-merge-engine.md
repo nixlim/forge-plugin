@@ -18,7 +18,7 @@ the prep commits currently stand:
    source, so ruff `UP037` (quoted-annotation; `UP` is selected project-wide, `pyproject.toml:28`) fires once per
    annotated function. `UP037` is **not** in the `_merge_engine.py` list, so "that list minus `I001`" does not cover it.
    - Reproduced: with P0 exactly as specified the c01 gate is `FAIL ruff-lint` (4x `UP037`) while compile, file-length,
-     types, import-contracts and bodies-unchanged all PASS -> `.refactor/merge-engine-sim-finding-up037-c01-gate.log`.
+     types, import-contracts and bodies-unchanged all PASS -> `.refactor/merge-engine-sim-finding-up037-c01-gate.txt`.
    - It cannot be fixed inside a tier-1 commit: `ruff --fix` rewrites the signature and the manifest oracle then reports
      `decompose oracle: FAIL: undeclared structural change` (control on the unfixed tree: PASS) ->
      `.refactor/merge-engine-sim-up037-probe.txt`. (A first attempt at that probe without `--isolated` was invalid —
@@ -95,8 +95,8 @@ Evidence files (all under `.refactor/`):
 `merge-engine-sim-results.json` (per cluster: sizes, bindings, imports, removals, gate tail, types line, sim SHA) ·
 `merge-engine-sim-types-delta.txt` (NEW/GONE per cluster) · `merge-engine-sim-final.txt` (final ruff, length,
 lint-imports, types, per-module ruff codes with the glob disabled, quality, probes, reader check) ·
-`merge-engine-sim-focused.txt` (focused tests on the final sim tree) · `merge-engine-sim-driver.log` ·
-`merge-engine-sim-finding-up037-c01-gate.log` · `merge-engine-sim-up037-probe.txt` · `merge-engine-sim-shell-ruff.txt` ·
+`merge-engine-sim-focused.txt` (focused tests on the final sim tree) · `merge-engine-sim-driver.txt` ·
+`merge-engine-sim-finding-up037-c01-gate.txt` · `merge-engine-sim-up037-probe.txt` · `merge-engine-sim-shell-ruff.txt` ·
 `merge-engine-sim-quality.json` · `merge-engine-debt-proposed.json` · `merge-engine-sim-clusters.json` ·
 `merge-engine-sim-tool-*.{py,sh}` (the driver, probes, reader check, type-delta helper, final checks — re-runnable).
 **Deliberately NOT copied:** the sim's manifests `merge-engine-<cluster>.json` and snapshots
@@ -1041,7 +1041,7 @@ lines, which is the tier-2 problem showing through, not a seam choice.
 
 ## 6. Risks the critic must check
 
-1. **UP037 / P0b (§0.1).** Verify the reproduction (`…-finding-up037-c01-gate.log`), that the fix is oracle-rejected
+1. **UP037 / P0b (§0.1).** Verify the reproduction (`…-finding-up037-c01-gate.txt`), that the fix is oracle-rejected
    (`…-up037-probe.txt`), and that P0b adds exactly one code. Confirm no `I001` anywhere in the glob or the finalize
    entries (it would silence `--format-imports`). Note the operator rule text says "minus I001" and nothing about
    adding — P0b needs an explicit nod.

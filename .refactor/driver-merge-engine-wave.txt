@@ -1,0 +1,85 @@
+--- c02 gate -> scripts/forge/forge_cli/app/_engine_gate.py
+c02 gate: gate PASS, mypy NEW 0 GONE 0, dest 396, shell 9762
+c02 gate: committed 8099e86
+--- c03 final_mode_recover -> scripts/forge/forge_cli/app/_engine_final_mode.py
+c03 final_mode_recover: gate PASS, mypy NEW 0 GONE 0, dest 312, shell 9634
+c03 final_mode_recover: committed 9d5d26a
+--- c04 lifecycle -> scripts/forge/forge_cli/app/_engine_lifecycle.py
+c04 lifecycle: gate PASS, mypy NEW 0 GONE 0, dest 318, shell 9331
+c04 lifecycle: committed 895577b
+--- c05 review_request -> scripts/forge/forge_cli/app/_engine_review_request.py
+c05 review_request: gate PASS, mypy NEW 0 GONE 0, dest 231, shell 9113
+c05 review_request: committed 7992869
+--- c06 review_verdict -> scripts/forge/forge_cli/app/_engine_review_verdict.py
+c06 review_verdict: gate PASS, mypy NEW 0 GONE 0, dest 315, shell 8811
+c06 review_verdict: committed 02e08d6
+--- c07 refresh -> scripts/forge/forge_cli/app/_engine_refresh.py
+c07 refresh: gate PASS, mypy NEW 0 GONE 0, dest 291, shell 8536
+c07 refresh: committed baf2ade
+--- c08 start_chain -> scripts/forge/forge_cli/app/_engine_start_chain.py
+c08 start_chain: gate PASS, mypy NEW 0 GONE 0, dest 454, shell 8100
+c08 start_chain: committed c2d2ce6
+--- c09 bootstrap -> scripts/forge/forge_cli/app/_engine_bootstrap.py
+c09 bootstrap: gate PASS, mypy NEW 0 GONE 0, dest 479, shell 7632
+c09 bootstrap: committed 1c48d7d
+--- c10 release_aborted -> scripts/forge/forge_cli/app/_engine_release_aborted.py
+c10 release_aborted: gate PASS, mypy NEW 0 GONE 0, dest 321, shell 7324
+c10 release_aborted: committed 8440b89
+--- c11 abort -> scripts/forge/forge_cli/app/_engine_abort.py
+c11 abort: gate PASS, mypy NEW 0 GONE 0, dest 419, shell 6917
+c11 abort: committed b22153c
+--- c12 release_pending -> scripts/forge/forge_cli/app/_engine_release_pending.py
+c12 release_pending: gate PASS, mypy NEW 0 GONE 0, dest 277, shell 6651
+c12 release_pending: committed 69aad1f
+--- c13 cleanup_child -> scripts/forge/forge_cli/app/_engine_cleanup_child.py
+c13 cleanup_child: gate PASS, mypy NEW 0 GONE 0, dest 311, shell 6354
+c13 cleanup_child: committed 6faaa1b
+--- c14 cleanup -> scripts/forge/forge_cli/app/_engine_cleanup.py
+c14 cleanup: gate PASS, mypy NEW 0 GONE 0, dest 438, shell 5926
+c14 cleanup: committed ba775d8
+--- c15 observation -> scripts/forge/forge_cli/app/_engine_observation.py
+c15 observation: gate PASS, mypy NEW 0 GONE 0, dest 264, shell 5675
+c15 observation: committed 15ee111
+--- c16 lock -> scripts/forge/forge_cli/app/_engine_lock.py
+c16 lock: gate PASS, mypy NEW 0 GONE 0, dest 591, shell 5095
+c16 lock: committed 61b3f8d
+--- c17 observation_parse -> scripts/forge/forge_cli/app/_engine_observation.py
+c17 observation_parse: gate PASS, mypy NEW 0 GONE 0, dest 338, shell 5022
+c17 observation_parse: committed 3bf9201
+--- c18 observe_remote -> scripts/forge/forge_cli/app/_engine_observe_remote.py
+c18 observe_remote: gate PASS, mypy NEW 0 GONE 0, dest 495, shell 4539
+c18 observe_remote: committed 90fd79c
+--- c19 epoch_fetch -> scripts/forge/forge_cli/app/_engine_epoch_fetch.py
+c19 epoch_fetch: gate PASS, mypy NEW 0 GONE 0, dest 446, shell 4109
+c19 epoch_fetch: committed 63ff143
+--- c20 epoch_ancestry -> scripts/forge/forge_cli/app/_engine_epoch_ancestry.py
+c20 epoch_ancestry: gate PASS, mypy NEW 0 GONE 0, dest 286, shell 3834
+c20 epoch_ancestry: committed 3bdd72c
+--- c21 epoch_rebase -> scripts/forge/forge_cli/app/_engine_epoch_rebase.py
+c21 epoch_rebase: gate PASS, mypy NEW 0 GONE 0, dest 449, shell 3399
+c21 epoch_rebase: committed 5017940
+--- c22 epoch_suite -> scripts/forge/forge_cli/app/_engine_epoch_suite.py
+c22 epoch_suite: gate PASS, mypy NEW 0 GONE 0, dest 392, shell 3019
+c22 epoch_suite: committed 8105445
+--- c23 epoch_push -> scripts/forge/forge_cli/app/_engine_epoch_push.py
+c23 epoch_push: gate PASS, mypy NEW 0 GONE 0, dest 251, shell 2780
+c23 epoch_push: committed 5bb21a9
+--- c24 rebase_recovery -> scripts/forge/forge_cli/app/_engine_rebase_recovery.py
+c24 rebase_recovery: gate PASS, mypy NEW 0 GONE 0, dest 356, shell 2439
+c24 rebase_recovery: committed f16aa87
+--- c25 conflict_observation -> scripts/forge/forge_cli/app/_engine_conflict_observation.py
+c25 conflict_observation: gate PASS, mypy NEW 0 GONE 0, dest 240, shell 2211
+c25 conflict_observation: committed 9ae78d4
+--- c26 recover_conflict -> scripts/forge/forge_cli/app/_engine_recover_conflict.py
+c26 recover_conflict: gate PASS, mypy NEW 0 GONE 0, dest 830, shell 1391
+c26 recover_conflict: committed d154cda
+--- c27 recover_bootstrap -> scripts/forge/forge_cli/app/_engine_recover_bootstrap.py
+c27 recover_bootstrap: gate PASS, mypy NEW 0 GONE 0, dest 397, shell 1006
+c27 recover_bootstrap: committed dba853d
+--- c28 recover -> scripts/forge/forge_cli/app/_engine_recover.py
+c28 recover: gate PASS, mypy NEW 0 GONE 0, dest 621, shell 396
+c28 recover: committed 4d5cf46
+--- c29 finalize -> scripts/forge/forge_cli/app/_engine_finalize.py
+c29 finalize: gate PASS, mypy NEW 0 GONE 0, dest 183, shell 224
+c29 finalize: committed f5ac5b3
+rc=0

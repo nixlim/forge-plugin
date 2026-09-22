@@ -13,4 +13,4 @@ unset FORGE_SESSION_PID REFACTOR_TYPE_CMD
   echo "digest_rc=${PIPESTATUS[0]}"
   echo "end=$(date -u +%FT%TZ)"
 } > "$out" 2>&1
-echo done > .refactor/gate-merge-engine-prep-iterator.done
+echo done > "$TMPDIR/gate-merge-engine-prep-iterator.done"

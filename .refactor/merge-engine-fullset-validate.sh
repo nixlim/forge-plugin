@@ -9,4 +9,4 @@ out=.refactor/fullset-merge-engine-baseline
     echo "run $n rc=$?"
   done
 } > "$out.txt" 2>&1
-echo done > "$out.done"
+echo done > "$TMPDIR/fullset-merge-engine-baseline.done"

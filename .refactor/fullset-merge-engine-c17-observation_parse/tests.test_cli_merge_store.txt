@@ -1,0 +1,7 @@
+.....forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating merge chains
+forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating commit chains
+......
+----------------------------------------------------------------------
+Ran 11 tests in 0.633s
+
+OK

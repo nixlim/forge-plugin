@@ -52,6 +52,33 @@
       "scripts/forge/forge_cli/app/_admission.py",
       "scripts/forge/forge_cli/app/_candidate_observation.py",
       "scripts/forge/forge_cli/app/_dispatch.py",
+      "scripts/forge/forge_cli/app/_engine_abort.py",
+      "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "scripts/forge/forge_cli/app/_engine_cleanup.py",
+      "scripts/forge/forge_cli/app/_engine_cleanup_child.py",
+      "scripts/forge/forge_cli/app/_engine_conflict_observation.py",
+      "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+      "scripts/forge/forge_cli/app/_engine_epoch_fetch.py",
+      "scripts/forge/forge_cli/app/_engine_epoch_push.py",
+      "scripts/forge/forge_cli/app/_engine_epoch_rebase.py",
+      "scripts/forge/forge_cli/app/_engine_epoch_suite.py",
+      "scripts/forge/forge_cli/app/_engine_final_mode.py",
+      "scripts/forge/forge_cli/app/_engine_finalize.py",
+      "scripts/forge/forge_cli/app/_engine_gate.py",
+      "scripts/forge/forge_cli/app/_engine_lifecycle.py",
+      "scripts/forge/forge_cli/app/_engine_lock.py",
+      "scripts/forge/forge_cli/app/_engine_observation.py",
+      "scripts/forge/forge_cli/app/_engine_observe_remote.py",
+      "scripts/forge/forge_cli/app/_engine_rebase_recovery.py",
+      "scripts/forge/forge_cli/app/_engine_recover.py",
+      "scripts/forge/forge_cli/app/_engine_recover_bootstrap.py",
+      "scripts/forge/forge_cli/app/_engine_recover_conflict.py",
+      "scripts/forge/forge_cli/app/_engine_refresh.py",
+      "scripts/forge/forge_cli/app/_engine_release_aborted.py",
+      "scripts/forge/forge_cli/app/_engine_release_pending.py",
+      "scripts/forge/forge_cli/app/_engine_review_request.py",
+      "scripts/forge/forge_cli/app/_engine_review_verdict.py",
+      "scripts/forge/forge_cli/app/_engine_start_chain.py",
       "scripts/forge/forge_cli/app/_merge_engine.py",
       "scripts/forge/forge_cli/app/_mutation_journal.py",
       "scripts/forge/forge_cli/candidate.py",
@@ -163,19 +190,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "3e55baa6df8722a87921d2ff0e23758cb9268802cbf15f95de467576fb35b7fd"
+      "result_sha256": "5a7ca4bd6315e632645e253f25cca0ce28a90829f293213ac5ef428a6c25a5c3"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "ee084603fe0460f32ab87a716318622202f89b3e43830148592a83962e90faf8"
+      "result_sha256": "8f1e0661873b3bd1a1f13fefdb8ca4350f8272e306c949b27b1768ce8c58067a"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "1febacf606a466405062c3d2243636279b796e32daedf2786151c04177ca0bc7"
+      "result_sha256": "894906ead17996bec031c64c0f485a20577ccd5b499f548f4a4de4742b18e053"
     },
     {
       "slot": "push",
@@ -193,13 +220,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "5c8947f9756c19e90562082d700ac3104b26ffb7f1163a96c176b905a9271404"
+      "result_sha256": "a9596f7fd068032dbc8eb68bcc281cf1fa2e34bbafbe57cd124b0a487e7cd157"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "e341e63447bba6997905273b6d7ea791ba87f6cfdd57c70d10cbaec3f4a1cc85"
+      "result_sha256": "115f1146949e9315340ace3acc1febf0b2c1bd5dd5ea2e1c4507b536a6304c17"
     }
   ]
 }

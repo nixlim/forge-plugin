@@ -1,0 +1,19 @@
+head=f5ac5b3bdc25699ee91e9725773505045ec83ba3 start=2026-09-22T11:43:50Z
+== gate results ==
+PASS mint
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+SKIP bodies-unchanged (no --snapshot)
+PASS tests
+GATE: PASS
+verify_rc=0
+tests.test_cli_merge_integration_shard1 rc=0 Ran 27 tests in 167.480s
+----------------------------------------------------------------------
+Ran 35 tests in 24.953s
+
+FAILED (failures=1)
+digest_rc=1
+end=2026-09-22T11:47:24Z
