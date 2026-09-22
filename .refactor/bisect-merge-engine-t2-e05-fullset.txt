@@ -1,0 +1,6 @@
+e05 full-set bisect 2026-09-22T14:28:10Z: bash .refactor/merge-engine-full-set.sh at each commit, in a detached worktree
+6e60498 docs(refactor): tier 2 driver transcript for e01-e02: rc=0 full set: 7/7 modules OK, xargs rc=0, wall=177s
+c81829d refactor(app): extract _recover_next_steps from recover (tie: rc=0 full set: 7/7 modules OK, xargs rc=0, wall=176s
+034df09 refactor(app): extract _acquire_recording_common_lock from _: rc=0 full set: 7/7 modules OK, xargs rc=0, wall=183s
+913f275 refactor(app): extract _durable_ancestry_containment from _r: rc=0 full set: 7/7 modules OK, xargs rc=0, wall=178s
+05288f0 refactor(app): extract _replayed_ancestry_containment from _: rc=0 full set: 7/7 modules OK, xargs rc=0, wall=177s

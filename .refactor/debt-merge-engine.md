@@ -71,10 +71,16 @@ bindings, so `quality.py` reports no class candidate. `__all__` of `app/__init__
   without annotations and on one line: the three `_engine_*_steps.py` modules and several in-module helpers trip
   `E501` (and `PLR0913` where a helper has six parameters). Carried in the measured per-module entries; the
   annotations are the same `self`-typing debt as forge-plugin-psvo.
-- **Reflection changes** (operations.md): moved functions report `__module__ = forge_cli.app._engine_<x>`, lose
-  the `MergeEngine.` `__qualname__` prefix, and bound methods are no longer picklable by qualified name; the
-  receiver annotation is a string until the UP037 commit. Nothing in `scripts/` or `tests/` reads these
-  (critique A5/A10).
+- **Reflection changes** (operations.md; Codex review B1/A2, nothing in `scripts/` or `tests/` reads any of them —
+  `.refactor/probe-merge-engine-get-type-hints.txt`): moved functions report `__module__ = forge_cli.app._engine_<x>`
+  and lose the `MergeEngine.` `__qualname__` prefix; plain moved functions still pickle by their new qualified
+  name, and the one new pickling failure is the `contextlib.contextmanager(...)` wrapper bound as
+  `_recording_common_lock` (pickle fails for 2 of 93 attributes at the tip vs 1, the `store` property, at baseline);
+  `typing.get_type_hints()` raises `NameError` for the 75 moved instance/class methods (baseline: 0 of 93) because
+  the receiver annotation names `MergeEngine`, imported only under `TYPE_CHECKING` (never evaluated at runtime, by
+  the `--annotate-self` contract); the UP037 commit only removed the quotes, it did not change resolvability.
+  `from forge_cli.app._merge_engine import <pruned name>` no longer works for the 19 imports the mover pruned from
+  the shell (private path; readers checked at every cluster).
 - **Dead-code candidates, not deleted** (plan §1): `_record_bootstrap_failure`, `_resolved_fetch_tip`,
   `_restore_bootstrap_fetch_observation_locked`, `_parse_remote_observation` have no caller; `_head_contained` is a
   census tripwire and stays. Deletion is not a tier-1/2 move; listed for forge-plugin-c4l4's triage.

@@ -1,0 +1,7 @@
+e05 bisect re-run 2026-09-22T13:59:28Z: the two tests that failed the e05 parallel checkpoint, at each tier-2 commit
+6e60498 docs(refactor): tier 2 driver transcript for e01-e02: OK
+c81829d refactor(app): extract _recover_next_steps from recover (tier 2, decla: OK
+034df09 refactor(app): extract _acquire_recording_common_lock from _recording_: OK
+913f275 refactor(app): extract _durable_ancestry_containment from _run_carried: OK
+05288f0 refactor(app): extract _replayed_ancestry_containment from _run_carrie: OK
+3f421b0 refactor(app): extract _persist_remote_observation_delta from _run_rem: OK

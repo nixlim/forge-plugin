@@ -176,7 +176,8 @@ for path in sorted(glob.glob("scripts/forge/forge_cli/app/_engine_*.py")):
     ) in t.body:  # top level only: the TYPE_CHECKING block is an ast.If and is skipped on purpose
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             text = ast.unparse(node)
-            if "_merge_engine" in text or re.search(r"_engine_\w+", text):
+            # tier 2 (second wave): a seam module may import its declared _steps sibling
+            if "_merge_engine" in text or re.search(r"_engine_\w+(?<!_steps)\b", text):
                 bad.append((os.path.basename(path), text))
     for node in ast.walk(t):
         if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in t.body:
@@ -184,8 +185,8 @@ for path in sorted(glob.glob("scripts/forge/forge_cli/app/_engine_*.py")):
             if text != "from forge_cli.app._merge_engine import MergeEngine":
                 bad.append((os.path.basename(path), "nested: " + text))
 probe(
-    "no _engine_* module imports _merge_engine at runtime or another _engine_* (only the \
-TYPE_CHECKING class import is nested)",
+    "no _engine_* module imports _merge_engine at runtime or another _engine_* except its \
+declared _steps sibling (only the TYPE_CHECKING class import is nested)",
     not bad,
     bad[:5],
 )

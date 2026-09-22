@@ -1,14 +1,14 @@
 {
  "scripts/forge/forge_cli/app/_engine_lock.py": {
-  "reason": "provisional 591 code lines: the single method _recording_common_lock (559 source lines, 5 nested defs) exceeds the 500 module target on its own; tier 1 relocates bodies verbatim and cannot shrink it",
-  "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py candidates from function_inventory.py blocks); residual closure/state design is forge-plugin-g8kf"
+  "reason": "578 code lines after tier-2 e02 (provisional 591 at P2): the single contextmanager _recording_common_lock (545 lines) exceeds the 500 module target on its own; the rest is five annotated closures plus a yield",
+  "follow_up": "forge-plugin-g8kf (closure state object; hoisting refused for annotated closures)"
  },
  "scripts/forge/forge_cli/app/_engine_recover.py": {
-  "reason": "provisional 621 code lines: the single method recover (616 source lines) exceeds the 500 module target on its own; tier 1 relocates bodies verbatim and cannot shrink it",
-  "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py candidates from function_inventory.py blocks); residual closure/state design is forge-plugin-g8kf"
+  "reason": "584 code lines after tier-2 e01 (provisional 621 at P2): the single method recover (578 lines) exceeds the 500 module target on its own; the five remaining ranges each have two outputs",
+  "follow_up": "forge-plugin-c4l4 (two-output ranges A+B bring the module under 500 with --dest)"
  },
  "scripts/forge/forge_cli/app/_engine_recover_conflict.py": {
-  "reason": "provisional 830 code lines: the single method _recover_conflict_locked (843 source lines, 11 nested defs) exceeds the 500 module target on its own; tier 1 relocates bodies verbatim and cannot shrink it",
-  "follow_up": "forge-plugin-37fr tier 2 checkpoint (extract_ranges.py candidates from function_inventory.py blocks); residual closure/state design is forge-plugin-g8kf"
+  "reason": "830 code lines (no eligible tier-2 range: every candidate has two outputs or calls the nonlocal-writing closure mark_foreign): the single method _recover_conflict_locked (843 lines, 11 nested defs) exceeds the 500 module target on its own",
+  "follow_up": "forge-plugin-c4l4 (two-output ranges), forge-plugin-g8kf (closure state object)"
  }
 }
