@@ -1,0 +1,7 @@
+extraction e06 on HEAD 3f421b03138906abd8e8e2861e27fc99da135aa5
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_observe_remote.py --function _run_remote_observation --start 437 --end 456 --name _classify_nonmovement_observation --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e06-_classify_nonmovement_observation.json --dest scripts/forge/forge_cli/app/_engine_observe_remote_steps.py
+REFUSED: range must span complete consecutive statements of one block in the selected function
+[exit 1]
+

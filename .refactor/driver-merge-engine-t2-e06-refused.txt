@@ -1,0 +1,3 @@
+--- e06 _run_remote_observation 437-456 -> _classify_nonmovement_observation
+STOP: e06: dry run refused (see .refactor/apply-merge-engine-t2-e06-_classify_nonmovement_observation.txt)
+rc=1

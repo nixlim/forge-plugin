@@ -1,17 +1,152 @@
 {
  "rule": "operator 2026-09-22: complete consecutive statements of one block, no return/yield/await, no break/continue whose loop is outside, at most 6 parameters, at most 1 output, no closure-state hazard, helper reads as one step; priority = the three provisional-baseline modules; optional ranges only when clean; stop after the first two unless both pass cleanly on the first attempt",
- "full_set_after": ["e05", "e10", "e11"],
+ "full_set_after": [
+  "e05",
+  "e10",
+  "e11"
+ ],
  "extractions": [
-  {"id": "e01", "source": "scripts/forge/forge_cli/app/_engine_recover.py", "function": "recover", "start": 584, "end": 622, "name": "_recover_next_steps", "dest": "scripts/forge/forge_cli/app/_engine_recover_steps.py", "priority": true, "expect": {"params": 2, "outputs": 1}},
-  {"id": "e02", "source": "scripts/forge/forge_cli/app/_engine_lock.py", "function": "_recording_common_lock", "start": 590, "end": 604, "name": "_acquire_recording_common_lock", "dest": "scripts/forge/forge_cli/app/_engine_lock_steps.py", "priority": true, "expect": {"params": 5, "outputs": 1}},
-  {"id": "e03", "source": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py", "function": "_run_carried_successor_ancestry", "start": 280, "end": 295, "name": "_durable_ancestry_containment", "dest": null, "priority": false, "expect": {"params": 2, "outputs": 1}},
-  {"id": "e04", "source": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py", "function": "_run_carried_successor_ancestry", "start": 119, "end": 163, "name": "_replayed_ancestry_containment", "dest": null, "priority": false, "expect": {"params": 3, "outputs": 1}},
-  {"id": "e05", "source": "scripts/forge/forge_cli/app/_engine_observe_remote.py", "function": "_run_remote_observation", "start": 471, "end": 508, "name": "_persist_remote_observation_delta", "dest": "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py", "priority": false, "expect": {"params": 6, "outputs": 1}},
-  {"id": "e06", "source": "scripts/forge/forge_cli/app/_engine_observe_remote.py", "function": "_run_remote_observation", "start": 437, "end": 456, "name": "_classify_nonmovement_observation", "dest": "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py", "priority": false, "expect": {"params": 4, "outputs": 1}},
-  {"id": "e07", "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py", "function": "_run_bootstrap_generation_composite", "start": 450, "end": 473, "name": "_refuse_exceeded_bootstrap_scope", "dest": null, "priority": false, "expect": {"params": 5, "outputs": 1}},
-  {"id": "e08", "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py", "function": "_run_bootstrap_generation_composite", "start": 413, "end": 428, "name": "_incomplete_bootstrap_refusal", "dest": null, "priority": false, "expect": {"params": 6, "outputs": 1}},
-  {"id": "e09", "source": "scripts/forge/forge_cli/app/_engine_epoch_suite.py", "function": "_run_epoch_suite", "start": 144, "end": 168, "name": "_stack_cell_argv", "dest": null, "priority": false, "expect": {"params": 6, "outputs": 1}},
-  {"id": "e10", "source": "scripts/forge/forge_cli/app/_engine_cleanup.py", "function": "cleanup_chain", "start": 443, "end": 460, "name": "_cleanup_release_to_closed", "dest": null, "priority": false, "expect": {"params": 4, "outputs": 1}}
+  {
+   "id": "e01",
+   "source": "scripts/forge/forge_cli/app/_engine_recover.py",
+   "function": "recover",
+   "start": 584,
+   "end": 622,
+   "name": "_recover_next_steps",
+   "dest": "scripts/forge/forge_cli/app/_engine_recover_steps.py",
+   "priority": true,
+   "expect": {
+    "params": 2,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e02",
+   "source": "scripts/forge/forge_cli/app/_engine_lock.py",
+   "function": "_recording_common_lock",
+   "start": 590,
+   "end": 604,
+   "name": "_acquire_recording_common_lock",
+   "dest": "scripts/forge/forge_cli/app/_engine_lock_steps.py",
+   "priority": true,
+   "expect": {
+    "params": 5,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e03",
+   "source": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+   "function": "_run_carried_successor_ancestry",
+   "start": 280,
+   "end": 295,
+   "name": "_durable_ancestry_containment",
+   "dest": null,
+   "priority": false,
+   "expect": {
+    "params": 2,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e04",
+   "source": "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py",
+   "function": "_run_carried_successor_ancestry",
+   "start": 119,
+   "end": 163,
+   "name": "_replayed_ancestry_containment",
+   "dest": null,
+   "priority": false,
+   "expect": {
+    "params": 3,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e05",
+   "source": "scripts/forge/forge_cli/app/_engine_observe_remote.py",
+   "function": "_run_remote_observation",
+   "start": 471,
+   "end": 508,
+   "name": "_persist_remote_observation_delta",
+   "dest": "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py",
+   "priority": false,
+   "expect": {
+    "params": 6,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e06",
+   "source": "scripts/forge/forge_cli/app/_engine_observe_remote.py",
+   "function": "_run_remote_observation",
+   "start": 438,
+   "end": 457,
+   "name": "_classify_nonmovement_observation",
+   "dest": "scripts/forge/forge_cli/app/_engine_observe_remote_steps.py",
+   "priority": false,
+   "expect": {
+    "params": 4,
+    "outputs": 1
+   },
+   "note": "range shifted by +1 after e05 added its import line at the top of the module"
+  },
+  {
+   "id": "e07",
+   "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+   "function": "_run_bootstrap_generation_composite",
+   "start": 450,
+   "end": 473,
+   "name": "_refuse_exceeded_bootstrap_scope",
+   "dest": null,
+   "priority": false,
+   "expect": {
+    "params": 5,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e08",
+   "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+   "function": "_run_bootstrap_generation_composite",
+   "start": 413,
+   "end": 428,
+   "name": "_incomplete_bootstrap_refusal",
+   "dest": null,
+   "priority": false,
+   "expect": {
+    "params": 6,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e09",
+   "source": "scripts/forge/forge_cli/app/_engine_epoch_suite.py",
+   "function": "_run_epoch_suite",
+   "start": 144,
+   "end": 168,
+   "name": "_stack_cell_argv",
+   "dest": null,
+   "priority": false,
+   "expect": {
+    "params": 6,
+    "outputs": 1
+   }
+  },
+  {
+   "id": "e10",
+   "source": "scripts/forge/forge_cli/app/_engine_cleanup.py",
+   "function": "cleanup_chain",
+   "start": 443,
+   "end": 460,
+   "name": "_cleanup_release_to_closed",
+   "dest": null,
+   "priority": false,
+   "expect": {
+    "params": 4,
+    "outputs": 1
+   }
+  }
  ],
  "not_eligible": {
   "_recover_conflict_locked": "every candidate has 2 outputs or a mark_foreign hazard; module stays 830 -> follow-up bead / forge-plugin-g8kf",
