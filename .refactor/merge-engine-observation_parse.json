@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "74988a4260b1e02942e1ffae16226bdbc3ad60ee0ecab372363d201da8a77d55",
+    "scripts/forge/forge_cli/app/_engine_observation.py": "9efef9a2e92eec505cacfe2c1da61dac5b0274cf940397c09c3a04dd756d15ae"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_observation.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_parse_remote_observation",
+        "_parse_fetched_remote_observation",
+        "_head_contained"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_observation",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [],
+        "scripts/forge/forge_cli/app/_engine_observation.py": [
+          "from pathlib import Path"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_observation.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "61b3f8ddb69e7e69d89185e7af8172305119a50f"
+}

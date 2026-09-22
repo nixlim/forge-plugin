@@ -1519,86 +1519,9 @@ class MergeEngine:
                         str(state["steps"][gate_id][-1]["transcript"])
                     ],
                 )
-
-    @staticmethod
-    def _parse_remote_observation(
-        result: chain_core.FencedProcessResult, destination_ref: str
-    ) -> tuple[bool | None, str | None]:
-        complete = bool(
-            result.returncode == 0
-            and not result.launch_failed
-            and not result.timed_out
-            and not result.output_limit
-            and not result.group_survived
-        )
-        if not complete:
-            return None, None
-        if not result.output:
-            return False, None
-        try:
-            decoded = result.output.decode("ascii")
-        except UnicodeDecodeError:
-            return None, None
-        rows = decoded.splitlines()
-        if len(rows) != 1:
-            return None, None
-        fields = rows[0].split("\t")
-        if (
-            len(fields) != 2
-            or fields[1] != destination_ref
-            or chain_core.COMMIT_RE.fullmatch(fields[0]) is None
-        ):
-            return None, None
-        return True, fields[0]
-
-    @staticmethod
-    def _parse_fetched_remote_observation(
-        result: chain_core.FencedProcessResult,
-        destination_ref: str,
-        git_dir: Path,
-    ) -> tuple[bool | None, str | None]:
-        """Classify the single fixed-ref observation fetch without a stale ref."""
-
-        complete = bool(
-            result.authorized
-            and not result.launch_failed
-            and not result.timed_out
-            and not result.output_limit
-            and not result.group_survived
-            and result.returncode is not None
-        )
-        if not complete:
-            return None, None
-        if result.returncode != 0:
-            expected = f"couldn't find remote ref {destination_ref}".encode("utf-8")
-            return (False, None) if expected in result.output else (None, None)
-        fetch_head = git_dir / "FETCH_HEAD"
-        try:
-            raw = fetch_head.read_bytes()
-        except OSError:
-            return None, None
-        if len(raw) > chain_core.MERGE_SCOPE_BINDING_CAP_BYTES or not raw.endswith(b"\n"):
-            return None, None
-        rows = raw.splitlines()
-        if len(rows) != 1:
-            return None, None
-        raw_oid = rows[0].split(b"\t", 1)[0]
-        try:
-            oid = raw_oid.decode("ascii")
-        except UnicodeDecodeError:
-            return None, None
-        if chain_core.COMMIT_RE.fullmatch(oid) is None:
-            return None, None
-        return True, oid
-
-    @staticmethod
-    def _head_contained(repository: chain_core.Repository, head: str, tip: str) -> bool:
-        return (
-            repository.git(
-                ["merge-base", "--is-ancestor", head, tip], check=False
-            ).returncode
-            == 0
-        )
+    _parse_remote_observation = staticmethod(_engine_observation._parse_remote_observation)
+    _parse_fetched_remote_observation = staticmethod(_engine_observation._parse_fetched_remote_observation)
+    _head_contained = staticmethod(_engine_observation._head_contained)
 
     def _run_remote_observation(
         self,
