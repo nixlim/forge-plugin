@@ -9,7 +9,9 @@ raw = open(path, encoding="utf-8").read()
 m = json.loads(raw)
 prod = m["subjects"]["production"]
 new = sorted(glob.glob("scripts/forge/forge_cli/app/_engine_*.py"))
-assert len(new) == 27, new
+added = sorted(set(new) - set(prod))
+assert added, "no new app/_engine_*.py subject"
+print("adding", len(added), "subject(s)")
 app = [p for p in prod if p.startswith("scripts/forge/forge_cli/app/")]
 assert app == sorted(app), "app block is not sorted; inspect before editing"
 merged = sorted(set(app) | set(new))

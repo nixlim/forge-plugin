@@ -1,0 +1,4 @@
+--- e10 cleanup_chain 443-460 -> _cleanup_release_to_closed
+e10: gate PASS, mypy NEW 0 GONE 0, params ['self', 'current', 'lease'] -> ['current'], source 441, dest None
+e10 _cleanup_release_to_closed: committed 22cb6a8
+rc=0
