@@ -106,11 +106,12 @@ def extractor_argv(item, p):
 
 def check_manifest_text(eid, item, out):
     """The dry run prints the manifest; check rope's inference against the plan and the rule."""
-    start = out.find("{")
-    end = out.rfind("}")
+    # The pretty-printed manifest is the column-0 "{" ... "}" block right before the verdict.
+    end = out.rfind("\n}\n")
+    start = out.rfind("\n{\n", 0, end)
     if start < 0 or end < 0:
         fail(f"{eid}: no manifest in dry-run output")
-    manifest = json.loads(out[start : end + 1])
+    manifest = json.loads(out[start + 1 : end + 2])
     op = manifest["operations"][0]
     params, outputs = op.get("parameters", []), op.get("outputs", [])
     if len(params) > 6 or len(outputs) > 1:
