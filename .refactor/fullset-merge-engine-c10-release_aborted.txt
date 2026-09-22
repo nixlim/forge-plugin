@@ -1,0 +1,12 @@
+== full set
+$ bash .refactor/merge-engine-full-set.sh .refactor/fullset-merge-engine-c10-release_aborted
+tests.test_cli_merge_lifecycle rc=0 Ran 115 tests in 111.229s
+tests.test_cli_merge_adapters rc=0 Ran 25 tests in 27.097s
+tests.test_cli_merge_store rc=0 Ran 11 tests in 0.608s
+tests.test_cli_loader rc=0 Ran 14 tests in 1.342s
+tests.test_cli_merge_integration_shard2 rc=0 Ran 27 tests in 141.492s
+tests.test_cli_merge_integration rc=0 Ran 28 tests in 159.719s
+tests.test_cli_merge_integration_shard1 rc=0 Ran 27 tests in 177.124s
+full set: 7/7 modules OK, xargs rc=0, wall=177s
+[exit 0]
+

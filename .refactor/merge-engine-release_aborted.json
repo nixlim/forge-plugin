@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "4098c242de59c33ffeede343c15bdd7d4b1560e77747c2224573d26692b6ca84",
+    "scripts/forge/forge_cli/app/_engine_release_aborted.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_release_aborted.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_release_to_aborted",
+        "_release_to_aborted_locked",
+        "_release_scope_exceeded"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_release_aborted",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_release_aborted"
+        ],
+        "scripts/forge/forge_cli/app/_engine_release_aborted.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_release_aborted.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "1c48d7d8328672b228e755f365fb635517bd7d8e"
+}
