@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "ede9b5675aa4b3f520992a86f5d528de815f0c8f77632c561ccb0e0d2b5ad425",
+    "scripts/forge/forge_cli/app/_engine_lock.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_lock.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_record_common_release_failure",
+        "_recording_common_lock"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_lock",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_lock"
+        ],
+        "scripts/forge/forge_cli/app/_engine_lock.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from pathlib import Path",
+          "from typing import Any, Iterator, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_lock.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "Iterator"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "15ee1110b685f2a639a5d0cda23c4fc979e06d07"
+}

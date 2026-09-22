@@ -1,0 +1,1308 @@
+cluster c16 on HEAD 15ee1110b685f2a639a5d0cda23c4fc979e06d07
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/move_methods.py --project . --source scripts/forge/forge_cli/app/_merge_engine.py --class MergeEngine --methods _record_common_release_failure,_recording_common_lock --dest scripts/forge/forge_cli/app/_engine_lock.py --import-root scripts/forge --shape function --annotate-self --format-imports --manifest .refactor/merge-engine-lock.json
+--- scripts/forge/forge_cli/app/_merge_engine.py
++++ scripts/forge/forge_cli/app/_merge_engine.py
+@@ -7,7 +7,7 @@
+ import secrets
+ import sys
+ from pathlib import Path
+-from typing import Any, Callable, Iterator, Mapping, Sequence
++from typing import Any, Callable, Mapping, Sequence
+ from forge_cli import chain_core, runtime, engine
+ from forge_cli.app._candidate_observation import _observe_current_merge_candidate
+ from forge_cli.app._mutation_journal import _persist_deferred_mutation_result
+@@ -27,6 +27,7 @@
+ from . import _engine_cleanup_child
+ from . import _engine_cleanup
+ from . import _engine_observation
++from . import _engine_lock
+ 
+ 
+ class MergeEngine:
+@@ -91,605 +92,8 @@
+             scope="merge",
+             cwd=candidate_root,
+         )
+-
+-    def _record_common_release_failure(
+-        self, chain_id: str, failure: chain_core.CommonLockReleaseFailure
+-    ) -> dict[str, Any] | None:
+-        """Preserve durable primary truth before exposing a release refusal."""
+-
+-        try:
+-            current = self.store.load(chain_id)
+-        except (FrozenError, OSError, Refusal):
+-            return None
+-        integration = current.get("integration")
+-        if not isinstance(integration, dict):
+-            return None
+-        if integration.get("condition") == "lock-release-failed":
+-            return current
+-        updated = copy.deepcopy(integration)
+-        updated.update(
+-            {
+-                "condition": "lock-release-failed",
+-                "primary_condition": integration.get("condition", "none"),
+-            }
+-        )
+-        generation = current.get("candidate")
+-        recorded = self.store.transition(
+-            current,
+-            "lock_release_result",
+-            {"delta": {"integration": updated}},
+-            generation_digest=(
+-                str(generation["generation_digest"])
+-                if isinstance(generation, Mapping)
+-                else None
+-            ),
+-            at=chain_core.iso_z(),
+-        )
+-        failure.chain = recorded
+-        failure.remediation = f"forge merge recover --chain-id {chain_id}"
+-        failure.next_required_step = failure.remediation
+-        return recorded
+-
+-    @contextlib.contextmanager
+-    def _recording_common_lock(
+-        self,
+-        common_dir: Path,
+-        *,
+-        chain_id: str,
+-        operation: str,
+-    ) -> Iterator[chain_core.CommonRebaseLock]:
+-        def event_intent(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
+-            payload = event.get("payload")
+-            delta = payload.get("delta") if isinstance(payload, Mapping) else None
+-            integration = (
+-                delta.get("integration") if isinstance(delta, Mapping) else None
+-            )
+-            intent = (
+-                integration.get("intent")
+-                if isinstance(integration, Mapping)
+-                else None
+-            )
+-            return intent if isinstance(intent, Mapping) else None
+-
+-        def carries_fence_digest(value: object, digest: str) -> bool:
+-            if isinstance(value, Mapping):
+-                if value.get("inflight_digest") == digest or value.get(
+-                    "fence_digest"
+-                ) == digest:
+-                    return True
+-                return any(
+-                    carries_fence_digest(member, digest)
+-                    for member in value.values()
+-                )
+-            if isinstance(value, list):
+-                return any(carries_fence_digest(member, digest) for member in value)
+-            return False
+-
+-        def lifecycle_classification(
+-            state: Mapping[str, Any],
+-            replay: chain_core.MergeReplayResult,
+-            fence: chain_core.PublishedLockRecord,
+-        ) -> str:
+-            operation_name = str(fence.record["operation"])
+-            intent_digest = str(fence.record["intent_digest"])
+-            events = [
+-                event for event in replay.events if isinstance(event, Mapping)
+-            ]
+-            by_digest = {
+-                str(event.get("digest")): event
+-                for event in events
+-                if chain_core.SHA256_RE.fullmatch(str(event.get("digest", ""))) is not None
+-            }
+-            attributed = by_digest.get(intent_digest)
+-            cleanup_intent = chain_core._recovery_cleanup_intent(attributed)
+-            if isinstance(cleanup_intent, Mapping):
+-                result_persisted = any(
+-                    chain_core._recovery_cleanup_result_matches(
+-                        event,
+-                        state,
+-                        cleanup_intent,
+-                        intent_digest=intent_digest,
+-                        fence_digest=fence.digest,
+-                        fence_operation=operation_name,
+-                    )
+-                    for event in events
+-                )
+-            else:
+-                result_persisted = any(
+-                    carries_fence_digest(event.get("payload"), fence.digest)
+-                    for event in events
+-                )
+-
+-            if operation_name in {"fetch", "tip-resolution"}:
+-                if attributed is None or attributed.get("event") != "fetch_intent":
+-                    raise FrozenError(
+-                        "reserved fetch fence diverges from chain lifecycle",
+-                        chain_id=chain_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-                attributed_payload = attributed.get("payload")
+-                if not isinstance(attributed_payload, Mapping):
+-                    raise FrozenError(
+-                        "reserved fetch intent payload is malformed",
+-                        chain_id=chain_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-                if attributed.get("generation_digest") is None:
+-                    request = attributed_payload.get("scope_request")
+-                    if request is not None and not isinstance(request, Mapping):
+-                        raise FrozenError(
+-                            "reserved bootstrap scope request is malformed",
+-                            chain_id=chain_id,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                    classification_state = copy.deepcopy(dict(state))
+-                    classification_integration = copy.deepcopy(
+-                        classification_state.get("integration")
+-                    )
+-                    if not isinstance(classification_integration, dict):
+-                        raise FrozenError(
+-                            "reserved bootstrap integration is malformed",
+-                            chain_id=chain_id,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                    classification_integration["intent"] = {
+-                        "operation": "fetch",
+-                        **copy.deepcopy(dict(attributed_payload)),
+-                    }
+-                    classification_state["integration"] = classification_integration
+-                    inspection = engine._classify_merge_scope_binding(
+-                        self.store,
+-                        classification_state,
+-                        fetch_intent_digest=intent_digest,
+-                        scope_request=(
+-                            request if isinstance(request, Mapping) else None
+-                        ),
+-                        fence=fence,
+-                    )
+-                    result_events = [
+-                        event
+-                        for event in events
+-                        if event.get("event") == "fetch_result"
+-                        and event.get("previous_digest") == intent_digest
+-                    ]
+-                    if not result_events:
+-                        current_intent = state.get("integration", {}).get("intent")
+-                        if (
+-                            state.get("state") != "classifying"
+-                            or not isinstance(current_intent, Mapping)
+-                            or current_intent.get("operation") != "fetch"
+-                        ):
+-                            raise FrozenError(
+-                                "reserved bootstrap fence lacks its pending lifecycle",
+-                                chain_id=chain_id,
+-                                schema=REVISION9_OUTPUT_SCHEMA,
+-                            )
+-                    elif len(result_events) == 1:
+-                        copied = result_events[0].get("payload", {}).get(
+-                            "scope_fetch_binding"
+-                        )
+-                        current_intent = state.get("integration", {}).get("intent")
+-                        if (
+-                            not isinstance(current_intent, Mapping)
+-                            or current_intent.get("operation") != "fetch-result"
+-                            or (copied is None and inspection.topology != "absent")
+-                            or (
+-                                isinstance(copied, Mapping)
+-                                and (
+-                                    inspection.topology != "canonical-one-link"
+-                                    or inspection.canonical is None
+-                                    or inspection.canonical.record != copied
+-                                )
+-                            )
+-                            or (
+-                                copied is not None
+-                                and not isinstance(copied, Mapping)
+-                            )
+-                        ):
+-                            raise FrozenError(
+-                                "reserved bootstrap result diverges from its sidecar",
+-                                chain_id=chain_id,
+-                                schema=REVISION9_OUTPUT_SCHEMA,
+-                            )
+-                    else:
+-                        raise FrozenError(
+-                            "reserved bootstrap fence has multiple lifecycle results",
+-                            chain_id=chain_id,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                return (
+-                    "fetch-result-persisted"
+-                    if result_persisted
+-                    else "fetch-intent-pending"
+-                )
+-
+-            if operation_name == "gate":
+-                gate_result = any(
+-                    event.get("event") == "gate_recorded"
+-                    and carries_fence_digest(event.get("payload"), fence.digest)
+-                    and carries_fence_digest(event.get("payload"), intent_digest)
+-                    for event in events
+-                )
+-                if not gate_result:
+-                    integration = state.get("integration")
+-                    epoch = (
+-                        integration.get("epoch")
+-                        if isinstance(integration, Mapping)
+-                        else None
+-                    )
+-                    plan = epoch.get("gate_plan") if isinstance(epoch, Mapping) else None
+-                    if not isinstance(plan, Mapping) or plan.get("status") != "sealed":
+-                        raise FrozenError(
+-                            "reserved gate fence lacks a sealed cursor",
+-                            chain_id=chain_id,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                    cursor = plan.get("cursor")
+-                    suite = plan.get("suite")
+-                    if (
+-                        not chain_core._valid_nonnegative_int(cursor)
+-                        or not isinstance(suite, list)
+-                        or int(cursor) >= len(suite)
+-                        or not isinstance(suite[int(cursor)], Mapping)
+-                    ):
+-                        raise FrozenError(
+-                            "reserved gate fence cursor is malformed",
+-                            chain_id=chain_id,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                    authorizer = (
+-                        str(plan.get("seal_event_digest"))
+-                        if int(cursor) == 0
+-                        else next(
+-                            (
+-                                str(event.get("digest"))
+-                                for event in reversed(events)
+-                                if event.get("event") == "gate_recorded"
+-                            ),
+-                            "",
+-                        )
+-                    )
+-                    member = suite[int(cursor)]
+-                    expected = chain_core.merge_gate_intent_digest(
+-                        chain_id=chain_id,
+-                        epoch_intent_digest=str(epoch.get("intent_digest")),
+-                        seal_event_digest=str(plan.get("seal_event_digest")),
+-                        generation_digest=str(plan.get("generation_digest")),
+-                        policy_digest=str(plan.get("policy_digest")),
+-                        suite_digest=str(plan.get("suite_digest")),
+-                        cursor=int(cursor),
+-                        kind=str(member.get("kind")),
+-                        gate_id=str(member.get("id")),
+-                        authorizing_event_digest=authorizer,
+-                    )
+-                    if expected != intent_digest:
+-                        raise FrozenError(
+-                            "reserved gate fence diverges from the sealed cursor",
+-                            chain_id=chain_id,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                return "gate-result-persisted" if gate_result else "gate-intent-pending"
+-
+-            if operation_name == "remote-observation":
+-                matched = False
+-                for event in events:
+-                    intent = event_intent(event)
+-                    if not isinstance(intent, Mapping):
+-                        continue
+-                    base = {
+-                        name: copy.deepcopy(intent.get(name))
+-                        for name in (
+-                            "schema",
+-                            "transaction",
+-                            "chain_id",
+-                            "attempt_identity",
+-                            "phase",
+-                            "push_intent_digest",
+-                        )
+-                    }
+-                    base["schema"] = "forge-remote-observation-intent/1"
+-                    if (
+-                        base.get("transaction") == "merge"
+-                        and base.get("chain_id") == chain_id
+-                        and base.get("phase") in {"final-prepush", "post-push"}
+-                        and sha256_bytes(chain_core.canonical_bytes(base)) == intent_digest
+-                    ):
+-                        matched = True
+-                        break
+-                if (
+-                    not matched
+-                    and attributed is not None
+-                    and attributed.get("event") == "cleanup_intent"
+-                ):
+-                    attributed_payload = attributed.get("payload")
+-                    attributed_delta = (
+-                        attributed_payload.get("delta")
+-                        if isinstance(attributed_payload, Mapping)
+-                        else None
+-                    )
+-                    attributed_cleanup = (
+-                        attributed_delta.get("cleanup")
+-                        if isinstance(attributed_delta, Mapping)
+-                        else None
+-                    )
+-                    cleanup_intent = (
+-                        attributed_cleanup.get("intent")
+-                        if isinstance(attributed_cleanup, Mapping)
+-                        else None
+-                    )
+-                    matched = bool(
+-                        isinstance(cleanup_intent, Mapping)
+-                        and cleanup_intent.get("schema")
+-                        == chain_core._MERGE_CLEANUP_INTENT_SCHEMA
+-                        and cleanup_intent.get("fence_operation")
+-                        == "remote-observation"
+-                        and chain_core._merge_cleanup_intent_valid(cleanup_intent, state)
+-                    )
+-                if not matched:
+-                    raise FrozenError(
+-                        "reserved remote-observation fence lacks its exact phase intent",
+-                        chain_id=chain_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-            elif operation_name in {"rebase", "continue", "abort"}:
+-                expected_intents = {
+-                    "rebase": {"rebase"},
+-                    "continue": {"continue"},
+-                    "abort": {"abort"},
+-                }[operation_name]
+-                intent = event_intent(attributed) if attributed is not None else None
+-                if (
+-                    attributed is None
+-                    or attributed.get("event")
+-                    not in {"rebase_intent", "condition_recorded"}
+-                    or not isinstance(intent, Mapping)
+-                    or intent.get("operation") not in expected_intents
+-                ):
+-                    raise FrozenError(
+-                        f"reserved {operation_name} fence lacks its exact intent",
+-                        chain_id=chain_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-            elif operation_name == "push":
+-                if attributed is None or attributed.get("event") != "push_intent":
+-                    raise FrozenError(
+-                        "reserved push fence lacks its exact intent",
+-                        chain_id=chain_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-            elif operation_name in {"worktree-remove", "branch-delete"}:
+-                cleanup_intent = chain_core._recovery_cleanup_intent(attributed)
+-                if (
+-                    attributed is None
+-                    or attributed.get("event") != "cleanup_intent"
+-                    or not isinstance(cleanup_intent, Mapping)
+-                    or cleanup_intent.get("fence_operation") != operation_name
+-                    or not chain_core._merge_cleanup_intent_valid(cleanup_intent, state)
+-                ):
+-                    raise FrozenError(
+-                        f"reserved {operation_name} fence lacks its cleanup intent",
+-                        chain_id=chain_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-            elif operation_name == "containment":
+-                cleanup_intent = chain_core._recovery_cleanup_intent(attributed)
+-                matched = bool(
+-                    attributed is not None
+-                    and (
+-                        attributed.get("event")
+-                        in {"condition_recorded", "fetch_result"}
+-                        or attributed.get("event") == "cleanup_intent"
+-                        and isinstance(cleanup_intent, Mapping)
+-                        and cleanup_intent.get("fence_operation")
+-                        == operation_name
+-                        and chain_core._merge_cleanup_intent_valid(
+-                            cleanup_intent, state
+-                        )
+-                    )
+-                )
+-                if not matched:
+-                    matched = any(
+-                        isinstance(event_intent(event), Mapping)
+-                        and sha256_bytes(
+-                            chain_core.canonical_bytes(dict(event_intent(event) or {}))
+-                        )
+-                        == intent_digest
+-                        for event in events
+-                    )
+-                if not matched:
+-                    raise FrozenError(
+-                        "reserved containment fence lacks its exact read intent",
+-                        chain_id=chain_id,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-            else:
+-                raise FrozenError(
+-                    "reserved merge fence operation is not recoverable",
+-                    chain_id=chain_id,
+-                    observed=operation_name,
+-                    schema=REVISION9_OUTPUT_SCHEMA,
+-                )
+-            return (
+-                f"{operation_name}-result-persisted"
+-                if result_persisted
+-                else f"{operation_name}-intent-pending"
+-            )
+-
+-        def classify_reserved_fence(
+-            reservation: chain_core.RecoveryReservation,
+-            fence: chain_core.PublishedLockRecord | None,
+-        ) -> dict[str, Any]:
+-            """Classify and durably record death while reservation-held."""
+-
+-            chain_core._require_common_lock_control(
+-                "reservation-held-lifecycle-classification"
+-            )
+-            selected_chain = reservation.affected_merge_chain()
+-            if fence is not None and (
+-                fence.record.get("owner_kind") != "merge"
+-                or fence.record.get("chain_id") != selected_chain
+-            ):
+-                raise FrozenError(
+-                    "reserved merge fence does not belong to the requested chain",
+-                    chain_id=selected_chain,
+-                    schema=REVISION9_OUTPUT_SCHEMA,
+-                )
+-            reservation.assert_current(
+-                "merge lifecycle recovery before chain lease"
+-            )
+-            with chain_core.acquire_chain_lease(
+-                self.store.root,
+-                chain_id=selected_chain,
+-                session=self.store._session(None),
+-                exclusion=reservation,
+-                timeout=reservation.remaining_timeout(
+-                    "reservation-held chain lease acquisition"
+-                ),
+-                clock=reservation.clock,
+-                sleeper=reservation.sleeper,
+-            ) as lease:
+-                state = self.store.load_locked(selected_chain, lease=lease)
+-                with self.store.event_lock(
+-                    selected_chain,
+-                    deadline=reservation.deadline,
+-                    clock=reservation.clock,
+-                    sleeper=reservation.sleeper,
+-                ):
+-                    replay = self.store._read_replay_locked(selected_chain)
+-                if (
+-                    fence is None
+-                    and engine._merge_inactive(state)
+-                    and engine._merge_inactive_epoch_has_no_started_child(
+-                        state, replay.events
+-                    )
+-                ):
+-                    raise chain_core._merge_refusal(
+-                        V2ReasonCode.STATE_PRECONDITION,
+-                        "forge: merge recover refused — inactive epoch has no started child",
+-                        expected="status or safe abort after inactivity",
+-                        observed=str(state["state"]),
+-                        remediation=f"forge status --chain-id {selected_chain}",
+-                        chain=state,
+-                    )
+-                if fence is None:
+-                    classification = "owner-death-only"
+-                else:
+-                    # Bootstrap recovery additionally authenticates the
+-                    # surviving sidecar topology.  Its return value is not
+-                    # authoritative: all persisted lifecycle labels come from
+-                    # the same pure prefix-history classifier used by replay.
+-                    if fence.record.get("operation") in {
+-                        "fetch",
+-                        "tip-resolution",
+-                    }:
+-                        lifecycle_classification(state, replay, fence)
+-                    classification = chain_core._classify_merge_recovery_lifecycle(
+-                        state,
+-                        replay.events,
+-                        fence_record=fence.record,
+-                        fence_digest=fence.digest,
+-                    )
+-                    if classification is None:
+-                        raise FrozenError(
+-                            "reserved merge fence lifecycle is not uniquely classifiable",
+-                            chain_id=selected_chain,
+-                            schema=REVISION9_OUTPUT_SCHEMA,
+-                        )
+-                recorded_at = chain_core.iso_z()
+-                unsigned = {
+-                    "schema": "forge-merge-fence-recovery-proof/1",
+-                    "chain_id": selected_chain,
+-                    "reservation": reservation.identity.evidence(),
+-                    "fence": fence.evidence() if fence is not None else None,
+-                    "lifecycle": {
+-                        "operation": (
+-                            fence.record.get("operation")
+-                            if fence is not None
+-                            else None
+-                        ),
+-                        "intent_digest": (
+-                            fence.record.get("intent_digest")
+-                            if fence is not None
+-                            else None
+-                        ),
+-                        "classification": classification,
+-                        "state_digest": sha256_bytes(chain_core.canonical_bytes(state)),
+-                        "tail_digest": replay.tail_digest,
+-                    },
+-                    "recorded_at": recorded_at,
+-                }
+-                proof = {
+-                    **unsigned,
+-                    "digest": sha256_bytes(chain_core.canonical_bytes(unsigned)),
+-                }
+-                current = self._epoch_transition(
+-                    state,
+-                    lease,
+-                    "condition_recorded",
+-                    {"delta": {}, "recovery_proof": proof},
+-                    at=recorded_at,
+-                )
+-                reservation.assert_current(
+-                    "merge lifecycle recovery after proof append"
+-                )
+-                with self.store.event_lock(
+-                    selected_chain,
+-                    deadline=reservation.deadline,
+-                    clock=reservation.clock,
+-                    sleeper=reservation.sleeper,
+-                ):
+-                    retained = self.store._read_replay_locked(selected_chain)
+-                tail_payload = retained.events[-1].get("payload")
+-                if (
+-                    current != retained.state
+-                    or not isinstance(tail_payload, Mapping)
+-                    or tail_payload.get("recovery_proof") != proof
+-                ):
+-                    raise FrozenError(
+-                        "merge fence recovery proof was not durably retained",
+-                        chain_id=selected_chain,
+-                        schema=REVISION9_OUTPUT_SCHEMA,
+-                    )
+-                proof_event_digest = str(retained.events[-1]["digest"])
+-            reservation.assert_current(
+-                "merge lifecycle recovery receipt"
+-            )
+-            return {
+-                "schema": "forge-merge-fence-recovery-receipt/1",
+-                "chain_id": selected_chain,
+-                "chain_store": str(self.store.root),
+-                "reservation_digest": reservation.identity.digest,
+-                "fence_digest": fence.digest if fence is not None else None,
+-                "proof_digest": str(proof["digest"]),
+-                "event_digest": proof_event_digest,
+-            }
+-
+-        def unexpected_split_recovery_proof(_proof: dict[str, Any]) -> None:
+-            raise OSError(
+-                "reservation lifecycle and death proof were not persisted atomically"
+-            )
+-
+-        lock = chain_core.acquire_common_lock(
+-            common_dir,
+-            owner_kind="merge",
+-            chain_id=chain_id,
+-            operation=operation,
+-            no_transaction_record=operation != "recover",
+-            recovery_recorder=(
+-                unexpected_split_recovery_proof
+-                if operation == "recover"
+-                else None
+-            ),
+-            recovery_classifier=(
+-                classify_reserved_fence if operation == "recover" else None
+-            ),
+-        )
+-        try:
+-            with lock as acquired:
+-                yield acquired
+-        except chain_core.CommonLockReleaseFailure as exc:
+-            self._record_common_release_failure(chain_id, exc)
+-            raise
++    _record_common_release_failure = _engine_lock._record_common_release_failure
++    _recording_common_lock = contextlib.contextmanager(_engine_lock._recording_common_lock)
+     _candidate_observation_transition = _engine_observation._candidate_observation_transition
+     _restore_candidate_observation_intent_locked = _engine_observation._restore_candidate_observation_intent_locked
+     _restore_bootstrap_fetch_observation_locked = _engine_observation._restore_bootstrap_fetch_observation_locked
+--- scripts/forge/forge_cli/app/_engine_lock.py
++++ scripts/forge/forge_cli/app/_engine_lock.py
+@@ -0,0 +1,610 @@
++from __future__ import annotations
++
++import copy
++from pathlib import Path
++from typing import TYPE_CHECKING, Any, Iterator, Mapping
++
++from forge_cli import chain_core, engine
++from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Refusal, V2ReasonCode
++from forge_cli.policy import sha256_bytes
++
++if TYPE_CHECKING:
++    from forge_cli.app._merge_engine import MergeEngine
++
++def _record_common_release_failure(
++    self: "MergeEngine", chain_id: str, failure: chain_core.CommonLockReleaseFailure
++) -> dict[str, Any] | None:
++    """Preserve durable primary truth before exposing a release refusal."""
++
++    try:
++        current = self.store.load(chain_id)
++    except (FrozenError, OSError, Refusal):
++        return None
++    integration = current.get("integration")
++    if not isinstance(integration, dict):
++        return None
++    if integration.get("condition") == "lock-release-failed":
++        return current
++    updated = copy.deepcopy(integration)
++    updated.update(
++        {
++            "condition": "lock-release-failed",
++            "primary_condition": integration.get("condition", "none"),
++        }
++    )
++    generation = current.get("candidate")
++    recorded = self.store.transition(
++        current,
++        "lock_release_result",
++        {"delta": {"integration": updated}},
++        generation_digest=(
++            str(generation["generation_digest"])
++            if isinstance(generation, Mapping)
++            else None
++        ),
++        at=chain_core.iso_z(),
++    )
++    failure.chain = recorded
++    failure.remediation = f"forge merge recover --chain-id {chain_id}"
++    failure.next_required_step = failure.remediation
++    return recorded
++
++def _recording_common_lock(
++    self: "MergeEngine",
++    common_dir: Path,
++    *,
++    chain_id: str,
++    operation: str,
++) -> Iterator[chain_core.CommonRebaseLock]:
++    def event_intent(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
++        payload = event.get("payload")
++        delta = payload.get("delta") if isinstance(payload, Mapping) else None
++        integration = (
++            delta.get("integration") if isinstance(delta, Mapping) else None
++        )
++        intent = (
++            integration.get("intent")
++            if isinstance(integration, Mapping)
++            else None
++        )
++        return intent if isinstance(intent, Mapping) else None
++
++    def carries_fence_digest(value: object, digest: str) -> bool:
++        if isinstance(value, Mapping):
++            if value.get("inflight_digest") == digest or value.get(
++                "fence_digest"
++            ) == digest:
++                return True
++            return any(
++                carries_fence_digest(member, digest)
++                for member in value.values()
++            )
++        if isinstance(value, list):
++            return any(carries_fence_digest(member, digest) for member in value)
++        return False
++
++    def lifecycle_classification(
++        state: Mapping[str, Any],
++        replay: chain_core.MergeReplayResult,
++        fence: chain_core.PublishedLockRecord,
++    ) -> str:
++        operation_name = str(fence.record["operation"])
++        intent_digest = str(fence.record["intent_digest"])
++        events = [
++            event for event in replay.events if isinstance(event, Mapping)
++        ]
++        by_digest = {
++            str(event.get("digest")): event
++            for event in events
++            if chain_core.SHA256_RE.fullmatch(str(event.get("digest", ""))) is not None
++        }
++        attributed = by_digest.get(intent_digest)
++        cleanup_intent = chain_core._recovery_cleanup_intent(attributed)
++        if isinstance(cleanup_intent, Mapping):
++            result_persisted = any(
++                chain_core._recovery_cleanup_result_matches(
++                    event,
++                    state,
++                    cleanup_intent,
++                    intent_digest=intent_digest,
++                    fence_digest=fence.digest,
++                    fence_operation=operation_name,
++                )
++                for event in events
++            )
++        else:
++            result_persisted = any(
++                carries_fence_digest(event.get("payload"), fence.digest)
++                for event in events
++            )
++
++        if operation_name in {"fetch", "tip-resolution"}:
++            if attributed is None or attributed.get("event") != "fetch_intent":
++                raise FrozenError(
++                    "reserved fetch fence diverges from chain lifecycle",
++                    chain_id=chain_id,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++            attributed_payload = attributed.get("payload")
++            if not isinstance(attributed_payload, Mapping):
++                raise FrozenError(
++                    "reserved fetch intent payload is malformed",
++                    chain_id=chain_id,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++            if attributed.get("generation_digest") is None:
++                request = attributed_payload.get("scope_request")
++                if request is not None and not isinstance(request, Mapping):
++                    raise FrozenError(
++                        "reserved bootstrap scope request is malformed",
++                        chain_id=chain_id,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++                classification_state = copy.deepcopy(dict(state))
++                classification_integration = copy.deepcopy(
++                    classification_state.get("integration")
++                )
++                if not isinstance(classification_integration, dict):
++                    raise FrozenError(
++                        "reserved bootstrap integration is malformed",
++                        chain_id=chain_id,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++                classification_integration["intent"] = {
++                    "operation": "fetch",
++                    **copy.deepcopy(dict(attributed_payload)),
++                }
++                classification_state["integration"] = classification_integration
++                inspection = engine._classify_merge_scope_binding(
++                    self.store,
++                    classification_state,
++                    fetch_intent_digest=intent_digest,
++                    scope_request=(
++                        request if isinstance(request, Mapping) else None
++                    ),
++                    fence=fence,
++                )
++                result_events = [
++                    event
++                    for event in events
++                    if event.get("event") == "fetch_result"
++                    and event.get("previous_digest") == intent_digest
++                ]
++                if not result_events:
++                    current_intent = state.get("integration", {}).get("intent")
++                    if (
++                        state.get("state") != "classifying"
++                        or not isinstance(current_intent, Mapping)
++                        or current_intent.get("operation") != "fetch"
++                    ):
++                        raise FrozenError(
++                            "reserved bootstrap fence lacks its pending lifecycle",
++                            chain_id=chain_id,
++                            schema=REVISION9_OUTPUT_SCHEMA,
++                        )
++                elif len(result_events) == 1:
++                    copied = result_events[0].get("payload", {}).get(
++                        "scope_fetch_binding"
++                    )
++                    current_intent = state.get("integration", {}).get("intent")
++                    if (
++                        not isinstance(current_intent, Mapping)
++                        or current_intent.get("operation") != "fetch-result"
++                        or (copied is None and inspection.topology != "absent")
++                        or (
++                            isinstance(copied, Mapping)
++                            and (
++                                inspection.topology != "canonical-one-link"
++                                or inspection.canonical is None
++                                or inspection.canonical.record != copied
++                            )
++                        )
++                        or (
++                            copied is not None
++                            and not isinstance(copied, Mapping)
++                        )
++                    ):
++                        raise FrozenError(
++                            "reserved bootstrap result diverges from its sidecar",
++                            chain_id=chain_id,
++                            schema=REVISION9_OUTPUT_SCHEMA,
++                        )
++                else:
++                    raise FrozenError(
++                        "reserved bootstrap fence has multiple lifecycle results",
++                        chain_id=chain_id,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++            return (
++                "fetch-result-persisted"
++                if result_persisted
++                else "fetch-intent-pending"
++            )
++
++        if operation_name == "gate":
++            gate_result = any(
++                event.get("event") == "gate_recorded"
++                and carries_fence_digest(event.get("payload"), fence.digest)
++                and carries_fence_digest(event.get("payload"), intent_digest)
++                for event in events
++            )
++            if not gate_result:
++                integration = state.get("integration")
++                epoch = (
++                    integration.get("epoch")
++                    if isinstance(integration, Mapping)
++                    else None
++                )
++                plan = epoch.get("gate_plan") if isinstance(epoch, Mapping) else None
++                if not isinstance(plan, Mapping) or plan.get("status") != "sealed":
++                    raise FrozenError(
++                        "reserved gate fence lacks a sealed cursor",
++                        chain_id=chain_id,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++                cursor = plan.get("cursor")
++                suite = plan.get("suite")
++                if (
++                    not chain_core._valid_nonnegative_int(cursor)
++                    or not isinstance(suite, list)
++                    or int(cursor) >= len(suite)
++                    or not isinstance(suite[int(cursor)], Mapping)
++                ):
++                    raise FrozenError(
++                        "reserved gate fence cursor is malformed",
++                        chain_id=chain_id,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++                authorizer = (
++                    str(plan.get("seal_event_digest"))
++                    if int(cursor) == 0
++                    else next(
++                        (
++                            str(event.get("digest"))
++                            for event in reversed(events)
++                            if event.get("event") == "gate_recorded"
++                        ),
++                        "",
++                    )
++                )
++                member = suite[int(cursor)]
++                expected = chain_core.merge_gate_intent_digest(
++                    chain_id=chain_id,
++                    epoch_intent_digest=str(epoch.get("intent_digest")),
++                    seal_event_digest=str(plan.get("seal_event_digest")),
++                    generation_digest=str(plan.get("generation_digest")),
++                    policy_digest=str(plan.get("policy_digest")),
++                    suite_digest=str(plan.get("suite_digest")),
++                    cursor=int(cursor),
++                    kind=str(member.get("kind")),
++                    gate_id=str(member.get("id")),
++                    authorizing_event_digest=authorizer,
++                )
++                if expected != intent_digest:
++                    raise FrozenError(
++                        "reserved gate fence diverges from the sealed cursor",
++                        chain_id=chain_id,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++            return "gate-result-persisted" if gate_result else "gate-intent-pending"
++
++        if operation_name == "remote-observation":
++            matched = False
++            for event in events:
++                intent = event_intent(event)
++                if not isinstance(intent, Mapping):
++                    continue
++                base = {
++                    name: copy.deepcopy(intent.get(name))
++                    for name in (
++                        "schema",
++                        "transaction",
++                        "chain_id",
++                        "attempt_identity",
++                        "phase",
++                        "push_intent_digest",
++                    )
++                }
++                base["schema"] = "forge-remote-observation-intent/1"
++                if (
++                    base.get("transaction") == "merge"
++                    and base.get("chain_id") == chain_id
++                    and base.get("phase") in {"final-prepush", "post-push"}
++                    and sha256_bytes(chain_core.canonical_bytes(base)) == intent_digest
++                ):
++                    matched = True
++                    break
++            if (
++                not matched
++                and attributed is not None
++                and attributed.get("event") == "cleanup_intent"
++            ):
++                attributed_payload = attributed.get("payload")
++                attributed_delta = (
++                    attributed_payload.get("delta")
++                    if isinstance(attributed_payload, Mapping)
++                    else None
++                )
++                attributed_cleanup = (
++                    attributed_delta.get("cleanup")
++                    if isinstance(attributed_delta, Mapping)
++                    else None
++                )
++                cleanup_intent = (
++                    attributed_cleanup.get("intent")
++                    if isinstance(attributed_cleanup, Mapping)
++                    else None
++                )
++                matched = bool(
++                    isinstance(cleanup_intent, Mapping)
++                    and cleanup_intent.get("schema")
++                    == chain_core._MERGE_CLEANUP_INTENT_SCHEMA
++                    and cleanup_intent.get("fence_operation")
++                    == "remote-observation"
++                    and chain_core._merge_cleanup_intent_valid(cleanup_intent, state)
++                )
++            if not matched:
++                raise FrozenError(
++                    "reserved remote-observation fence lacks its exact phase intent",
++                    chain_id=chain_id,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++        elif operation_name in {"rebase", "continue", "abort"}:
++            expected_intents = {
++                "rebase": {"rebase"},
++                "continue": {"continue"},
++                "abort": {"abort"},
++            }[operation_name]
++            intent = event_intent(attributed) if attributed is not None else None
++            if (
++                attributed is None
++                or attributed.get("event")
++                not in {"rebase_intent", "condition_recorded"}
++                or not isinstance(intent, Mapping)
++                or intent.get("operation") not in expected_intents
++            ):
++                raise FrozenError(
++                    f"reserved {operation_name} fence lacks its exact intent",
++                    chain_id=chain_id,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++        elif operation_name == "push":
++            if attributed is None or attributed.get("event") != "push_intent":
++                raise FrozenError(
++                    "reserved push fence lacks its exact intent",
++                    chain_id=chain_id,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++        elif operation_name in {"worktree-remove", "branch-delete"}:
++            cleanup_intent = chain_core._recovery_cleanup_intent(attributed)
++            if (
++                attributed is None
++                or attributed.get("event") != "cleanup_intent"
++                or not isinstance(cleanup_intent, Mapping)
++                or cleanup_intent.get("fence_operation") != operation_name
++                or not chain_core._merge_cleanup_intent_valid(cleanup_intent, state)
++            ):
++                raise FrozenError(
++                    f"reserved {operation_name} fence lacks its cleanup intent",
++                    chain_id=chain_id,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++        elif operation_name == "containment":
++            cleanup_intent = chain_core._recovery_cleanup_intent(attributed)
++            matched = bool(
++                attributed is not None
++                and (
++                    attributed.get("event")
++                    in {"condition_recorded", "fetch_result"}
++                    or attributed.get("event") == "cleanup_intent"
++                    and isinstance(cleanup_intent, Mapping)
++                    and cleanup_intent.get("fence_operation")
++                    == operation_name
++                    and chain_core._merge_cleanup_intent_valid(
++                        cleanup_intent, state
++                    )
++                )
++            )
++            if not matched:
++                matched = any(
++                    isinstance(event_intent(event), Mapping)
++                    and sha256_bytes(
++                        chain_core.canonical_bytes(dict(event_intent(event) or {}))
++                    )
++                    == intent_digest
++                    for event in events
++                )
++            if not matched:
++                raise FrozenError(
++                    "reserved containment fence lacks its exact read intent",
++                    chain_id=chain_id,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++        else:
++            raise FrozenError(
++                "reserved merge fence operation is not recoverable",
++                chain_id=chain_id,
++                observed=operation_name,
++                schema=REVISION9_OUTPUT_SCHEMA,
++            )
++        return (
++            f"{operation_name}-result-persisted"
++            if result_persisted
++            else f"{operation_name}-intent-pending"
++        )
++
++    def classify_reserved_fence(
++        reservation: chain_core.RecoveryReservation,
++        fence: chain_core.PublishedLockRecord | None,
++    ) -> dict[str, Any]:
++        """Classify and durably record death while reservation-held."""
++
++        chain_core._require_common_lock_control(
++            "reservation-held-lifecycle-classification"
++        )
++        selected_chain = reservation.affected_merge_chain()
++        if fence is not None and (
++            fence.record.get("owner_kind") != "merge"
++            or fence.record.get("chain_id") != selected_chain
++        ):
++            raise FrozenError(
++                "reserved merge fence does not belong to the requested chain",
++                chain_id=selected_chain,
++                schema=REVISION9_OUTPUT_SCHEMA,
++            )
++        reservation.assert_current(
++            "merge lifecycle recovery before chain lease"
++        )
++        with chain_core.acquire_chain_lease(
++            self.store.root,
++            chain_id=selected_chain,
++            session=self.store._session(None),
++            exclusion=reservation,
++            timeout=reservation.remaining_timeout(
++                "reservation-held chain lease acquisition"
++            ),
++            clock=reservation.clock,
++            sleeper=reservation.sleeper,
++        ) as lease:
++            state = self.store.load_locked(selected_chain, lease=lease)
++            with self.store.event_lock(
++                selected_chain,
++                deadline=reservation.deadline,
++                clock=reservation.clock,
++                sleeper=reservation.sleeper,
++            ):
++                replay = self.store._read_replay_locked(selected_chain)
++            if (
++                fence is None
++                and engine._merge_inactive(state)
++                and engine._merge_inactive_epoch_has_no_started_child(
++                    state, replay.events
++                )
++            ):
++                raise chain_core._merge_refusal(
++                    V2ReasonCode.STATE_PRECONDITION,
++                    "forge: merge recover refused — inactive epoch has no started child",
++                    expected="status or safe abort after inactivity",
++                    observed=str(state["state"]),
++                    remediation=f"forge status --chain-id {selected_chain}",
++                    chain=state,
++                )
++            if fence is None:
++                classification = "owner-death-only"
++            else:
++                # Bootstrap recovery additionally authenticates the
++                # surviving sidecar topology.  Its return value is not
++                # authoritative: all persisted lifecycle labels come from
++                # the same pure prefix-history classifier used by replay.
++                if fence.record.get("operation") in {
++                    "fetch",
++                    "tip-resolution",
++                }:
++                    lifecycle_classification(state, replay, fence)
++                classification = chain_core._classify_merge_recovery_lifecycle(
++                    state,
++                    replay.events,
++                    fence_record=fence.record,
++                    fence_digest=fence.digest,
++                )
++                if classification is None:
++                    raise FrozenError(
++                        "reserved merge fence lifecycle is not uniquely classifiable",
++                        chain_id=selected_chain,
++                        schema=REVISION9_OUTPUT_SCHEMA,
++                    )
++            recorded_at = chain_core.iso_z()
++            unsigned = {
++                "schema": "forge-merge-fence-recovery-proof/1",
++                "chain_id": selected_chain,
++                "reservation": reservation.identity.evidence(),
++                "fence": fence.evidence() if fence is not None else None,
++                "lifecycle": {
++                    "operation": (
++                        fence.record.get("operation")
++                        if fence is not None
++                        else None
++                    ),
++                    "intent_digest": (
++                        fence.record.get("intent_digest")
++                        if fence is not None
++                        else None
++                    ),
++                    "classification": classification,
++                    "state_digest": sha256_bytes(chain_core.canonical_bytes(state)),
++                    "tail_digest": replay.tail_digest,
++                },
++                "recorded_at": recorded_at,
++            }
++            proof = {
++                **unsigned,
++                "digest": sha256_bytes(chain_core.canonical_bytes(unsigned)),
++            }
++            current = self._epoch_transition(
++                state,
++                lease,
++                "condition_recorded",
++                {"delta": {}, "recovery_proof": proof},
++                at=recorded_at,
++            )
++            reservation.assert_current(
++                "merge lifecycle recovery after proof append"
++            )
++            with self.store.event_lock(
++                selected_chain,
++                deadline=reservation.deadline,
++                clock=reservation.clock,
++                sleeper=reservation.sleeper,
++            ):
++                retained = self.store._read_replay_locked(selected_chain)
++            tail_payload = retained.events[-1].get("payload")
++            if (
++                current != retained.state
++                or not isinstance(tail_payload, Mapping)
++                or tail_payload.get("recovery_proof") != proof
++            ):
++                raise FrozenError(
++                    "merge fence recovery proof was not durably retained",
++                    chain_id=selected_chain,
++                    schema=REVISION9_OUTPUT_SCHEMA,
++                )
++            proof_event_digest = str(retained.events[-1]["digest"])
++        reservation.assert_current(
++            "merge lifecycle recovery receipt"
++        )
++        return {
++            "schema": "forge-merge-fence-recovery-receipt/1",
++            "chain_id": selected_chain,
++            "chain_store": str(self.store.root),
++            "reservation_digest": reservation.identity.digest,
++            "fence_digest": fence.digest if fence is not None else None,
++            "proof_digest": str(proof["digest"]),
++            "event_digest": proof_event_digest,
++        }
++
++    def unexpected_split_recovery_proof(_proof: dict[str, Any]) -> None:
++        raise OSError(
++            "reservation lifecycle and death proof were not persisted atomically"
++        )
++
++    lock = chain_core.acquire_common_lock(
++        common_dir,
++        owner_kind="merge",
++        chain_id=chain_id,
++        operation=operation,
++        no_transaction_record=operation != "recover",
++        recovery_recorder=(
++            unexpected_split_recovery_proof
++            if operation == "recover"
++            else None
++        ),
++        recovery_classifier=(
++            classify_reserved_fence if operation == "recover" else None
++        ),
++    )
++    try:
++        with lock as acquired:
++            yield acquired
++    except chain_core.CommonLockReleaseFailure as exc:
++        self._record_common_release_failure(chain_id, exc)
++        raise
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "ede9b5675aa4b3f520992a86f5d528de815f0c8f77632c561ccb0e0d2b5ad425",
+    "scripts/forge/forge_cli/app/_engine_lock.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_lock.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_record_common_release_failure",
+        "_recording_common_lock"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_lock",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_lock"
+        ],
+        "scripts/forge/forge_cli/app/_engine_lock.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from pathlib import Path",
+          "from typing import Any, Iterator, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_lock.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "Iterator"
+        ]
+      },
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-c16-before.json
+snapshot: 882 bodies across 869 names -> .refactor/merge-engine-c16-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/move_methods.py --project . --source scripts/forge/forge_cli/app/_merge_engine.py --class MergeEngine --methods _record_common_release_failure,_recording_common_lock --dest scripts/forge/forge_cli/app/_engine_lock.py --import-root scripts/forge --shape function --annotate-self --format-imports --manifest .refactor/merge-engine-lock.json --apply
+APPLIED tier 1; manifest: .refactor/merge-engine-lock.json
+[exit 0]
+
