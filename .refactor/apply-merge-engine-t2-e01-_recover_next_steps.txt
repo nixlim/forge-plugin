@@ -1,0 +1,161 @@
+extraction e01 on HEAD b3825b32af240555fd3a7bee6334e9b592143d4d
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_recover.py --function recover --start 584 --end 622 --name _recover_next_steps --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e01-_recover_next_steps.json --dest scripts/forge/forge_cli/app/_engine_recover_steps.py
+--- scripts/forge/forge_cli/app/_engine_recover.py
++++ scripts/forge/forge_cli/app/_engine_recover.py
+@@ -6,6 +6,7 @@
+ 
+ from forge_cli import chain_core, engine
+ from forge_cli.app._candidate_observation import _observe_current_merge_candidate
++from forge_cli.app._engine_recover_steps import _recover_next_steps
+ from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Outcome, V2ReasonCode
+ 
+ if TYPE_CHECKING:
+@@ -581,45 +582,7 @@
+             pending_classification,
+         )
+         action = "classified"
+-    if current["state"] == "pushing":
+-        condition = current["integration"]["condition"]
+-        reason = (
+-            V2ReasonCode.PUSH_FAILED
+-            if condition == "push-failed"
+-            else V2ReasonCode.PUSH_OUTCOME_UNKNOWN
+-            if condition == "push-outcome-unknown"
+-            else V2ReasonCode.NON_FAST_FORWARD
+-            if condition == "non-fast-forward"
+-            else None
+-        )
+-        if reason is not None:
+-            raise chain_core._merge_refusal(
+-                reason,
+-                f"forge: merge recover observed {condition}",
+-                remediation=f"forge merge recover --chain-id {current['chain_id']}",
+-                chain=current,
+-            )
+-    next_steps = {
+-        "pushed": f"forge merge cleanup --chain-id {current['chain_id']}",
+-        "pushing": f"forge merge recover --chain-id {current['chain_id']}",
+-        "reviewing": f"forge review request --chain-id {current['chain_id']}",
+-        "authorized": f"forge merge finalize --chain-id {current['chain_id']}",
+-        "revising": f"forge merge refresh --chain-id {current['chain_id']}",
+-        "rebase_conflict": (
+-            f"forge merge recover --continue --paths <path>... --chain-id {current['chain_id']}"
+-        ),
+-        "closed": "none — merge chain closed",
+-        "aborted": "none — merge chain aborted",
+-    }
+-    if action == "historical-landed-superseded":
+-        next_steps["aborted"] = (
+-            "forge merge start --worktree "
+-            f"{current['worktree']['path']}"
+-        )
+-    elif action == "inactive-not-landed":
+-        next_steps["pushing"] = (
+-            f"forge merge abort --chain-id {current['chain_id']}"
+-        )
++    next_steps = _recover_next_steps(current, action)
+     return engine._success(
+         current,
+         f"merge recovery {action} for chain {current['chain_id']}",
+--- scripts/forge/forge_cli/app/_engine_recover_steps.py
++++ scripts/forge/forge_cli/app/_engine_recover_steps.py
+@@ -0,0 +1,47 @@
++from __future__ import annotations
++
++from forge_cli import chain_core
++from forge_cli.envelope import V2ReasonCode
++
++
++def _recover_next_steps(current, action):
++    if current["state"] == "pushing":
++        condition = current["integration"]["condition"]
++        reason = (
++            V2ReasonCode.PUSH_FAILED
++            if condition == "push-failed"
++            else V2ReasonCode.PUSH_OUTCOME_UNKNOWN
++            if condition == "push-outcome-unknown"
++            else V2ReasonCode.NON_FAST_FORWARD
++            if condition == "non-fast-forward"
++            else None
++        )
++        if reason is not None:
++            raise chain_core._merge_refusal(
++                reason,
++                f"forge: merge recover observed {condition}",
++                remediation=f"forge merge recover --chain-id {current['chain_id']}",
++                chain=current,
++            )
++    next_steps = {
++        "pushed": f"forge merge cleanup --chain-id {current['chain_id']}",
++        "pushing": f"forge merge recover --chain-id {current['chain_id']}",
++        "reviewing": f"forge review request --chain-id {current['chain_id']}",
++        "authorized": f"forge merge finalize --chain-id {current['chain_id']}",
++        "revising": f"forge merge refresh --chain-id {current['chain_id']}",
++        "rebase_conflict": (
++            f"forge merge recover --continue --paths <path>... --chain-id {current['chain_id']}"
++        ),
++        "closed": "none — merge chain closed",
++        "aborted": "none — merge chain aborted",
++    }
++    if action == "historical-landed-superseded":
++        next_steps["aborted"] = (
++            "forge merge start --worktree "
++            f"{current['worktree']['path']}"
++        )
++    elif action == "inactive-not-landed":
++        next_steps["pushing"] = (
++            f"forge merge abort --chain-id {current['chain_id']}"
++        )
++    return next_steps
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_recover.py": "febfdec73134ae3cd2ad729a26c54af86be14352741dfcfc4642a156144b1ed7",
+    "scripts/forge/forge_cli/app/_engine_recover_steps.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_recover.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_recover_steps.py",
+      "function": "recover",
+      "name": "_recover_next_steps",
+      "imports": {
+        "scripts/forge/forge_cli/app/_engine_recover.py": [
+          "from forge_cli.app._engine_recover_steps import _recover_next_steps"
+        ],
+        "scripts/forge/forge_cli/app/_engine_recover_steps.py": [
+          "from __future__ import annotations",
+          "from forge_cli import chain_core",
+          "from forge_cli.envelope import V2ReasonCode"
+        ]
+      },
+      "start_line": 584,
+      "end_line": 622,
+      "parameters": [
+        "current",
+        "action"
+      ],
+      "outputs": [
+        "next_steps"
+      ],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-t2-e01-before.json
+snapshot: 882 bodies across 868 names -> .refactor/merge-engine-t2-e01-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_recover.py --function recover --start 584 --end 622 --name _recover_next_steps --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e01-_recover_next_steps.json --dest scripts/forge/forge_cli/app/_engine_recover_steps.py --apply
+APPLIED tier 2; manifest: .refactor/merge-engine-t2-e01-_recover_next_steps.json
+[exit 0]
+

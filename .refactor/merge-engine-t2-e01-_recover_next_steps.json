@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_recover.py": "febfdec73134ae3cd2ad729a26c54af86be14352741dfcfc4642a156144b1ed7",
+    "scripts/forge/forge_cli/app/_engine_recover_steps.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_recover.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_recover_steps.py",
+      "function": "recover",
+      "name": "_recover_next_steps",
+      "imports": {
+        "scripts/forge/forge_cli/app/_engine_recover.py": [
+          "from forge_cli.app._engine_recover_steps import _recover_next_steps"
+        ],
+        "scripts/forge/forge_cli/app/_engine_recover_steps.py": [
+          "from __future__ import annotations",
+          "from forge_cli import chain_core",
+          "from forge_cli.envelope import V2ReasonCode"
+        ]
+      },
+      "start_line": 584,
+      "end_line": 622,
+      "parameters": [
+        "current",
+        "action"
+      ],
+      "outputs": [
+        "next_steps"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "b3825b32af240555fd3a7bee6334e9b592143d4d"
+}
