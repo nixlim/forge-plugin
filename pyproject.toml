@@ -61,8 +61,36 @@ max-nested-blocks = 4
 "scripts/forge/forge_cli/app/_admission.py" = ["C901", "I001", "PLR0912", "PLR0915"]
 "scripts/forge/forge_cli/app/_candidate_observation.py" = ["C901", "I001", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_dispatch.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
-"scripts/forge/forge_cli/app/_engine_*.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F841", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
-"scripts/forge/forge_cli/app/_merge_engine.py" = ["B023", "B904", "B905", "C901", "E501", "E731", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
+"scripts/forge/forge_cli/app/_engine_abort.py" = ["B905", "C901", "E501", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/app/_engine_bootstrap.py" = ["C901", "E501", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_cleanup.py" = ["C901", "F841", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/app/_engine_cleanup_child.py" = ["PLR0913", "UP035"]
+"scripts/forge/forge_cli/app/_engine_conflict_observation.py" = ["B023", "C901", "PLR0911", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_epoch_ancestry.py" = ["C901", "UP035"]
+"scripts/forge/forge_cli/app/_engine_epoch_fetch.py" = ["C901", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_epoch_push.py" = ["C901", "E501", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_epoch_rebase.py" = ["C901", "E501", "PLR0911", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_epoch_suite.py" = ["B023", "C901", "E731", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/app/_engine_final_mode.py" = ["C901", "PLR0911", "PLR0912", "UP035"]
+"scripts/forge/forge_cli/app/_engine_finalize.py" = ["E501", "UP035"]
+"scripts/forge/forge_cli/app/_engine_gate.py" = ["PLR0913", "UP035"]
+"scripts/forge/forge_cli/app/_engine_lifecycle.py" = ["C901", "E501", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_lock.py" = ["C901", "E501", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_lock_steps.py" = ["E501"]
+"scripts/forge/forge_cli/app/_engine_observation.py" = ["B023", "PLR0911", "PLR0913", "UP012", "UP035"]
+"scripts/forge/forge_cli/app/_engine_observe_remote.py" = ["B023", "B905", "C901", "E501", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/app/_engine_observe_remote_steps.py" = ["E501"]
+"scripts/forge/forge_cli/app/_engine_rebase_recovery.py" = ["C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_recover.py" = ["C901", "E501", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/app/_engine_recover_bootstrap.py" = ["UP035"]
+"scripts/forge/forge_cli/app/_engine_recover_conflict.py" = ["B904", "C901", "E501", "F841", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_refresh.py" = ["F841", "UP035"]
+"scripts/forge/forge_cli/app/_engine_release_aborted.py" = ["UP035"]
+"scripts/forge/forge_cli/app/_engine_release_pending.py" = ["C901", "PLR0912", "UP035"]
+"scripts/forge/forge_cli/app/_engine_review_request.py" = ["UP012", "UP035"]
+"scripts/forge/forge_cli/app/_engine_review_verdict.py" = ["C901", "E501", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_start_chain.py" = ["UP035"]
+"scripts/forge/forge_cli/app/_merge_engine.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/app/_mutation_journal.py" = ["C901", "I001", "UP035"]
 "scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 # chain_core/ package (split 2026-09-13; narrowed per module 2026-09-14, bead forge-plugin-r0b):
@@ -329,6 +357,10 @@ containers = ["forge_cli.app"]
 layers = [
     "_dispatch",
     "_merge_engine",
+    # MergeEngine decompose (bead forge-plugin-37fr): seam modules hold the moved bodies and import
+    # _merge_engine only under TYPE_CHECKING (excluded above); the _steps siblings hold tier-2 helpers.
+    "_engine_abort | _engine_bootstrap | _engine_cleanup | _engine_cleanup_child | _engine_conflict_observation | _engine_epoch_ancestry | _engine_epoch_fetch | _engine_epoch_push | _engine_epoch_rebase | _engine_epoch_suite | _engine_final_mode | _engine_finalize | _engine_gate | _engine_lifecycle | _engine_lock | _engine_observation | _engine_observe_remote | _engine_rebase_recovery | _engine_recover | _engine_recover_bootstrap | _engine_recover_conflict | _engine_refresh | _engine_release_aborted | _engine_release_pending | _engine_review_request | _engine_review_verdict | _engine_start_chain",
+    "_engine_lock_steps | _engine_observe_remote_steps | _engine_recover_steps",
     "_admission | _candidate_observation | _mutation_journal",
 ]
 ignore_imports = [
