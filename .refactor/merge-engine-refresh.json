@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "3ae1236d62f530314e3ccef14aba7c761d7f44b0c270ab3f5fcf3bd71abd6dfb",
+    "scripts/forge/forge_cli/app/_engine_refresh.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_refresh.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_admission_from_candidate_observation",
+        "_admission_for_refresh",
+        "_refresh_iteration",
+        "refresh"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_refresh",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_refresh"
+        ],
+        "scripts/forge/forge_cli/app/_engine_refresh.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import dataclasses",
+          "import secrets",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, engine",
+          "from forge_cli.app._admission import prepare_merge_admission",
+          "from forge_cli.envelope import FrozenError, Outcome, REVISION9_OUTPUT_SCHEMA, V2ReasonCode",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_refresh.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "remove_imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "dataclasses"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "02e08d60efb31da5ab3098487bf9083236da27d1"
+}
