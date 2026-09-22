@@ -1,0 +1,7 @@
+--- e01 recover 584-622 -> _recover_next_steps
+e01: gate PASS, mypy NEW 0 GONE 0, params ['current', 'action'] -> ['next_steps'], source 584, dest 44
+e01 _recover_next_steps: committed c81829d
+--- e02 _recording_common_lock 590-604 -> _acquire_recording_common_lock
+e02: gate PASS, mypy NEW 0 GONE 0, params ['common_dir', 'chain_id', 'operation', 'unexpected_split_recovery_proof', 'classify_reserved_fence'] -> ['lock'], source 578, dest 19
+e02 _acquire_recording_common_lock: committed 034df09
+rc=0
