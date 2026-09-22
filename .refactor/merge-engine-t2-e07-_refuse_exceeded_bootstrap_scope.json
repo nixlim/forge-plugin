@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_bootstrap.py": "56b452b67d5d39682948b5437ee94dbb3390038cff050157a8c4217a02b5b452"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "function": "_run_bootstrap_generation_composite",
+      "name": "_refuse_exceeded_bootstrap_scope",
+      "imports": {},
+      "start_line": 450,
+      "end_line": 473,
+      "parameters": [
+        "scope",
+        "self",
+        "state",
+        "proof",
+        "verb"
+      ],
+      "outputs": [
+        "state"
+      ],
+      "format_imports": true
+    }
+  ],
+  "base_commit": "d1c9e2c089aaeebb92adee5c3999b1e69868a378"
+}

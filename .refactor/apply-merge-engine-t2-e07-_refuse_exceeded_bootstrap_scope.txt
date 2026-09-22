@@ -1,0 +1,112 @@
+extraction e07 on HEAD d1c9e2c089aaeebb92adee5c3999b1e69868a378
+
+== dry run
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_bootstrap.py --function _run_bootstrap_generation_composite --start 450 --end 473 --name _refuse_exceeded_bootstrap_scope --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e07-_refuse_exceeded_bootstrap_scope.json
+--- scripts/forge/forge_cli/app/_engine_bootstrap.py
++++ scripts/forge/forge_cli/app/_engine_bootstrap.py
+@@ -447,30 +447,7 @@
+             chain_id=str(state["chain_id"]),
+             schema=REVISION9_OUTPUT_SCHEMA,
+         )
+-    exceeded = bool(scope is not None and scope.result == "exceeded")
+-    if exceeded:
+-        fetch_digest = engine._merge_event_digest(
+-            self.store, str(state["chain_id"]), "fetch_result"
+-        )
+-        if not isinstance(proof, Mapping) or fetch_digest is None:
+-            raise FrozenError(
+-                "run-scope refusal lacks its authenticated result proof",
+-                chain_id=str(state["chain_id"]),
+-                schema=REVISION9_OUTPUT_SCHEMA,
+-            )
+-        state = self._release_scope_exceeded(
+-            state,
+-            scope_proof_digest=str(proof["digest"]),
+-            fetch_result_event_digest=fetch_digest,
+-            verb=verb,
+-        )
+-        raise chain_core._merge_refusal(
+-            V2ReasonCode.RUN_SCOPE_EXCEEDED,
+-            f"forge: {verb} refused — changed paths exceed bound task scope",
+-            expected="every changed path within task files and admitted run scope",
+-            observed=str(scope.out_of_scope_paths if scope is not None else ()),
+-            chain=state,
+-        )
++    state = _refuse_exceeded_bootstrap_scope(scope, self, state, proof, verb)
+     return state, engine.MergeBootstrapClassification(
+         candidate=copy.deepcopy(dict(candidate)),
+         scope=copy.deepcopy(scope),
+@@ -502,3 +479,30 @@
+         generation_number=generation_number,
+         verb=verb,
+     )
++
++def _refuse_exceeded_bootstrap_scope(scope, self, state, proof, verb):
++    exceeded = bool(scope is not None and scope.result == "exceeded")
++    if exceeded:
++        fetch_digest = engine._merge_event_digest(
++            self.store, str(state["chain_id"]), "fetch_result"
++        )
++        if not isinstance(proof, Mapping) or fetch_digest is None:
++            raise FrozenError(
++                "run-scope refusal lacks its authenticated result proof",
++                chain_id=str(state["chain_id"]),
++                schema=REVISION9_OUTPUT_SCHEMA,
++            )
++        state = self._release_scope_exceeded(
++            state,
++            scope_proof_digest=str(proof["digest"]),
++            fetch_result_event_digest=fetch_digest,
++            verb=verb,
++        )
++        raise chain_core._merge_refusal(
++            V2ReasonCode.RUN_SCOPE_EXCEEDED,
++            f"forge: {verb} refused — changed paths exceed bound task scope",
++            expected="every changed path within task files and admitted run scope",
++            observed=str(scope.out_of_scope_paths if scope is not None else ()),
++            chain=state,
++        )
++    return state
+{
+  "version": 1,
+  "tier": 2,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_engine_bootstrap.py": "56b452b67d5d39682948b5437ee94dbb3390038cff050157a8c4217a02b5b452"
+  },
+  "operations": [
+    {
+      "kind": "extract",
+      "source": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "function": "_run_bootstrap_generation_composite",
+      "name": "_refuse_exceeded_bootstrap_scope",
+      "imports": {},
+      "start_line": 450,
+      "end_line": 473,
+      "parameters": [
+        "scope",
+        "self",
+        "state",
+        "proof",
+        "verb"
+      ],
+      "outputs": [
+        "state"
+      ],
+      "format_imports": true
+    }
+  ]
+}
+DRY RUN: verified; no files written
+[exit 0]
+
+== snapshot
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/snapshot_bodies.py snapshot scripts/forge/forge_cli --out .refactor/merge-engine-t2-e07-before.json
+snapshot: 887 bodies across 873 names -> .refactor/merge-engine-t2-e07-before.json
+[exit 0]
+
+== apply
+$ python3 /home/agents/foundry-of-zero/refactor-python/skills/decompose/scripts/extract_ranges.py --project . --source scripts/forge/forge_cli/app/_engine_bootstrap.py --function _run_bootstrap_generation_composite --start 450 --end 473 --name _refuse_exceeded_bootstrap_scope --import-root scripts/forge --format-imports --manifest .refactor/merge-engine-t2-e07-_refuse_exceeded_bootstrap_scope.json --apply
+APPLIED tier 2; manifest: .refactor/merge-engine-t2-e07-_refuse_exceeded_bootstrap_scope.json
+[exit 0]
+

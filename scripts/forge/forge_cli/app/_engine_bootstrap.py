@@ -447,30 +447,7 @@ def _run_bootstrap_generation_composite(
             chain_id=str(state["chain_id"]),
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    exceeded = bool(scope is not None and scope.result == "exceeded")
-    if exceeded:
-        fetch_digest = engine._merge_event_digest(
-            self.store, str(state["chain_id"]), "fetch_result"
-        )
-        if not isinstance(proof, Mapping) or fetch_digest is None:
-            raise FrozenError(
-                "run-scope refusal lacks its authenticated result proof",
-                chain_id=str(state["chain_id"]),
-                schema=REVISION9_OUTPUT_SCHEMA,
-            )
-        state = self._release_scope_exceeded(
-            state,
-            scope_proof_digest=str(proof["digest"]),
-            fetch_result_event_digest=fetch_digest,
-            verb=verb,
-        )
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_SCOPE_EXCEEDED,
-            f"forge: {verb} refused — changed paths exceed bound task scope",
-            expected="every changed path within task files and admitted run scope",
-            observed=str(scope.out_of_scope_paths if scope is not None else ()),
-            chain=state,
-        )
+    state = _refuse_exceeded_bootstrap_scope(scope, self, state, proof, verb)
     return state, engine.MergeBootstrapClassification(
         candidate=copy.deepcopy(dict(candidate)),
         scope=copy.deepcopy(scope),
@@ -502,3 +479,30 @@ def _run_bootstrap_generation(
         generation_number=generation_number,
         verb=verb,
     )
+
+def _refuse_exceeded_bootstrap_scope(scope, self, state, proof, verb):
+    exceeded = bool(scope is not None and scope.result == "exceeded")
+    if exceeded:
+        fetch_digest = engine._merge_event_digest(
+            self.store, str(state["chain_id"]), "fetch_result"
+        )
+        if not isinstance(proof, Mapping) or fetch_digest is None:
+            raise FrozenError(
+                "run-scope refusal lacks its authenticated result proof",
+                chain_id=str(state["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        state = self._release_scope_exceeded(
+            state,
+            scope_proof_digest=str(proof["digest"]),
+            fetch_result_event_digest=fetch_digest,
+            verb=verb,
+        )
+        raise chain_core._merge_refusal(
+            V2ReasonCode.RUN_SCOPE_EXCEEDED,
+            f"forge: {verb} refused — changed paths exceed bound task scope",
+            expected="every changed path within task files and admitted run scope",
+            observed=str(scope.out_of_scope_paths if scope is not None else ()),
+            chain=state,
+        )
+    return state
