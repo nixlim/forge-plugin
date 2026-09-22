@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _park_integrated_review(
-    self: "MergeEngine", state: dict[str, Any], lease: chain_core.ChainLease
+    self: MergeEngine, state: dict[str, Any], lease: chain_core.ChainLease
 ) -> dict[str, Any]:
     integration = copy.deepcopy(state["integration"])
     engine._reset_merge_nonmovement_counter(integration)
@@ -47,7 +47,7 @@ def _park_integrated_review(
     )
 
 def _finish_recovered_epoch_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,
@@ -66,7 +66,7 @@ def _finish_recovered_epoch_locked(
     state = self._run_epoch_push(state, lock, lease, budget)
     return state, "pushed" if state["state"] == "pushed" else "observed"
 
-def finalize(self: "MergeEngine") -> Outcome:
+def finalize(self: MergeEngine) -> Outcome:
     """Execute one FR-235 bounded epoch under the ordered lock stack."""
 
     self._git_no_lazy_fetch_qualification = None

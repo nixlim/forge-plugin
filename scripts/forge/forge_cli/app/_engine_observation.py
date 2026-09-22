@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _candidate_observation_transition(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease | None,
     integration: Mapping[str, Any],
@@ -42,7 +42,7 @@ def _candidate_observation_transition(
     )
 
 def _restore_candidate_observation_intent_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease | None,
 ) -> tuple[dict[str, Any], object, bool]:
@@ -65,7 +65,7 @@ def _restore_candidate_observation_intent_locked(
     )
 
 def _restore_bootstrap_fetch_observation_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease | None,
 ) -> tuple[dict[str, Any], bool]:
@@ -83,7 +83,7 @@ def _restore_bootstrap_fetch_observation_locked(
     return self._candidate_observation_transition(state, lease, restored), True
 
 def _run_candidate_observation_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease | None,

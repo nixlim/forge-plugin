@@ -29,7 +29,7 @@ def _final_mode_unavailable(
     )
 
 def _prepare_git_no_lazy_fetch_qualification(
-    self: "MergeEngine", state: Mapping[str, Any]
+    self: MergeEngine, state: Mapping[str, Any]
 ) -> None:
     """Qualify and rebind Git before this invocation publishes its lock."""
 
@@ -48,7 +48,7 @@ def _prepare_git_no_lazy_fetch_qualification(
     self._git_no_lazy_fetch_qualification = qualification
 
 def _prepare_bootstrap_git_no_lazy_fetch_qualification(
-    self: "MergeEngine",
+    self: MergeEngine,
     admission: engine.MergeAdmission,
     *,
     verb: str,
@@ -86,7 +86,7 @@ def _prepare_bootstrap_git_no_lazy_fetch_qualification(
     self._git_no_lazy_fetch_qualification = qualification
 
 def _final_history_mutation_mode(
-    self: "MergeEngine", state: Mapping[str, Any], lock: chain_core.CommonRebaseLock
+    self: MergeEngine, state: Mapping[str, Any], lock: chain_core.CommonRebaseLock
 ) -> tuple[str | None, str]:
     """Read DM-015 from the exact final intended commit under the lock."""
 
@@ -146,7 +146,7 @@ def _final_history_mutation_mode(
     return mode, result.output_digest
 
 def _park_invalid_final_history_mode(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease,
     *,
@@ -195,7 +195,7 @@ def _current_merge_authority(state: Mapping[str, Any]) -> bool:
     return chain_core._merge_current_authority_valid(state)
 
 def _recover_can_reach_final_mode(
-    cls: "type[MergeEngine]",
+    cls: type[MergeEngine],
     state: Mapping[str, Any],
     *,
     continue_rebase: bool,
@@ -299,7 +299,7 @@ def _recover_can_reach_final_mode(
         return False
     return intent.get("operation") == "fetch"
 
-def _read_only_recovery_flag_state(self: "MergeEngine") -> dict[str, Any]:
+def _read_only_recovery_flag_state(self: MergeEngine) -> dict[str, Any]:
     """Read replay truth without repairing bytes before a loud-flag refusal."""
 
     if self.ctx.options.run_id is not None:

@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _recover_merge_bootstrap_scope_binding(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: Mapping[str, Any],
     admission: engine.MergeAdmission,
     *,
@@ -69,7 +69,7 @@ def _recover_merge_bootstrap_scope_binding(
     )
 
 def _bootstrap_pending_classification_inputs_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: Mapping[str, Any],
     admission: engine.MergeAdmission,
 ) -> engine.MergeBootstrapClassification:
@@ -179,7 +179,7 @@ def _bootstrap_pending_classification_inputs_locked(
     )
 
 def _recover_classifying_bootstrap_v12_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease,
 ) -> tuple[
@@ -396,7 +396,7 @@ def _recover_classifying_bootstrap_v12_locked(
     return current, "classification-pending", admission, pending
 
 def _recover_classifying_bootstrap_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,

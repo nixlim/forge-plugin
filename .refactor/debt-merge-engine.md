@@ -65,7 +65,7 @@ bindings, so `quality.py` reports no class candidate. `__all__` of `app/__init__
   `cls: "type[MergeEngine]"` as string constants although every seam module inherits
   `from __future__ import annotations`. Forgiven during the waves by the temporary glob (P0b `e814491`); at
   finalize removed by one mechanical non-move commit, `ruff check --select UP037 --fix` over `app/_engine_*.py`
-  (76 annotations across 28 modules; the `TYPE_CHECKING` import of `MergeEngine` makes the bare name safe), so no
+  (75 annotations across 27 modules; the `TYPE_CHECKING` import of `MergeEngine` makes the bare name safe), so no
   measured per-module entry carries UP037.
 - **Unannotated tier-2 helpers and long call lines.** rope emits the helper signature and the replacement call
   without annotations and on one line: the three `_engine_*_steps.py` modules and several in-module helpers trip

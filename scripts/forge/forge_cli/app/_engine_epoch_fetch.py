@@ -31,7 +31,7 @@ def _sealed_plan(
     }
 
 def _begin_epoch(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease,
     *,
@@ -127,7 +127,7 @@ def _resolved_epoch_fetch_tip(state: Mapping[str, Any]) -> str:
     return oid
 
 def _run_epoch_fetch(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,
@@ -250,7 +250,7 @@ def _run_epoch_fetch(
     return self._complete_epoch_fetch_locked(state, lock, lease)
 
 def _complete_epoch_fetch_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,

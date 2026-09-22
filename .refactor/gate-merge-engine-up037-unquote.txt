@@ -1,0 +1,12 @@
+head=3fffe485514ec95d6eac53e86f651b34ade83048+UP037 fix
+== gate results ==
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+SKIP bodies-unchanged (no --snapshot)
+PASS tests
+GATE: PASS
+verify_rc=0
+== up037-fix: total=234 baseline=234 NEW=0 GONE=0

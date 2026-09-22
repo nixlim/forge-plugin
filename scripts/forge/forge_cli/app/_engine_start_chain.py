@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _claim_slot(
-    self: "MergeEngine",
+    self: MergeEngine,
     admission: engine.MergeAdmission,
 ) -> tuple[str, str, Path, str | None, str | None]:
     worktree_digest, name, path = engine._merge_claim_identity(
@@ -84,7 +84,7 @@ def _claim_slot(
     )
     return worktree_digest, name, path, predecessor_id, predecessor_digest
 
-def _allocate_chain_id(self: "MergeEngine") -> str:
+def _allocate_chain_id(self: MergeEngine) -> str:
     for _attempt in range(32):
         chain_id = engine.chain_id_now()
         if (
@@ -98,7 +98,7 @@ def _allocate_chain_id(self: "MergeEngine") -> str:
     )
 
 def _initial_merge_state(
-    self: "MergeEngine",
+    self: MergeEngine,
     chain_id: str,
     admission: engine.MergeAdmission,
     claim_path: Path,
@@ -153,7 +153,7 @@ def _initial_merge_state(
     }
 
 def _record_bootstrap_failure(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     operation_nonce: str,
     refusal: Refusal,
@@ -196,7 +196,7 @@ def _record_bootstrap_failure(
     )
 
 def _complete_bootstrap_classification(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     admission: engine.MergeAdmission,
     pending: engine.MergeBootstrapClassification,
@@ -305,7 +305,7 @@ def _complete_bootstrap_classification(
 
 
 def start_chain(
-    self: "MergeEngine",
+    self: MergeEngine,
     worktree: str,
     declared_tier: str | None = None,
     *,

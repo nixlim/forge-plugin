@@ -45,7 +45,7 @@ def _push_classification(
     return "known-failure"
 
 def _run_epoch_push(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,

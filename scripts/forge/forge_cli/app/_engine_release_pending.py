@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _complete_pending_release_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease,
     *,
@@ -136,7 +136,7 @@ def _complete_pending_release_locked(
     return state, disposition
 
 def _resume_pending_release(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     *,
     expected_target: str | None = None,
@@ -200,7 +200,7 @@ def _resume_pending_release(
             )
 
 def _release_historical_landing_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _release_to_closed_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease,
 ) -> dict[str, Any]:
@@ -125,7 +125,7 @@ def _release_to_closed_locked(
     return terminal
 
 def _cleanup_result_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease,
     *,
@@ -159,7 +159,7 @@ def _cleanup_result_locked(
     )
 
 def _run_cleanup_child(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,

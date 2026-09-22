@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _record_common_release_failure(
-    self: "MergeEngine", chain_id: str, failure: chain_core.CommonLockReleaseFailure
+    self: MergeEngine, chain_id: str, failure: chain_core.CommonLockReleaseFailure
 ) -> dict[str, Any] | None:
     """Preserve durable primary truth before exposing a release refusal."""
 
@@ -51,7 +51,7 @@ def _record_common_release_failure(
     return recorded
 
 def _recording_common_lock(
-    self: "MergeEngine",
+    self: MergeEngine,
     common_dir: Path,
     *,
     chain_id: str,

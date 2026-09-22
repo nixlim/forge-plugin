@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _admission_from_candidate_observation(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: Mapping[str, Any],
     observation: Mapping[str, Any],
     *,
@@ -69,7 +69,7 @@ def _admission_from_candidate_observation(
     )
 
 def _admission_for_refresh(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: Mapping[str, Any],
     *,
     observation: Mapping[str, Any] | None = None,
@@ -123,7 +123,7 @@ def _admission_for_refresh(
         )
     return admission
 
-def _refresh_iteration(self: "MergeEngine", state: Mapping[str, Any]) -> int:
+def _refresh_iteration(self: MergeEngine, state: Mapping[str, Any]) -> int:
     """Apply the ordinary scalar row before review-specific refusals."""
 
     integration = state.get("integration")
@@ -173,7 +173,7 @@ def _refresh_iteration(self: "MergeEngine", state: Mapping[str, Any]) -> int:
         )
     return iteration
 
-def refresh(self: "MergeEngine", *, remote_tip: str | None = None) -> Outcome:
+def refresh(self: MergeEngine, *, remote_tip: str | None = None) -> Outcome:
     engine._require_merge_lifecycle_control("admission-priority")
     state = self._preflight_lifecycle(self._load(), "merge refresh")
     self._halt(state)

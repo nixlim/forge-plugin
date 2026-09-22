@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _release_to_aborted(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     *,
     reason: str | None,
@@ -143,7 +143,7 @@ def _release_to_aborted(
     return terminal
 
 def _release_to_aborted_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lease: chain_core.ChainLease,
     *,
@@ -264,7 +264,7 @@ def _release_to_aborted_locked(
     return terminal
 
 def _release_scope_exceeded(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     *,
     scope_proof_digest: str,

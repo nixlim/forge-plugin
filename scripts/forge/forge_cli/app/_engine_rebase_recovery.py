@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _record_foreign_git_locked(
-    self: "MergeEngine", state: dict[str, Any], lease: chain_core.ChainLease
+    self: MergeEngine, state: dict[str, Any], lease: chain_core.ChainLease
 ) -> dict[str, Any]:
     integration = state.get("integration")
     if not isinstance(integration, Mapping):
@@ -38,7 +38,7 @@ def _record_foreign_git_locked(
     )
 
 def _materialize_rebase_success_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,
@@ -155,7 +155,7 @@ def _materialize_rebase_success_locked(
     )
 
 def _recover_rebase_observation_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,

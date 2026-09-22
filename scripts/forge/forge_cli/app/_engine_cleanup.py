@@ -10,7 +10,7 @@ from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Outcome, V2
 if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
-def cleanup_chain(self: "MergeEngine") -> Outcome:
+def cleanup_chain(self: MergeEngine) -> Outcome:
     """Remove only the contained worktree and unmoved branch, without force."""
 
     for control in chain_core._REQUIRED_MERGE_INTEGRATION_CONTROLS:

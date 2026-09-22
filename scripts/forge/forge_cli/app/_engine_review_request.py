@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _review_package(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: Mapping[str, Any],
     repository: chain_core.Repository,
     policy: Policy,
@@ -109,7 +109,7 @@ def _review_package(
     )
     return package, profiles, profiles_by_path
 
-def review_request(self: "MergeEngine") -> Outcome:
+def review_request(self: MergeEngine) -> Outcome:
     chain_core._require_merge_adapter_control("mandatory-review-final")
     state = self._preflight_lifecycle(self._load(), "review request")
     self._halt(state)
@@ -224,7 +224,7 @@ def review_request(self: "MergeEngine") -> Outcome:
         evidence_refs=[package_ref],
     )
 
-def review_collect(self: "MergeEngine") -> Outcome:
+def review_collect(self: MergeEngine) -> Outcome:
     state = self._preflight_lifecycle(self._load(), "review collect")
     if state["state"] != "reviewing":
         self._wrong_state(state, "reviewing", "review collect")

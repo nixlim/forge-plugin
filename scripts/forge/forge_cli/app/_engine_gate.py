@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _resolve_gate(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: Mapping[str, Any],
     policy: Policy,
     changed_paths: Sequence[str],
@@ -87,7 +87,7 @@ def _resolve_gate(
     raise AssertionError("unreachable")
 
 def _run_scoped_mutation(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: Mapping[str, Any],
     repository: chain_core.Repository,
 ) -> dict[str, Any]:
@@ -173,7 +173,7 @@ def _run_scoped_mutation(
     }
 
 def _record_gate_result(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     suite: Sequence[str],
     gate_id: str,
@@ -235,7 +235,7 @@ def _record_gate_result(
         at=chain_core.iso_z(),
     )
 
-def gate_run(self: "MergeEngine", gate_id: str) -> Outcome:
+def gate_run(self: MergeEngine, gate_id: str) -> Outcome:
     chain_core._require_merge_adapter_control("ordered-gate-suite")
     state = self._preflight_lifecycle(
         self._load(), f"merge gate run {gate_id}"
@@ -366,7 +366,7 @@ def gate_run(self: "MergeEngine", gate_id: str) -> Outcome:
         evidence_refs=evidence_refs,
     )
 
-def verify(self: "MergeEngine") -> Outcome:
+def verify(self: MergeEngine) -> Outcome:
     chain_core._require_merge_adapter_control("ordered-gate-suite")
     state = self._preflight_lifecycle(self._load(), "merge verify")
     repository, policy, _changed_paths = _observe_current_merge_candidate(

@@ -11,7 +11,7 @@ from forge_cli.policy import sha256_bytes
 if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
-def abort(self: "MergeEngine", reason: str | None = None) -> Outcome:
+def abort(self: MergeEngine, reason: str | None = None) -> Outcome:
     engine._require_merge_lifecycle_control("admission-priority")
     state = self._load()
     claim = state.get("worktree", {}).get("claim")
@@ -270,7 +270,7 @@ def abort(self: "MergeEngine", reason: str | None = None) -> Outcome:
     )
 
 def _attempted_release_preconditions_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     *,

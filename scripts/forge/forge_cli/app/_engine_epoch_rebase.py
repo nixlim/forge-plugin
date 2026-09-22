@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _run_epoch_rebase(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     fetched_tip: str,
     lock: chain_core.CommonRebaseLock,
@@ -168,7 +168,7 @@ def _run_epoch_rebase(
     return state
 
 def _restore_integrated_rebase_observation_intent_locked(
-    self: "MergeEngine", state: dict[str, Any], lease: chain_core.ChainLease
+    self: MergeEngine, state: dict[str, Any], lease: chain_core.ChainLease
 ) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
     """Restore the raw rebase fact after a crash in a read-only proof leg."""
 
@@ -229,7 +229,7 @@ def _restore_integrated_rebase_observation_intent_locked(
     return state, source_intent
 
 def _run_integrated_rebase_observation_locked(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     lock: chain_core.CommonRebaseLock,
     lease: chain_core.ChainLease,

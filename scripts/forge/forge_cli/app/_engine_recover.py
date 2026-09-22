@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 def recover(
-    self: "MergeEngine",
+    self: MergeEngine,
     *,
     continue_rebase: bool = False,
     paths: Sequence[str] | None = None,

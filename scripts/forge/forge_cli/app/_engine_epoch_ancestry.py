@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def _epoch_replay_context(
-    self: "MergeEngine", state: Mapping[str, Any]
+    self: MergeEngine, state: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Return context only from a replay matching the locked projection."""
 
@@ -31,7 +31,7 @@ def _epoch_replay_context(
     return context
 
 def _run_carried_successor_ancestry(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     fetched_tip: str,
     lock: chain_core.CommonRebaseLock,

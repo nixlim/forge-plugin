@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
 def start(
-    self: "MergeEngine",
+    self: MergeEngine,
     worktree: str,
     declared_tier: str | None = None,
     *,
@@ -28,7 +28,7 @@ def start(
     )
 
 def bind_candidate(
-    self: "MergeEngine",
+    self: MergeEngine,
     admission: engine.MergeAdmission,
     remote_tip: str,
     *,
@@ -42,7 +42,7 @@ def bind_candidate(
     )
 
 def _preflight_lifecycle(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     verb: str,
     *,
@@ -142,7 +142,7 @@ def _preflight_lifecycle(
         )
     return state
 
-def approve(self: "MergeEngine", candidate: str) -> Outcome:
+def approve(self: MergeEngine, candidate: str) -> Outcome:
     engine._require_merge_lifecycle_control("candidate-bound-approval")
     state = self._preflight_lifecycle(self._load(), "merge approve")
     self._halt(state)
@@ -278,7 +278,7 @@ def approve(self: "MergeEngine", candidate: str) -> Outcome:
         f"forge status --chain-id {state['chain_id']}",
     )
 
-def status(self: "MergeEngine") -> Outcome:
+def status(self: MergeEngine) -> Outcome:
     state = self._load()
     claim = state.get("worktree", {}).get("claim")
     if isinstance(claim, Mapping) and claim.get("status") == "unpublished":

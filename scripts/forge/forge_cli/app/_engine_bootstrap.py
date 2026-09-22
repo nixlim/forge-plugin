@@ -66,7 +66,7 @@ def _resolved_fetch_tip(
     return oid
 
 def _run_bootstrap_generation_composite(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     admission: engine.MergeAdmission,
     lock: chain_core.CommonRebaseLock,
@@ -441,7 +441,7 @@ def _run_bootstrap_generation_composite(
     )
 
 def _run_bootstrap_generation(
-    self: "MergeEngine",
+    self: MergeEngine,
     state: dict[str, Any],
     admission: engine.MergeAdmission,
     lock: chain_core.CommonRebaseLock,

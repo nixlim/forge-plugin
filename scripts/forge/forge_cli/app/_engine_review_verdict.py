@@ -13,7 +13,7 @@ from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Outcome, V2
 if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
-def review_attach(self: "MergeEngine", verdict_file: str) -> Outcome:
+def review_attach(self: MergeEngine, verdict_file: str) -> Outcome:
     chain_core._require_merge_adapter_control("mandatory-review-final")
     state = self._preflight_lifecycle(self._load(), "review attach")
     self._halt(state)
@@ -170,7 +170,7 @@ def review_attach(self: "MergeEngine", verdict_file: str) -> Outcome:
     )
 
 def review_disposition(
-    self: "MergeEngine", finding: int, severity: str, resolution: str
+    self: MergeEngine, finding: int, severity: str, resolution: str
 ) -> Outcome:
     chain_core._require_merge_adapter_control("mandatory-review-final")
     state = self._preflight_lifecycle(self._load(), "review disposition")
