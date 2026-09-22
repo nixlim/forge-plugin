@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "95fd81d4e7c29572a330a966f7f180c0e77b30d90db1bafdd91db288db890049",
+    "scripts/forge/forge_cli/app/_engine_bootstrap.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_bootstrap.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_bootstrap_fetch_argv",
+        "_resolved_fetch_tip",
+        "_run_bootstrap_generation_composite",
+        "_run_bootstrap_generation"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_bootstrap",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_bootstrap"
+        ],
+        "scripts/forge/forge_cli/app/_engine_bootstrap.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, runtime, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_bootstrap.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "c2d2ce6f84252ce2c2c10cf0acb8c554e8c2080f"
+}
