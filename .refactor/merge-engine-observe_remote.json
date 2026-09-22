@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "scripts/forge/forge_cli/app/_merge_engine.py": "a0ab8d693ba51f0be6ee95841b50f196f46ca1a0ccd838e177fa9004e2aebdb3",
+    "scripts/forge/forge_cli/app/_engine_observe_remote.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "scripts/forge/forge_cli/app/_merge_engine.py",
+      "dest": "scripts/forge/forge_cli/app/_engine_observe_remote.py",
+      "class": "MergeEngine",
+      "methods": [
+        "_run_remote_observation"
+      ],
+      "shape": "function",
+      "target_class": null,
+      "alias": "_engine_observe_remote",
+      "test_only": false,
+      "imports": {
+        "scripts/forge/forge_cli/app/_merge_engine.py": [
+          "from . import _engine_observe_remote"
+        ],
+        "scripts/forge/forge_cli/app/_engine_observe_remote.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import os",
+          "from pathlib import Path",
+          "from typing import Any, Mapping",
+          "from forge_cli import chain_core, runtime, engine",
+          "from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal",
+          "from forge_cli.policy import sha256_bytes",
+          "from typing import TYPE_CHECKING"
+        ]
+      },
+      "annotate_self": true,
+      "type_checking_imports": {
+        "scripts/forge/forge_cli/app/_engine_observe_remote.py": [
+          "from forge_cli.app._merge_engine import MergeEngine"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "3bf920185410a358adb1fc4cc5e5aeca05a20958"
+}

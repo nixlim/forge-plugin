@@ -1,0 +1,5362 @@
+{
+ "files": {
+  "scripts/forge/forge_cli/__init__.py": "9e05a1744125202a254def8d74acddaa81fff33d6ec621a105c5e25a1229156a",
+  "scripts/forge/forge_cli/app/__init__.py": "9863cf72499b1bf8d0512eba419108797d71ad6cec0a1fdba7a80907c5efe924",
+  "scripts/forge/forge_cli/app/_admission.py": "b3d2c1f7574167fc659fad8e8c48c5602c2ddeb1f2fc3618688934b189717655",
+  "scripts/forge/forge_cli/app/_candidate_observation.py": "c750cb0880854e11633625fc5fc018baa030a28c32a30ff8fdf11d967b54edff",
+  "scripts/forge/forge_cli/app/_dispatch.py": "91de24d1354fae47a23fe568d3d2bc777704ece4e0141cbe6a9af24eed1dc90f",
+  "scripts/forge/forge_cli/app/_engine_abort.py": "31b7e2dc8a0ce4075ba0f2fe653ced631924f071ce2da8832b481a122ff80343",
+  "scripts/forge/forge_cli/app/_engine_bootstrap.py": "56b452b67d5d39682948b5437ee94dbb3390038cff050157a8c4217a02b5b452",
+  "scripts/forge/forge_cli/app/_engine_cleanup.py": "652327739a2083805f1fadb3282b8d80fa35d342012953e3e17a17f08f67f5dd",
+  "scripts/forge/forge_cli/app/_engine_cleanup_child.py": "11b240d81a0d47ca672b2087335ff1869bac52e31df5dad5a523c4bae7c04958",
+  "scripts/forge/forge_cli/app/_engine_final_mode.py": "cedadab61e04e42ddc5df6be996f33ae9d8d1a20485b7693c42db242b67e1415",
+  "scripts/forge/forge_cli/app/_engine_gate.py": "eb60d0aae29a415bc94e4dabc57a574a06ae1ef168b0af811bc19c2f32828b26",
+  "scripts/forge/forge_cli/app/_engine_lifecycle.py": "7185db308d317fccff6a25757550a440e9c22c5a242fcd39faebcc216e117877",
+  "scripts/forge/forge_cli/app/_engine_lock.py": "c449ec8704f875e271a49d8a569a8289a2c9b9aa6e77c2ce227c43be87bbceeb",
+  "scripts/forge/forge_cli/app/_engine_observation.py": "8f2766368293910460f844179ab4f6500ce807c553f38ae5fc02c805508fc6c0",
+  "scripts/forge/forge_cli/app/_engine_refresh.py": "7ed46f6703513f560c445e90ea92be8465670c0b079a2d9d68dd3524262dad10",
+  "scripts/forge/forge_cli/app/_engine_release_aborted.py": "4bc3bc0abebb437bdf862670831b90dba332afeab341b5408da5b2c1451a2963",
+  "scripts/forge/forge_cli/app/_engine_release_pending.py": "4e558cce54de0764ebf43db7477a3f7aa4baf5018051390cc93a76252504219c",
+  "scripts/forge/forge_cli/app/_engine_review_request.py": "ff80cf9ddd1a2d6044b18674d2b9090c5312493762b9d07aca4a6dd9bdce674f",
+  "scripts/forge/forge_cli/app/_engine_review_verdict.py": "6aa6f3014171ecfdc70cb25da2f7c7dd6f7b6e2ca592d2be085725e5b6de7cab",
+  "scripts/forge/forge_cli/app/_engine_start_chain.py": "468993b61e950c798fd448273d2f7f352e3c95dba4bc75c9d2590679e6757c1a",
+  "scripts/forge/forge_cli/app/_merge_engine.py": "a0ab8d693ba51f0be6ee95841b50f196f46ca1a0ccd838e177fa9004e2aebdb3",
+  "scripts/forge/forge_cli/app/_mutation_journal.py": "00958b63b20ec615c63bfc66134ce290ae72f1819172bcd162f108cfa14de9ba",
+  "scripts/forge/forge_cli/candidate.py": "014ddcd56075f0b6e356de2a4253accf0774752f097c6336a6ceb063f48c48d5",
+  "scripts/forge/forge_cli/chain_core/__init__.py": "e2a36bf4bb9382febec7bd32c92db06d48a5870b53c85fe63ecbb9f06cf6407d",
+  "scripts/forge/forge_cli/chain_core/_activation.py": "9ce55d8226802b58acda227f1c968bd614bd89b656eb053710bc5f1ed1c9d623",
+  "scripts/forge/forge_cli/chain_core/_activation_outbox.py": "1c864591f36688253bcc3fb07470823d6a7bfa43e04987304f5098d828f139c1",
+  "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py": "74283966acd3db1acf5fe14549a2185d34c5b574e2d33941ff35674eae81d2e1",
+  "scripts/forge/forge_cli/chain_core/_candidate_v2.py": "5815cefd8f9e2b2b9ef5ccc29b1434d538518d167b62fbefb41aedbbfed8bc98",
+  "scripts/forge/forge_cli/chain_core/_chain_batch_authorize.py": "9f8b436b632a87a8546639607c3eb3025f732bb92d19e54d00e8a31069595999",
+  "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py": "1ded29147e8fc4715aae70f83a63b77cd5f90a0b2a60ed8a45510f208de3e83c",
+  "scripts/forge/forge_cli/chain_core/_chain_state.py": "a5bed8311db48d6079d023db1eba253cd764842b26460a76e090edea93c26a07",
+  "scripts/forge/forge_cli/chain_core/_commit_chain.py": "1bd59b01dd3894dfae95ad1b92c129ad17b4f8ef5e7973fb4adff9ab50c6c3c0",
+  "scripts/forge/forge_cli/chain_core/_common_lock.py": "927b9c7aaba78550ce3aeeb8fbcac66b9f93941179d940da289bff157df9d4b6",
+  "scripts/forge/forge_cli/chain_core/_controls.py": "fdea0f342106bd99bda0a717078a6ddcae46d4b23575ccb9181bca8c2b846d98",
+  "scripts/forge/forge_cli/chain_core/_core.py": "c06b04f0a08debf5447a99c50dec5c522de571248b0ff5feaacd273fde41ccf7",
+  "scripts/forge/forge_cli/chain_core/_fenced_child.py": "369a2e2691d314d0253141df1105ffc43472d46fb77341d856fc626d4960e350",
+  "scripts/forge/forge_cli/chain_core/_fenced_process.py": "03aeb4612ccba74f683f9a5bdc8b247ad42b6bd5200f54ccba0c5f0e17728d80",
+  "scripts/forge/forge_cli/chain_core/_ingest_capture.py": "fccf644f72d3c3f2a21cf757bfb91f3ebc2071a95e1ec1ea54542babcd477ac5",
+  "scripts/forge/forge_cli/chain_core/_ingest_currency.py": "bccbe6103c3a8adeff151c426985fc386007b411865ab8b8fa4cb71de6a3c045",
+  "scripts/forge/forge_cli/chain_core/_ingest_merge.py": "289bec7e13a5620addd16de91e0914e4add731deef9e60bcd53f552b40b11c94",
+  "scripts/forge/forge_cli/chain_core/_lock_owner.py": "71d8be6f641f5d79d63552a5fd541e54815fb52fc1b72b1ee8ca04e68e7b03e2",
+  "scripts/forge/forge_cli/chain_core/_lock_record_io.py": "5676812770d445a1e6b794e981dbeb2f4ef27e36f317ee7c59b842b49b6eb288",
+  "scripts/forge/forge_cli/chain_core/_lock_record_validators.py": "64fc2a16f4e8183beb8a0f6bdf70534d25cc8de35785393804660d334807e6f0",
+  "scripts/forge/forge_cli/chain_core/_lock_recovery.py": "4050da0d1e3404a18e0b7dd89cf14539c11ba2061bf5793ce3bc13221c55a3f2",
+  "scripts/forge/forge_cli/chain_core/_lock_reservation.py": "36224041d77c4dc6318bc6fb2b59b1fa24ab48f90cff40aa8048035a550d4758",
+  "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py": "2127aa7e0820274781d01b4c1366ca4c1142e6366fd1179d6da0170a6307e6ea",
+  "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py": "a4c5a988f40f53e8e7064ba4bfe2b3c0a4d6cf2cb816aa165b220cc38c7a2c74",
+  "scripts/forge/forge_cli/chain_core/_merge_chain.py": "c53ae684a3c7c20367a7e592a51c2e1c88af7d3d0a089be1813783fcbabb215f",
+  "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py": "07ba25e53f08ebbb0dc373378ad276334638bc5f60e15b1cdac38e45a90c054b",
+  "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py": "710c99670a2c7dee833ac294c27c71beea0ae7b813f3da279fbccabcb752af53",
+  "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py": "d1a472462c25d7160bdc7729f152f39b6b596fc666e4516a3c63847c1bfc5dbc",
+  "scripts/forge/forge_cli/chain_core/_merge_cleanup_result.py": "c93dd5ca1af6ff766b3b44ea0a5f38b045c4e61b8904131dd246578e23044c15",
+  "scripts/forge/forge_cli/chain_core/_merge_epoch.py": "f5544b864987f722b017f211203bfcaf406e81e98119d55783b5be69afd045d9",
+  "scripts/forge/forge_cli/chain_core/_merge_events.py": "95373677a0d6831ec2eebce6d991fde854ff763ec3adb815a24484756d721e76",
+  "scripts/forge/forge_cli/chain_core/_merge_plan.py": "3c821b274d92d18d7b534f281eaead03bbabee515acd201009d89d0fe38725c5",
+  "scripts/forge/forge_cli/chain_core/_merge_rebase.py": "bd3dc3f96f0d019385321e83b9a5a3cbbe12690f95f5a4d34af4fcfb7252b74f",
+  "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py": "3b2afd261198273581148f5283e7598f1350993a035589d75c155ca57faa12a7",
+  "scripts/forge/forge_cli/chain_core/_merge_recovery_proof.py": "f05479b553b7bffb76fb54025c07ff71f31c21ad68e1da8be3a1e78ede68b327",
+  "scripts/forge/forge_cli/chain_core/_merge_release.py": "3d711585014d67927467306280ac7b721055f8f8f5eb3455bb319bf9b05d9403",
+  "scripts/forge/forge_cli/chain_core/_merge_replay.py": "36c6fff38d1795b97d4518de44f41dbb7f20080b304cea03a7403b8f5d06abab",
+  "scripts/forge/forge_cli/chain_core/_merge_scope.py": "a170c583236c0fb49db2a06e1ed63e08d320221d201f3c17a6932935a46835ab",
+  "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py": "38f7735bae982c364a8e008d3bd5b7a33f8b33bd14078aca080c3020bf16e386",
+  "scripts/forge/forge_cli/chain_core/_merge_state_shape.py": "b7ab29389554511baf1cba84b28615cc446f0cd6d3e72d2a70370e6f5b633532",
+  "scripts/forge/forge_cli/chain_core/_merge_transition.py": "df21f7e9a15a4208ab2148f1daa2f9db9ace22cb822ec81837d0cae79099bc9a",
+  "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py": "907995bf55fed28387cc20af0f9cab1f41eee5b168a7841c7f116524cf59d6f1",
+  "scripts/forge/forge_cli/chain_core/_remote_observation.py": "b2c54f471185466c88703ec1218a443077fd8afbca73ba5a4b3760d21f065fbd",
+  "scripts/forge/forge_cli/chain_core/_repository.py": "b36ff303618775fc9dff7ac2a2dc5483c5ad638d5c8a46e372e6c55a9f060672",
+  "scripts/forge/forge_cli/chain_core/_state.py": "9f893ca2c3a79bb1e7e99b95df8b2551964341c4a2215cb52d0e3cd12431360d",
+  "scripts/forge/forge_cli/chain_core/_storage.py": "1d87f446ae023bf0203228705162dbba3e97b32d16e8c3e8a39105c3e468b89a",
+  "scripts/forge/forge_cli/engine/__init__.py": "1dc45f5183c699f85e09ccbb7b083e08297e18313fa0cc731ddb1f40c7cf43ff",
+  "scripts/forge/forge_cli/engine/_approval.py": "75e61316b4fb8f97440dd6c5e5fb4c32d93e3ba0c46974e8ba3d88564438ff8c",
+  "scripts/forge/forge_cli/engine/_archive.py": "0e5700ccd118ac838e9933b4a59cbd0daad3c1f263398307a7b405f90bc39546",
+  "scripts/forge/forge_cli/engine/_candidate_ops.py": "626915cf6c8203cdce3f61bc3fa86f4d14899f57f5d4b4d0e5d90ad3950c3a63",
+  "scripts/forge/forge_cli/engine/_classification.py": "ace5f2881a095253023003c3afb2ee441acb8cfb9b5dfd9aaa8c2ebb8b61e1c1",
+  "scripts/forge/forge_cli/engine/_cli_options.py": "e5d06828f53ef971295161258010c1b1603e99a61673b74c4ef9cf451f0cd331",
+  "scripts/forge/forge_cli/engine/_command_lock.py": "45614219fac7b9339e7af2781dabff24ede1e52bd0ca2b6214b679c529428464",
+  "scripts/forge/forge_cli/engine/_core.py": "6fcd7f7a327a727baee5e4982a058bf6dd1abc1fe44c76bdb1ed9dc1e77cbb44",
+  "scripts/forge/forge_cli/engine/_engine.py": "e56c43c335764a6637c67b7a9922f99b2bfbd75666aa8903dd14d0b1f6d428c1",
+  "scripts/forge/forge_cli/engine/_finalize.py": "d4c1fe96b26f1157d2e36b49529eabdf0c78c8ab33d033fdf99d499d791a4d88",
+  "scripts/forge/forge_cli/engine/_fresh_eval.py": "caca97d845052e10cdc334214cce8ce532e383d8dce2b7d0c13d8fe41e1587d6",
+  "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py": "da0654303d0b453747d500ff928d9b80d517c7e4715009861403dfe8158eb0cc",
+  "scripts/forge/forge_cli/engine/_gate_checks.py": "addf818d669c7f995852804e9ee847e19a85ad652fd85b97e3564f814d676557",
+  "scripts/forge/forge_cli/engine/_journal.py": "d782b6d2d8a8a8abfbb5e27cc4aab9353f1cdc916720e01674212bef80e59bd7",
+  "scripts/forge/forge_cli/engine/_merge_bootstrap_child.py": "1c5ee92d65b0cff86b41e5a2b6c282e9c902df7518aae9cdd8c4dbd5e6f2d6c7",
+  "scripts/forge/forge_cli/engine/_merge_bootstrap_result.py": "0462b29b09b3e398cbb111cd8abb310e7794563235e78880cdf7de7a7e2ddea5",
+  "scripts/forge/forge_cli/engine/_merge_candidate.py": "bd7743c2a9707213ad91514ad43a497055a5562e33289b5d09bbb1c62fe663b3",
+  "scripts/forge/forge_cli/engine/_merge_candidate_generation.py": "8184dd4ee8e5737f0354ac57decc348a5761077b5156bbb470cb10b5340092a9",
+  "scripts/forge/forge_cli/engine/_merge_candidate_observation.py": "ff01e02649f1e031d4f624f5d9afedd02b7b38a3c1b45f9340db10b9700e3b8d",
+  "scripts/forge/forge_cli/engine/_merge_claim.py": "2b1841837d9e5fd764e6a2ad9f1f7e05c431dfb0390571474454321e6df35284",
+  "scripts/forge/forge_cli/engine/_merge_conflict.py": "f570e0119ad556ad0648511430fbc0660618950a45a5bf33684d7feb06e35f4c",
+  "scripts/forge/forge_cli/engine/_merge_epoch.py": "26f3359b390e119db4777baaf9826f3ad8d540933a73b2a9fe70769584592ccc",
+  "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py": "e4819c06009d75c7a9722065f06f3bcdabd701d24d0abdf381239370fea6639d",
+  "scripts/forge/forge_cli/engine/_merge_scope_binding.py": "0f942fc8eaec25030891fefdabbb7a4233355a6fa22b91cab43c993a75088d42",
+  "scripts/forge/forge_cli/engine/_merge_scope_derive.py": "274aa9ff1edd941bffddcf41dd16c0f7e634a53dc2746a814c2e3cf121ec55cc",
+  "scripts/forge/forge_cli/engine/_merge_worktree.py": "75e9517c03937180082c7da4ecaeb21f50b766cacf6066cf0935cec0ee5add0c",
+  "scripts/forge/forge_cli/engine/_parser.py": "f9ff25a4ae562710f265458d09e5dc15183ad7a95b2497a1eb1f6cff4fe22f30",
+  "scripts/forge/forge_cli/engine/_review_transport.py": "d7ac0f0de7f31dde1dd49ebc75c84b3a58c6c447c7aa182fafef06dc09afb1ea",
+  "scripts/forge/forge_cli/engine/_state.py": "9599b4faaeabf2d2d5768b458f9299acd6f8cc9f164e750dc73b9a4898b6d11f",
+  "scripts/forge/forge_cli/engine/_verbs_decision.py": "e2af7ee2e4e17345732b1c9606e51a4fe0d031f6b263d4b3000220ec7807e102",
+  "scripts/forge/forge_cli/engine/_verbs_finalize.py": "d59bc5878a0d86f6dd9f7037e70f6173c629ab0dffbc845ca22efe763ca7c78f",
+  "scripts/forge/forge_cli/engine/_verbs_gate.py": "ebbea3ce204b363739a869dbb11bc152f7600fc2bb926880b51ac6cd938cfbe1",
+  "scripts/forge/forge_cli/engine/_verbs_gate_evals.py": "b4e0806fcfaf9900c4870dc274a12181dcb745a64d8f3c2f71415b183b56ba15",
+  "scripts/forge/forge_cli/engine/_verbs_lifecycle.py": "974c79830d79133da55b076df692d68e1e9cab945cc5b552080f99241be582b2",
+  "scripts/forge/forge_cli/engine/_verbs_review_collect.py": "d73cc8852a3b613ff788bd01539b09e3b461e883a88fd97915cd357e0d8296b3",
+  "scripts/forge/forge_cli/engine/_verbs_review_request.py": "45acf7e1823ba8e664a11f3f883397cd93d8bc25635e8eb700222798bdf1bac0",
+  "scripts/forge/forge_cli/engine/_verbs_status.py": "315204fe5e80e2d5091969b2757f6491834395289e33e0916f5e91dcf7f4e24c",
+  "scripts/forge/forge_cli/engine/_verbs_tombstone.py": "ab06277b16055e02942708636925adff3451106b3eb60ff1bc07c7463e85d126",
+  "scripts/forge/forge_cli/envelope.py": "079afcba406966d6ca6ef613168a800114efdfdef531f73a2ebc6dcf31850bf2",
+  "scripts/forge/forge_cli/fresh_evals.py": "c69e8ecb1580184ad27e64335d3f3a0829c82f58fe866d43698a16fef6f04a14",
+  "scripts/forge/forge_cli/policy.py": "eb480d24592c7b6936219c8782c46f258fb5a51ae7ee4de87b9a522114218a89",
+  "scripts/forge/forge_cli/runtime.py": "ac916738e0bb6f224aeda98dbfad8eb59caf3933a757a988aacbed3eafa02950"
+ },
+ "hashes": {
+  "ArtifactIO": [
+   "069ffb047842ebb3"
+  ],
+  "ArtifactIO.absolute": [
+   "b2d0166f8a4132e5"
+  ],
+  "ArtifactIO.read": [
+   "4a3973a1fd920b33"
+  ],
+  "ArtifactIO.write": [
+   "b53c020617106470"
+  ],
+  "AuthorizationMarker": [
+   "15bca34923d536a5"
+  ],
+  "CLIOptions": [
+   "14fe2946021dbb48"
+  ],
+  "CandidateError": [
+   "c789d9cbe2ce41e0"
+  ],
+  "CandidateError.__init__": [
+   "edbeb52a12d11727"
+  ],
+  "CandidateObservation": [
+   "77503683bb9b225f"
+  ],
+  "CandidateSnapshot": [
+   "b7ec47aa6a641103"
+  ],
+  "CandidateSnapshot.state_record": [
+   "6562f65213963abf"
+  ],
+  "ChainLease": [
+   "6a94db8c4bdec82c"
+  ],
+  "ChainLease.__enter__": [
+   "bab5aca1afd597d7"
+  ],
+  "ChainLease.__exit__": [
+   "fa6e774668bb2ddb"
+  ],
+  "ChainLease.__init__": [
+   "dbd011129359304a"
+  ],
+  "ChainLease._revalidate": [
+   "ce8bd650d1900f1a"
+  ],
+  "ChainLease.before_event_append": [
+   "43879732ecdf3719"
+  ],
+  "ChainLease.before_state_replace": [
+   "c717ae0d8aa3b0d2"
+  ],
+  "ChainLease.chain_id": [
+   "881dc6f4523a3712"
+  ],
+  "ChainLease.path": [
+   "5c38bc28fb8e6052"
+  ],
+  "ChainLease.protected_append": [
+   "d740d9f43df22317"
+  ],
+  "ChainLease.protected_state_replace": [
+   "2c88d0d2c3330603"
+  ],
+  "ChainLease.record": [
+   "cced2a66c5c2056f"
+  ],
+  "ChainLease.release": [
+   "8e7c1c18604f5558"
+  ],
+  "ChainLeaseUnavailable": [
+   "411ac337c2f0fc93"
+  ],
+  "ChainLeaseUnavailable.__init__": [
+   "bfcf9a7fd3e6364a"
+  ],
+  "ChainStore": [
+   "88340b7d5b8fd6f5"
+  ],
+  "ChainStore._drain_pending_batch": [
+   "c5c8023ed52ea5c4"
+  ],
+  "ChainStore._events": [
+   "1deb534c4aeb59b2"
+  ],
+  "ChainStore._events_unlocked": [
+   "08f399488930f462"
+  ],
+  "ChainStore._load_locked": [
+   "b69c9179bc671d37"
+  ],
+  "ChainStore._validate_bound_event_history": [
+   "e9930b037873bd4d"
+  ],
+  "ChainStore.create": [
+   "c2f35162a53e1612"
+  ],
+  "ChainStore.load": [
+   "30fd0fd3d39f51ee"
+  ],
+  "ChainStore.persist": [
+   "9133788462950f00"
+  ],
+  "ChainStore.recover_pending_outbox": [
+   "55698c18118c6ec6"
+  ],
+  "CommandContext": [
+   "ece4a93bdef1d58b"
+  ],
+  "CommandContext.command_digest": [
+   "99da87ddd0124b21"
+  ],
+  "CommandContext.helper": [
+   "30a68110113dc2fa"
+  ],
+  "CommandContext.plugin_root": [
+   "7062a481d6cd9084"
+  ],
+  "CommandContext.scripts_dir": [
+   "676daccc41c0865a"
+  ],
+  "CommandContext.validate_run_id": [
+   "b60f2c181ca81d7d"
+  ],
+  "CommitObject": [
+   "db4b781d530d7e9a"
+  ],
+  "CommonLockBoundaryCrash": [
+   "0f8612ea54aefd09"
+  ],
+  "CommonLockInspection": [
+   "0285a36ced41d52f"
+  ],
+  "CommonLockInspection.evidence": [
+   "ccd26e46a9d2a80b"
+  ],
+  "CommonLockInspection.recoverable": [
+   "c3a57cb38d22ecc9"
+  ],
+  "CommonLockReleaseFailure": [
+   "ed8d5fd988b36774"
+  ],
+  "CommonLockReleaseFailure.__init__": [
+   "f295af519e2353a4"
+  ],
+  "CommonLockUnavailable": [
+   "b9086b0618796a41"
+  ],
+  "CommonLockUnavailable.__init__": [
+   "6324dd5cab980297"
+  ],
+  "CommonRebaseLock": [
+   "71438f4fc488347b"
+  ],
+  "CommonRebaseLock.__enter__": [
+   "50dafeaa0813b988"
+  ],
+  "CommonRebaseLock.__exit__": [
+   "fa6e774668bb2ddb"
+  ],
+  "CommonRebaseLock.__init__": [
+   "3e561f48a2eb2ad6"
+  ],
+  "CommonRebaseLock._emit_boundary": [
+   "22236028bb8360cb"
+  ],
+  "CommonRebaseLock.assert_held": [
+   "736ec860a33669be"
+  ],
+  "CommonRebaseLock.digest": [
+   "2933e82a43e2b7f4"
+  ],
+  "CommonRebaseLock.record": [
+   "a51814ed21138463"
+  ],
+  "CommonRebaseLock.recover_owned_fence": [
+   "50728393578c37ff"
+  ],
+  "CommonRebaseLock.release": [
+   "d2a091c104143e3f"
+  ],
+  "CommonRebaseLock.released": [
+   "a95be8463d42bf90"
+  ],
+  "CommonRebaseLock.retry_release": [
+   "77d2a3fcab650533"
+  ],
+  "ContractArgumentParser": [
+   "d40bcd31d3c63794"
+  ],
+  "ContractArgumentParser.error": [
+   "f848ad2e78eedad5"
+  ],
+  "Engine": [
+   "f422ddd1ff0057ac"
+  ],
+  "Engine.__init__": [
+   "fa8b24f782785995"
+  ],
+  "Engine._chains_for_worktree": [
+   "9fa37d611a6ebc34"
+  ],
+  "Engine._emit_decision": [
+   "ce1e6da93f7dcb55"
+  ],
+  "Engine._preflight": [
+   "553b00679e6cb2b7"
+  ],
+  "Engine._record_head_moved": [
+   "7e19c5798af36705"
+  ],
+  "Engine._wrong_state": [
+   "46d5b9aaa1079103"
+  ],
+  "Engine.next_step": [
+   "b5ead301457c30cd"
+  ],
+  "Engine.select": [
+   "6e18d5d5d14e24e0"
+  ],
+  "EvaluationOutcome": [
+   "12ad766a0d109c38"
+  ],
+  "EvaluationRequest": [
+   "09a0e4f9e527f3a4"
+  ],
+  "FencedChildSurvived": [
+   "749d16cc20e9c48b"
+  ],
+  "FencedChildSurvived.__init__": [
+   "de599bdcac64311f"
+  ],
+  "FencedProcessResult": [
+   "a2f7cf83c4069650"
+  ],
+  "FencedProcessResult.evidence": [
+   "28bca04b739761ce"
+  ],
+  "FinalizeContext": [
+   "04bda1443ec86723"
+  ],
+  "Fixture": [
+   "c8fb6bc94a58ab61"
+  ],
+  "Fixture.inventory_record": [
+   "d81a24bed97776fc"
+  ],
+  "FixtureSuite": [
+   "84cd6461a300f7b4"
+  ],
+  "FixtureSuite.manifest_record": [
+   "bc1d920c00ed7154"
+  ],
+  "FreshEvalError": [
+   "f4f9fc383ef752bd"
+  ],
+  "FreshEvalError.__init__": [
+   "ec8b9ec9385f4e1c"
+  ],
+  "FrozenError": [
+   "c3c22825e6ae8cad"
+  ],
+  "FrozenError.__init__": [
+   "1299d2dc891ff63a"
+  ],
+  "FrozenError.outcome": [
+   "834f5f21b9699d4b"
+  ],
+  "GitContext": [
+   "e4106a14aaf62bc4"
+  ],
+  "GitContext.environment": [
+   "6b205c3ba6b2447b"
+  ],
+  "LaunchRequest": [
+   "75140af42070dc0f"
+  ],
+  "LaunchResult": [
+   "844d8a03ebafe276"
+  ],
+  "MaterializedCandidate": [
+   "64084b178a031209"
+  ],
+  "MaterializedCandidate.verify": [
+   "dc1eb80c4acc6b79"
+  ],
+  "MaterializedReviewProjection": [
+   "a33eb23a55e381eb"
+  ],
+  "MaterializedReviewProjection.verify": [
+   "491ac8892a3ca5c9"
+  ],
+  "MergeAdmission": [
+   "cc75e59d742fcd2f"
+  ],
+  "MergeBootstrapClassification": [
+   "611b6be370fd8023"
+  ],
+  "MergeCandidateGeneration": [
+   "fdef677de9d18f28"
+  ],
+  "MergeChainStore": [
+   "e0129e78bafde9ea"
+  ],
+  "MergeChainStore._append_receipt_with_outer": [
+   "e6bea185fecb8810"
+  ],
+  "MergeChainStore._journal_outer": [
+   "b7b5ffde9789bfc5"
+  ],
+  "MergeChainStore._load_with_outer": [
+   "9355e88a98a0c6bd"
+  ],
+  "MergeChainStore._prepare_event": [
+   "1edc60357dea4a8a"
+  ],
+  "MergeChainStore._projection_status": [
+   "3ec2003bd77e871b"
+  ],
+  "MergeChainStore._read_replay_locked": [
+   "338f469cff233cfa"
+  ],
+  "MergeChainStore._resolve_replayed_projection": [
+   "fcb0635dc6cacb04"
+  ],
+  "MergeChainStore._session": [
+   "44dffdd1083aca96"
+  ],
+  "MergeChainStore._write_transition_with_outer": [
+   "62842c268f5992de"
+  ],
+  "MergeChainStore.create": [
+   "2eb052a521211beb"
+  ],
+  "MergeChainStore.load": [
+   "118b1c7abaff9cbf"
+  ],
+  "MergeChainStore.load_locked": [
+   "45cb2f8f3196c161"
+  ],
+  "MergeChainStore.recover_pending_outbox": [
+   "ed7ba6dc46cb55b2"
+  ],
+  "MergeChainStore.transition": [
+   "33e4e945ea49ee2f"
+  ],
+  "MergeChainStore.transition_locked": [
+   "ce754ab16a61dddd"
+  ],
+  "MergeEngine": [
+   "732e1a5976e33935"
+  ],
+  "MergeEngine.__init__": [
+   "b52161e1ab6891fe"
+  ],
+  "MergeEngine._begin_epoch": [
+   "9ba35ac69c8462c2"
+  ],
+  "MergeEngine._bootstrap_pending_classification_inputs_locked": [
+   "1c8d507814ce436a"
+  ],
+  "MergeEngine._complete_epoch_fetch_locked": [
+   "baced9cfb2ec1e73"
+  ],
+  "MergeEngine._epoch_fetch_argv": [
+   "0db74aaeded9d79b"
+  ],
+  "MergeEngine._epoch_replay_context": [
+   "93d1908f3bfc247e"
+  ],
+  "MergeEngine._epoch_transition": [
+   "29f597ca011ac59c"
+  ],
+  "MergeEngine._finish_recovered_epoch_locked": [
+   "5eb57731e45a1c54"
+  ],
+  "MergeEngine._halt": [
+   "a51509e9af44b1df"
+  ],
+  "MergeEngine._load": [
+   "a693ffed6626aec9"
+  ],
+  "MergeEngine._materialize_rebase_success_locked": [
+   "ea0b7141b8607bc8"
+  ],
+  "MergeEngine._park_integrated_review": [
+   "6d462ddc64c2571f"
+  ],
+  "MergeEngine._push_classification": [
+   "12fdfa09a7e76226"
+  ],
+  "MergeEngine._record_foreign_git_locked": [
+   "e6d8474d917c0940"
+  ],
+  "MergeEngine._recover_classifying_bootstrap_locked": [
+   "4c122fdb7edd4d0e"
+  ],
+  "MergeEngine._recover_classifying_bootstrap_v12_locked": [
+   "69e3992111a47aa0"
+  ],
+  "MergeEngine._recover_conflict_locked": [
+   "2c802e81c0769715"
+  ],
+  "MergeEngine._recover_merge_bootstrap_scope_binding": [
+   "d9c9594a63a1a4f0"
+  ],
+  "MergeEngine._recover_rebase_observation_locked": [
+   "e0f2152f8f99433e"
+  ],
+  "MergeEngine._resolved_epoch_fetch_tip": [
+   "590035b88ee52a89"
+  ],
+  "MergeEngine._restore_integrated_rebase_observation_intent_locked": [
+   "44c1ec37e6fa8d3c"
+  ],
+  "MergeEngine._run_carried_successor_ancestry": [
+   "0869d16debbbd78c"
+  ],
+  "MergeEngine._run_conflict_observation_locked": [
+   "5176d7fa60f43179"
+  ],
+  "MergeEngine._run_epoch_fetch": [
+   "f2477a766c404654"
+  ],
+  "MergeEngine._run_epoch_push": [
+   "934e708cc15936d0"
+  ],
+  "MergeEngine._run_epoch_rebase": [
+   "66676c07bee4d0ab"
+  ],
+  "MergeEngine._run_epoch_suite": [
+   "1551b0e3aba4b3eb"
+  ],
+  "MergeEngine._run_integrated_rebase_observation_locked": [
+   "f515558108bf2bfc"
+  ],
+  "MergeEngine._run_remote_observation": [
+   "446e6ea8d12f0798"
+  ],
+  "MergeEngine._sealed_plan": [
+   "e6b8868d4e418390"
+  ],
+  "MergeEngine._tail_event_digest": [
+   "d92c98d1532d4c10"
+  ],
+  "MergeEngine._wrong_state": [
+   "b8406d2b3df1faaa"
+  ],
+  "MergeEngine.finalize": [
+   "2983513fdc693467"
+  ],
+  "MergeEngine.recover": [
+   "b4c1ac1ccabeb425"
+  ],
+  "MergeEngine.store": [
+   "98d8aca9e9485ccc"
+  ],
+  "MergeReplayResult": [
+   "04558d5af90b4e5b"
+  ],
+  "MergeRunTaskSnapshot": [
+   "70219c4694281a41"
+  ],
+  "MergeScopeBindingInspection": [
+   "af41a500ed78349c"
+  ],
+  "MergeScopeResult": [
+   "ca3ae97fc688ab1f"
+  ],
+  "NativeReviewerLauncher": [
+   "3f8f492e6811ad29"
+  ],
+  "NativeReviewerLauncher.launch": [
+   "3eca0b2692023bb8"
+  ],
+  "Outcome": [
+   "46e5d7b09e9aee75"
+  ],
+  "Outcome.envelope": [
+   "305e50c5d690420e"
+  ],
+  "Outcome.exit_code": [
+   "e3a24cfa08b82bca"
+  ],
+  "Policy": [
+   "9e07f7ee1ec339db"
+  ],
+  "PolicyError": [
+   "96d7d8ffbf1593ac"
+  ],
+  "ProcessResult": [
+   "e2a4c65f0b220d5f"
+  ],
+  "ProducedCommitContext": [
+   "c6e706fb4614baab"
+  ],
+  "PublishedLockRecord": [
+   "ca710443cd3d42f4"
+  ],
+  "PublishedLockRecord.evidence": [
+   "83d1f7f960b65549"
+  ],
+  "ReasonCode": [
+   "b2068d0e1535af13"
+  ],
+  "RecoveryReservation": [
+   "cbc511bbad227e1e"
+  ],
+  "RecoveryReservation.affected_merge_chain": [
+   "c1f05fdea916a070"
+  ],
+  "RecoveryReservation.assert_current": [
+   "ca699091cb73b4a7"
+  ],
+  "RecoveryReservation.matches_chain": [
+   "612b8892d2a41460"
+  ],
+  "RecoveryReservation.record": [
+   "cced2a66c5c2056f"
+  ],
+  "RecoveryReservation.remaining_timeout": [
+   "627535c475d9b7e2"
+  ],
+  "Refusal": [
+   "861f6cc4e6ab0b02"
+  ],
+  "Refusal.__init__": [
+   "330ef820323039bb"
+  ],
+  "Refusal.outcome": [
+   "f10ab7908dd00193"
+  ],
+  "Repository": [
+   "113135faeb71490b"
+  ],
+  "Repository.__init__": [
+   "acd17d3e332c8cf1"
+  ],
+  "Repository.candidate_bytes": [
+   "355ec3a7b069c8bc"
+  ],
+  "Repository.candidate_context": [
+   "d739414be973b064"
+  ],
+  "Repository.candidate_hash": [
+   "fb526e62740d721f"
+  ],
+  "Repository.candidate_observation": [
+   "8377c4ed2148339b"
+  ],
+  "Repository.candidate_snapshot": [
+   "5451a4416c009e03"
+  ],
+  "Repository.commit_message_argument_digest": [
+   "8fe5c6a59384eb8d"
+  ],
+  "Repository.common_root": [
+   "868382f50ce4718f"
+  ],
+  "Repository.discover": [
+   "722b83cec05e7fbe"
+  ],
+  "Repository.git": [
+   "2be558d43cf4be99"
+  ],
+  "Repository.git_common_dir": [
+   "e941104a899852cc"
+  ],
+  "Repository.head": [
+   "fa958d4073a9aa09"
+  ],
+  "Repository.normalize_paths": [
+   "d482f11acf011fae"
+  ],
+  "Repository.policy": [
+   "93a1de6c648c3dc3"
+  ],
+  "Repository.read_commit_object": [
+   "6320e76c04f77805"
+  ],
+  "Repository.staged_paths": [
+   "006fbc5b7b02a1dd"
+  ],
+  "Repository.tree_index_drift": [
+   "409273d73d7b9258"
+  ],
+  "ReviewerLauncher": [
+   "c3280c3909d8c0ac"
+  ],
+  "ReviewerLauncher.launch": [
+   "bc9cfd7d2389ab1e"
+  ],
+  "Route": [
+   "bb756d710b591ae4"
+  ],
+  "SecretFinding": [
+   "72b5103ff5456ecf"
+  ],
+  "SecretFinding.as_dict": [
+   "32fab7dc7a487301"
+  ],
+  "TreeEntry": [
+   "b2ad43220b8da72e"
+  ],
+  "V2ReasonCode": [
+   "10b65914cf954e54"
+  ],
+  "_BlockedFenceChild": [
+   "c9541fda94e3027c"
+  ],
+  "_ChainActivationSnapshot": [
+   "30e3d44f740e2883"
+  ],
+  "_ChainReceiptSnapshotVerifier": [
+   "c78c5f6c3c2663cd"
+  ],
+  "_ChainReceiptSnapshotVerifier.__call__": [
+   "2a2a11d44ccb1004"
+  ],
+  "_ChainReceiptSnapshotVerifier.__init__": [
+   "192d142a2efbb884"
+  ],
+  "_ChainReceiptSnapshotVerifier.recheck": [
+   "332ea6a798815c9b"
+  ],
+  "_ChainStoragePrimitives": [
+   "5e4432f4d86bcee5"
+  ],
+  "_ChainStoragePrimitives.__init__": [
+   "d0543988655fdeea"
+  ],
+  "_ChainStoragePrimitives._append_event_bytes": [
+   "e985daf9587a5886"
+  ],
+  "_ChainStoragePrimitives._atomic_state": [
+   "7dad922a6c0311f0"
+  ],
+  "_ChainStoragePrimitives._boundary": [
+   "d2c8c6adf86f194e"
+  ],
+  "_ChainStoragePrimitives._canonical_raw_commit_state": [
+   "8ee966eb0079239f"
+  ],
+  "_ChainStoragePrimitives._fsync_dir": [
+   "3be9647a8c1e9cde"
+  ],
+  "_ChainStoragePrimitives._open_child_directory": [
+   "8fda75a4e384ee37"
+  ],
+  "_ChainStoragePrimitives._open_lock_descriptor": [
+   "1193a9cb8630f615"
+  ],
+  "_ChainStoragePrimitives._open_root_descriptor": [
+   "b64c40f8e6deed4c"
+  ],
+  "_ChainStoragePrimitives._owned_directory": [
+   "4e58fd44e25cdcf4"
+  ],
+  "_ChainStoragePrimitives._read_root_bytes": [
+   "94bf4341a570ae89"
+  ],
+  "_ChainStoragePrimitives._read_tombstone_locked": [
+   "367f08a9f9cbaeb1"
+  ],
+  "_ChainStoragePrimitives._recover_tombstone_publication": [
+   "84f5f604919a309d"
+  ],
+  "_ChainStoragePrimitives._remember_version": [
+   "e7b30ce3f38d2828"
+  ],
+  "_ChainStoragePrimitives._require_tail_version": [
+   "7091f62eb34cb27c"
+  ],
+  "_ChainStoragePrimitives._root_entry_exists": [
+   "3372e26a056866ff"
+  ],
+  "_ChainStoragePrimitives._root_name": [
+   "7e245bd2076b9393"
+  ],
+  "_ChainStoragePrimitives._tombstone_artifact_fact": [
+   "563b54fcfbe53797"
+  ],
+  "_ChainStoragePrimitives._tombstone_publication_alias": [
+   "099186efc74a0cec"
+  ],
+  "_ChainStoragePrimitives._valid_tombstone_record": [
+   "5a392f4ce70567a1"
+  ],
+  "_ChainStoragePrimitives._validate_id": [
+   "43da6889d7dd8d1b"
+  ],
+  "_ChainStoragePrimitives.admission_lock": [
+   "fea5ba5eba763c28"
+  ],
+  "_ChainStoragePrimitives.artifact_dir": [
+   "f92eb38c2fd6c0f2"
+  ],
+  "_ChainStoragePrimitives.artifact_parent_descriptor": [
+   "6f00a9fa5a59da75"
+  ],
+  "_ChainStoragePrimitives.chain_family": [
+   "e83f3b31f30fe217"
+  ],
+  "_ChainStoragePrimitives.create_tombstone": [
+   "fa22a8262876b848"
+  ],
+  "_ChainStoragePrimitives.ensure_root": [
+   "abfbd5da4f262c27"
+  ],
+  "_ChainStoragePrimitives.event_lock": [
+   "f8e8b371c1add132"
+  ],
+  "_ChainStoragePrimitives.events_path": [
+   "ffccf20855829285"
+  ],
+  "_ChainStoragePrimitives.list_ids": [
+   "ed0e4f4c10d15995"
+  ],
+  "_ChainStoragePrimitives.raw_state_proves_commit_family": [
+   "265ec3b31ca7542a"
+  ],
+  "_ChainStoragePrimitives.root_descriptor": [
+   "d4e999401283a61e"
+  ],
+  "_ChainStoragePrimitives.state_path": [
+   "b8ba54be2fcb4205"
+  ],
+  "_ChainStoragePrimitives.tombstone": [
+   "1e1509248080fd8e"
+  ],
+  "_DeferredMutationRequestError": [
+   "8eca7df4d8ec6c6f"
+  ],
+  "_FreshEvalArtifactIO": [
+   "44b9bed396e15d59"
+  ],
+  "_FreshEvalArtifactIO._write_atomic": [
+   "4a49019e5bcfc197"
+  ],
+  "_FreshEvalArtifactIO.absolute": [
+   "63e7cbcde6a925e1"
+  ],
+  "_FreshEvalArtifactIO.read": [
+   "0b67062225a7e7d4"
+  ],
+  "_FreshEvalArtifactIO.write": [
+   "b47239a05697a924"
+  ],
+  "_FreshEvalControlAbort": [
+   "56462d47dd4f37be"
+  ],
+  "_FreshEvalControlAbort.__init__": [
+   "f38b5a0dc4a6742f"
+  ],
+  "_GitNoLazyFetchQualification": [
+   "86fb056c30648ab8"
+  ],
+  "_GitResult": [
+   "f4a5e58b872cc083"
+  ],
+  "_MergeEpochBudget": [
+   "2bb4114acc649487"
+  ],
+  "_MergeEpochBudget.consume": [
+   "0330506cd7da7034"
+  ],
+  "_PublicationCleanupFailure": [
+   "64888dc38ee28748"
+  ],
+  "_ReceiptRunSnapshot": [
+   "6c696257b4b04246"
+  ],
+  "_absolute_git_path": [
+   "c8487bacc4db90f4"
+  ],
+  "_acquire_secondary_flock": [
+   "406b058de28d8a7e"
+  ],
+  "_admission_for_refresh": [
+   "a18076c411b6757d"
+  ],
+  "_admission_from_candidate_observation": [
+   "8521fe9304737e33"
+  ],
+  "_adopt_out_of_band_candidate": [
+   "8831eed32c8fdbaa"
+  ],
+  "_allocate_chain_id": [
+   "6d10ebdac9e26ed5"
+  ],
+  "_apply_verdict": [
+   "7a63cf211f2b2510"
+  ],
+  "_archive_close_tree_clean": [
+   "9f936668eb90eaee"
+  ],
+  "_archive_contamination_refusal": [
+   "3215a97bc2e55fb8"
+  ],
+  "_archive_metadata": [
+   "abba05207f025d56"
+  ],
+  "_archive_module": [
+   "2a0e9a6c5007ad35"
+  ],
+  "_archive_parent_descriptor": [
+   "6ce2e96fbe3b8dba"
+  ],
+  "_archive_recheck": [
+   "c9e4e20b691eb443"
+  ],
+  "_archive_refusal": [
+   "f3b887b87c96c2cd"
+  ],
+  "_artifact_reference_matches": [
+   "3de18541a7d72215"
+  ],
+  "_assert_review_master_stable": [
+   "18e0de384e80cdef"
+  ],
+  "_attach_merge_lifecycle_parser": [
+   "31818f8ee067bee5"
+  ],
+  "_attempted_release_preconditions_locked": [
+   "913bf4119f67fd6d"
+  ],
+  "_authorization_problem": [
+   "fec0f59f1419e062"
+  ],
+  "_authorize_chain_batch": [
+   "62e3ec3577ed2be8"
+  ],
+  "_base_identity": [
+   "425f6e4230f2a893"
+  ],
+  "_binding_for_commit_event": [
+   "1ba390a96ed5419c"
+  ],
+  "_binding_is_current_with_candidate_v2": [
+   "f0dcf308239b007e"
+  ],
+  "_binding_matches_source_fact_with_candidate_v2": [
+   "eaef3426c3c1b15f"
+  ],
+  "_binding_shape_valid_with_candidate_v2": [
+   "d7a802c019d5a45f"
+  ],
+  "_bootstrap_fetch_argv": [
+   "fdb8dfffa36bdf5d"
+  ],
+  "_bootstrap_fetch_observation_record_valid": [
+   "cc57b2f1b77014e6"
+  ],
+  "_bootstrap_fetch_observation_transition_valid": [
+   "94c90a10b5cd6c16"
+  ],
+  "_bounded_descriptor_read": [
+   "b5628319c4b2e482"
+  ],
+  "_bounded_mutation_output": [
+   "2ccd4a5658e906af"
+  ],
+  "_build_chain_journal_records": [
+   "ac1b994681cd0ea5"
+  ],
+  "_build_merge_chain_journal_records": [
+   "36780f39d32fdae5"
+  ],
+  "_candidate_binding_for_state_with_candidate_v2": [
+   "a6cdb2a028933299"
+  ],
+  "_candidate_blob": [
+   "755a1a8f4fbd4164"
+  ],
+  "_candidate_observation_transition": [
+   "a342fd0c73b1f7be"
+  ],
+  "_candidate_patch_ref": [
+   "8bb453eb7ec09020"
+  ],
+  "_candidate_record": [
+   "fc6aeb44c804685b"
+  ],
+  "_candidate_review_diff": [
+   "bfc5e036e753b74a"
+  ],
+  "_candidate_snapshot": [
+   "85c2ecca02e1e818"
+  ],
+  "_canonical_document": [
+   "97493dd72ea23d9b"
+  ],
+  "_canonical_json": [
+   "3cf7e3314fb88c65"
+  ],
+  "_canonical_object_store": [
+   "b486f85a4a921c32"
+  ],
+  "_capture_ingest_blob": [
+   "130f239cff436dcc"
+  ],
+  "_capture_ingest_inputs": [
+   "a1e3f01121f68336"
+  ],
+  "_capture_ingest_record_evidence": [
+   "afde3e6ab75ff318"
+  ],
+  "_capture_run_evidence": [
+   "4f6b99d92b4b9e5e"
+  ],
+  "_chain_activation_ownership_summary": [
+   "a205657d484455b2"
+  ],
+  "_chain_batch_lock": [
+   "97c3a0d3e1695336"
+  ],
+  "_chain_receipt_snapshot_lock": [
+   "c33e3a37aa5e4d43"
+  ],
+  "_chain_storage_root": [
+   "edf88332c94296d1"
+  ],
+  "_checkout_inventory": [
+   "362f907cfeb4b35c"
+  ],
+  "_checkout_leaf": [
+   "795e29ae8f4eb07a"
+  ],
+  "_claim_slot": [
+   "6802edb8c3136ddc"
+  ],
+  "_classification_argv": [
+   "f04f684431234dd4"
+  ],
+  "_classification_environment": [
+   "b67c25ab19f2b39d"
+  ],
+  "_classify_merge_recovery_lifecycle": [
+   "445c66a03cad9e77"
+  ],
+  "_classify_merge_scope_binding": [
+   "a52d83b85c05aef4"
+  ],
+  "_classify_merge_scope_binding_at": [
+   "cf20fc03241806b4"
+  ],
+  "_cleanup_result_locked": [
+   "f4f0ad46cdc8cc36"
+  ],
+  "_clear_owned_reservation": [
+   "d730d350e66ccdc4"
+  ],
+  "_clear_reserved_fence": [
+   "f88a37ebdbd77c4f"
+  ],
+  "_collect_fenced_child": [
+   "6eb9949f8ee216d2"
+  ],
+  "_command_run_lock_id": [
+   "45d346dff96e428d"
+  ],
+  "_commit_start_binding_refusal": [
+   "36f2ac4ef1d8cec2"
+  ],
+  "_commit_transition_valid_with_candidate_v2": [
+   "7be66da3e676841f"
+  ],
+  "_committed_changelog_output_paths": [
+   "ea945afb568396b0"
+  ],
+  "_common_fence_path_present": [
+   "eec9432f123780ad"
+  ],
+  "_complete_bootstrap_classification": [
+   "2236d8054306345a"
+  ],
+  "_complete_pending_release_locked": [
+   "d2f20afdf12ef244"
+  ],
+  "_completion_document": [
+   "89a1772a4db20092"
+  ],
+  "_coordination_modules": [
+   "1f1124b196aaf1e5"
+  ],
+  "_coordination_refusal": [
+   "3f318552df8dd57e"
+  ],
+  "_create_private_record_at": [
+   "8737d9394433e386"
+  ],
+  "_current_merge_authority": [
+   "bdddd2893b1dead8"
+  ],
+  "_current_test_paths": [
+   "42a378fa4485d710"
+  ],
+  "_decode_merge_bootstrap_result": [
+   "e8781bd9a4f74005"
+  ],
+  "_dedent_fenced_cell": [
+   "2725507714ea16c4"
+  ],
+  "_derive_merge_scope": [
+   "8a49762cc6c444e3"
+  ],
+  "_diagnostic": [
+   "5ac28b75fe3dda51"
+  ],
+  "_directory_open_flags": [
+   "b9bb3eac8393d8ba"
+  ],
+  "_discover_line": [
+   "0e89a8f73258a056"
+  ],
+  "_discover_merge_scope_fence_from_sidecar": [
+   "706c93568fc068ee"
+  ],
+  "_discover_path": [
+   "ed4dbeb57c21ab9b"
+  ],
+  "_discover_raw_line": [
+   "6730bc5c513933c5"
+  ],
+  "_drain_chain_batch_capability": [
+   "9b2d0549c41c7e9e"
+  ],
+  "_effective_object_store_roots": [
+   "3d9a5f46ca2f70c0"
+  ],
+  "_ensure_checkout_parents": [
+   "c21c3244e3762bee"
+  ],
+  "_enumerate_paths": [
+   "6e9d237ef8bc4a0b"
+  ],
+  "_env_fingerprint": [
+   "c24eb2d9b8f5ddfa"
+  ],
+  "_epoch_ancestry_record_valid": [
+   "12b248a4b5aa305e"
+  ],
+  "_epoch_fetch_observation_passed": [
+   "789e7095797e5be8"
+  ],
+  "_epoch_fetch_observation_predecessor_valid": [
+   "de8e179d073d8d5f"
+  ],
+  "_epoch_fetch_observation_record_valid": [
+   "1fe1f8bb48256af0"
+  ],
+  "_epoch_fetch_result_intent_digest": [
+   "1170241a8d41998e"
+  ],
+  "_event_batch_records_with_candidate_v2": [
+   "4b45e3e67ce11b56"
+  ],
+  "_events_are_valid": [
+   "c83fe5767c90a3e8"
+  ],
+  "_evidence_record": [
+   "c8f133c6d79d4f5c"
+  ],
+  "_exact_keys": [
+   "02d0e771731e42f5"
+  ],
+  "_exclusive_descriptor_lock": [
+   "2609af5d171ba134"
+  ],
+  "_expected_offsets": [
+   "1f5fd593cdd201f7"
+  ],
+  "_extract_global_options": [
+   "8918a5511e12860f"
+  ],
+  "_fast_mechanical_skips": [
+   "f41103bff020ca1f"
+  ],
+  "_fence_death_proof": [
+   "b5c0e2288c850566"
+  ],
+  "_fence_lines": [
+   "8a0eb6533f2d10fc"
+  ],
+  "_fence_matches_owner": [
+   "298f4f7f87631885"
+  ],
+  "_fenced_shell_cells": [
+   "2359f6cf0feaddcf"
+  ],
+  "_final_history_mutation_mode": [
+   "9cf7fdf2f45bf9f6"
+  ],
+  "_final_mode_unavailable": [
+   "8d3aca8f76c5c7b6"
+  ],
+  "_finalize_candidate": [
+   "f5ac330cd9f00606"
+  ],
+  "_finalize_evidence": [
+   "27a70809521c9094"
+  ],
+  "_finalize_fresh_reviewer_evals": [
+   "97b2c19c008e2f3e"
+  ],
+  "_finalize_halt": [
+   "4871c5fd3c90541a"
+  ],
+  "_finalize_lock": [
+   "b0056b7c5643e330"
+  ],
+  "_finalize_produced_identity": [
+   "55891b6ef8b184bb"
+  ],
+  "_finalize_tree_drift": [
+   "e666a67e8265c8ff"
+  ],
+  "_finalize_ttl": [
+   "bc216d744a08c314"
+  ],
+  "_fixture_package_digest": [
+   "c193c017ee8068f2"
+  ],
+  "_fixture_paths": [
+   "563cba3dfe2bee52"
+  ],
+  "_forge_command": [
+   "97793258432ac32c"
+  ],
+  "_fresh_eval_evaluation": [
+   "906e34cd4e8f775c"
+  ],
+  "_fresh_eval_invalid_refusal": [
+   "fa8501e9795b48a8"
+  ],
+  "_fresh_eval_request_for_step": [
+   "f3fd426b03fb069f"
+  ],
+  "_fresh_eval_requests": [
+   "876b4bd7bc101072"
+  ],
+  "_fresh_reviewer_block_claimed": [
+   "f0bc9fdc3fd65797"
+  ],
+  "_fresh_reviewer_evals_required": [
+   "d59a2ddebdb1b1a4"
+  ],
+  "_fresh_reviewer_evidence_package": [
+   "2af0bd1c508f786c"
+  ],
+  "_fresh_reviewer_pass_claimed": [
+   "9ed0716719f71514"
+  ],
+  "_frontmatter": [
+   "0240cc028980a1f1"
+  ],
+  "_gate_one_complete": [
+   "7c26941e36261f3f"
+  ],
+  "_gate_satisfied": [
+   "20ba541a06ebf911"
+  ],
+  "_git": [
+   "aaba302c3fe5dfa9"
+  ],
+  "_git_environment_digest": [
+   "8b347e7b0696cd70"
+  ],
+  "_git_executable_qualification": [
+   "8ac88d1dea5a562b"
+  ],
+  "_git_mutation": [
+   "faf0a21b44627cf3"
+  ],
+  "_group_probe": [
+   "0ac771af773186b3"
+  ],
+  "_head_contained": [
+   "6cc5dd60c36547cd"
+  ],
+  "_ingest_allocation_records": [
+   "32225209628deef0"
+  ],
+  "_ingest_captured_paths": [
+   "1158528b84e7c2f0"
+  ],
+  "_ingest_proof_verifier": [
+   "6079b884b09279a6"
+  ],
+  "_ingest_secret_scan_is_current": [
+   "5f61997ff08a8631"
+  ],
+  "_ingest_step_is_current": [
+   "e99c4312d1417889"
+  ],
+  "_initial_merge_state": [
+   "07b5415aa3d758d8"
+  ],
+  "_inspect_common_lock_fd": [
+   "6526730236ed4afa"
+  ],
+  "_install_candidate_snapshot": [
+   "86289cc08bd98924"
+  ],
+  "_install_ingest_sources": [
+   "dd2a7d171bfc4071"
+  ],
+  "_invalidate_candidate_evidence": [
+   "40e9217b63e22b78"
+  ],
+  "_isolated_object_git": [
+   "3275ce8cb0ba1411"
+  ],
+  "_issue_authorization": [
+   "bdd43585d102c10b"
+  ],
+  "_iter_verified_master_package_windows": [
+   "e9148b459f96453c"
+  ],
+  "_kill": [
+   "0114ec074aeb2384"
+  ],
+  "_kill_process_group": [
+   "9af81d6dce7476f2"
+  ],
+  "_latest_current_pass": [
+   "776cfc379f219fa7"
+  ],
+  "_launch_one": [
+   "86b46c2c53a9cc63"
+  ],
+  "_lease_exclusion_is_current": [
+   "aa587669ab06aee6"
+  ],
+  "_lease_reclaim_authority_is_current": [
+   "ddb93361d13668f0"
+  ],
+  "_live_chain": [
+   "b3f701cd01e93529"
+  ],
+  "_materialize_merge_candidate_tuple": [
+   "3add87a2b9ec34a5"
+  ],
+  "_materialize_raw_projection": [
+   "f45c4da6eb0d5c37"
+  ],
+  "_materialize_raw_tree": [
+   "9c284e876aa4639e"
+  ],
+  "_mechanical_complete": [
+   "4d6bbe8f236b478f"
+  ],
+  "_merge_attempted_release_preconditions_valid": [
+   "9899a3aa26395dad"
+  ],
+  "_merge_bootstrap_child_argv": [
+   "ff482baedf73bf55"
+  ],
+  "_merge_bootstrap_child_main": [
+   "51278b0b2bf0f217"
+  ],
+  "_merge_bootstrap_classification_pending": [
+   "ef7b7d681a46974c"
+  ],
+  "_merge_branch_reflog_proves_integrated": [
+   "116333d99e8f7d04"
+  ],
+  "_merge_candidate_observation_binding": [
+   "d51b8acd8c772625"
+  ],
+  "_merge_candidate_observation_evidence": [
+   "c82ea937bcd8ffae"
+  ],
+  "_merge_candidate_observation_evidence_valid": [
+   "2b9e1b39c6c8553b"
+  ],
+  "_merge_candidate_observation_outputs": [
+   "2dba94b3afcd897d"
+  ],
+  "_merge_candidate_observation_record_valid": [
+   "aee023965c26e3ad"
+  ],
+  "_merge_candidate_observation_step_names": [
+   "330fb9078fd56a50"
+  ],
+  "_merge_candidate_observation_step_specs": [
+   "b2323e0799c8b162"
+  ],
+  "_merge_candidate_observation_transition_valid": [
+   "d1a5ac5dda00c25c"
+  ],
+  "_merge_carried_gate_steps": [
+   "3b3a0e579fce4378"
+  ],
+  "_merge_carry_payload_valid": [
+   "b701c6675a22b482"
+  ],
+  "_merge_claim_identity": [
+   "f33bf415ca9d1f97"
+  ],
+  "_merge_cleanup_branch_observation": [
+   "d951dcca5a31277e"
+  ],
+  "_merge_cleanup_evidence_history": [
+   "01bc78644cf847e5"
+  ],
+  "_merge_cleanup_expected_argv": [
+   "475d20717264cd8f"
+  ],
+  "_merge_cleanup_expected_subject": [
+   "0e608a14c67460b6"
+  ],
+  "_merge_cleanup_fetch_head_bytes": [
+   "e8c1e6ee216ed8d3"
+  ],
+  "_merge_cleanup_history_summary": [
+   "dbba075725175d93"
+  ],
+  "_merge_cleanup_intent_transition_valid": [
+   "b56d5794b056b2e3"
+  ],
+  "_merge_cleanup_intent_valid": [
+   "3bf1d9ed810a66ee"
+  ],
+  "_merge_cleanup_observation_valid": [
+   "0ecd07ee505119f3"
+  ],
+  "_merge_cleanup_process_complete": [
+   "6e6df5039fa47866"
+  ],
+  "_merge_cleanup_process_output": [
+   "dae893d5f881f4e4"
+  ],
+  "_merge_cleanup_process_record": [
+   "a0c0b607729408e9"
+  ],
+  "_merge_cleanup_process_result_valid": [
+   "3519ee9e01e8fb6c"
+  ],
+  "_merge_cleanup_remote_fetch_observation": [
+   "f1a1f3cc25188b72"
+  ],
+  "_merge_cleanup_result_transition_valid": [
+   "d504c79ae779eabc"
+  ],
+  "_merge_cleanup_results_valid": [
+   "091f45aec35c9389"
+  ],
+  "_merge_cleanup_retry_proof_valid": [
+   "603a4573f8415368"
+  ],
+  "_merge_cleanup_step_result_valid": [
+   "d40f5c309e13918f"
+  ],
+  "_merge_cleanup_unmatched_intent": [
+   "6a691f9d3f7c84b3"
+  ],
+  "_merge_cleanup_worktree_inventory": [
+   "eceba7f59ef9ff1c"
+  ],
+  "_merge_command_engine": [
+   "cd740c5b99171e2f"
+  ],
+  "_merge_conflict_path_is_canonical": [
+   "cb3c0fb9cae698b7"
+  ],
+  "_merge_conflict_record": [
+   "10e8fdda93aa9d99"
+  ],
+  "_merge_conflict_record_matches": [
+   "330326cecebea6d7"
+  ],
+  "_merge_containment": [
+   "80110641fe8850c4"
+  ],
+  "_merge_current_authority_valid": [
+   "8e6a3c71e1bc241a"
+  ],
+  "_merge_current_gate_facts": [
+   "76ce29715fffdf07"
+  ],
+  "_merge_epoch_fetch_observation_digest": [
+   "fcf862f472930fe9"
+  ],
+  "_merge_epoch_suite": [
+   "585e187842eb0f59"
+  ],
+  "_merge_epoch_valid": [
+   "ea7bf454137b0f0f"
+  ],
+  "_merge_event_digest": [
+   "d4a8be8c762758ba"
+  ],
+  "_merge_event_outbox": [
+   "a320a643f2eec94d"
+  ],
+  "_merge_full_patch_argv": [
+   "eef6e7e37bd2aaf9"
+  ],
+  "_merge_gate_current": [
+   "b8646c586ee4181f"
+  ],
+  "_merge_gate_event_fact": [
+   "576c8c8b4c0b7ecd"
+  ],
+  "_merge_gate_plan_valid": [
+   "1dda1fdbe245fa30"
+  ],
+  "_merge_gate_step_generation_digests": [
+   "21913a2e0f1525e1"
+  ],
+  "_merge_gate_suite": [
+   "50784ef380b56f19"
+  ],
+  "_merge_has_attempt": [
+   "ee564b91e6ecf23a"
+  ],
+  "_merge_history_has_git_mutation_intent": [
+   "6d40caccaa910c9f"
+  ],
+  "_merge_history_uses_additive_grammar": [
+   "daa368c92d0f92aa"
+  ],
+  "_merge_inactive": [
+   "8167244d393cd878"
+  ],
+  "_merge_inactive_epoch_has_no_started_child": [
+   "55ceecae687dbd70"
+  ],
+  "_merge_inactive_post_attempt_recovery_ready": [
+   "d187776dfa7d7b1d"
+  ],
+  "_merge_ingest_binding": [
+   "220036a86afbacb7"
+  ],
+  "_merge_ingest_record_templates": [
+   "529ec1e3b9a53410"
+  ],
+  "_merge_ingest_state_shape_valid": [
+   "7edd26c348c893f4"
+  ],
+  "_merge_ingest_transition_valid": [
+   "8b29051d7ce49246"
+  ],
+  "_merge_latest_contained_attempt": [
+   "7efbc4fac6a3446e"
+  ],
+  "_merge_nonconflict_index_bytes": [
+   "6c16f31da955258e"
+  ],
+  "_merge_nonconflict_status_bytes": [
+   "2240e0e55383261b"
+  ],
+  "_merge_old_tip_all_false": [
+   "9c1658d6a9f4176a"
+  ],
+  "_merge_owned_rebase_metadata": [
+   "b0d474eac27e6abe"
+  ],
+  "_merge_owner_directory": [
+   "9d2ae2e3e571f713"
+  ],
+  "_merge_payload_delta": [
+   "e2c3c6a207788736"
+  ],
+  "_merge_plan_position_fact": [
+   "d385b452e5ba4882"
+  ],
+  "_merge_plan_transition_valid": [
+   "06b4d82433886e5b"
+  ],
+  "_merge_process_unresolved": [
+   "b7118d2c04ae3c30"
+  ],
+  "_merge_publication_failure": [
+   "89ddaf8a33dba618"
+  ],
+  "_merge_rebase_action": [
+   "4cc7f6af27fef26f"
+  ],
+  "_merge_rebase_integrated_observation_binding": [
+   "30d1580a77783b0b"
+  ],
+  "_merge_rebase_integrated_predicate": [
+   "2d3ef1d19d312392"
+  ],
+  "_merge_rebase_operation_metadata_absent": [
+   "30c70f2a164a54db"
+  ],
+  "_merge_rebase_result_classification": [
+   "6f67aec6c209c4e3"
+  ],
+  "_merge_rebase_result_failed": [
+   "2588abe0b5eb25b0"
+  ],
+  "_merge_recovery_proof_transition_valid": [
+   "ff5c443c9f329854"
+  ],
+  "_merge_refusal": [
+   "a8302b7f483a8490"
+  ],
+  "_merge_release_preconditions_valid": [
+   "f8f78d97505d9125"
+  ],
+  "_merge_released_predecessor": [
+   "79c04d294b3bd6a1"
+  ],
+  "_merge_remote_only_equality_proof": [
+   "cc5f79e5f3d6dc2b"
+  ],
+  "_merge_retained_inflight": [
+   "9c8519ddd0521696"
+  ],
+  "_merge_revision9_compatibility_view": [
+   "6be3641758a6e9e7"
+  ],
+  "_merge_run_directory": [
+   "fb448a40482acef6"
+  ],
+  "_merge_scope_argv": [
+   "b06a19a3a525d485"
+  ],
+  "_merge_scope_binding_names": [
+   "cbf63caaf4733c33"
+  ],
+  "_merge_scope_binding_validator": [
+   "a00d6f951ccae0d7"
+  ],
+  "_merge_scope_child_result": [
+   "18fe0c55313dc0a8"
+  ],
+  "_merge_scope_environment": [
+   "50e3eaf01b8389fc"
+  ],
+  "_merge_scope_environment_contract": [
+   "793706ebb3827ed6"
+  ],
+  "_merge_scope_event_binding_valid": [
+   "3b8742c618bd82ea"
+  ],
+  "_merge_scope_from_candidate_observation": [
+   "d518b20b200c2fff"
+  ],
+  "_merge_scope_proof": [
+   "fe9b5a143cd33794"
+  ],
+  "_merge_scope_request": [
+   "143dc3b9b36bcd3a"
+  ],
+  "_merge_scope_transition_valid": [
+   "e830264a93b6d838"
+  ],
+  "_merge_state_shape_valid": [
+   "3ce92f5f589990f4"
+  ],
+  "_merge_transition_valid": [
+   "8ad6bd28434c728c"
+  ],
+  "_merge_unpublished_claim_absent": [
+   "964d5a60a86ddaf9"
+  ],
+  "_merge_worktree_status": [
+   "459de93c8fbb08c8"
+  ],
+  "_message_from_args": [
+   "0fd09219853b97b1"
+  ],
+  "_mutation_persistence_error": [
+   "e5cc984f35940817"
+  ],
+  "_new_merge_record_is_current": [
+   "55bfd09797b807bf"
+  ],
+  "_new_owner_record": [
+   "d4876015957ca20f"
+  ],
+  "_new_state": [
+   "974447b743a3addb"
+  ],
+  "_next_incomplete": [
+   "55e3eae36c2c4dce"
+  ],
+  "_normalize_merge_conflict_paths": [
+   "5f39e6af3ebd7d83"
+  ],
+  "_nul_git_paths": [
+   "dbc58cdcc5291478"
+  ],
+  "_object_format": [
+   "3484124319ff5cfd"
+  ],
+  "_object_store_alternates": [
+   "0f1a160576107bc6"
+  ],
+  "_observe_current_merge_candidate": [
+   "71687c5e018c6b8c"
+  ],
+  "_observe_merge_conflict": [
+   "dc059c91f377bc31"
+  ],
+  "_observe_merge_post_add": [
+   "0ab0e7f1df603b00"
+  ],
+  "_opaque_path_evidence_at": [
+   "97f791c3e3a60cfd"
+  ],
+  "_open_lock_directory": [
+   "2ac66bfb6e6b35f1"
+  ],
+  "_open_owned_directory": [
+   "c7df68a0896e980e"
+  ],
+  "_oracle_free_subject": [
+   "54a4b505cca30dca"
+  ],
+  "_park_invalid_final_history_mode": [
+   "0be2d3b9c0a27543"
+  ],
+  "_parse_alternate_path": [
+   "ff50aabf0d2dfdd5"
+  ],
+  "_parse_changelog": [
+   "c4b7d98379c3a5a6"
+  ],
+  "_parse_fetched_remote_observation": [
+   "e8a2213454f95b5a"
+  ],
+  "_parse_history_mutation_mode": [
+   "38913119eef2a170"
+  ],
+  "_parse_invariants": [
+   "4c7699a6933f89d9"
+  ],
+  "_parse_merge_candidate_observation": [
+   "dda8decd58b15b42"
+  ],
+  "_parse_merge_conflict_paths": [
+   "db311bace9e941f8"
+  ],
+  "_parse_merge_name_status_output": [
+   "6b1981373e6d7b1e"
+  ],
+  "_parse_merge_scope_output": [
+   "42f4109ad530ca16"
+  ],
+  "_parse_plugin_manifest": [
+   "d0c3a193dedda997"
+  ],
+  "_parse_regions": [
+   "25dc2139901e61cd"
+  ],
+  "_parse_regions_for_orders": [
+   "a491b858773fa1b4"
+  ],
+  "_parse_regions_with_trigger_defect": [
+   "cfae0715fa5d7c70"
+  ],
+  "_parse_registered_worktrees": [
+   "0b725979f9a12dec"
+  ],
+  "_parse_remote_observation": [
+   "23f3602add7525dc"
+  ],
+  "_parse_reviewer_eval_triggers": [
+   "c374cc63d7f79386"
+  ],
+  "_parse_stack_validations": [
+   "0eb0143365daf5d3"
+  ],
+  "_parse_utc": [
+   "ad5b436e6cb9eeda"
+  ],
+  "_parse_verdict": [
+   "af1fda91855540de"
+  ],
+  "_parsed_run_captured_path": [
+   "aaab4bc605185934"
+  ],
+  "_passed_stack_cell_is_intermediate": [
+   "be725b6c74f5cd6a"
+  ],
+  "_peek_chain_state": [
+   "a444426a8485b16d"
+  ],
+  "_peek_raw_abort_state": [
+   "4a9d8336ecb69086"
+  ],
+  "_peek_selected_chain": [
+   "de77ea36aec05c04"
+  ],
+  "_pending_mutating_gate": [
+   "99eacb36f31b591d"
+  ],
+  "_permission_path_key": [
+   "e7526755af3ce44a"
+  ],
+  "_persist_deferred_mutation_result": [
+   "a096fcf3d428af75"
+  ],
+  "_persist_recovery_proof": [
+   "c645fcc5e30bce64"
+  ],
+  "_pid_is_running": [
+   "2c0836202a993c3e"
+  ],
+  "_pinned_git_environment": [
+   "12dbb85e39280f32"
+  ],
+  "_pipe_cloexec": [
+   "9186a3e6198f4d56"
+  ],
+  "_policy_for_state": [
+   "4ce13307153a82dd"
+  ],
+  "_preflight_lifecycle": [
+   "d0f5a082b486f9a8"
+  ],
+  "_prepare_archive_candidate": [
+   "96c001cf68126991"
+  ],
+  "_prepare_bootstrap_git_no_lazy_fetch_qualification": [
+   "8b249f4a4d85a413"
+  ],
+  "_prepare_git_no_lazy_fetch_qualification": [
+   "200a0721bd46b312"
+  ],
+  "_prepare_merge_activation_preamble": [
+   "d61f8c06cd881303"
+  ],
+  "_prepared_request_inputs": [
+   "3388bb94520d8956"
+  ],
+  "_prevalidate_chain_batch_carrier": [
+   "f9a87339d5b78bee"
+  ],
+  "_process_group_exists": [
+   "d87513231303cdbe"
+  ],
+  "_process_probe": [
+   "e9e2d93f25a29aa6"
+  ],
+  "_produced_exact_message": [
+   "64666b3b2518cd76"
+  ],
+  "_produced_exact_tree": [
+   "5887f82f77158db5"
+  ],
+  "_produced_head_moved": [
+   "a4097dba198cfaa2"
+  ],
+  "_produced_mismatch_outcome": [
+   "68bfdcd0fa3a53a0"
+  ],
+  "_produced_single_parent": [
+   "e84e5fa38f4d90ba"
+  ],
+  "_profiles_for_path": [
+   "a288c20fd299c29d"
+  ],
+  "_projection_path_is_excluded": [
+   "4210eac46c5c7387"
+  ],
+  "_projection_records": [
+   "ade3cad07151a871"
+  ],
+  "_prompt": [
+   "de1ef566f5f3c7a3"
+  ],
+  "_prove_ingest_live_chain": [
+   "48db503c2a8b8b29"
+  ],
+  "_prove_merge_run_task_binding": [
+   "7bc9376a245ca77d"
+  ],
+  "_prove_run_task_binding": [
+   "0fd417d7a3bf0c72"
+  ],
+  "_publish_fence": [
+   "1d123fff47a6baa7"
+  ],
+  "_publish_merge_claim": [
+   "942302e704ba5436"
+  ],
+  "_publish_merge_scope_binding": [
+   "725a51b7a7d2edaa"
+  ],
+  "_publish_no_replace_link": [
+   "808150bbf43f48a8"
+  ],
+  "_publish_portable_owner": [
+   "33da7dc21db27b31"
+  ],
+  "_publish_recovery_reservation": [
+   "7cd1e683bf314d5b"
+  ],
+  "_published_recovery_evidence_valid": [
+   "39f045a48328f48b"
+  ],
+  "_qualify_git_no_lazy_fetch": [
+   "7c4919c8e7f5ebbd"
+  ],
+  "_raw_top_level_command": [
+   "111b6ef8eac4bcb3"
+  ],
+  "_read_archive_candidate": [
+   "23d5c1538c7e90ca"
+  ],
+  "_read_archive_candidate_at": [
+   "b57d2e46aa55b5e5"
+  ],
+  "_read_bound_artifact": [
+   "d879cae583c205ac"
+  ],
+  "_read_child_ack": [
+   "53ab28fe0f50f29e"
+  ],
+  "_read_fence_for_recovery": [
+   "10f696f25cabab5b"
+  ],
+  "_read_ingest_input": [
+   "540aa3e0705aeb97"
+  ],
+  "_read_ingest_sources": [
+   "5e980a5ce1d57706"
+  ],
+  "_read_merge_artifact": [
+   "07022fe3449e6909"
+  ],
+  "_read_merge_claim": [
+   "241bd8d6caf3928c"
+  ],
+  "_read_merge_git_metadata": [
+   "411bee28a5b6d025"
+  ],
+  "_read_only_recovery_flag_state": [
+   "4cdadbbb398d4585"
+  ],
+  "_read_owned_record_at": [
+   "1171b2af23ea631c"
+  ],
+  "_read_raw_commit": [
+   "f2d799f63e71b675"
+  ],
+  "_read_review_master_digest": [
+   "9c8439aade2e6381"
+  ],
+  "_read_review_master_window": [
+   "46a8133c60a98d06"
+  ],
+  "_receipt_run_snapshot": [
+   "90befcd1c92fc629"
+  ],
+  "_reconcile_merge_projection_for_lease_reclaim": [
+   "65e54432cd9ec032"
+  ],
+  "_record_at_if_present": [
+   "644fc433bba1c444"
+  ],
+  "_record_bootstrap_failure": [
+   "5683cb8c5b5c4026"
+  ],
+  "_record_common_release_failure": [
+   "1c455db08fcb379f"
+  ],
+  "_record_fresh_eval_terminal": [
+   "240fe9c9ebb79231"
+  ],
+  "_record_gate_result": [
+   "035e1abbf5de2fed"
+  ],
+  "_record_process_step": [
+   "54e8ffa4d937e005"
+  ],
+  "_record_produced_identity": [
+   "634fe1ec56d7bfff"
+  ],
+  "_recording_common_lock": [
+   "2ec7f02045c29429"
+  ],
+  "_recover_can_reach_final_mode": [
+   "9e24776bbd53e816"
+  ],
+  "_recover_committing": [
+   "7ee2ef68883c9131"
+  ],
+  "_recover_stale_portable_owner": [
+   "072e7d593680144a"
+  ],
+  "_recovered_absent_rebase_intent_digest": [
+   "8ab200d4fb6238a0"
+  ],
+  "_recovery_classification_receipt_valid": [
+   "f03fd9a0470c4af1"
+  ],
+  "_recovery_cleanup_intent": [
+   "c55d1c132a2046ec"
+  ],
+  "_recovery_cleanup_result_matches": [
+   "afa4b3eed507d6f4"
+  ],
+  "_recovery_event_intent": [
+   "7d4f8fec8783e020"
+  ],
+  "_recovery_record": [
+   "6f4e7e680142475f"
+  ],
+  "_recovery_value_carries_inflight": [
+   "979f009058c32adb"
+  ],
+  "_recursive_alternate_object_stores": [
+   "fb636d0528fe9b92"
+  ],
+  "_refresh_iteration": [
+   "972552b560a91364"
+  ],
+  "_registered_worktrees": [
+   "812ee4f341fcfb47"
+  ],
+  "_release_historical_landing_locked": [
+   "61456fdccdb8e73f"
+  ],
+  "_release_lock": [
+   "1000fa85ac5c4ae9"
+  ],
+  "_release_portable_identity": [
+   "232e5e0a8bbc47e9"
+  ],
+  "_release_scope_exceeded": [
+   "5c88c993b1b8f2aa"
+  ],
+  "_release_to_aborted": [
+   "120597e6bf91b6d4"
+  ],
+  "_release_to_aborted_locked": [
+   "3f5c5b785e08697c"
+  ],
+  "_release_to_closed_locked": [
+   "d1a603d3148fc008"
+  ],
+  "_remote_containment_argv": [
+   "ab9ab73062909430"
+  ],
+  "_remote_containment_evidence_valid": [
+   "3c199e37f39fb977"
+  ],
+  "_remote_observation_fetch_argv": [
+   "f0b965c1b89700e3"
+  ],
+  "_remote_observation_heads": [
+   "bd2c4ebc601b7355"
+  ],
+  "_remote_observation_intent": [
+   "eff0d7ca92d95e69"
+  ],
+  "_remote_observation_progress_matches_observed": [
+   "55be7637f30c5765"
+  ],
+  "_remote_observation_progress_transition_valid": [
+   "4c2253ec6c4166de"
+  ],
+  "_remote_observation_progress_valid": [
+   "c827b1b049eb006c"
+  ],
+  "_remove_merge_claim": [
+   "7de39ee3cb844ded"
+  ],
+  "_render_archive_bytes": [
+   "304bb1c0d862c3cd"
+  ],
+  "_render_review_patch": [
+   "a9963d5803931658"
+  ],
+  "_replay_merge_event_bytes": [
+   "6ed5939ce02eb0bc"
+  ],
+  "_replayed_remote_observation_completed": [
+   "a6d4358da82fd979"
+  ],
+  "_repository_recovery_reservation_present": [
+   "88a676a184a73f3d"
+  ],
+  "_require_active_merge_epoch": [
+   "c52463075457e482"
+  ],
+  "_require_common_lock_control": [
+   "afddb3e67595c239"
+  ],
+  "_require_deadline_open": [
+   "8ad42fce5f8fc1d3"
+  ],
+  "_require_git_no_lazy_fetch_qualification": [
+   "87e3f84daa2d74aa"
+  ],
+  "_require_ingest_proof": [
+   "3afd86fadf275654"
+  ],
+  "_require_loud_merge_recovery_mode": [
+   "74abd9a82cfd87d6"
+  ],
+  "_require_merge_adapter_control": [
+   "56f838da9c6c0edd"
+  ],
+  "_require_merge_integration_control": [
+   "c4619f0a1319d07e"
+  ],
+  "_require_merge_lifecycle_control": [
+   "1ec8dc7be5fd7386"
+  ],
+  "_require_merge_store_control": [
+   "8e5e1f37887a9cee"
+  ],
+  "_require_no_pending_chain_activation_outbox": [
+   "f29f9fdd9de34bab"
+  ],
+  "_require_recovery_proof_recorder": [
+   "34e4510532991a5c"
+  ],
+  "_require_supported_mode": [
+   "a25d903a31b4f2fa"
+  ],
+  "_require_tombstone_control": [
+   "da88317638e05705"
+  ],
+  "_required_steps": [
+   "828428aab9300a29"
+  ],
+  "_reservation_evidence": [
+   "cce13ae196021bf0"
+  ],
+  "_reset_merge_nonmovement_counter": [
+   "31baf45161fcec28"
+  ],
+  "_resolve_chain_activation_projection": [
+   "5590496665cff534"
+  ],
+  "_resolve_chain_activation_snapshot": [
+   "4d946d59697fb032"
+  ],
+  "_resolve_gate": [
+   "3a71ffcfbc5f8eca",
+   "fa06446fb573f741"
+  ],
+  "_resolve_recorded_merge_tip": [
+   "7934af5d87ff84ba"
+  ],
+  "_resolved_fetch_tip": [
+   "eed96d92fc4e02fe"
+  ],
+  "_restore_bootstrap_fetch_observation_locked": [
+   "34bb832f90f02ea3"
+  ],
+  "_restore_candidate_observation_intent_locked": [
+   "d1ff3d12051bbe70"
+  ],
+  "_resume_merge_scope_binding": [
+   "18986f516e62b0c0"
+  ],
+  "_resume_pending_release": [
+   "b8f52e9387128a1f"
+  ],
+  "_retain_or_advance_merge_candidate": [
+   "dfc380bdebbfb3aa"
+  ],
+  "_revalidate_record_at": [
+   "d2bfe38cbede5c3b"
+  ],
+  "_review_complete_package_refusal": [
+   "649b415b40a558d3"
+  ],
+  "_review_master_identity": [
+   "e30201dde265267f"
+  ],
+  "_review_master_leaf_is_valid": [
+   "28e99a10a4c036ef"
+  ],
+  "_review_master_pointer_prompt": [
+   "f255c3b596e65ae8"
+  ],
+  "_review_master_transport": [
+   "4709fb5308ccea27"
+  ],
+  "_review_master_window_count": [
+   "b09bd9ee527ef452"
+  ],
+  "_review_package": [
+   "645201321275dede",
+   "889700122f30b6a8"
+  ],
+  "_review_package_is_oversized": [
+   "42e72f607894c575"
+  ],
+  "_review_projection_record": [
+   "dd4d480e379aac0f"
+  ],
+  "_reviewer_argv": [
+   "6e8de1147fdbb2a0"
+  ],
+  "_reviewer_denied_roots": [
+   "1bc1eb78233e2ab3"
+  ],
+  "_reviewer_permission_config": [
+   "79bc85d85ae40aa9"
+  ],
+  "_reviewer_project_config": [
+   "dece922892b3fdb9"
+  ],
+  "_reviewer_text": [
+   "c022fefcd48f2b1e"
+  ],
+  "_route_and_prompt_controls": [
+   "d306308af3276eb0"
+  ],
+  "_route_shared_chain_engine": [
+   "bc246be6c314c8d8"
+  ],
+  "_run_bootstrap_generation": [
+   "b74fb7838465bc1f"
+  ],
+  "_run_bootstrap_generation_composite": [
+   "5299b7da476e7b2f"
+  ],
+  "_run_bounded": [
+   "ad296590524efe6b"
+  ],
+  "_run_candidate_observation_locked": [
+   "f8203b9ec7152b94"
+  ],
+  "_run_classification": [
+   "f388784a3430f107"
+  ],
+  "_run_cleanup_child": [
+   "b205fae51b1d8558"
+  ],
+  "_run_fresh_reviewer_evals": [
+   "edd5596ec3d4852a"
+  ],
+  "_run_halt": [
+   "49513b965549a153"
+  ],
+  "_run_scoped_mutation": [
+   "929e0909e4a9ca60"
+  ],
+  "_safe_error": [
+   "85f89084f299804e"
+  ],
+  "_same_filesystem_node": [
+   "23d2ee1af67b289e"
+  ],
+  "_same_published_record": [
+   "b98fde8fb949f2ad"
+  ],
+  "_sanitized_environment": [
+   "419a0a771ee4eaaa"
+  ],
+  "_separator": [
+   "8c5c5d5850ab49a9"
+  ],
+  "_serialize_worktree_command": [
+   "c0a62d4c97e12a10"
+  ],
+  "_sha256": [
+   "68e7621362d91038"
+  ],
+  "_single_line_ascii": [
+   "4b07667efa7db4e6"
+  ],
+  "_sleep_with_deadline": [
+   "3ee0fb9fcfc32eff"
+  ],
+  "_spawn_blocked_fence_child": [
+   "b52fa34baabda907"
+  ],
+  "_split_markdown_row": [
+   "3cdee4d71f9e7add"
+  ],
+  "_stable_file_identity": [
+   "d2eb107feab6ff0f"
+  ],
+  "_stage_paths": [
+   "79b0c7aeec12706f"
+  ],
+  "_stop_unstarted_child": [
+   "6ca89b2168d3dfdc"
+  ],
+  "_strict_json": [
+   "2fcb88c1dea5b39c"
+  ],
+  "_success": [
+   "9bdf93d72dc073ae"
+  ],
+  "_temporary_checkout_parent": [
+   "fa464b9b16783906"
+  ],
+  "_terminate": [
+   "d9c7890ad26f52b7"
+  ],
+  "_terminate_fenced_group": [
+   "c7f7a064d9b46d37"
+  ],
+  "_tombstone_abort_disposition": [
+   "ff1c3326c7bbf9bb"
+  ],
+  "_tombstone_outcome": [
+   "eac836d545c3a2ef"
+  ],
+  "_toml_string": [
+   "b265b9f297387810"
+  ],
+  "_transition_state": [
+   "5524564c3958f9fb"
+  ],
+  "_tree_blob_bytes": [
+   "de32412681a8321a"
+  ],
+  "_tree_records": [
+   "72af9877eb4b184c"
+  ],
+  "_unlink_merge_scope_temporary_at": [
+   "d15cea0348d71054"
+  ],
+  "_unlink_revalidated_record_at": [
+   "df17969466aff698"
+  ],
+  "_user_skip": [
+   "aee30cf754ff4c31"
+  ],
+  "_utc_now": [
+   "15bc3d8f53163be8"
+  ],
+  "_valid_host": [
+   "ffd78be659769fd9"
+  ],
+  "_valid_nonce": [
+   "9e4a78d2f87065d6"
+  ],
+  "_valid_nonnegative_int": [
+   "66b68e69dcc83aad"
+  ],
+  "_valid_nullable_chain": [
+   "80201e109807edb8"
+  ],
+  "_valid_oid": [
+   "4a44fc1cfbc4dc1a"
+  ],
+  "_valid_positive_int": [
+   "390a65817e00cee0"
+  ],
+  "_valid_sorted_unique_strings": [
+   "7fc69dc1ce3c5881"
+  ],
+  "_valid_utc_second": [
+   "66a6ab445b42c449"
+  ],
+  "_validate_artifact": [
+   "6ada1207cfa99047"
+  ],
+  "_validate_bound_chain_state": [
+   "1a96d582f6605274"
+  ],
+  "_validate_chain_activation_lineage": [
+   "68061ae860ea1e29"
+  ],
+  "_validate_chain_batch_target": [
+   "a257ef9abbdf7c26"
+  ],
+  "_validate_chain_lease_record": [
+   "b5e2a5f6a5cca745"
+  ],
+  "_validate_deferred_mutation_request": [
+   "e705d99ead7a4da4"
+  ],
+  "_validate_fence_record": [
+   "3c48da275634b639"
+  ],
+  "_validate_merge_claim_record": [
+   "1e52cbc5117f620c"
+  ],
+  "_validate_merge_scope_fetch_binding": [
+   "3b62f542f38acb65"
+  ],
+  "_validate_merge_scope_proof": [
+   "ba08c64a339593dc"
+  ],
+  "_validate_merge_scope_request": [
+   "43896cd651cd869c"
+  ],
+  "_validate_owner_record": [
+   "00eaf6acf39d6a26"
+  ],
+  "_validate_recovery_record": [
+   "bc954e063af15e8b"
+  ],
+  "_validate_request_plan": [
+   "917f303541fd6378"
+  ],
+  "_validate_revision9_cross_options": [
+   "3fd2c3aa5878e490"
+  ],
+  "_validated_commitment_path": [
+   "790d8fc6c1537c51"
+  ],
+  "_validated_fresh_reviewer_manifest": [
+   "2b09eee53984d75e"
+  ],
+  "_validated_symlink_target": [
+   "d3ef5b94bbc5c08a"
+  ],
+  "_verify_and_build_ingest_records": [
+   "c13c2d1241bc6211"
+  ],
+  "_verify_and_build_merge_ingest_records": [
+   "0112b25192d945f6"
+  ],
+  "_verify_operator_harness": [
+   "4122302e0a5b1435"
+  ],
+  "_verify_safe_checkout": [
+   "770ab38b31755276"
+  ],
+  "_verify_safe_projection": [
+   "c1bb8166cabb5278"
+  ],
+  "_void_mismatched_gate_one_pair": [
+   "bef6e24b52cf002a"
+  ],
+  "_wait_for_child_exit": [
+   "6430d08b405f72b5"
+  ],
+  "_waitpid_nohang": [
+   "d32d0176542737af"
+  ],
+  "_write_all": [
+   "be5c63b656ff004e",
+   "c6a4d21f273d7d84"
+  ],
+  "_write_artifact": [
+   "7ce9462610948da8"
+  ],
+  "_write_index_tree": [
+   "c36108020f67f8d4"
+  ],
+  "_write_merge_artifact": [
+   "564fe619d038d80e"
+  ],
+  "abort": [
+   "bf119500a425ed0a",
+   "ca509a511afb3abc"
+  ],
+  "abort_disposition": [
+   "7c46649ae640dd2a"
+  ],
+  "abort_disposition_refusal": [
+   "a1ff562f7f517ff2"
+  ],
+  "acquire_chain_lease": [
+   "d06cbccbd23cf364"
+  ],
+  "acquire_common_lock": [
+   "5de3d0a3700d5b2a"
+  ],
+  "approve": [
+   "1a45dddc2e8b8d4b",
+   "bdafa99e7edf75ad"
+  ],
+  "authorization_id": [
+   "9ae14803b3638348"
+  ],
+  "base_identity": [
+   "ff3ae3b99dc96986"
+  ],
+  "bind_candidate": [
+   "959d93510d878ac5"
+  ],
+  "bind_merge_candidate_generation": [
+   "9a9564696cfd5b71"
+  ],
+  "build_parser": [
+   "b1bca4fddc029109"
+  ],
+  "candidate_binding": [
+   "cb8fabf9f178a35c"
+  ],
+  "candidate_is_v2": [
+   "9f76f75a5a28f08b"
+  ],
+  "canonical_bytes": [
+   "27a83d55caa2b0ee"
+  ],
+  "chain_id_now": [
+   "edad618bd7f7daaa"
+  ],
+  "classify": [
+   "a43608fcacb68b97"
+  ],
+  "cleanup_chain": [
+   "64fb7898603645af"
+  ],
+  "collect": [
+   "20eb9015e7036716"
+  ],
+  "commit_message_bytes": [
+   "cd719e4d2674452c"
+  ],
+  "context_from_paths": [
+   "0406e0f4ffad0312"
+  ],
+  "current_step_satisfied": [
+   "33a7dbe7183795bf"
+  ],
+  "derive_trigger": [
+   "718fe158436b9023"
+  ],
+  "discover_context": [
+   "724183b9ce30ec86"
+  ],
+  "dispatch": [
+   "ab24620ba23c75c9"
+  ],
+  "enumerate_tree_pair": [
+   "3cfbb0830f60eb41"
+  ],
+  "finalize": [
+   "2d1375f7f6e22cdd"
+  ],
+  "gate_run": [
+   "fae82b91cfa74c0b",
+   "fca36b71bfd516d7"
+  ],
+  "git_output": [
+   "f65c1d7fd51606d6"
+  ],
+  "hold_common_lock": [
+   "720bc90c62f3c5d8"
+  ],
+  "index_paths": [
+   "e80de46091c2707c"
+  ],
+  "inspect_common_lock": [
+   "dea20d04a5381bf0"
+  ],
+  "inventory_fixtures": [
+   "44bbc46428e106c2"
+  ],
+  "iso_z": [
+   "f5dc07f81728c7a1"
+  ],
+  "iter_verified_master_package_windows": [
+   "2c1889e5dbaf888b"
+  ],
+  "journal_batch_recover": [
+   "edc7ab9779f6134b"
+  ],
+  "journal_ingest_chain": [
+   "69600c414f23bc48"
+  ],
+  "main": [
+   "41d421c987445b00"
+  ],
+  "marker_timestamp_for_cleanup": [
+   "90bbdea9998e0f09"
+  ],
+  "materialize_candidate": [
+   "04bf0730b2bf2a2f"
+  ],
+  "materialize_review_projection": [
+   "2109419834f92e86"
+  ],
+  "merge_gate_intent_digest": [
+   "900e56e315833a41"
+  ],
+  "name_status_tree_pair": [
+   "a76c8de9809f60b0"
+  ],
+  "observe_index": [
+   "b3b2f1ea2fdc5370"
+  ],
+  "operator_tombstone": [
+   "cb44011a7fcd4794"
+  ],
+  "parse_marker": [
+   "edfdef2087fa532c"
+  ],
+  "parse_policy": [
+   "692d48a92737362b"
+  ],
+  "parse_time": [
+   "8e772ab92e520afd"
+  ],
+  "parse_verdict": [
+   "2d242ad813261b12"
+  ],
+  "paths_matching_pattern": [
+   "08c54267ce2df1eb"
+  ],
+  "prepare_merge_admission": [
+   "838010dced812146"
+  ],
+  "prepare_request_plan": [
+   "e887d5130e10576b"
+  ],
+  "promoted_tier": [
+   "ee1614e60b8506d9"
+  ],
+  "read_commit_object": [
+   "34019478fa4a233a"
+  ],
+  "rebase": [
+   "55abefddb62c0597"
+  ],
+  "reduce_merge_event": [
+   "ee616690c8561904"
+  ],
+  "refresh": [
+   "995cbb131094c5e0"
+  ],
+  "register_activation_reservation_seam": [
+   "1f3da7341ec20d5d"
+  ],
+  "register_coordination_seams": [
+   "b1279eb44242697e"
+  ],
+  "render": [
+   "3ca3d791a5ee69a5"
+  ],
+  "render_marker": [
+   "40bfa3407a3f739a"
+  ],
+  "render_tree_pair": [
+   "c481c0bb954ef30f"
+  ],
+  "require_controls": [
+   "ce983dea3149078f"
+  ],
+  "resolve_base_tree": [
+   "496a6c3035a23b32"
+  ],
+  "restage": [
+   "de1a0454dbded808"
+  ],
+  "review_attach": [
+   "2784c2347f92c662",
+   "a80afb0d41654eed"
+  ],
+  "review_collect": [
+   "83cfc699bccccab7",
+   "b7508d0ff9792258"
+  ],
+  "review_disposition": [
+   "6cbfd6c42c576662",
+   "a1ad8a92c0d23ba5"
+  ],
+  "review_projection": [
+   "1feb3e34fa950542"
+  ],
+  "review_request": [
+   "73a395bff02b5aa7",
+   "99f3b84ad4f51b65"
+  ],
+  "run_bounded": [
+   "4cbfef8deafbace1"
+  ],
+  "run_fenced_command": [
+   "9304fae29915f3de"
+  ],
+  "scan_added_secrets": [
+   "279cdfee2f6740e6"
+  ],
+  "scan_secrets": [
+   "fea6081efc115a79"
+  ],
+  "sha256_bytes": [
+   "2111a13323b94ee0"
+  ],
+  "skip": [
+   "b7fb8f7cdf8aff4f"
+  ],
+  "snapshot": [
+   "834920fc692c7d47"
+  ],
+  "start": [
+   "3c30dd5d06747e1c",
+   "d5e126ca58f6ac80"
+  ],
+  "start_chain": [
+   "8358e7f2555a8c51"
+  ],
+  "status": [
+   "37431e9882f8f26a",
+   "ae4b1465ef6194ae"
+  ],
+  "tree_blob": [
+   "8b98f2ac9ee9c6a6"
+  ],
+  "tree_entry": [
+   "792837e392d088b1"
+  ],
+  "trigger_required": [
+   "fee5dab2c29d3a1f"
+  ],
+  "utc_now": [
+   "dc34c2ca4d7cc101"
+  ],
+  "valid_scope_path": [
+   "542ca7d9195ba6c6"
+  ],
+  "validate_manifest": [
+   "e7f0bdf9cfd2d70b"
+  ],
+  "validate_merge_state": [
+   "fc0208f3c1374e73"
+  ],
+  "validate_state": [
+   "7c986c89fe8b769a"
+  ],
+  "verify": [
+   "136dce0fb997ecb8",
+   "7131525e5ff3665c"
+  ]
+ },
+ "paths": [
+  "scripts/forge/forge_cli"
+ ],
+ "where": {
+  "ArtifactIO": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "ArtifactIO.absolute": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "ArtifactIO.read": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "ArtifactIO.write": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "AuthorizationMarker": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "CLIOptions": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CandidateError": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "CandidateError.__init__": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "CandidateObservation": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "CandidateSnapshot": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "CandidateSnapshot.state_record": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "ChainLease": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.__enter__": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.__exit__": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.__init__": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease._revalidate": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.before_event_append": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.before_state_replace": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.chain_id": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.path": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.protected_append": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.protected_state_replace": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.record": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLease.release": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ChainLeaseUnavailable": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "ChainLeaseUnavailable.__init__": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "ChainStore": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore._drain_pending_batch": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore._events": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore._events_unlocked": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore._load_locked": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore._validate_bound_event_history": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore.create": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore.load": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore.persist": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "ChainStore.recover_pending_outbox": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CommandContext": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CommandContext.command_digest": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CommandContext.helper": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CommandContext.plugin_root": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CommandContext.scripts_dir": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CommandContext.validate_run_id": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "CommitObject": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "CommonLockBoundaryCrash": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonLockInspection": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonLockInspection.evidence": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonLockInspection.recoverable": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonLockReleaseFailure": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonLockReleaseFailure.__init__": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonLockUnavailable": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonLockUnavailable.__init__": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "CommonRebaseLock": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.__enter__": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.__exit__": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.__init__": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock._emit_boundary": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.assert_held": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.digest": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.record": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.recover_owned_fence": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.release": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.released": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "CommonRebaseLock.retry_release": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "ContractArgumentParser": [
+   "scripts/forge/forge_cli/engine/_parser.py"
+  ],
+  "ContractArgumentParser.error": [
+   "scripts/forge/forge_cli/engine/_parser.py"
+  ],
+  "Engine": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine.__init__": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine._chains_for_worktree": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine._emit_decision": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine._preflight": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine._record_head_moved": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine._wrong_state": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine.next_step": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "Engine.select": [
+   "scripts/forge/forge_cli/engine/_engine.py"
+  ],
+  "EvaluationOutcome": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "EvaluationRequest": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "FencedChildSurvived": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "FencedChildSurvived.__init__": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "FencedProcessResult": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "FencedProcessResult.evidence": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "FinalizeContext": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "Fixture": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "Fixture.inventory_record": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "FixtureSuite": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "FixtureSuite.manifest_record": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "FreshEvalError": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "FreshEvalError.__init__": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "FrozenError": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "FrozenError.__init__": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "FrozenError.outcome": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "GitContext": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "GitContext.environment": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "LaunchRequest": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "LaunchResult": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "MaterializedCandidate": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "MaterializedCandidate.verify": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "MaterializedReviewProjection": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "MaterializedReviewProjection.verify": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "MergeAdmission": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "MergeBootstrapClassification": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "MergeCandidateGeneration": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "MergeChainStore": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._append_receipt_with_outer": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._journal_outer": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._load_with_outer": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._prepare_event": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._projection_status": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._read_replay_locked": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._resolve_replayed_projection": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._session": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore._write_transition_with_outer": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore.create": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore.load": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore.load_locked": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore.recover_pending_outbox": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore.transition": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeChainStore.transition_locked": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "MergeEngine": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine.__init__": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._begin_epoch": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._bootstrap_pending_classification_inputs_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._complete_epoch_fetch_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._epoch_fetch_argv": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._epoch_replay_context": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._epoch_transition": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._finish_recovered_epoch_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._halt": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._load": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._materialize_rebase_success_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._park_integrated_review": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._push_classification": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._record_foreign_git_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._recover_classifying_bootstrap_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._recover_classifying_bootstrap_v12_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._recover_conflict_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._recover_merge_bootstrap_scope_binding": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._recover_rebase_observation_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._resolved_epoch_fetch_tip": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._restore_integrated_rebase_observation_intent_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_carried_successor_ancestry": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_conflict_observation_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_epoch_fetch": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_epoch_push": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_epoch_rebase": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_epoch_suite": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_integrated_rebase_observation_locked": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._run_remote_observation": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._sealed_plan": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._tail_event_digest": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine._wrong_state": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine.finalize": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine.recover": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeEngine.store": [
+   "scripts/forge/forge_cli/app/_merge_engine.py"
+  ],
+  "MergeReplayResult": [
+   "scripts/forge/forge_cli/chain_core/_merge_replay.py"
+  ],
+  "MergeRunTaskSnapshot": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "MergeScopeBindingInspection": [
+   "scripts/forge/forge_cli/engine/_merge_scope_binding.py"
+  ],
+  "MergeScopeResult": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "NativeReviewerLauncher": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "NativeReviewerLauncher.launch": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "Outcome": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "Outcome.envelope": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "Outcome.exit_code": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "Policy": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "PolicyError": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "ProcessResult": [
+   "scripts/forge/forge_cli/runtime.py"
+  ],
+  "ProducedCommitContext": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "PublishedLockRecord": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "PublishedLockRecord.evidence": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "ReasonCode": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "RecoveryReservation": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "RecoveryReservation.affected_merge_chain": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "RecoveryReservation.assert_current": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "RecoveryReservation.matches_chain": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "RecoveryReservation.record": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "RecoveryReservation.remaining_timeout": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "Refusal": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "Refusal.__init__": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "Refusal.outcome": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "Repository": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.__init__": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.candidate_bytes": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.candidate_context": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.candidate_hash": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.candidate_observation": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.candidate_snapshot": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.commit_message_argument_digest": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.common_root": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.discover": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.git": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.git_common_dir": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.head": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.normalize_paths": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.policy": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.read_commit_object": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.staged_paths": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "Repository.tree_index_drift": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "ReviewerLauncher": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "ReviewerLauncher.launch": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "Route": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "SecretFinding": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "SecretFinding.as_dict": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "TreeEntry": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "V2ReasonCode": [
+   "scripts/forge/forge_cli/envelope.py"
+  ],
+  "_BlockedFenceChild": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_ChainActivationSnapshot": [
+   "scripts/forge/forge_cli/chain_core/_activation.py"
+  ],
+  "_ChainReceiptSnapshotVerifier": [
+   "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py"
+  ],
+  "_ChainReceiptSnapshotVerifier.__call__": [
+   "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py"
+  ],
+  "_ChainReceiptSnapshotVerifier.__init__": [
+   "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py"
+  ],
+  "_ChainReceiptSnapshotVerifier.recheck": [
+   "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py"
+  ],
+  "_ChainStoragePrimitives": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.__init__": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._append_event_bytes": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._atomic_state": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._boundary": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._canonical_raw_commit_state": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._fsync_dir": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._open_child_directory": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._open_lock_descriptor": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._open_root_descriptor": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._owned_directory": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._read_root_bytes": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._read_tombstone_locked": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._recover_tombstone_publication": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._remember_version": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._require_tail_version": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._root_entry_exists": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._root_name": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._tombstone_artifact_fact": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._tombstone_publication_alias": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._valid_tombstone_record": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives._validate_id": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.admission_lock": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.artifact_dir": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.artifact_parent_descriptor": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.chain_family": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.create_tombstone": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.ensure_root": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.event_lock": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.events_path": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.list_ids": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.raw_state_proves_commit_family": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.root_descriptor": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.state_path": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_ChainStoragePrimitives.tombstone": [
+   "scripts/forge/forge_cli/chain_core/_storage.py"
+  ],
+  "_DeferredMutationRequestError": [
+   "scripts/forge/forge_cli/app/_mutation_journal.py"
+  ],
+  "_FreshEvalArtifactIO": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_FreshEvalArtifactIO._write_atomic": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_FreshEvalArtifactIO.absolute": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_FreshEvalArtifactIO.read": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_FreshEvalArtifactIO.write": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_FreshEvalControlAbort": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_FreshEvalControlAbort.__init__": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_GitNoLazyFetchQualification": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_GitResult": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_MergeEpochBudget": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_MergeEpochBudget.consume": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_PublicationCleanupFailure": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_ReceiptRunSnapshot": [
+   "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py"
+  ],
+  "_absolute_git_path": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_acquire_secondary_flock": [
+   "scripts/forge/forge_cli/chain_core/_common_lock.py"
+  ],
+  "_admission_for_refresh": [
+   "scripts/forge/forge_cli/app/_engine_refresh.py"
+  ],
+  "_admission_from_candidate_observation": [
+   "scripts/forge/forge_cli/app/_engine_refresh.py"
+  ],
+  "_adopt_out_of_band_candidate": [
+   "scripts/forge/forge_cli/engine/_candidate_ops.py"
+  ],
+  "_allocate_chain_id": [
+   "scripts/forge/forge_cli/app/_engine_start_chain.py"
+  ],
+  "_apply_verdict": [
+   "scripts/forge/forge_cli/engine/_verbs_review_collect.py"
+  ],
+  "_archive_close_tree_clean": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_archive_contamination_refusal": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_archive_metadata": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_archive_module": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_archive_parent_descriptor": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_archive_recheck": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_archive_refusal": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_artifact_reference_matches": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_assert_review_master_stable": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_attach_merge_lifecycle_parser": [
+   "scripts/forge/forge_cli/engine/_parser.py"
+  ],
+  "_attempted_release_preconditions_locked": [
+   "scripts/forge/forge_cli/app/_engine_abort.py"
+  ],
+  "_authorization_problem": [
+   "scripts/forge/forge_cli/engine/_approval.py"
+  ],
+  "_authorize_chain_batch": [
+   "scripts/forge/forge_cli/chain_core/_chain_batch_authorize.py"
+  ],
+  "_base_identity": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_binding_for_commit_event": [
+   "scripts/forge/forge_cli/engine/_journal.py"
+  ],
+  "_binding_is_current_with_candidate_v2": [
+   "scripts/forge/forge_cli/chain_core/_candidate_v2.py"
+  ],
+  "_binding_matches_source_fact_with_candidate_v2": [
+   "scripts/forge/forge_cli/chain_core/_candidate_v2.py"
+  ],
+  "_binding_shape_valid_with_candidate_v2": [
+   "scripts/forge/forge_cli/chain_core/_candidate_v2.py"
+  ],
+  "_bootstrap_fetch_argv": [
+   "scripts/forge/forge_cli/app/_engine_bootstrap.py"
+  ],
+  "_bootstrap_fetch_observation_record_valid": [
+   "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py"
+  ],
+  "_bootstrap_fetch_observation_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py"
+  ],
+  "_bounded_descriptor_read": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_bounded_mutation_output": [
+   "scripts/forge/forge_cli/app/_mutation_journal.py"
+  ],
+  "_build_chain_journal_records": [
+   "scripts/forge/forge_cli/engine/_journal.py"
+  ],
+  "_build_merge_chain_journal_records": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_candidate_binding_for_state_with_candidate_v2": [
+   "scripts/forge/forge_cli/chain_core/_candidate_v2.py"
+  ],
+  "_candidate_blob": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_candidate_observation_transition": [
+   "scripts/forge/forge_cli/app/_engine_observation.py"
+  ],
+  "_candidate_patch_ref": [
+   "scripts/forge/forge_cli/engine/_candidate_ops.py"
+  ],
+  "_candidate_record": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_candidate_review_diff": [
+   "scripts/forge/forge_cli/engine/_candidate_ops.py"
+  ],
+  "_candidate_snapshot": [
+   "scripts/forge/forge_cli/engine/_candidate_ops.py"
+  ],
+  "_canonical_document": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_canonical_json": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_canonical_object_store": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_capture_ingest_blob": [
+   "scripts/forge/forge_cli/chain_core/_ingest_capture.py"
+  ],
+  "_capture_ingest_inputs": [
+   "scripts/forge/forge_cli/engine/_journal.py"
+  ],
+  "_capture_ingest_record_evidence": [
+   "scripts/forge/forge_cli/chain_core/_ingest_capture.py"
+  ],
+  "_capture_run_evidence": [
+   "scripts/forge/forge_cli/chain_core/_ingest_capture.py"
+  ],
+  "_chain_activation_ownership_summary": [
+   "scripts/forge/forge_cli/chain_core/_activation.py"
+  ],
+  "_chain_batch_lock": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_chain_receipt_snapshot_lock": [
+   "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py"
+  ],
+  "_chain_storage_root": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_checkout_inventory": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_checkout_leaf": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_claim_slot": [
+   "scripts/forge/forge_cli/app/_engine_start_chain.py"
+  ],
+  "_classification_argv": [
+   "scripts/forge/forge_cli/engine/_classification.py"
+  ],
+  "_classification_environment": [
+   "scripts/forge/forge_cli/engine/_classification.py"
+  ],
+  "_classify_merge_recovery_lifecycle": [
+   "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py"
+  ],
+  "_classify_merge_scope_binding": [
+   "scripts/forge/forge_cli/engine/_merge_scope_binding.py"
+  ],
+  "_classify_merge_scope_binding_at": [
+   "scripts/forge/forge_cli/engine/_merge_scope_binding.py"
+  ],
+  "_cleanup_result_locked": [
+   "scripts/forge/forge_cli/app/_engine_cleanup_child.py"
+  ],
+  "_clear_owned_reservation": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "_clear_reserved_fence": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_collect_fenced_child": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_command_run_lock_id": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "_commit_start_binding_refusal": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_commit_transition_valid_with_candidate_v2": [
+   "scripts/forge/forge_cli/chain_core/_candidate_v2.py"
+  ],
+  "_committed_changelog_output_paths": [
+   "scripts/forge/forge_cli/chain_core/_repository.py"
+  ],
+  "_common_fence_path_present": [
+   "scripts/forge/forge_cli/chain_core/_lock_recovery.py"
+  ],
+  "_complete_bootstrap_classification": [
+   "scripts/forge/forge_cli/app/_engine_start_chain.py"
+  ],
+  "_complete_pending_release_locked": [
+   "scripts/forge/forge_cli/app/_engine_release_pending.py"
+  ],
+  "_completion_document": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_coordination_modules": [
+   "scripts/forge/forge_cli/runtime.py"
+  ],
+  "_coordination_refusal": [
+   "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py"
+  ],
+  "_create_private_record_at": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_current_merge_authority": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_current_test_paths": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "_decode_merge_bootstrap_result": [
+   "scripts/forge/forge_cli/engine/_merge_bootstrap_result.py"
+  ],
+  "_dedent_fenced_cell": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_derive_merge_scope": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_diagnostic": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_directory_open_flags": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_discover_line": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_discover_merge_scope_fence_from_sidecar": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_discover_path": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_discover_raw_line": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_drain_chain_batch_capability": [
+   "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py"
+  ],
+  "_effective_object_store_roots": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_ensure_checkout_parents": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_enumerate_paths": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_env_fingerprint": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_epoch_ancestry_record_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_epoch.py"
+  ],
+  "_epoch_fetch_observation_passed": [
+   "scripts/forge/forge_cli/chain_core/_merge_epoch.py"
+  ],
+  "_epoch_fetch_observation_predecessor_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_recovery_proof.py"
+  ],
+  "_epoch_fetch_observation_record_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_epoch.py"
+  ],
+  "_epoch_fetch_result_intent_digest": [
+   "scripts/forge/forge_cli/chain_core/_merge_epoch.py"
+  ],
+  "_event_batch_records_with_candidate_v2": [
+   "scripts/forge/forge_cli/chain_core/_candidate_v2.py"
+  ],
+  "_events_are_valid": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_evidence_record": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_exact_keys": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_exclusive_descriptor_lock": [
+   "scripts/forge/forge_cli/chain_core/_state.py"
+  ],
+  "_expected_offsets": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_extract_global_options": [
+   "scripts/forge/forge_cli/engine/_parser.py"
+  ],
+  "_fast_mechanical_skips": [
+   "scripts/forge/forge_cli/runtime.py"
+  ],
+  "_fence_death_proof": [
+   "scripts/forge/forge_cli/chain_core/_lock_recovery.py"
+  ],
+  "_fence_lines": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_fence_matches_owner": [
+   "scripts/forge/forge_cli/chain_core/_lock_owner.py"
+  ],
+  "_fenced_shell_cells": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_final_history_mutation_mode": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_final_mode_unavailable": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_finalize_candidate": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_finalize_evidence": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_finalize_fresh_reviewer_evals": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_finalize_halt": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_finalize_lock": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_finalize_produced_identity": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_finalize_tree_drift": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_finalize_ttl": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_fixture_package_digest": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_fixture_paths": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_forge_command": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_fresh_eval_evaluation": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_fresh_eval_invalid_refusal": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_fresh_eval_request_for_step": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_fresh_eval_requests": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_fresh_reviewer_block_claimed": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "_fresh_reviewer_evals_required": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_fresh_reviewer_evidence_package": [
+   "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py"
+  ],
+  "_fresh_reviewer_pass_claimed": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "_frontmatter": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_gate_one_complete": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_gate_satisfied": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_git": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_git_environment_digest": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_git_executable_qualification": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_git_mutation": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_group_probe": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_head_contained": [
+   "scripts/forge/forge_cli/app/_engine_observation.py"
+  ],
+  "_ingest_allocation_records": [
+   "scripts/forge/forge_cli/chain_core/_ingest_merge.py"
+  ],
+  "_ingest_captured_paths": [
+   "scripts/forge/forge_cli/chain_core/_ingest_currency.py"
+  ],
+  "_ingest_proof_verifier": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_ingest_secret_scan_is_current": [
+   "scripts/forge/forge_cli/chain_core/_ingest_currency.py"
+  ],
+  "_ingest_step_is_current": [
+   "scripts/forge/forge_cli/chain_core/_ingest_currency.py"
+  ],
+  "_initial_merge_state": [
+   "scripts/forge/forge_cli/app/_engine_start_chain.py"
+  ],
+  "_inspect_common_lock_fd": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_install_candidate_snapshot": [
+   "scripts/forge/forge_cli/engine/_candidate_ops.py"
+  ],
+  "_install_ingest_sources": [
+   "scripts/forge/forge_cli/engine/_journal.py"
+  ],
+  "_invalidate_candidate_evidence": [
+   "scripts/forge/forge_cli/engine/_candidate_ops.py"
+  ],
+  "_isolated_object_git": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_issue_authorization": [
+   "scripts/forge/forge_cli/engine/_approval.py"
+  ],
+  "_iter_verified_master_package_windows": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_kill": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_kill_process_group": [
+   "scripts/forge/forge_cli/runtime.py"
+  ],
+  "_latest_current_pass": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_launch_one": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_lease_exclusion_is_current": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_lease_reclaim_authority_is_current": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_live_chain": [
+   "scripts/forge/forge_cli/engine/_verbs_lifecycle.py"
+  ],
+  "_materialize_merge_candidate_tuple": [
+   "scripts/forge/forge_cli/engine/_merge_candidate.py"
+  ],
+  "_materialize_raw_projection": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_materialize_raw_tree": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_mechanical_complete": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "_merge_attempted_release_preconditions_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_release.py"
+  ],
+  "_merge_bootstrap_child_argv": [
+   "scripts/forge/forge_cli/engine/_merge_bootstrap_child.py"
+  ],
+  "_merge_bootstrap_child_main": [
+   "scripts/forge/forge_cli/engine/_merge_bootstrap_child.py"
+  ],
+  "_merge_bootstrap_classification_pending": [
+   "scripts/forge/forge_cli/chain_core/_merge_state_shape.py"
+  ],
+  "_merge_branch_reflog_proves_integrated": [
+   "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py"
+  ],
+  "_merge_candidate_observation_binding": [
+   "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py"
+  ],
+  "_merge_candidate_observation_evidence": [
+   "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py"
+  ],
+  "_merge_candidate_observation_evidence_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py"
+  ],
+  "_merge_candidate_observation_outputs": [
+   "scripts/forge/forge_cli/engine/_merge_candidate_observation.py"
+  ],
+  "_merge_candidate_observation_record_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py"
+  ],
+  "_merge_candidate_observation_step_names": [
+   "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py"
+  ],
+  "_merge_candidate_observation_step_specs": [
+   "scripts/forge/forge_cli/chain_core/_merge_candidate_observation_steps.py"
+  ],
+  "_merge_candidate_observation_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_candidate_observation.py"
+  ],
+  "_merge_carried_gate_steps": [
+   "scripts/forge/forge_cli/chain_core/_merge_plan.py"
+  ],
+  "_merge_carry_payload_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_plan.py"
+  ],
+  "_merge_claim_identity": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_merge_cleanup_branch_observation": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py"
+  ],
+  "_merge_cleanup_evidence_history": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py"
+  ],
+  "_merge_cleanup_expected_argv": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py"
+  ],
+  "_merge_cleanup_expected_subject": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py"
+  ],
+  "_merge_cleanup_fetch_head_bytes": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py"
+  ],
+  "_merge_cleanup_history_summary": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py"
+  ],
+  "_merge_cleanup_intent_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py"
+  ],
+  "_merge_cleanup_intent_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py"
+  ],
+  "_merge_cleanup_observation_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py"
+  ],
+  "_merge_cleanup_process_complete": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py"
+  ],
+  "_merge_cleanup_process_output": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py"
+  ],
+  "_merge_cleanup_process_record": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_merge_cleanup_process_result_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_result.py"
+  ],
+  "_merge_cleanup_remote_fetch_observation": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_merge_cleanup_result_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_result.py"
+  ],
+  "_merge_cleanup_results_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_result.py"
+  ],
+  "_merge_cleanup_retry_proof_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py"
+  ],
+  "_merge_cleanup_step_result_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_result.py"
+  ],
+  "_merge_cleanup_unmatched_intent": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py"
+  ],
+  "_merge_cleanup_worktree_inventory": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_observation.py"
+  ],
+  "_merge_command_engine": [
+   "scripts/forge/forge_cli/app/_dispatch.py"
+  ],
+  "_merge_conflict_path_is_canonical": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_merge_conflict_record": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_merge_conflict_record_matches": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_merge_containment": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_merge_current_authority_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_plan.py"
+  ],
+  "_merge_current_gate_facts": [
+   "scripts/forge/forge_cli/chain_core/_ingest_merge.py"
+  ],
+  "_merge_epoch_fetch_observation_digest": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_epoch_suite": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_epoch_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_state_shape.py"
+  ],
+  "_merge_event_digest": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_event_outbox": [
+   "scripts/forge/forge_cli/chain_core/_merge_events.py"
+  ],
+  "_merge_full_patch_argv": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_merge_gate_current": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_gate_event_fact": [
+   "scripts/forge/forge_cli/chain_core/_ingest_merge.py"
+  ],
+  "_merge_gate_plan_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_state_shape.py"
+  ],
+  "_merge_gate_step_generation_digests": [
+   "scripts/forge/forge_cli/chain_core/_merge_plan.py"
+  ],
+  "_merge_gate_suite": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_has_attempt": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_history_has_git_mutation_intent": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_history.py"
+  ],
+  "_merge_history_uses_additive_grammar": [
+   "scripts/forge/forge_cli/chain_core/_merge_state_shape.py"
+  ],
+  "_merge_inactive": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_inactive_epoch_has_no_started_child": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_inactive_post_attempt_recovery_ready": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_merge_ingest_binding": [
+   "scripts/forge/forge_cli/chain_core/_ingest_merge.py"
+  ],
+  "_merge_ingest_record_templates": [
+   "scripts/forge/forge_cli/chain_core/_ingest_merge.py"
+  ],
+  "_merge_ingest_state_shape_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_state_shape.py"
+  ],
+  "_merge_ingest_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_transition.py"
+  ],
+  "_merge_latest_contained_attempt": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_merge_nonconflict_index_bytes": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_merge_nonconflict_status_bytes": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_merge_old_tip_all_false": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_merge_owned_rebase_metadata": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_merge_owner_directory": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_merge_payload_delta": [
+   "scripts/forge/forge_cli/chain_core/_merge_events.py"
+  ],
+  "_merge_plan_position_fact": [
+   "scripts/forge/forge_cli/chain_core/_merge_plan.py"
+  ],
+  "_merge_plan_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_plan.py"
+  ],
+  "_merge_process_unresolved": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_publication_failure": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_merge_rebase_action": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_merge_rebase_integrated_observation_binding": [
+   "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py"
+  ],
+  "_merge_rebase_integrated_predicate": [
+   "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py"
+  ],
+  "_merge_rebase_operation_metadata_absent": [
+   "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py"
+  ],
+  "_merge_rebase_result_classification": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_merge_rebase_result_failed": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_merge_recovery_proof_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_recovery_proof.py"
+  ],
+  "_merge_refusal": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_merge_release_preconditions_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_release.py"
+  ],
+  "_merge_released_predecessor": [
+   "scripts/forge/forge_cli/engine/_merge_candidate.py"
+  ],
+  "_merge_remote_only_equality_proof": [
+   "scripts/forge/forge_cli/chain_core/_merge_plan.py"
+  ],
+  "_merge_retained_inflight": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_merge_revision9_compatibility_view": [
+   "scripts/forge/forge_cli/chain_core/_merge_state_shape.py"
+  ],
+  "_merge_run_directory": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_merge_scope_argv": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_merge_scope_binding_names": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_merge_scope_binding_validator": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_merge_scope_child_result": [
+   "scripts/forge/forge_cli/engine/_merge_scope_binding.py"
+  ],
+  "_merge_scope_environment": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_merge_scope_environment_contract": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_merge_scope_event_binding_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope.py"
+  ],
+  "_merge_scope_from_candidate_observation": [
+   "scripts/forge/forge_cli/engine/_merge_candidate_generation.py"
+  ],
+  "_merge_scope_proof": [
+   "scripts/forge/forge_cli/engine/_merge_candidate.py"
+  ],
+  "_merge_scope_request": [
+   "scripts/forge/forge_cli/engine/_merge_candidate.py"
+  ],
+  "_merge_scope_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope.py"
+  ],
+  "_merge_state_shape_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_state_shape.py"
+  ],
+  "_merge_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_transition.py"
+  ],
+  "_merge_unpublished_claim_absent": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_merge_worktree_status": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_message_from_args": [
+   "scripts/forge/forge_cli/engine/_cli_options.py"
+  ],
+  "_mutation_persistence_error": [
+   "scripts/forge/forge_cli/app/_mutation_journal.py"
+  ],
+  "_new_merge_record_is_current": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_new_owner_record": [
+   "scripts/forge/forge_cli/chain_core/_lock_owner.py"
+  ],
+  "_new_state": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "_next_incomplete": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "_normalize_merge_conflict_paths": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_nul_git_paths": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_object_format": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_object_store_alternates": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_observe_current_merge_candidate": [
+   "scripts/forge/forge_cli/app/_candidate_observation.py"
+  ],
+  "_observe_merge_conflict": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_observe_merge_post_add": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_opaque_path_evidence_at": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_open_lock_directory": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_open_owned_directory": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "_oracle_free_subject": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_park_invalid_final_history_mode": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_parse_alternate_path": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_parse_changelog": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_parse_fetched_remote_observation": [
+   "scripts/forge/forge_cli/app/_engine_observation.py"
+  ],
+  "_parse_history_mutation_mode": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_parse_invariants": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_parse_merge_candidate_observation": [
+   "scripts/forge/forge_cli/engine/_merge_candidate_observation.py"
+  ],
+  "_parse_merge_conflict_paths": [
+   "scripts/forge/forge_cli/engine/_merge_conflict.py"
+  ],
+  "_parse_merge_name_status_output": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_parse_merge_scope_output": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_parse_plugin_manifest": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_parse_regions": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_parse_regions_for_orders": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_parse_regions_with_trigger_defect": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_parse_registered_worktrees": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_parse_remote_observation": [
+   "scripts/forge/forge_cli/app/_engine_observation.py"
+  ],
+  "_parse_reviewer_eval_triggers": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_parse_stack_validations": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_parse_utc": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_parse_verdict": [
+   "scripts/forge/forge_cli/engine/_verbs_review_collect.py"
+  ],
+  "_parsed_run_captured_path": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_passed_stack_cell_is_intermediate": [
+   "scripts/forge/forge_cli/engine/_journal.py"
+  ],
+  "_peek_chain_state": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "_peek_raw_abort_state": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "_peek_selected_chain": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "_pending_mutating_gate": [
+   "scripts/forge/forge_cli/engine/_verbs_gate.py"
+  ],
+  "_permission_path_key": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_persist_deferred_mutation_result": [
+   "scripts/forge/forge_cli/app/_mutation_journal.py"
+  ],
+  "_persist_recovery_proof": [
+   "scripts/forge/forge_cli/chain_core/_lock_recovery.py"
+  ],
+  "_pid_is_running": [
+   "scripts/forge/forge_cli/engine/_approval.py"
+  ],
+  "_pinned_git_environment": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_pipe_cloexec": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_policy_for_state": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_preflight_lifecycle": [
+   "scripts/forge/forge_cli/app/_engine_lifecycle.py"
+  ],
+  "_prepare_archive_candidate": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_prepare_bootstrap_git_no_lazy_fetch_qualification": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_prepare_git_no_lazy_fetch_qualification": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_prepare_merge_activation_preamble": [
+   "scripts/forge/forge_cli/chain_core/_activation_outbox.py"
+  ],
+  "_prepared_request_inputs": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_prevalidate_chain_batch_carrier": [
+   "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py"
+  ],
+  "_process_group_exists": [
+   "scripts/forge/forge_cli/runtime.py"
+  ],
+  "_process_probe": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_produced_exact_message": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_produced_exact_tree": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_produced_head_moved": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_produced_mismatch_outcome": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_produced_single_parent": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_profiles_for_path": [
+   "scripts/forge/forge_cli/engine/_verbs_review_request.py"
+  ],
+  "_projection_path_is_excluded": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_projection_records": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_prompt": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_prove_ingest_live_chain": [
+   "scripts/forge/forge_cli/chain_core/_ingest_currency.py"
+  ],
+  "_prove_merge_run_task_binding": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_prove_run_task_binding": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "_publish_fence": [
+   "scripts/forge/forge_cli/chain_core/_fenced_process.py"
+  ],
+  "_publish_merge_claim": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_publish_merge_scope_binding": [
+   "scripts/forge/forge_cli/engine/_merge_scope_binding.py"
+  ],
+  "_publish_no_replace_link": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_publish_portable_owner": [
+   "scripts/forge/forge_cli/chain_core/_lock_owner.py"
+  ],
+  "_publish_recovery_reservation": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "_published_recovery_evidence_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py"
+  ],
+  "_qualify_git_no_lazy_fetch": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_raw_top_level_command": [
+   "scripts/forge/forge_cli/engine/_parser.py"
+  ],
+  "_read_archive_candidate": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_read_archive_candidate_at": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_read_bound_artifact": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_read_child_ack": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_read_fence_for_recovery": [
+   "scripts/forge/forge_cli/chain_core/_lock_recovery.py"
+  ],
+  "_read_ingest_input": [
+   "scripts/forge/forge_cli/chain_core/_ingest_capture.py"
+  ],
+  "_read_ingest_sources": [
+   "scripts/forge/forge_cli/engine/_journal.py"
+  ],
+  "_read_merge_artifact": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_read_merge_claim": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_read_merge_git_metadata": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_read_only_recovery_flag_state": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_read_owned_record_at": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_read_raw_commit": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_read_review_master_digest": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_read_review_master_window": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_receipt_run_snapshot": [
+   "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py"
+  ],
+  "_reconcile_merge_projection_for_lease_reclaim": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_record_at_if_present": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_record_bootstrap_failure": [
+   "scripts/forge/forge_cli/app/_engine_start_chain.py"
+  ],
+  "_record_common_release_failure": [
+   "scripts/forge/forge_cli/app/_engine_lock.py"
+  ],
+  "_record_fresh_eval_terminal": [
+   "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py"
+  ],
+  "_record_gate_result": [
+   "scripts/forge/forge_cli/app/_engine_gate.py"
+  ],
+  "_record_process_step": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_record_produced_identity": [
+   "scripts/forge/forge_cli/engine/_finalize.py"
+  ],
+  "_recording_common_lock": [
+   "scripts/forge/forge_cli/app/_engine_lock.py"
+  ],
+  "_recover_can_reach_final_mode": [
+   "scripts/forge/forge_cli/app/_engine_final_mode.py"
+  ],
+  "_recover_committing": [
+   "scripts/forge/forge_cli/engine/_verbs_finalize.py"
+  ],
+  "_recover_stale_portable_owner": [
+   "scripts/forge/forge_cli/chain_core/_lock_recovery.py"
+  ],
+  "_recovered_absent_rebase_intent_digest": [
+   "scripts/forge/forge_cli/chain_core/_merge_recovery_proof.py"
+  ],
+  "_recovery_classification_receipt_valid": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_recovery_cleanup_intent": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py"
+  ],
+  "_recovery_cleanup_result_matches": [
+   "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py"
+  ],
+  "_recovery_event_intent": [
+   "scripts/forge/forge_cli/chain_core/_merge_cleanup_intent.py"
+  ],
+  "_recovery_record": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "_recovery_value_carries_inflight": [
+   "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py"
+  ],
+  "_recursive_alternate_object_stores": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_refresh_iteration": [
+   "scripts/forge/forge_cli/app/_engine_refresh.py"
+  ],
+  "_registered_worktrees": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_release_historical_landing_locked": [
+   "scripts/forge/forge_cli/app/_engine_release_pending.py"
+  ],
+  "_release_lock": [
+   "scripts/forge/forge_cli/engine/_verbs_finalize.py"
+  ],
+  "_release_portable_identity": [
+   "scripts/forge/forge_cli/chain_core/_lock_owner.py"
+  ],
+  "_release_scope_exceeded": [
+   "scripts/forge/forge_cli/app/_engine_release_aborted.py"
+  ],
+  "_release_to_aborted": [
+   "scripts/forge/forge_cli/app/_engine_release_aborted.py"
+  ],
+  "_release_to_aborted_locked": [
+   "scripts/forge/forge_cli/app/_engine_release_aborted.py"
+  ],
+  "_release_to_closed_locked": [
+   "scripts/forge/forge_cli/app/_engine_cleanup_child.py"
+  ],
+  "_remote_containment_argv": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_remote_containment_evidence_valid": [
+   "scripts/forge/forge_cli/chain_core/_remote_observation.py"
+  ],
+  "_remote_observation_fetch_argv": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_remote_observation_heads": [
+   "scripts/forge/forge_cli/chain_core/_merge_rebase.py"
+  ],
+  "_remote_observation_intent": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_remote_observation_progress_matches_observed": [
+   "scripts/forge/forge_cli/chain_core/_remote_observation.py"
+  ],
+  "_remote_observation_progress_transition_valid": [
+   "scripts/forge/forge_cli/chain_core/_remote_observation.py"
+  ],
+  "_remote_observation_progress_valid": [
+   "scripts/forge/forge_cli/chain_core/_remote_observation.py"
+  ],
+  "_remove_merge_claim": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_render_archive_bytes": [
+   "scripts/forge/forge_cli/engine/_archive.py"
+  ],
+  "_render_review_patch": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_replay_merge_event_bytes": [
+   "scripts/forge/forge_cli/chain_core/_merge_replay.py"
+  ],
+  "_replayed_remote_observation_completed": [
+   "scripts/forge/forge_cli/chain_core/_remote_observation.py"
+  ],
+  "_repository_recovery_reservation_present": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "_require_active_merge_epoch": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "_require_common_lock_control": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_require_deadline_open": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_require_git_no_lazy_fetch_qualification": [
+   "scripts/forge/forge_cli/engine/_merge_scope_derive.py"
+  ],
+  "_require_ingest_proof": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_require_loud_merge_recovery_mode": [
+   "scripts/forge/forge_cli/engine/_merge_worktree.py"
+  ],
+  "_require_merge_adapter_control": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_require_merge_integration_control": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_require_merge_lifecycle_control": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_require_merge_store_control": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_require_no_pending_chain_activation_outbox": [
+   "scripts/forge/forge_cli/chain_core/_activation_outbox.py"
+  ],
+  "_require_recovery_proof_recorder": [
+   "scripts/forge/forge_cli/chain_core/_lock_recovery.py"
+  ],
+  "_require_supported_mode": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_require_tombstone_control": [
+   "scripts/forge/forge_cli/engine/_verbs_tombstone.py"
+  ],
+  "_required_steps": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_reservation_evidence": [
+   "scripts/forge/forge_cli/chain_core/_lock_reservation.py"
+  ],
+  "_reset_merge_nonmovement_counter": [
+   "scripts/forge/forge_cli/engine/_merge_candidate.py"
+  ],
+  "_resolve_chain_activation_projection": [
+   "scripts/forge/forge_cli/chain_core/_activation_outbox.py"
+  ],
+  "_resolve_chain_activation_snapshot": [
+   "scripts/forge/forge_cli/chain_core/_activation.py"
+  ],
+  "_resolve_gate": [
+   "scripts/forge/forge_cli/engine/_verbs_gate.py",
+   "scripts/forge/forge_cli/app/_engine_gate.py"
+  ],
+  "_resolve_recorded_merge_tip": [
+   "scripts/forge/forge_cli/engine/_merge_candidate.py"
+  ],
+  "_resolved_fetch_tip": [
+   "scripts/forge/forge_cli/app/_engine_bootstrap.py"
+  ],
+  "_restore_bootstrap_fetch_observation_locked": [
+   "scripts/forge/forge_cli/app/_engine_observation.py"
+  ],
+  "_restore_candidate_observation_intent_locked": [
+   "scripts/forge/forge_cli/app/_engine_observation.py"
+  ],
+  "_resume_merge_scope_binding": [
+   "scripts/forge/forge_cli/engine/_merge_scope_binding.py"
+  ],
+  "_resume_pending_release": [
+   "scripts/forge/forge_cli/app/_engine_release_pending.py"
+  ],
+  "_retain_or_advance_merge_candidate": [
+   "scripts/forge/forge_cli/engine/_merge_candidate.py"
+  ],
+  "_revalidate_record_at": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_review_complete_package_refusal": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_review_master_identity": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_review_master_leaf_is_valid": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_review_master_pointer_prompt": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_review_master_transport": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_review_master_window_count": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_review_package": [
+   "scripts/forge/forge_cli/engine/_verbs_review_request.py",
+   "scripts/forge/forge_cli/app/_engine_review_request.py"
+  ],
+  "_review_package_is_oversized": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "_review_projection_record": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_reviewer_argv": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_reviewer_denied_roots": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_reviewer_permission_config": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_reviewer_project_config": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_reviewer_text": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_route_and_prompt_controls": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_route_shared_chain_engine": [
+   "scripts/forge/forge_cli/app/_dispatch.py"
+  ],
+  "_run_bootstrap_generation": [
+   "scripts/forge/forge_cli/app/_engine_bootstrap.py"
+  ],
+  "_run_bootstrap_generation_composite": [
+   "scripts/forge/forge_cli/app/_engine_bootstrap.py"
+  ],
+  "_run_bounded": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_run_candidate_observation_locked": [
+   "scripts/forge/forge_cli/app/_engine_observation.py"
+  ],
+  "_run_classification": [
+   "scripts/forge/forge_cli/engine/_classification.py"
+  ],
+  "_run_cleanup_child": [
+   "scripts/forge/forge_cli/app/_engine_cleanup_child.py"
+  ],
+  "_run_fresh_reviewer_evals": [
+   "scripts/forge/forge_cli/engine/_verbs_gate_evals.py"
+  ],
+  "_run_halt": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_run_scoped_mutation": [
+   "scripts/forge/forge_cli/app/_engine_gate.py"
+  ],
+  "_safe_error": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_same_filesystem_node": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_same_published_record": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_sanitized_environment": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_separator": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_serialize_worktree_command": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "_sha256": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_single_line_ascii": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_sleep_with_deadline": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_spawn_blocked_fence_child": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_split_markdown_row": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "_stable_file_identity": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_stage_paths": [
+   "scripts/forge/forge_cli/engine/_candidate_ops.py"
+  ],
+  "_stop_unstarted_child": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_strict_json": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_success": [
+   "scripts/forge/forge_cli/engine/_approval.py"
+  ],
+  "_temporary_checkout_parent": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_terminate": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_terminate_fenced_group": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_tombstone_abort_disposition": [
+   "scripts/forge/forge_cli/engine/_verbs_tombstone.py"
+  ],
+  "_tombstone_outcome": [
+   "scripts/forge/forge_cli/engine/_verbs_tombstone.py"
+  ],
+  "_toml_string": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_transition_state": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_tree_blob_bytes": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_tree_records": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_unlink_merge_scope_temporary_at": [
+   "scripts/forge/forge_cli/engine/_merge_scope_binding.py"
+  ],
+  "_unlink_revalidated_record_at": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_io.py"
+  ],
+  "_user_skip": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_utc_now": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_valid_host": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_valid_nonce": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_valid_nonnegative_int": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_valid_nullable_chain": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_valid_oid": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_valid_positive_int": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_valid_sorted_unique_strings": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_valid_utc_second": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_validate_artifact": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_validate_bound_chain_state": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_validate_chain_activation_lineage": [
+   "scripts/forge/forge_cli/chain_core/_activation.py"
+  ],
+  "_validate_chain_batch_target": [
+   "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py"
+  ],
+  "_validate_chain_lease_record": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_validators.py"
+  ],
+  "_validate_deferred_mutation_request": [
+   "scripts/forge/forge_cli/app/_mutation_journal.py"
+  ],
+  "_validate_fence_record": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_validators.py"
+  ],
+  "_validate_merge_claim_record": [
+   "scripts/forge/forge_cli/engine/_merge_claim.py"
+  ],
+  "_validate_merge_scope_fetch_binding": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_validate_merge_scope_proof": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope.py"
+  ],
+  "_validate_merge_scope_request": [
+   "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py"
+  ],
+  "_validate_owner_record": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_validators.py"
+  ],
+  "_validate_recovery_record": [
+   "scripts/forge/forge_cli/chain_core/_lock_record_validators.py"
+  ],
+  "_validate_request_plan": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_validate_revision9_cross_options": [
+   "scripts/forge/forge_cli/engine/_cli_options.py"
+  ],
+  "_validated_commitment_path": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_validated_fresh_reviewer_manifest": [
+   "scripts/forge/forge_cli/engine/_fresh_eval.py"
+  ],
+  "_validated_symlink_target": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_verify_and_build_ingest_records": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "_verify_and_build_merge_ingest_records": [
+   "scripts/forge/forge_cli/chain_core/_ingest_merge.py"
+  ],
+  "_verify_operator_harness": [
+   "scripts/forge/forge_cli/engine/_approval.py"
+  ],
+  "_verify_safe_checkout": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_verify_safe_projection": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "_void_mismatched_gate_one_pair": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "_wait_for_child_exit": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_waitpid_nohang": [
+   "scripts/forge/forge_cli/chain_core/_fenced_child.py"
+  ],
+  "_write_all": [
+   "scripts/forge/forge_cli/fresh_evals.py",
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "_write_artifact": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "_write_index_tree": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "_write_merge_artifact": [
+   "scripts/forge/forge_cli/engine/_merge_epoch.py"
+  ],
+  "abort": [
+   "scripts/forge/forge_cli/engine/_verbs_tombstone.py",
+   "scripts/forge/forge_cli/app/_engine_abort.py"
+  ],
+  "abort_disposition": [
+   "scripts/forge/forge_cli/engine/_verbs_tombstone.py"
+  ],
+  "abort_disposition_refusal": [
+   "scripts/forge/forge_cli/engine/_command_lock.py"
+  ],
+  "acquire_chain_lease": [
+   "scripts/forge/forge_cli/chain_core/_merge_chain.py"
+  ],
+  "acquire_common_lock": [
+   "scripts/forge/forge_cli/chain_core/_common_lock.py"
+  ],
+  "approve": [
+   "scripts/forge/forge_cli/engine/_verbs_decision.py",
+   "scripts/forge/forge_cli/app/_engine_lifecycle.py"
+  ],
+  "authorization_id": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "base_identity": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "bind_candidate": [
+   "scripts/forge/forge_cli/app/_engine_lifecycle.py"
+  ],
+  "bind_merge_candidate_generation": [
+   "scripts/forge/forge_cli/engine/_merge_candidate_generation.py"
+  ],
+  "build_parser": [
+   "scripts/forge/forge_cli/engine/_parser.py"
+  ],
+  "candidate_binding": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "candidate_is_v2": [
+   "scripts/forge/forge_cli/chain_core/_candidate_v2.py"
+  ],
+  "canonical_bytes": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "chain_id_now": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "classify": [
+   "scripts/forge/forge_cli/engine/_verbs_lifecycle.py"
+  ],
+  "cleanup_chain": [
+   "scripts/forge/forge_cli/app/_engine_cleanup.py"
+  ],
+  "collect": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "commit_message_bytes": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "context_from_paths": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "current_step_satisfied": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "derive_trigger": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "discover_context": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "dispatch": [
+   "scripts/forge/forge_cli/app/_dispatch.py"
+  ],
+  "enumerate_tree_pair": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "finalize": [
+   "scripts/forge/forge_cli/engine/_verbs_finalize.py"
+  ],
+  "gate_run": [
+   "scripts/forge/forge_cli/engine/_verbs_gate.py",
+   "scripts/forge/forge_cli/app/_engine_gate.py"
+  ],
+  "git_output": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "hold_common_lock": [
+   "scripts/forge/forge_cli/chain_core/_common_lock.py"
+  ],
+  "index_paths": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "inspect_common_lock": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "inventory_fixtures": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "iso_z": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "iter_verified_master_package_windows": [
+   "scripts/forge/forge_cli/engine/_review_transport.py"
+  ],
+  "journal_batch_recover": [
+   "scripts/forge/forge_cli/engine/_verbs_status.py"
+  ],
+  "journal_ingest_chain": [
+   "scripts/forge/forge_cli/engine/_verbs_status.py"
+  ],
+  "main": [
+   "scripts/forge/forge_cli/app/_dispatch.py"
+  ],
+  "marker_timestamp_for_cleanup": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "materialize_candidate": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "materialize_review_projection": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "merge_gate_intent_digest": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "name_status_tree_pair": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "observe_index": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "operator_tombstone": [
+   "scripts/forge/forge_cli/engine/_verbs_tombstone.py"
+  ],
+  "parse_marker": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "parse_policy": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "parse_time": [
+   "scripts/forge/forge_cli/chain_core/_core.py"
+  ],
+  "parse_verdict": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "paths_matching_pattern": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "prepare_merge_admission": [
+   "scripts/forge/forge_cli/app/_admission.py"
+  ],
+  "prepare_request_plan": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "promoted_tier": [
+   "scripts/forge/forge_cli/engine/_core.py"
+  ],
+  "read_commit_object": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "rebase": [
+   "scripts/forge/forge_cli/engine/_verbs_lifecycle.py"
+  ],
+  "reduce_merge_event": [
+   "scripts/forge/forge_cli/chain_core/_merge_events.py"
+  ],
+  "refresh": [
+   "scripts/forge/forge_cli/app/_engine_refresh.py"
+  ],
+  "register_activation_reservation_seam": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "register_coordination_seams": [
+   "scripts/forge/forge_cli/chain_core/_commit_chain.py"
+  ],
+  "render": [
+   "scripts/forge/forge_cli/engine/_cli_options.py"
+  ],
+  "render_marker": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "render_tree_pair": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "require_controls": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "resolve_base_tree": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "restage": [
+   "scripts/forge/forge_cli/engine/_verbs_lifecycle.py"
+  ],
+  "review_attach": [
+   "scripts/forge/forge_cli/engine/_verbs_review_collect.py",
+   "scripts/forge/forge_cli/app/_engine_review_verdict.py"
+  ],
+  "review_collect": [
+   "scripts/forge/forge_cli/engine/_verbs_review_collect.py",
+   "scripts/forge/forge_cli/app/_engine_review_request.py"
+  ],
+  "review_disposition": [
+   "scripts/forge/forge_cli/engine/_verbs_decision.py",
+   "scripts/forge/forge_cli/app/_engine_review_verdict.py"
+  ],
+  "review_projection": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "review_request": [
+   "scripts/forge/forge_cli/engine/_verbs_review_request.py",
+   "scripts/forge/forge_cli/app/_engine_review_request.py"
+  ],
+  "run_bounded": [
+   "scripts/forge/forge_cli/runtime.py"
+  ],
+  "run_fenced_command": [
+   "scripts/forge/forge_cli/chain_core/_fenced_process.py"
+  ],
+  "scan_added_secrets": [
+   "scripts/forge/forge_cli/engine/_gate_checks.py"
+  ],
+  "scan_secrets": [
+   "scripts/forge/forge_cli/engine/_verbs_gate.py"
+  ],
+  "sha256_bytes": [
+   "scripts/forge/forge_cli/policy.py"
+  ],
+  "skip": [
+   "scripts/forge/forge_cli/engine/_verbs_decision.py"
+  ],
+  "snapshot": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "start": [
+   "scripts/forge/forge_cli/engine/_verbs_lifecycle.py",
+   "scripts/forge/forge_cli/app/_engine_lifecycle.py"
+  ],
+  "start_chain": [
+   "scripts/forge/forge_cli/app/_engine_start_chain.py"
+  ],
+  "status": [
+   "scripts/forge/forge_cli/engine/_verbs_status.py",
+   "scripts/forge/forge_cli/app/_engine_lifecycle.py"
+  ],
+  "tree_blob": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "tree_entry": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "trigger_required": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "utc_now": [
+   "scripts/forge/forge_cli/runtime.py"
+  ],
+  "valid_scope_path": [
+   "scripts/forge/forge_cli/candidate.py"
+  ],
+  "validate_manifest": [
+   "scripts/forge/forge_cli/fresh_evals.py"
+  ],
+  "validate_merge_state": [
+   "scripts/forge/forge_cli/chain_core/_merge_replay.py"
+  ],
+  "validate_state": [
+   "scripts/forge/forge_cli/chain_core/_chain_state.py"
+  ],
+  "verify": [
+   "scripts/forge/forge_cli/engine/_verbs_decision.py",
+   "scripts/forge/forge_cli/app/_engine_gate.py"
+  ]
+ }
+}
