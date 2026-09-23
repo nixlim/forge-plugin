@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision8_coordination.py": "5213fa7df62f8dbf7f8833bba7f7bccc409c3044a5b4357537789ad77ae60ba8",
+    "tests/test_revision8_interruptions.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision8_coordination.py",
+      "dest": "tests/test_revision8_interruptions.py",
+      "class": "Revision8CoordinationTests",
+      "methods": [
+        "test_postsyscall_baseexception_restores_registry_and_owner_begin_paths",
+        "test_postsyscall_baseexception_during_rollback_retains_coherent_candidate",
+        "test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent"
+      ],
+      "shape": "class",
+      "target_class": "Revision8InterruptionsTests",
+      "alias": "test_revision8_interruptions",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision8_coordination.py": [],
+        "tests/test_revision8_interruptions.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import os",
+          "import socket",
+          "import unittest",
+          "from unittest import mock",
+          "from tests._revision8_constants import RECORDED_AT",
+          "from tests._revision8_support import Revision8Support",
+          "from codex_orchestrator import journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent": "tests/test_revision8_interruptions.py::Revision8InterruptionsTests::test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_postsyscall_baseexception_during_rollback_retains_coherent_candidate": "tests/test_revision8_interruptions.py::Revision8InterruptionsTests::test_postsyscall_baseexception_during_rollback_retains_coherent_candidate",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_postsyscall_baseexception_restores_registry_and_owner_begin_paths": "tests/test_revision8_interruptions.py::Revision8InterruptionsTests::test_postsyscall_baseexception_restores_registry_and_owner_begin_paths"
+    },
+    "unittest": {
+      "test_revision8_coordination.Revision8CoordinationTests.test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent": "test_revision8_interruptions.Revision8InterruptionsTests.test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent",
+      "test_revision8_coordination.Revision8CoordinationTests.test_postsyscall_baseexception_during_rollback_retains_coherent_candidate": "test_revision8_interruptions.Revision8InterruptionsTests.test_postsyscall_baseexception_during_rollback_retains_coherent_candidate",
+      "test_revision8_coordination.Revision8CoordinationTests.test_postsyscall_baseexception_restores_registry_and_owner_begin_paths": "test_revision8_interruptions.Revision8InterruptionsTests.test_postsyscall_baseexception_restores_registry_and_owner_begin_paths"
+    }
+  },
+  "base_commit": "d3b84bb50604d3e6c95743073917d50fe3ccdae3"
+}
