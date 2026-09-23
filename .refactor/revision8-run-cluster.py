@@ -30,7 +30,7 @@ PLAN = ".refactor/plan-revision8.json"
 RECORDS = ".refactor/decompose-records-revision8.json"
 TRAILER = (
     "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>\n"
-    "Claude-Session: https://claude.ai/code/session_01BDaProgzFkPbDymN7uG4QD\n"
+    "Claude-Session: https://claude.ai/code/session_01SYWXNsq28sVx7Emukta6g7\n"
 )
 
 ENV = dict(os.environ)
