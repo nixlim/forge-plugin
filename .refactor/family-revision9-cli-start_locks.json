@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_cli_surfaces.py": "0d762a180e2e24ea037a69f29240956ef169e5c8dd7f88092e5e9ff3ccf0ddd9",
+    "tests/test_revision9_cli_surfaces_start_locks.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_cli_surfaces.py",
+      "dest": "tests/test_revision9_cli_surfaces_start_locks.py",
+      "class": "Revision9BoundCLIIntegrationTests",
+      "methods": [
+        "test_lockless_bound_start_refuses_nonexistent_run_without_creating_it",
+        "test_lockless_bound_start_halt_precedes_stable_lock_creation",
+        "test_start_lock_disappearance_never_recreates_before_halt",
+        "test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing",
+        "test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory",
+        "test_commit_activation_rejects_event_one_rebinding_before_replay",
+        "test_lockless_bound_start_refuses_foreign_owner_without_creating_lock",
+        "test_lockless_bound_start_refuses_other_worktree_without_creating_lock",
+        "test_lockless_bound_start_creation_control_is_load_bearing",
+        "test_lockless_chain_batch_creation_revalidates_in_lock_order",
+        "test_existing_chain_batch_lock_skips_creation_only_validation",
+        "test_existing_locked_bound_start_succeeds_without_session_pid",
+        "test_existing_locked_bound_start_preserves_foreign_owner_behavior",
+        "test_lockless_merge_start_binding_creates_stable_batch_lock",
+        "test_lockless_read_only_binding_validator_does_not_create_batch_lock",
+        "test_bound_start_persists_exact_immutable_binding",
+        "test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive"
+      ],
+      "shape": "class",
+      "target_class": "Revision9CliSurfacesStartLocksTests",
+      "alias": "test_revision9_cli_surfaces_start_locks",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_cli_surfaces.py": [],
+        "tests/test_revision9_cli_surfaces_start_locks.py": [
+          "from __future__ import annotations",
+          "import contextlib",
+          "import copy",
+          "import io",
+          "import json",
+          "import os",
+          "from unittest import mock",
+          "from tests._cli_loader import patch_chain_core, patch_engine",
+          "from tests._revision9_cli_constants import CLI, CLI_FIXTURE_SUPPORT, CORE, ROOT, RUNTIME, key",
+          "from tests._revision9_cli_support import Revision9CliSupport"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_cli_surfaces.py": [
+          "ROOT"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_bound_start_persists_exact_immutable_binding": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_bound_start_persists_exact_immutable_binding",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_commit_activation_rejects_event_one_rebinding_before_replay": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_commit_activation_rejects_event_one_rebinding_before_replay",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_existing_chain_batch_lock_skips_creation_only_validation": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_existing_chain_batch_lock_skips_creation_only_validation",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_existing_locked_bound_start_preserves_foreign_owner_behavior": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_existing_locked_bound_start_preserves_foreign_owner_behavior",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_existing_locked_bound_start_succeeds_without_session_pid": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_existing_locked_bound_start_succeeds_without_session_pid",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_bound_start_creation_control_is_load_bearing": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_bound_start_creation_control_is_load_bearing",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_bound_start_halt_precedes_stable_lock_creation": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_bound_start_halt_precedes_stable_lock_creation",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_bound_start_refuses_foreign_owner_without_creating_lock": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_bound_start_refuses_foreign_owner_without_creating_lock",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_bound_start_refuses_nonexistent_run_without_creating_it": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_bound_start_refuses_nonexistent_run_without_creating_it",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_bound_start_refuses_other_worktree_without_creating_lock": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_bound_start_refuses_other_worktree_without_creating_lock",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_chain_batch_creation_revalidates_in_lock_order": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_chain_batch_creation_revalidates_in_lock_order",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_merge_start_binding_creates_stable_batch_lock": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_merge_start_binding_creates_stable_batch_lock",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_lockless_read_only_binding_validator_does_not_create_batch_lock": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_lockless_read_only_binding_validator_does_not_create_batch_lock",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_start_lock_disappearance_never_recreates_before_halt": "tests/test_revision9_cli_surfaces_start_locks.py::Revision9CliSurfacesStartLocksTests::test_start_lock_disappearance_never_recreates_before_halt"
+    },
+    "unittest": {
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_bound_start_persists_exact_immutable_binding": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_bound_start_persists_exact_immutable_binding",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_commit_activation_rejects_event_one_rebinding_before_replay": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_commit_activation_rejects_event_one_rebinding_before_replay",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_existing_chain_batch_lock_skips_creation_only_validation": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_existing_chain_batch_lock_skips_creation_only_validation",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_existing_locked_bound_start_preserves_foreign_owner_behavior": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_existing_locked_bound_start_preserves_foreign_owner_behavior",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_existing_locked_bound_start_succeeds_without_session_pid": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_existing_locked_bound_start_succeeds_without_session_pid",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_bound_start_creation_control_is_load_bearing": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_bound_start_creation_control_is_load_bearing",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_bound_start_halt_precedes_stable_lock_creation": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_bound_start_halt_precedes_stable_lock_creation",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_bound_start_refuses_foreign_owner_without_creating_lock": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_bound_start_refuses_foreign_owner_without_creating_lock",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_bound_start_refuses_nonexistent_run_without_creating_it": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_bound_start_refuses_nonexistent_run_without_creating_it",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_bound_start_refuses_other_worktree_without_creating_lock": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_bound_start_refuses_other_worktree_without_creating_lock",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_chain_batch_creation_revalidates_in_lock_order": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_chain_batch_creation_revalidates_in_lock_order",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_merge_start_binding_creates_stable_batch_lock": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_merge_start_binding_creates_stable_batch_lock",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_lockless_read_only_binding_validator_does_not_create_batch_lock": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_lockless_read_only_binding_validator_does_not_create_batch_lock",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_start_lock_disappearance_never_recreates_before_halt": "test_revision9_cli_surfaces_start_locks.Revision9CliSurfacesStartLocksTests.test_start_lock_disappearance_never_recreates_before_halt"
+    }
+  },
+  "base_commit": "c424d796ec5d92a94b0b3bc00a93b1c2272bee65"
+}
