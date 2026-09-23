@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision8_coordination.py": "e8fa6226b45838121591fed9d328559c15e6b8a5b14a5edebd47a1ae3ba6f69a",
+    "tests/test_revision8_registry_races.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision8_coordination.py",
+      "dest": "tests/test_revision8_registry_races.py",
+      "class": "Revision8CoordinationTests",
+      "methods": [
+        "test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating",
+        "test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting",
+        "test_registry_exchange_race_restores_foreign_canonical_without_publish",
+        "test_absent_registry_link_race_never_clobbers_foreign_canonical",
+        "test_absent_registry_directory_collision_preserves_foreign_node",
+        "test_absent_registry_symlink_collision_preserves_foreign_node",
+        "test_absent_registry_broken_symlink_collision_preserves_foreign_node",
+        "test_absent_registry_unreadable_file_collision_preserves_foreign_node",
+        "test_exact_staged_registry_prelink_is_recognized_as_published",
+        "test_exact_staged_registry_prelink_rolls_back_after_validation_failure",
+        "test_exact_staged_owner_prelink_is_recognized_as_adopted",
+        "test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner"
+      ],
+      "shape": "class",
+      "target_class": "Revision8RegistryRacesTests",
+      "alias": "test_revision8_registry_races",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision8_coordination.py": [],
+        "tests/test_revision8_registry_races.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import os",
+          "import socket",
+          "import unittest",
+          "from unittest import mock",
+          "from tests._revision8_constants import RECORDED_AT",
+          "from tests._revision8_support import Revision8Support",
+          "from codex_orchestrator import journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_absent_registry_broken_symlink_collision_preserves_foreign_node": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_absent_registry_broken_symlink_collision_preserves_foreign_node",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_absent_registry_directory_collision_preserves_foreign_node": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_absent_registry_directory_collision_preserves_foreign_node",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_absent_registry_link_race_never_clobbers_foreign_canonical": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_absent_registry_link_race_never_clobbers_foreign_canonical",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_absent_registry_symlink_collision_preserves_foreign_node": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_absent_registry_symlink_collision_preserves_foreign_node",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_absent_registry_unreadable_file_collision_preserves_foreign_node": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_absent_registry_unreadable_file_collision_preserves_foreign_node",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_exact_staged_owner_prelink_is_recognized_as_adopted": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_exact_staged_owner_prelink_is_recognized_as_adopted",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_exact_staged_registry_prelink_is_recognized_as_published": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_exact_staged_registry_prelink_is_recognized_as_published",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_exact_staged_registry_prelink_rolls_back_after_validation_failure": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_exact_staged_registry_prelink_rolls_back_after_validation_failure",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_registry_exchange_race_restores_foreign_canonical_without_publish": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_registry_exchange_race_restores_foreign_canonical_without_publish",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating": "tests/test_revision8_registry_races.py::Revision8RegistryRacesTests::test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating"
+    },
+    "unittest": {
+      "test_revision8_coordination.Revision8CoordinationTests.test_absent_registry_broken_symlink_collision_preserves_foreign_node": "test_revision8_registry_races.Revision8RegistryRacesTests.test_absent_registry_broken_symlink_collision_preserves_foreign_node",
+      "test_revision8_coordination.Revision8CoordinationTests.test_absent_registry_directory_collision_preserves_foreign_node": "test_revision8_registry_races.Revision8RegistryRacesTests.test_absent_registry_directory_collision_preserves_foreign_node",
+      "test_revision8_coordination.Revision8CoordinationTests.test_absent_registry_link_race_never_clobbers_foreign_canonical": "test_revision8_registry_races.Revision8RegistryRacesTests.test_absent_registry_link_race_never_clobbers_foreign_canonical",
+      "test_revision8_coordination.Revision8CoordinationTests.test_absent_registry_symlink_collision_preserves_foreign_node": "test_revision8_registry_races.Revision8RegistryRacesTests.test_absent_registry_symlink_collision_preserves_foreign_node",
+      "test_revision8_coordination.Revision8CoordinationTests.test_absent_registry_unreadable_file_collision_preserves_foreign_node": "test_revision8_registry_races.Revision8RegistryRacesTests.test_absent_registry_unreadable_file_collision_preserves_foreign_node",
+      "test_revision8_coordination.Revision8CoordinationTests.test_exact_staged_owner_prelink_is_recognized_as_adopted": "test_revision8_registry_races.Revision8RegistryRacesTests.test_exact_staged_owner_prelink_is_recognized_as_adopted",
+      "test_revision8_coordination.Revision8CoordinationTests.test_exact_staged_registry_prelink_is_recognized_as_published": "test_revision8_registry_races.Revision8RegistryRacesTests.test_exact_staged_registry_prelink_is_recognized_as_published",
+      "test_revision8_coordination.Revision8CoordinationTests.test_exact_staged_registry_prelink_rolls_back_after_validation_failure": "test_revision8_registry_races.Revision8RegistryRacesTests.test_exact_staged_registry_prelink_rolls_back_after_validation_failure",
+      "test_revision8_coordination.Revision8CoordinationTests.test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner": "test_revision8_registry_races.Revision8RegistryRacesTests.test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner",
+      "test_revision8_coordination.Revision8CoordinationTests.test_registry_exchange_race_restores_foreign_canonical_without_publish": "test_revision8_registry_races.Revision8RegistryRacesTests.test_registry_exchange_race_restores_foreign_canonical_without_publish",
+      "test_revision8_coordination.Revision8CoordinationTests.test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting": "test_revision8_registry_races.Revision8RegistryRacesTests.test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting",
+      "test_revision8_coordination.Revision8CoordinationTests.test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating": "test_revision8_registry_races.Revision8RegistryRacesTests.test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating"
+    }
+  },
+  "base_commit": "c27ca9f3600b244ee8c6ac36a59b63edb49969ea"
+}
