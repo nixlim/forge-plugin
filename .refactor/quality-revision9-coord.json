@@ -1,0 +1,262 @@
+{
+  "limits": {
+    "module_target": 500,
+    "module_ceiling": 1000,
+    "function_target": 150,
+    "class_target": 30,
+    "max_parameters": 6,
+    "max_outputs": 1,
+    "plain_decorators": [
+      "_serialize_worktree_command"
+    ]
+  },
+  "modules": {
+    "tests/test_revision9_coordination_activation_outbox.py": {
+      "code_lines": 790,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "790 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_activation_scan.py": {
+      "code_lines": 618,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "618 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_batch_builder.py": {
+      "code_lines": 576,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "576 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_chain_drain.py": {
+      "code_lines": 424,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "tests/test_revision9_coordination_cli_diagnostics.py": {
+      "code_lines": 230,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "tests/test_revision9_coordination_gap_repair.py": {
+      "code_lines": 760,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "760 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_ledger_recovery.py": {
+      "code_lines": 810,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "810 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_legacy_activation.py": {
+      "code_lines": 896,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "test_legacy_activation_crash_matrix",
+          "line": 474,
+          "size": 169
+        },
+        {
+          "kind": "function",
+          "name": "test_typed_opened_run_bytes_are_unchanged",
+          "line": 644,
+          "size": 200
+        }
+      ],
+      "tracking": {
+        "reason": "896 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination.py": {
+      "code_lines": 4931,
+      "over_ceiling": true,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_write_commit_gate_binding_chain",
+          "line": 273,
+          "size": 251
+        },
+        {
+          "kind": "function",
+          "name": "_write_commit_decision_cycle_chain",
+          "line": 525,
+          "size": 359
+        },
+        {
+          "kind": "function",
+          "name": "test_binding_currentness_rejects_superseded_gate_facts",
+          "line": 1305,
+          "size": 205
+        },
+        {
+          "kind": "function",
+          "name": "test_fr021_superseded_candidate_records_are_retired",
+          "line": 1729,
+          "size": 188
+        },
+        {
+          "kind": "function",
+          "name": "test_epoch_identity_is_event_bound_and_cannot_clear_before_park",
+          "line": 2892,
+          "size": 151
+        },
+        {
+          "kind": "function",
+          "name": "test_condition_edge_table_and_forbidden_top_level_fields_are_closed",
+          "line": 3131,
+          "size": 153
+        },
+        {
+          "kind": "function",
+          "name": "test_gate_review_and_approval_require_exact_fact_changes",
+          "line": 3320,
+          "size": 219
+        },
+        {
+          "kind": "function",
+          "name": "test_complete_tuple_closes_gate_review_and_iteration_bypasses",
+          "line": 3540,
+          "size": 241
+        },
+        {
+          "kind": "function",
+          "name": "test_refresh_retains_iteration_and_eighth_block_closes_loop",
+          "line": 3782,
+          "size": 196
+        },
+        {
+          "kind": "function",
+          "name": "test_push_observation_phase_and_classification_are_context_bound",
+          "line": 4195,
+          "size": 177
+        },
+        {
+          "kind": "function",
+          "name": "test_push_intent_cannot_preseed_landing_and_repeated_oid_lands_once",
+          "line": 4373,
+          "size": 163
+        },
+        {
+          "kind": "function",
+          "name": "test_claim_release_and_terminal_links_are_replay_context_bound",
+          "line": 4537,
+          "size": 237
+        }
+      ],
+      "tracking": {
+        "reason": "4931 code lines (from 13,222): still holds Revision9FixtureTests, the Revision9BuilderBatchTests shell (one unittest.skipUnless test the mover refuses), Revision9BindingTests (2,022) and Revision9MergeTransitionGrammarTests (2,679, class-dependent parameter defaults on its hub helpers)",
+        "follow_up": "forge-plugin-z50i (binding plan ready, grammar needs an operator-directed hand edit)"
+      }
+    },
+    "tests/test_revision9_coordination_receipted_chain.py": {
+      "code_lines": 799,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "test_commit_sibling_carried_binding_authentication_is_load_bearing",
+          "line": 347,
+          "size": 159
+        }
+      ],
+      "tracking": {
+        "reason": "799 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_scope_change.py": {
+      "code_lines": 521,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "521 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_staging_crashes.py": {
+      "code_lines": 536,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "536 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/test_revision9_coordination_terminal_builder.py": {
+      "code_lines": 655,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "655 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    },
+    "tests/_revision9_coord_constants.py": {
+      "code_lines": 45,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "tests/_revision9_coord_support.py": {
+      "code_lines": 806,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "_write_bound_chain_state",
+          "line": 156,
+          "size": 253
+        },
+        {
+          "kind": "function",
+          "name": "_seed_gh17_wedge",
+          "line": 600,
+          "size": 162
+        }
+      ],
+      "tracking": {
+        "reason": "806 code lines: 18 helpers shared by two or more scenario families of the 109-test Revision9BuilderBatchTests class (mixin shape); _write_bound_chain_state alone is 253 lines and is read by 5 families, _seed_gh17_wedge 162 by 3",
+        "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+      }
+    }
+  }
+}
