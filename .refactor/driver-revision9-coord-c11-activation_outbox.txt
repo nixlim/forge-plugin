@@ -1,0 +1,18 @@
+== c11-activation_outbox start=2026-09-23T11:13:55Z head=4d416d1 load=9.23 8.39 8.64
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2917 bodies across 2895 names -> .refactor/revision9-coord-c11-activation_outbox-before.json
+id map: 12 unittest + 12 pytest -> .refactor/idmap-revision9-coord-activation_outbox.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-activation_outbox.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 245 files within budget (max 1000)
+Ran 12 tests in 1.277s OK (standalone tests.test_revision9_coordination_activation_outbox without PYTHONPATH)
+== c11-activation_outbox record SHA d4a36fa663207059813660042389e35998bccbbb (pre-amend); amending the record and the driver log into it end=2026-09-23T11:14:36Z

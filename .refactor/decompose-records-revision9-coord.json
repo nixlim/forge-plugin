@@ -108,5 +108,15 @@
   "dest": "tests/test_revision9_coordination_activation_scan.py",
   "target_class": "Revision9ActivationScanTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c11-activation_outbox",
+  "commit": "d4a36fa663207059813660042389e35998bccbbb",
+  "snapshot": ".refactor/revision9-coord-c11-activation_outbox-before.json",
+  "manifest": ".refactor/family-revision9-coord-activation_outbox.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c11-activation_outbox.json",
+  "dest": "tests/test_revision9_coordination_activation_outbox.py",
+  "target_class": "Revision9ActivationOutboxTests",
+  "shape": "class"
  }
 ]
