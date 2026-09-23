@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "b858d0b1b84b85e2badf728ab99e45773b910c0fa87a2b26acad862ef1fef3a2",
+    "tests/test_revision9_coordination_chain_drain.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_chain_drain.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "test_chain_drain_raw_records_without_capability_refuses",
+        "_chain_drain_case",
+        "test_chain_drain_valid_authorizer_new_and_repeated_paths",
+        "test_chain_drain_authorized_pending_and_lost_response_retry",
+        "test_chain_drain_authorization_exact_field_bindings",
+        "test_chain_drain_authorization_controls_are_load_bearing",
+        "test_ingest_requires_registered_proof_complete_authority"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ChainDrainTests",
+      "alias": "test_revision9_coordination_chain_drain",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_chain_drain.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import json",
+          "import unittest",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_chain_drain_authorization_controls_are_load_bearing": "tests/test_revision9_coordination_chain_drain.py::Revision9ChainDrainTests::test_chain_drain_authorization_controls_are_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_chain_drain_authorization_exact_field_bindings": "tests/test_revision9_coordination_chain_drain.py::Revision9ChainDrainTests::test_chain_drain_authorization_exact_field_bindings",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_chain_drain_authorized_pending_and_lost_response_retry": "tests/test_revision9_coordination_chain_drain.py::Revision9ChainDrainTests::test_chain_drain_authorized_pending_and_lost_response_retry",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_chain_drain_raw_records_without_capability_refuses": "tests/test_revision9_coordination_chain_drain.py::Revision9ChainDrainTests::test_chain_drain_raw_records_without_capability_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_chain_drain_valid_authorizer_new_and_repeated_paths": "tests/test_revision9_coordination_chain_drain.py::Revision9ChainDrainTests::test_chain_drain_valid_authorizer_new_and_repeated_paths",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_ingest_requires_registered_proof_complete_authority": "tests/test_revision9_coordination_chain_drain.py::Revision9ChainDrainTests::test_ingest_requires_registered_proof_complete_authority"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_chain_drain_authorization_controls_are_load_bearing": "test_revision9_coordination_chain_drain.Revision9ChainDrainTests.test_chain_drain_authorization_controls_are_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_chain_drain_authorization_exact_field_bindings": "test_revision9_coordination_chain_drain.Revision9ChainDrainTests.test_chain_drain_authorization_exact_field_bindings",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_chain_drain_authorized_pending_and_lost_response_retry": "test_revision9_coordination_chain_drain.Revision9ChainDrainTests.test_chain_drain_authorized_pending_and_lost_response_retry",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_chain_drain_raw_records_without_capability_refuses": "test_revision9_coordination_chain_drain.Revision9ChainDrainTests.test_chain_drain_raw_records_without_capability_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_chain_drain_valid_authorizer_new_and_repeated_paths": "test_revision9_coordination_chain_drain.Revision9ChainDrainTests.test_chain_drain_valid_authorizer_new_and_repeated_paths",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_ingest_requires_registered_proof_complete_authority": "test_revision9_coordination_chain_drain.Revision9ChainDrainTests.test_ingest_requires_registered_proof_complete_authority"
+    }
+  },
+  "base_commit": "09c4b74a05fcf22451d88f6ee9bcee8f10bcb7e4"
+}

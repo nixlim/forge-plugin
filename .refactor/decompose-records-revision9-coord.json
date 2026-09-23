@@ -58,5 +58,15 @@
   "dest": "tests/test_revision9_coordination_staging_crashes.py",
   "target_class": "Revision9StagingCrashTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c06-chain_drain",
+  "commit": "d8d81113709012bb03ca4cae4b461acb3001b161",
+  "snapshot": ".refactor/revision9-coord-c06-chain_drain-before.json",
+  "manifest": ".refactor/family-revision9-coord-chain_drain.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c06-chain_drain.json",
+  "dest": "tests/test_revision9_coordination_chain_drain.py",
+  "target_class": "Revision9ChainDrainTests",
+  "shape": "class"
  }
 ]
