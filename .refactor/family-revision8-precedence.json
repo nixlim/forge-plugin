@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision8_coordination.py": "22a87fd5f0a3c9126ded946d17c2dfde15b1a629c5f54e5064ced5e939ce2e25",
+    "tests/test_revision8_precedence.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision8_coordination.py",
+      "dest": "tests/test_revision8_precedence.py",
+      "class": "Revision8CoordinationTests",
+      "methods": [
+        "test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes",
+        "test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes",
+        "test_foreign_owner_classification_precedes_candidate_schema",
+        "test_engine_lifecycle_owner_classification_precedes_schema",
+        "test_engine_lifecycle_envelope_is_built_before_session_identity",
+        "test_citation_controls_precede_current_session_identity_refusals",
+        "test_current_session_identity_literals_are_exact_and_nonmutating",
+        "test_citation_controls_precede_recorded_owner_classification",
+        "test_new_write_validator_control_is_load_bearing",
+        "test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry",
+        "test_invalid_session_pid_literal_is_retained",
+        "test_live_session_identity_is_stable_across_fresh_cli_shells",
+        "test_operation_specific_invalid_id_and_missing_run_literals",
+        "test_operation_specific_repository_unavailable_literals",
+        "test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct",
+        "test_lock_registry_update_and_rollback_failure_literals_are_exact"
+      ],
+      "shape": "class",
+      "target_class": "Revision8PrecedenceTests",
+      "alias": "test_revision8_precedence",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision8_coordination.py": [],
+        "tests/test_revision8_precedence.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import json",
+          "import os",
+          "import socket",
+          "import sys",
+          "import unittest",
+          "from unittest import mock",
+          "from tests._revision8_constants import RECORDED_AT",
+          "from tests._revision8_support import Revision8Support",
+          "from codex_orchestrator import journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision8_coordination.py": [
+          "copy"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_citation_controls_precede_current_session_identity_refusals": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_citation_controls_precede_current_session_identity_refusals",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_citation_controls_precede_recorded_owner_classification": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_citation_controls_precede_recorded_owner_classification",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_current_session_identity_literals_are_exact_and_nonmutating": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_current_session_identity_literals_are_exact_and_nonmutating",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_engine_lifecycle_envelope_is_built_before_session_identity": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_engine_lifecycle_envelope_is_built_before_session_identity",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_engine_lifecycle_owner_classification_precedes_schema": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_engine_lifecycle_owner_classification_precedes_schema",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_foreign_owner_classification_precedes_candidate_schema": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_foreign_owner_classification_precedes_candidate_schema",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_invalid_session_pid_literal_is_retained": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_invalid_session_pid_literal_is_retained",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_live_session_identity_is_stable_across_fresh_cli_shells": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_live_session_identity_is_stable_across_fresh_cli_shells",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_lock_registry_update_and_rollback_failure_literals_are_exact": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_lock_registry_update_and_rollback_failure_literals_are_exact",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_new_write_validator_control_is_load_bearing": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_new_write_validator_control_is_load_bearing",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_operation_specific_invalid_id_and_missing_run_literals": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_operation_specific_invalid_id_and_missing_run_literals",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_operation_specific_repository_unavailable_literals": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_operation_specific_repository_unavailable_literals",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes": "tests/test_revision8_precedence.py::Revision8PrecedenceTests::test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes"
+    },
+    "unittest": {
+      "test_revision8_coordination.Revision8CoordinationTests.test_citation_controls_precede_current_session_identity_refusals": "test_revision8_precedence.Revision8PrecedenceTests.test_citation_controls_precede_current_session_identity_refusals",
+      "test_revision8_coordination.Revision8CoordinationTests.test_citation_controls_precede_recorded_owner_classification": "test_revision8_precedence.Revision8PrecedenceTests.test_citation_controls_precede_recorded_owner_classification",
+      "test_revision8_coordination.Revision8CoordinationTests.test_current_session_identity_literals_are_exact_and_nonmutating": "test_revision8_precedence.Revision8PrecedenceTests.test_current_session_identity_literals_are_exact_and_nonmutating",
+      "test_revision8_coordination.Revision8CoordinationTests.test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry": "test_revision8_precedence.Revision8PrecedenceTests.test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry",
+      "test_revision8_coordination.Revision8CoordinationTests.test_engine_lifecycle_envelope_is_built_before_session_identity": "test_revision8_precedence.Revision8PrecedenceTests.test_engine_lifecycle_envelope_is_built_before_session_identity",
+      "test_revision8_coordination.Revision8CoordinationTests.test_engine_lifecycle_owner_classification_precedes_schema": "test_revision8_precedence.Revision8PrecedenceTests.test_engine_lifecycle_owner_classification_precedes_schema",
+      "test_revision8_coordination.Revision8CoordinationTests.test_foreign_owner_classification_precedes_candidate_schema": "test_revision8_precedence.Revision8PrecedenceTests.test_foreign_owner_classification_precedes_candidate_schema",
+      "test_revision8_coordination.Revision8CoordinationTests.test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes": "test_revision8_precedence.Revision8PrecedenceTests.test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes",
+      "test_revision8_coordination.Revision8CoordinationTests.test_invalid_session_pid_literal_is_retained": "test_revision8_precedence.Revision8PrecedenceTests.test_invalid_session_pid_literal_is_retained",
+      "test_revision8_coordination.Revision8CoordinationTests.test_live_session_identity_is_stable_across_fresh_cli_shells": "test_revision8_precedence.Revision8PrecedenceTests.test_live_session_identity_is_stable_across_fresh_cli_shells",
+      "test_revision8_coordination.Revision8CoordinationTests.test_lock_registry_update_and_rollback_failure_literals_are_exact": "test_revision8_precedence.Revision8PrecedenceTests.test_lock_registry_update_and_rollback_failure_literals_are_exact",
+      "test_revision8_coordination.Revision8CoordinationTests.test_new_write_validator_control_is_load_bearing": "test_revision8_precedence.Revision8PrecedenceTests.test_new_write_validator_control_is_load_bearing",
+      "test_revision8_coordination.Revision8CoordinationTests.test_operation_specific_invalid_id_and_missing_run_literals": "test_revision8_precedence.Revision8PrecedenceTests.test_operation_specific_invalid_id_and_missing_run_literals",
+      "test_revision8_coordination.Revision8CoordinationTests.test_operation_specific_repository_unavailable_literals": "test_revision8_precedence.Revision8PrecedenceTests.test_operation_specific_repository_unavailable_literals",
+      "test_revision8_coordination.Revision8CoordinationTests.test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct": "test_revision8_precedence.Revision8PrecedenceTests.test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct",
+      "test_revision8_coordination.Revision8CoordinationTests.test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes": "test_revision8_precedence.Revision8PrecedenceTests.test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes"
+    }
+  },
+  "base_commit": "872314eabcfb1e08157fdf6a7594a7be7b16d771"
+}

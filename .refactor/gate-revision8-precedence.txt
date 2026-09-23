@@ -1,0 +1,32 @@
+== verify.sh (--test-mode mapping)
+$ bash /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/verify.sh --pkg tests --snapshot .refactor/revision8-precedence-before.json --manifest .refactor/family-revision8-precedence.json --strict-bodies --test-snapshot .refactor/tests-revision8-precedence.json --test-mode mapping
+== gate results ==
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+[exit 0]
+
+== repository file-length guard
+$ python3 scripts/check_file_length.py tests
+ok: 77 files within budget (max 1000)
+[exit 0]
+
+== import without PYTHONPATH
+$ python3 -m unittest tests.test_revision8_precedence
+................
+----------------------------------------------------------------------
+Ran 16 tests in 8.535s
+
+OK
+[exit 0]
+
+== standalone import without PYTHONPATH
+$ python3 -c import tests.test_revision8_precedence
+[exit 0]
+
