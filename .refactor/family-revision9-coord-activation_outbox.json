@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "7ef8f7885ebde894af2f5b0ef6c14e248bdff37d7bdb56b78d9f9c1b82c8f577",
+    "tests/test_revision9_coordination_activation_outbox.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_activation_outbox.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_activation_outbox_case",
+        "_compete_with_activation_outbox",
+        "test_activation_outbox_blocks_raw_append_byte_exactly_then_drains",
+        "test_activation_outbox_lifecycle_guard_is_load_bearing",
+        "test_legacy_raw_guard_intent_conditions_are_load_bearing",
+        "test_raw_lifecycle_validation_precedes_batch_reservation",
+        "test_raw_lifecycle_lock_order_is_load_bearing",
+        "test_published_first_use_intent_blocks_outbox_before_publication",
+        "test_staged_first_use_intent_blocks_outbox_before_publication",
+        "test_raw_open_cannot_supply_writer_contract_before_any_mutation",
+        "test_raw_open_writer_contract_refusal_is_load_bearing",
+        "test_activation_outbox_reserves_first_use_then_drains_exact_batch",
+        "test_activation_outbox_missing_events_or_tampered_state_refuses_first_use",
+        "test_internal_typed_flag_cannot_bypass_activated_batch_builders"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ActivationOutboxTests",
+      "alias": "test_revision9_coordination_activation_outbox",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_activation_outbox.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import json",
+          "import unittest",
+          "from contextlib import contextmanager",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._cli_loader import patch_chain_core",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_coordination.py": [
+          "contextmanager",
+          "patch_chain_core"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_blocks_raw_append_byte_exactly_then_drains": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_blocks_raw_append_byte_exactly_then_drains",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_lifecycle_guard_is_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_lifecycle_guard_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_missing_events_or_tampered_state_refuses_first_use": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_missing_events_or_tampered_state_refuses_first_use",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_reserves_first_use_then_drains_exact_batch": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_reserves_first_use_then_drains_exact_batch",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_internal_typed_flag_cannot_bypass_activated_batch_builders": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_internal_typed_flag_cannot_bypass_activated_batch_builders",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_legacy_raw_guard_intent_conditions_are_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_legacy_raw_guard_intent_conditions_are_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_published_first_use_intent_blocks_outbox_before_publication": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_published_first_use_intent_blocks_outbox_before_publication",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_lifecycle_lock_order_is_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_lifecycle_lock_order_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_lifecycle_validation_precedes_batch_reservation": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_lifecycle_validation_precedes_batch_reservation",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_open_cannot_supply_writer_contract_before_any_mutation": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_open_cannot_supply_writer_contract_before_any_mutation",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_open_writer_contract_refusal_is_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_open_writer_contract_refusal_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_staged_first_use_intent_blocks_outbox_before_publication": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_staged_first_use_intent_blocks_outbox_before_publication"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_blocks_raw_append_byte_exactly_then_drains": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_blocks_raw_append_byte_exactly_then_drains",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_lifecycle_guard_is_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_lifecycle_guard_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_missing_events_or_tampered_state_refuses_first_use": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_missing_events_or_tampered_state_refuses_first_use",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_reserves_first_use_then_drains_exact_batch": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_reserves_first_use_then_drains_exact_batch",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_internal_typed_flag_cannot_bypass_activated_batch_builders": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_internal_typed_flag_cannot_bypass_activated_batch_builders",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_legacy_raw_guard_intent_conditions_are_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_legacy_raw_guard_intent_conditions_are_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_published_first_use_intent_blocks_outbox_before_publication": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_published_first_use_intent_blocks_outbox_before_publication",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_lifecycle_lock_order_is_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_lifecycle_lock_order_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_lifecycle_validation_precedes_batch_reservation": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_lifecycle_validation_precedes_batch_reservation",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_open_cannot_supply_writer_contract_before_any_mutation": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_open_cannot_supply_writer_contract_before_any_mutation",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_open_writer_contract_refusal_is_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_open_writer_contract_refusal_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_staged_first_use_intent_blocks_outbox_before_publication": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_staged_first_use_intent_blocks_outbox_before_publication"
+    }
+  },
+  "base_commit": "4d416d1b080f8f819c51125424fc37846f8b089d"
+}
