@@ -1,0 +1,18 @@
+== c01-cli_diagnostics start=2026-09-23T11:04:42Z head=a2f86cb load=4.85 7.97 8.85
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2907 bodies across 2885 names -> .refactor/revision9-coord-c01-cli_diagnostics-before.json
+id map: 4 unittest + 4 pytest -> .refactor/idmap-revision9-coord-cli_diagnostics.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-cli_diagnostics.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 235 files within budget (max 1000)
+Ran 4 tests in 0.966s OK (standalone tests.test_revision9_coordination_cli_diagnostics without PYTHONPATH)
+== c01-cli_diagnostics record SHA c46bb8ccebd18a4abf3576f0daa4500123095190 (pre-amend); amending the record and the driver log into it end=2026-09-23T11:05:42Z
