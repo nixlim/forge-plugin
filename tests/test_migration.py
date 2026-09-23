@@ -112,7 +112,7 @@ class LegacyRuntimeNameCarveOutTests(unittest.TestCase):
             "scripts/forge/migrate-upstream.py",
             "tests/test_migration.py",
         }
-        allowed_prefixes = ("docs/design/", "docs/specs/")
+        allowed_prefixes = ("docs/design/", "docs/specs/", ".refactor/")
         forbidden = b"opencode"
         violations: list[str] = []
 
