@@ -611,9 +611,9 @@
 +from pathlib import Path
 +from unittest import mock
 +
-+from codex_orchestrator import batch, journal
-+
 +from tests._revision8_constants import RECORDED_AT, TOOLS
++
++from codex_orchestrator import batch, journal
 +
 +
 +class Revision8Support:
