@@ -1,0 +1,120 @@
+{
+  "limits": {
+    "module_target": 500,
+    "module_ceiling": 1000,
+    "function_target": 150,
+    "class_target": 30,
+    "max_parameters": 6,
+    "max_outputs": 1,
+    "plain_decorators": [
+      "_serialize_worktree_command"
+    ]
+  },
+  "modules": {
+    "tests/test_revision9_cli_surfaces.py": {
+      "code_lines": 1229,
+      "over_ceiling": true,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "test_secret_scan_selection_is_exact_current_gate_two_authority",
+          "line": 881,
+          "size": 215
+        }
+      ],
+      "tracking": {
+        "reason": "the eight classes that were never in this session's scope plus the pass-only shell of the big class: 1,229 code lines, over the 1,000 ceiling, carried by its shrunk baseline entry (5456 -> 1229); a further class-shape session on the two largest remaining classes brings it under 1,000",
+        "follow_up": "forge-plugin-by61"
+      }
+    },
+    "tests/_revision9_cli_constants.py": {
+      "code_lines": 34,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "tests/_revision9_cli_support.py": {
+      "code_lines": 674,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "prepare_unbound_fast_ingest",
+          "line": 314,
+          "size": 258
+        }
+      ],
+      "tracking": {
+        "reason": "one support mixin per class (brief section 4): the 15 helpers of Revision9BoundCLIIntegrationTests, 674 code lines (15 methods, under class_target 30); invoke_cli/cli_process_context/open_run_and_task/start_bound_fast_chain are hubs used by every family",
+        "follow_up": "forge-plugin-by61"
+      }
+    },
+    "tests/test_revision9_cli_surfaces_dispositions.py": {
+      "code_lines": 966,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "test_explicit_abort_of_readable_bound_chain_is_a_terminal_disposition",
+          "line": 110,
+          "size": 165
+        }
+      ],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (20 tests, 966 code lines; fallback seam recorded in the plan if it ever grows)",
+        "follow_up": "forge-plugin-by61"
+      }
+    },
+    "tests/test_revision9_cli_surfaces_ingest.py": {
+      "code_lines": 570,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (9 tests, 570 code lines)",
+        "follow_up": "forge-plugin-by61"
+      }
+    },
+    "tests/test_revision9_cli_surfaces_multicell_stack.py": {
+      "code_lines": 588,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "test_bound_multicell_stack_failure_journals_failed_cell_and_stops",
+          "line": 159,
+          "size": 274
+        }
+      ],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (6 tests, 588 code lines)",
+        "follow_up": "forge-plugin-by61"
+      }
+    },
+    "tests/test_revision9_cli_surfaces_replay.py": {
+      "code_lines": 666,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (10 tests, 666 code lines)",
+        "follow_up": "forge-plugin-by61"
+      }
+    },
+    "tests/test_revision9_cli_surfaces_start_locks.py": {
+      "code_lines": 803,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (17 tests, 803 code lines)",
+        "follow_up": "forge-plugin-by61"
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+head=e03515d2a67dd31c858dd5d00f141d302f12f2a4 start=2026-09-23T15:28:50Z load=17.57 8.61 7.54 worktree=0 tracked changes
+gate-1 shard 1/4: exit 0 OK
+.......................................................................................................................................................................................................................................................................................................s............................................................................................................................/usr/lib/python3.13/unittest/case.py:606: ResourceWarning: unclosed file <_io.BufferedWriter name=7>
+  if method() is not None:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......
+----------------------------------------------------------------------
+Ran 426 tests in 410.891s
+
+OK (skipped=1)
+
+gate-1 shard 2/4: exit 0 OK
+...............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+----------------------------------------------------------------------
+Ran 671 tests in 353.544s
+
+OK
+
+gate-1 shard 3/4: exit 1 FAILED
+.................................................F................................................forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating merge chains
+forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating commit chains
+......................................................................................................................................................................................................................sss......................................................................................s.......
+======================================================================
+FAIL: test_timeout_and_output_cap_both_use_term_quarter_second_then_kill (tests.test_cli_common_lock.FencedProcessTests.test_timeout_and_output_cap_both_use_term_quarter_second_then_kill) (label='timeout')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/tests/test_cli_common_lock.py", line 1757, in test_timeout_and_output_cap_both_use_term_quarter_second_then_kill
+    self.assertEqual([item[0] for item in sent], [signal.SIGTERM, signal.SIGKILL])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [<Signals.SIGTERM: 15>] != [<Signals.SIGTERM: 15>, <Signals.SIGKILL: 9>]
+
+Second list contains 1 additional elements.
+First extra element 1:
+<Signals.SIGKILL: 9>
+
+- [<Signals.SIGTERM: 15>]
++ [<Signals.SIGTERM: 15>, <Signals.SIGKILL: 9>]
+
+----------------------------------------------------------------------
+Ran 409 tests in 412.863s
+
+FAILED (failures=1, skipped=4)
+
+gate-1 shard 4/4: exit 1 FAILED
+.............................F.............................................................................................................................................................................................................................................................................................................................................................................s......
+======================================================================
+FAIL: test_cleanup_worktree_remove_pre_result_crash_is_observed (tests.test_cli_merge_integration.MergeIntegrationEpochTests.test_cleanup_worktree_remove_pre_result_crash_is_observed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/tests/test_cli_merge_integration.py", line 7543, in test_cleanup_worktree_remove_pre_result_crash_is_observed
+    self._assert_cleanup_pre_result_crash_recovery("worktree-remove")
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/tests/test_cli_merge_integration.py", line 7470, in _assert_cleanup_pre_result_crash_recovery
+    self.assertFalse(self.worktree.exists())
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 402 tests in 500.820s
+
+FAILED (failures=1, skipped=1)
+
+gate1_rc=1
+end=2026-09-23T15:37:12Z load=6.24 10.23 10.07

@@ -1,0 +1,80 @@
+[
+  {
+    "label": "mixin",
+    "shape": "mixin",
+    "commit": "ce6eb089978858b10929ff7458eb9ac050c05d77",
+    "snapshot": ".refactor/revision9-cli-mixin-before.json",
+    "manifest": ".refactor/mixin-revision9-cli-mixin.json",
+    "test_snapshot": ".refactor/tests-revision9-cli-mixin.json",
+    "id_map": null,
+    "dest": "tests/_revision9_cli_support.py",
+    "dest_code_lines": 674,
+    "source_code_lines": 4778,
+    "methods": 15
+  },
+  {
+    "label": "dispositions",
+    "shape": "class",
+    "commit": "c424d796ec5d92a94b0b3bc00a93b1c2272bee65",
+    "snapshot": ".refactor/revision9-cli-dispositions-before.json",
+    "manifest": ".refactor/family-revision9-cli-dispositions.json",
+    "test_snapshot": ".refactor/tests-revision9-cli-dispositions.json",
+    "id_map": ".refactor/idmap-revision9-cli-dispositions.json",
+    "dest": "tests/test_revision9_cli_surfaces_dispositions.py",
+    "dest_code_lines": 966,
+    "source_code_lines": 3820,
+    "methods": 20
+  },
+  {
+    "label": "start_locks",
+    "shape": "class",
+    "commit": "e31e72773c3c8d55695dc680aaf0fa5bab568021",
+    "snapshot": ".refactor/revision9-cli-start_locks-before.json",
+    "manifest": ".refactor/family-revision9-cli-start_locks.json",
+    "test_snapshot": ".refactor/tests-revision9-cli-start_locks.json",
+    "id_map": ".refactor/idmap-revision9-cli-start_locks.json",
+    "dest": "tests/test_revision9_cli_surfaces_start_locks.py",
+    "dest_code_lines": 803,
+    "source_code_lines": 3028,
+    "methods": 17
+  },
+  {
+    "label": "replay",
+    "shape": "class",
+    "commit": "e9a0250fb19255ac239309af80415b204171fac9",
+    "snapshot": ".refactor/revision9-cli-replay-before.json",
+    "manifest": ".refactor/family-revision9-cli-replay.json",
+    "test_snapshot": ".refactor/tests-revision9-cli-replay.json",
+    "id_map": ".refactor/idmap-revision9-cli-replay.json",
+    "dest": "tests/test_revision9_cli_surfaces_replay.py",
+    "dest_code_lines": 666,
+    "source_code_lines": 2370,
+    "methods": 10
+  },
+  {
+    "label": "multicell_stack",
+    "shape": "class",
+    "commit": "7596909f7ef3e27ed179923a2467b88b54cbe4c2",
+    "snapshot": ".refactor/revision9-cli-multicell_stack-before.json",
+    "manifest": ".refactor/family-revision9-cli-multicell_stack.json",
+    "test_snapshot": ".refactor/tests-revision9-cli-multicell_stack.json",
+    "id_map": ".refactor/idmap-revision9-cli-multicell_stack.json",
+    "dest": "tests/test_revision9_cli_surfaces_multicell_stack.py",
+    "dest_code_lines": 588,
+    "source_code_lines": 1788,
+    "methods": 6
+  },
+  {
+    "label": "ingest",
+    "shape": "class",
+    "commit": "e03515d2a67dd31c858dd5d00f141d302f12f2a4",
+    "snapshot": ".refactor/revision9-cli-ingest-before.json",
+    "manifest": ".refactor/family-revision9-cli-ingest.json",
+    "test_snapshot": ".refactor/tests-revision9-cli-ingest.json",
+    "id_map": ".refactor/idmap-revision9-cli-ingest.json",
+    "dest": "tests/test_revision9_cli_surfaces_ingest.py",
+    "dest_code_lines": 570,
+    "source_code_lines": 1229,
+    "methods": 9
+  }
+]
