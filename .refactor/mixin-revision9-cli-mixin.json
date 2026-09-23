@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_cli_surfaces.py": "8bfb0910bfb822ca6c5104134f58873f9ab128c746764dcf1df713dc024a1314",
+    "tests/_revision9_cli_support.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_cli_surfaces.py",
+      "dest": "tests/_revision9_cli_support.py",
+      "class": "Revision9BoundCLIIntegrationTests",
+      "methods": [
+        "revision9_environment",
+        "cli_process_context",
+        "invoke_cli",
+        "invoke_cli_at",
+        "open_run_and_task",
+        "start_bound_chain",
+        "start_bound_fast_chain",
+        "configure_changelog_gate",
+        "start_bound_multicell_stack_chain",
+        "selected_commit_ingest_event_digests",
+        "normalized_journal_records",
+        "prepare_unbound_fast_ingest",
+        "_quarantine_and_tombstone",
+        "_journal_records",
+        "assert_commit_identity_drain_crash_replays_once"
+      ],
+      "shape": "mixin",
+      "target_class": "Revision9CliSupport",
+      "alias": "_revision9_cli_support",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_cli_surfaces.py": [
+          "from tests._revision9_cli_support import Revision9CliSupport"
+        ],
+        "tests/_revision9_cli_support.py": [
+          "from __future__ import annotations",
+          "import contextlib",
+          "import io",
+          "import json",
+          "import os",
+          "import warnings",
+          "from pathlib import Path",
+          "from types import SimpleNamespace",
+          "from unittest import mock",
+          "from tests._cli_loader import patch_engine",
+          "from tests._revision9_cli_constants import CLI, CLI_FIXTURE_SUPPORT, ENVELOPE_KEYS, ROOT, RUNTIME, key"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "55219737b0bd0f539342d1ff4788551247af5c49"
+}

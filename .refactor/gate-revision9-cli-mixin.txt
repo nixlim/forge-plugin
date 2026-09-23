@@ -1,0 +1,41 @@
+== verify.sh (--test-mode identity)
+$ bash /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/verify.sh --pkg tests --snapshot .refactor/revision9-cli-mixin-before.json --manifest .refactor/mixin-revision9-cli-mixin.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-mixin.json --test-mode identity
+== gate results ==
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+[exit 0]
+
+== repository file-length guard
+$ python3 scripts/check_file_length.py tests
+ok: 73 files within budget (max 1000)
+[exit 0]
+
+== loader sweep
+$ python3 -m unittest tests.test_cli_loader
+..............
+----------------------------------------------------------------------
+Ran 14 tests in 1.469s
+
+OK
+[exit 0]
+
+== import without PYTHONPATH
+$ python3 -m unittest tests.test_revision9_cli_surfaces
+.....................................................................................
+----------------------------------------------------------------------
+Ran 85 tests in 77.243s
+
+OK
+[exit 0]
+
+== standalone import without PYTHONPATH
+$ python3 -c import tests._revision9_cli_support
+[exit 0]
+
