@@ -1,0 +1,280 @@
+--- tests/test_revision9_coordination.py
++++ tests/test_revision9_coordination.py
+@@ -1927,61 +1927,6 @@
+                     files=["docs/example.py"],
+                 )
+ 
+-    def test_builder_request_schema_and_digest_are_exact(self) -> None:
+-        request, digest = batch.normalized_request(
+-            self.repo.resolve(),
+-            "run-20260828-request",
+-            "journal task-start",
+-            {
+-                "task": "task-01",
+-                "goal": "Goal",
+-                "acceptance": ["Acceptance"],
+-                "file": ["src/example.py"],
+-            },
+-        )
+-        self.assertEqual(
+-            request,
+-            {
+-                "schema": "forge-journal-builder-request/1",
+-                "verb": "journal task-start",
+-                "repository": str(self.repo.resolve()),
+-                "run_id": "run-20260828-request",
+-                "inputs": {
+-                    "task": "task-01",
+-                    "goal": "Goal",
+-                    "acceptance": ["Acceptance"],
+-                    "file": ["src/example.py"],
+-                },
+-            },
+-        )
+-        self.assertEqual(digest, journal._sha256(journal._canonical_json_bytes(request)))
+-
+-        readmit_request, readmit_digest = batch.normalized_request(
+-            self.repo.resolve(),
+-            "run-20260831-readmit-request",
+-            "run-readmit",
+-            {"scope": ["tests/**", "src/**"], "replace": False},
+-        )
+-        self.assertEqual(
+-            readmit_request,
+-            {
+-                "schema": journal.BATCH_REQUEST_SCHEMA,
+-                "verb": "run-readmit",
+-                "repository": str(self.repo.resolve()),
+-                "run_id": "run-20260831-readmit-request",
+-                "inputs": {
+-                    "scope": ["tests/**", "src/**"],
+-                    "replace": False,
+-                },
+-            },
+-        )
+-        self.assertEqual(
+-            readmit_digest,
+-            journal._sha256(
+-                journal._canonical_json_bytes(readmit_request)
+-            ),
+-        )
+-
+     def test_run_open_is_hidden_until_atomic_publication(self) -> None:
+         repo, _ = self._new_repo("repo-open-atomic")
+         run_id = "run-20260828-open-atomic"
+@@ -3404,53 +3349,6 @@
+         self, repo: Path, run_id: str, chain_id: str
+     ) -> dict[str, object]:
+         return self._append_test_decision(repo, run_id, chain_id, "chain-landing")
+-
+-    def _append_test_decision(
+-        self, repo: Path, run_id: str, chain_id: str, outcome: str, *, seed: str = ""
+-    ) -> dict[str, object]:
+-        preimage = {
+-            "schema": journal.BINDING_SCHEMA,
+-            "source_record": {
+-                "chain_id": chain_id,
+-                "event_digest": key(
+-                    ("terminal-event" if outcome == "chain-landing" else f"terminal-event-{outcome}")
+-                    + seed
+-                ),
+-            },
+-            "candidate": {
+-                "kind": "staged-diff-sha256",
+-                "value": key("terminal-candidate"),
+-            },
+-            "review": None,
+-        }
+-        binding = {
+-            **preimage,
+-            "binding_id": journal._sha256(journal._canonical_json_bytes(preimage)),
+-        }
+-        with mock.patch.object(builders, "resolve_binding", return_value=binding):
+-            appended = builders.decision_add(
+-                repo,
+-                run_id,
+-                idempotency_key=key(f"{run_id}-{chain_id}-terminal-{outcome}{seed}"),
+-                task="task-01",
+-                resolution=(
+-                    "The bound candidate landed"
+-                    if outcome == "chain-landing"
+-                    else "The bound chain was aborted"
+-                ),
+-                finding=None,
+-                outcome=outcome,
+-                risk=None,
+-                basis=[],
+-                binding_chain=chain_id,
+-                binding_id=str(binding["binding_id"]),
+-            )
+-        self.assertFalse(appended.repeated)
+-        self.assertEqual(len(appended.records), 1)
+-        recorded_binding = appended.records[0].get("binding")
+-        self.assertEqual(recorded_binding, binding)
+-        assert isinstance(recorded_binding, dict)
+-        return recorded_binding
+ 
+     def _terminal_control_repo(self, name: str) -> tuple[Path, str, dict[str, object]]:
+         repo, _ = self._new_repo(name)
+--- tests/test_revision9_coordination_probe.py
++++ tests/test_revision9_coordination_probe.py
+@@ -0,0 +1,114 @@
++from __future__ import annotations
++
++import unittest
++from pathlib import Path
++from unittest import mock
++
++from codex_orchestrator import batch, builders, journal
++
++from tests._revision9_coord_constants import key
++
++
++class Revision9ProbeTests(unittest.TestCase):
++
++    def _append_test_decision(
++        self, repo: Path, run_id: str, chain_id: str, outcome: str, *, seed: str = ""
++    ) -> dict[str, object]:
++        preimage = {
++            "schema": journal.BINDING_SCHEMA,
++            "source_record": {
++                "chain_id": chain_id,
++                "event_digest": key(
++                    ("terminal-event" if outcome == "chain-landing" else f"terminal-event-{outcome}")
++                    + seed
++                ),
++            },
++            "candidate": {
++                "kind": "staged-diff-sha256",
++                "value": key("terminal-candidate"),
++            },
++            "review": None,
++        }
++        binding = {
++            **preimage,
++            "binding_id": journal._sha256(journal._canonical_json_bytes(preimage)),
++        }
++        with mock.patch.object(builders, "resolve_binding", return_value=binding):
++            appended = builders.decision_add(
++                repo,
++                run_id,
++                idempotency_key=key(f"{run_id}-{chain_id}-terminal-{outcome}{seed}"),
++                task="task-01",
++                resolution=(
++                    "The bound candidate landed"
++                    if outcome == "chain-landing"
++                    else "The bound chain was aborted"
++                ),
++                finding=None,
++                outcome=outcome,
++                risk=None,
++                basis=[],
++                binding_chain=chain_id,
++                binding_id=str(binding["binding_id"]),
++            )
++        self.assertFalse(appended.repeated)
++        self.assertEqual(len(appended.records), 1)
++        recorded_binding = appended.records[0].get("binding")
++        self.assertEqual(recorded_binding, binding)
++        assert isinstance(recorded_binding, dict)
++        return recorded_binding
++
++    def test_builder_request_schema_and_digest_are_exact(self) -> None:
++        request, digest = batch.normalized_request(
++            self.repo.resolve(),
++            "run-20260828-request",
++            "journal task-start",
++            {
++                "task": "task-01",
++                "goal": "Goal",
++                "acceptance": ["Acceptance"],
++                "file": ["src/example.py"],
++            },
++        )
++        self.assertEqual(
++            request,
++            {
++                "schema": "forge-journal-builder-request/1",
++                "verb": "journal task-start",
++                "repository": str(self.repo.resolve()),
++                "run_id": "run-20260828-request",
++                "inputs": {
++                    "task": "task-01",
++                    "goal": "Goal",
++                    "acceptance": ["Acceptance"],
++                    "file": ["src/example.py"],
++                },
++            },
++        )
++        self.assertEqual(digest, journal._sha256(journal._canonical_json_bytes(request)))
++
++        readmit_request, readmit_digest = batch.normalized_request(
++            self.repo.resolve(),
++            "run-20260831-readmit-request",
++            "run-readmit",
++            {"scope": ["tests/**", "src/**"], "replace": False},
++        )
++        self.assertEqual(
++            readmit_request,
++            {
++                "schema": journal.BATCH_REQUEST_SCHEMA,
++                "verb": "run-readmit",
++                "repository": str(self.repo.resolve()),
++                "run_id": "run-20260831-readmit-request",
++                "inputs": {
++                    "scope": ["tests/**", "src/**"],
++                    "replace": False,
++                },
++            },
++        )
++        self.assertEqual(
++            readmit_digest,
++            journal._sha256(
++                journal._canonical_json_bytes(readmit_request)
++            ),
++        )
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "7d9ab1f6775ff2ef0bf87b8bc4e819cb7214420629a5ce0363ca12e254275e11",
+    "tests/test_revision9_coordination_probe.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_probe.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_append_test_decision",
+        "test_builder_request_schema_and_digest_are_exact"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ProbeTests",
+      "alias": "test_revision9_coordination_probe",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_probe.py": [
+          "from __future__ import annotations",
+          "import unittest",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_builder_request_schema_and_digest_are_exact": "tests/test_revision9_coordination_probe.py::Revision9ProbeTests::test_builder_request_schema_and_digest_are_exact"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_builder_request_schema_and_digest_are_exact": "test_revision9_coordination_probe.Revision9ProbeTests.test_builder_request_schema_and_digest_are_exact"
+    }
+  }
+}
+DRY RUN: verified; no files written

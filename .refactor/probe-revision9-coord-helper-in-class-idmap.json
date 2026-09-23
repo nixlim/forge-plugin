@@ -1,0 +1,8 @@
+{
+ "pytest": {
+  "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_builder_request_schema_and_digest_are_exact": "tests/test_revision9_coordination_probe.py::Revision9ProbeTests::test_builder_request_schema_and_digest_are_exact"
+ },
+ "unittest": {
+  "test_revision9_coordination.Revision9BuilderBatchTests.test_builder_request_schema_and_digest_are_exact": "test_revision9_coordination_probe.Revision9ProbeTests.test_builder_request_schema_and_digest_are_exact"
+ }
+}

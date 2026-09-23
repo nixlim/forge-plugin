@@ -1,0 +1,14 @@
+== gate results ==
+PASS compile
+PASS ruff-lint
+FAIL file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+== first failure detail (tail of .refactor-gate.log) ==
+tests/_revision9_coord_support.py: 1623 code lines > budget 1000
+1 file(s) violate the size budget (max 1000, baseline .refactor-baseline.json)
+GATE: FAIL
+gate rc=1 wall=31s load=25.61 25.20 25.62

@@ -1,0 +1,388 @@
+{
+ "sizes": {
+  "setUp": 6,
+  "_new_repo": 29,
+  "api_environment": 3,
+  "run_dir": 2,
+  "open_run": 9,
+  "start_task": 10,
+  "test_typed_builder_round_trip_ids_receipts_and_idempotency": 125,
+  "_leave_complete_intent": 37,
+  "_leave_base_intent": 16,
+  "test_exact_prefix_and_torn_receipt_recovery": 29,
+  "test_pending_reader_refuses_without_mutation_and_absent_lock_is_read_only": 26,
+  "test_torn_intent_never_becomes_authoritative": 32,
+  "test_self_consistent_intent_substitution_after_prepare_is_refused": 40,
+  "test_activated_missing_stable_lock_or_receipt_ledger_diverges": 23,
+  "test_ledger_wide_duplicate_and_unrelated_invalid_receipts_freeze": 34,
+  "test_intent_without_journal_and_reentrant_pending_read_refuse_exactly": 27,
+  "test_midflight_intent_hardlink_fifo_and_foreign_uid_fences": 33,
+  "test_batch_controls_are_load_bearing": 63,
+  "test_builder_validation_controls_are_detected_in_memory": 46,
+  "test_activated_scope_readmission_uses_typed_builder": 76,
+  "test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume": 72,
+  "test_scope_change_recovers_intent_and_receipted_registry_publication": 81,
+  "test_scope_change_recovery_refuses_unproved_replace_and_disabled_control": 87,
+  "test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps": 73,
+  "test_batch_recover_repairs_one_n_record_gap": 76,
+  "test_batch_gap_repair_controls_are_independently_load_bearing": 44,
+  "test_repair_receipt_is_rederived_on_every_load": 29,
+  "test_torn_repair_receipt_resumes_only_its_derived_suffix": 44,
+  "test_activated_scope_change_rechecks_superset_containment_and_conflicts": 74,
+  "test_concurrent_admission_and_scope_change_remain_disjoint": 119,
+  "_leave_scope_receipt_gap": 69,
+  "_leave_two_record_receipt_gap": 45,
+  "_write_landed_intent_for_last_receipt": 29,
+  "test_batch_recover_repairs_proven_readmission_gap_and_stale_intent": 45,
+  "test_batch_gap_repair_refuses_unproved_bytes_and_intent": 101,
+  "test_typed_task_scope_refusal_names_offending_pathspec": 16,
+  "test_builder_request_schema_and_digest_are_exact": 53,
+  "test_run_open_is_hidden_until_atomic_publication": 34,
+  "test_run_open_prepublication_crashes_leave_no_visible_run": 32,
+  "test_run_open_durable_receipt_survives_registry_failure_and_retry": 34,
+  "test_run_open_process_death_keeps_staging_invisible_and_retryable": 75,
+  "test_fr019_failure_phase_order_preserves_earlier_bytes": 60,
+  "test_batch_crashes_recover_stored_bytes_without_duplicate_receipt": 62,
+  "test_prepublication_intent_stage_crashes_retry_without_authority": 81,
+  "test_foreign_request_intent_stage_is_not_deleted": 17,
+  "test_intent_source_name_substitution_never_survives_canonical": 67,
+  "test_intent_quarantine_preserves_a_second_canonical_swap": 85,
+  "test_chain_drain_raw_records_without_capability_refuses": 57,
+  "test_hostile_transaction_nodes_and_midflight_inode_replacement_freeze": 54,
+  "_write_bound_chain_state": 240,
+  "_chain_drain_case": 40,
+  "_chain_drain_authorizer": 93,
+  "test_chain_drain_valid_authorizer_new_and_repeated_paths": 35,
+  "test_chain_drain_authorized_pending_and_lost_response_retry": 61,
+  "test_chain_drain_authorization_exact_field_bindings": 80,
+  "test_chain_drain_authorization_controls_are_load_bearing": 52,
+  "test_ingest_requires_registered_proof_complete_authority": 89,
+  "_append_test_landing": 4,
+  "_append_test_decision": 46,
+  "_terminal_control_repo": 12,
+  "test_terminal_builder_guards_pending_outbox_and_missing_landing": 36,
+  "_abort_bound_chain_fixture": 38,
+  "test_terminal_builder_accepts_authenticated_abort_disposition": 93,
+  "test_terminal_abort_disposition_fails_closed_on_shape": 21,
+  "_self_event_fixture": 35,
+  "test_abort_disposition_self_event_admission_controls_are_load_bearing": 26,
+  "test_abort_disposition_self_event_source_fact_requires_aborted_unchanged_prior": 32,
+  "test_terminal_builder_accepts_only_explicit_absent_chain_tombstone": 73,
+  "test_terminal_builder_accepts_exact_captured_tombstone_then_quarantine": 86,
+  "test_each_terminal_chain_control_is_load_bearing": 106,
+  "test_terminal_guard_refuses_chain_root_swap_after_enumeration": 47,
+  "_open_legacy_run": 35,
+  "_activation_markers": 8,
+  "_run_file_bytes": 6,
+  "_plant_unreplayable_unrelated_chain": 14,
+  "_pad_valid_json_over_cap": 5,
+  "_guard_activation_artifact_read_budget": 46,
+  "_assert_first_batch_artifact_substitution_refuses": 60,
+  "test_batch_lock_create_open_substitution_refuses": 4,
+  "test_first_receipt_ledger_create_open_substitution_refuses": 4,
+  "test_first_receipt_ledger_post_create_substitution_refuses": 60,
+  "_activation_outbox_case": 87,
+  "_compete_with_activation_outbox": 17,
+  "_invoke_raw_lifecycle": 25,
+  "_bound_chain_outbox": 29,
+  "_acknowledge_bound_chain": 47,
+  "_legacy_receipted_chain_case": 80,
+  "_rewrite_commit_events": 25,
+  "test_commit_sibling_receipt_request_authentication_is_load_bearing": 136,
+  "test_commit_sibling_carried_binding_authentication_is_load_bearing": 158,
+  "test_commit_sibling_receipt_snapshot_recheck_is_load_bearing": 97,
+  "test_activation_scan_tolerates_unreplayable_unrelated_chain": 46,
+  "test_activation_scan_warns_and_continues_on_oversized_unrelated_state": 49,
+  "test_activation_scan_refuses_oversized_state_bound_to_this_run": 41,
+  "test_activation_state_byte_cap_is_load_bearing_in_memory": 33,
+  "test_activation_scan_refuses_oversized_bound_events_at_cap_plus_one": 48,
+  "test_activation_events_byte_cap_is_load_bearing_in_memory": 36,
+  "test_activation_scan_converts_bounded_path_memory_errors": 36,
+  "test_activation_replay_passes_scan_only_state_and_event_caps": 78,
+  "test_activation_scan_unrelated_tolerance_is_load_bearing": 18,
+  "test_activation_scan_ignores_unrelated_chain_created_between_scans": 48,
+  "test_activation_scan_bound_chain_created_between_scans_refuses": 99,
+  "test_activation_scan_skips_external_sibling_chain_and_run_lock": 87,
+  "test_concurrent_legacy_activation_never_cross_acquires_run_locks": 125,
+  "test_id_only_legacy_opening_activates_with_matching_marker_run_id": 40,
+  "test_persisted_activation_candidate_requires_allocated_id_and_contract": 97,
+  "test_activation_allocation_refuses_unicode_and_oversized_suffixes": 55,
+  "test_removed_batch_lock_after_activation_is_not_recreated": 23,
+  "test_activation_outbox_blocks_raw_append_byte_exactly_then_drains": 97,
+  "test_activation_outbox_lifecycle_guard_is_load_bearing": 37,
+  "test_legacy_raw_guard_intent_conditions_are_load_bearing": 35,
+  "test_raw_lifecycle_validation_precedes_batch_reservation": 54,
+  "test_raw_lifecycle_lock_order_is_load_bearing": 134,
+  "test_published_first_use_intent_blocks_outbox_before_publication": 50,
+  "test_staged_first_use_intent_blocks_outbox_before_publication": 29,
+  "test_raw_open_cannot_supply_writer_contract_before_any_mutation": 37,
+  "test_raw_open_writer_contract_refusal_is_load_bearing": 29,
+  "test_legacy_open_without_stderr_never_falls_back_to_stdout": 41,
+  "test_legacy_open_broken_stderr_never_changes_durable_success": 46,
+  "test_activation_outbox_reserves_first_use_then_drains_exact_batch": 81,
+  "test_activation_outbox_missing_events_or_tampered_state_refuses_first_use": 40,
+  "test_legacy_first_typed_use_atomically_activates": 90,
+  "test_legacy_activation_crash_matrix": 165,
+  "test_typed_opened_run_bytes_are_unchanged": 193,
+  "test_global_reconciliation_defers_torn_adopted_coverage": 96,
+  "_restore_prefix_wedge_fixture": 37,
+  "test_pre_fix_golden_wedge_recovers_and_continues": 129,
+  "_seed_unactivated_stale_ledger": 66,
+  "test_unactivated_stale_ledger_has_legible_refusal_and_raw_append": 55,
+  "test_unactivated_stale_ledger_retire_then_typed_successor": 28,
+  "test_unactivated_stale_ledger_raw_close_succeeds": 18,
+  "test_unactivated_stale_ledger_eof_guard_is_load_bearing": 28,
+  "_seed_gh17_wedge": 157,
+  "_assert_gh17_recovered": 77,
+  "test_gh17_shape_recovers_without_reapplication": 56,
+  "test_gh17_shape_refuses_explicit_foreign_gap_run_id": 21,
+  "test_recovery_activation_crash_matrix": 112,
+  "test_repair_receipt_n_record_members_rederived": 119,
+  "test_stable_reader_rederives_every_n_record_repair_member": 105,
+  "test_writer_activation_controls_are_independently_load_bearing": 51,
+  "test_retired_successor_close_intent_recovers_and_releases_registry": 39,
+  "test_retired_successor_close_recovers_every_stored_suffix_prefix": 81,
+  "test_retired_successor_recovery_rejects_other_run_mutation": 77,
+  "test_internal_typed_flag_cannot_bypass_activated_batch_builders": 51,
+  "command": 10,
+  "test_cli_legacy_open_notice_is_stderr_only_and_typed_open_is_quiet": 106,
+  "test_cli_singleton_and_idempotency_key_diagnostics": 25
+ },
+ "clusters": [
+  [
+   "setUp",
+   "test_typed_builder_round_trip_ids_receipts_and_idempotency",
+   "_leave_complete_intent",
+   "test_exact_prefix_and_torn_receipt_recovery",
+   "test_pending_reader_refuses_without_mutation_and_absent_lock_is_read_only",
+   "test_midflight_intent_hardlink_fifo_and_foreign_uid_fences",
+   "test_batch_controls_are_load_bearing",
+   "test_activated_scope_readmission_uses_typed_builder",
+   "test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume",
+   "test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps",
+   "test_batch_recover_repairs_one_n_record_gap",
+   "test_batch_gap_repair_controls_are_independently_load_bearing",
+   "test_activated_scope_change_rechecks_superset_containment_and_conflicts",
+   "test_concurrent_admission_and_scope_change_remain_disjoint",
+   "_leave_two_record_receipt_gap",
+   "_write_landed_intent_for_last_receipt",
+   "test_run_open_durable_receipt_survives_registry_failure_and_retry",
+   "test_hostile_transaction_nodes_and_midflight_inode_replacement_freeze",
+   "test_ingest_requires_registered_proof_complete_authority",
+   "test_activation_scan_skips_external_sibling_chain_and_run_lock",
+   "test_concurrent_legacy_activation_never_cross_acquires_run_locks",
+   "test_raw_open_writer_contract_refusal_is_load_bearing",
+   "test_legacy_open_without_stderr_never_falls_back_to_stdout",
+   "test_legacy_open_broken_stderr_never_changes_durable_success",
+   "_seed_gh17_wedge",
+   "_assert_gh17_recovered",
+   "test_gh17_shape_recovers_without_reapplication",
+   "test_gh17_shape_refuses_explicit_foreign_gap_run_id",
+   "test_recovery_activation_crash_matrix",
+   "test_repair_receipt_n_record_members_rederived",
+   "test_stable_reader_rederives_every_n_record_repair_member",
+   "test_writer_activation_controls_are_independently_load_bearing",
+   "command",
+   "test_cli_legacy_open_notice_is_stderr_only_and_typed_open_is_quiet",
+   "test_cli_singleton_and_idempotency_key_diagnostics"
+  ],
+  [
+   "_leave_base_intent",
+   "test_torn_intent_never_becomes_authoritative",
+   "test_intent_without_journal_and_reentrant_pending_read_refuse_exactly"
+  ],
+  [
+   "test_self_consistent_intent_substitution_after_prepare_is_refused"
+  ],
+  [
+   "test_activated_missing_stable_lock_or_receipt_ledger_diverges"
+  ],
+  [
+   "test_ledger_wide_duplicate_and_unrelated_invalid_receipts_freeze"
+  ],
+  [
+   "test_builder_validation_controls_are_detected_in_memory"
+  ],
+  [
+   "test_scope_change_recovers_intent_and_receipted_registry_publication"
+  ],
+  [
+   "test_scope_change_recovery_refuses_unproved_replace_and_disabled_control"
+  ],
+  [
+   "test_repair_receipt_is_rederived_on_every_load",
+   "test_torn_repair_receipt_resumes_only_its_derived_suffix",
+   "_leave_scope_receipt_gap",
+   "test_batch_recover_repairs_proven_readmission_gap_and_stale_intent",
+   "test_batch_gap_repair_refuses_unproved_bytes_and_intent"
+  ],
+  [
+   "test_typed_task_scope_refusal_names_offending_pathspec"
+  ],
+  [
+   "test_builder_request_schema_and_digest_are_exact"
+  ],
+  [
+   "test_run_open_is_hidden_until_atomic_publication"
+  ],
+  [
+   "test_run_open_prepublication_crashes_leave_no_visible_run",
+   "test_batch_crashes_recover_stored_bytes_without_duplicate_receipt",
+   "_write_bound_chain_state",
+   "_chain_drain_case",
+   "_chain_drain_authorizer",
+   "test_chain_drain_valid_authorizer_new_and_repeated_paths",
+   "test_chain_drain_authorized_pending_and_lost_response_retry",
+   "test_chain_drain_authorization_exact_field_bindings",
+   "test_chain_drain_authorization_controls_are_load_bearing",
+   "_append_test_landing",
+   "_append_test_decision",
+   "_terminal_control_repo",
+   "test_terminal_builder_guards_pending_outbox_and_missing_landing",
+   "_abort_bound_chain_fixture",
+   "test_terminal_builder_accepts_authenticated_abort_disposition",
+   "test_terminal_builder_accepts_only_explicit_absent_chain_tombstone",
+   "test_terminal_builder_accepts_exact_captured_tombstone_then_quarantine",
+   "test_each_terminal_chain_control_is_load_bearing",
+   "test_terminal_guard_refuses_chain_root_swap_after_enumeration",
+   "_activation_markers",
+   "_plant_unreplayable_unrelated_chain",
+   "_pad_valid_json_over_cap",
+   "_guard_activation_artifact_read_budget",
+   "_activation_outbox_case",
+   "_compete_with_activation_outbox",
+   "_invoke_raw_lifecycle",
+   "test_commit_sibling_receipt_snapshot_recheck_is_load_bearing",
+   "test_activation_scan_tolerates_unreplayable_unrelated_chain",
+   "test_activation_scan_warns_and_continues_on_oversized_unrelated_state",
+   "test_activation_scan_refuses_oversized_state_bound_to_this_run",
+   "test_activation_state_byte_cap_is_load_bearing_in_memory",
+   "test_activation_scan_refuses_oversized_bound_events_at_cap_plus_one",
+   "test_activation_events_byte_cap_is_load_bearing_in_memory",
+   "test_activation_scan_converts_bounded_path_memory_errors",
+   "test_activation_replay_passes_scan_only_state_and_event_caps",
+   "test_activation_scan_unrelated_tolerance_is_load_bearing",
+   "test_activation_outbox_blocks_raw_append_byte_exactly_then_drains",
+   "test_activation_outbox_lifecycle_guard_is_load_bearing",
+   "test_raw_lifecycle_validation_precedes_batch_reservation",
+   "test_raw_open_cannot_supply_writer_contract_before_any_mutation",
+   "test_activation_outbox_reserves_first_use_then_drains_exact_batch",
+   "test_activation_outbox_missing_events_or_tampered_state_refuses_first_use",
+   "test_legacy_activation_crash_matrix",
+   "test_unactivated_stale_ledger_raw_close_succeeds"
+  ],
+  [
+   "test_run_open_process_death_keeps_staging_invisible_and_retryable",
+   "test_id_only_legacy_opening_activates_with_matching_marker_run_id",
+   "test_retired_successor_close_intent_recovers_and_releases_registry",
+   "test_retired_successor_close_recovers_every_stored_suffix_prefix"
+  ],
+  [
+   "test_fr019_failure_phase_order_preserves_earlier_bytes"
+  ],
+  [
+   "test_prepublication_intent_stage_crashes_retry_without_authority"
+  ],
+  [
+   "test_foreign_request_intent_stage_is_not_deleted"
+  ],
+  [
+   "test_intent_source_name_substitution_never_survives_canonical"
+  ],
+  [
+   "test_intent_quarantine_preserves_a_second_canonical_swap"
+  ],
+  [
+   "test_chain_drain_raw_records_without_capability_refuses"
+  ],
+  [
+   "test_terminal_abort_disposition_fails_closed_on_shape"
+  ],
+  [
+   "_self_event_fixture",
+   "test_abort_disposition_self_event_admission_controls_are_load_bearing",
+   "test_abort_disposition_self_event_source_fact_requires_aborted_unchanged_prior"
+  ],
+  [
+   "_run_file_bytes",
+   "test_first_receipt_ledger_post_create_substitution_refuses",
+   "test_persisted_activation_candidate_requires_allocated_id_and_contract",
+   "test_activation_allocation_refuses_unicode_and_oversized_suffixes",
+   "test_removed_batch_lock_after_activation_is_not_recreated",
+   "test_legacy_raw_guard_intent_conditions_are_load_bearing",
+   "test_staged_first_use_intent_blocks_outbox_before_publication",
+   "test_legacy_first_typed_use_atomically_activates",
+   "test_typed_opened_run_bytes_are_unchanged",
+   "test_global_reconciliation_defers_torn_adopted_coverage",
+   "_restore_prefix_wedge_fixture",
+   "_seed_unactivated_stale_ledger",
+   "test_unactivated_stale_ledger_has_legible_refusal_and_raw_append",
+   "test_unactivated_stale_ledger_retire_then_typed_successor",
+   "test_unactivated_stale_ledger_eof_guard_is_load_bearing",
+   "test_retired_successor_recovery_rejects_other_run_mutation"
+  ],
+  [
+   "_assert_first_batch_artifact_substitution_refuses",
+   "test_batch_lock_create_open_substitution_refuses",
+   "test_first_receipt_ledger_create_open_substitution_refuses"
+  ],
+  [
+   "_bound_chain_outbox",
+   "_acknowledge_bound_chain",
+   "_legacy_receipted_chain_case",
+   "_rewrite_commit_events",
+   "test_commit_sibling_receipt_request_authentication_is_load_bearing",
+   "test_commit_sibling_carried_binding_authentication_is_load_bearing"
+  ],
+  [
+   "test_activation_scan_ignores_unrelated_chain_created_between_scans"
+  ],
+  [
+   "test_activation_scan_bound_chain_created_between_scans_refuses"
+  ],
+  [
+   "test_raw_lifecycle_lock_order_is_load_bearing"
+  ],
+  [
+   "test_published_first_use_intent_blocks_outbox_before_publication"
+  ],
+  [
+   "test_pre_fix_golden_wedge_recovers_and_continues"
+  ],
+  [
+   "test_internal_typed_flag_cannot_bypass_activated_batch_builders"
+  ],
+  [
+   "api_environment"
+  ],
+  [
+   "run_dir"
+  ],
+  [
+   "_new_repo"
+  ],
+  [
+   "start_task"
+  ],
+  [
+   "_open_legacy_run"
+  ],
+  [
+   "open_run"
+  ]
+ ],
+ "hubs": [
+  "@state:assertEqual",
+  "api_environment",
+  "run_dir",
+  "_new_repo",
+  "@state:assertRaisesRegex",
+  "@state:assertFalse",
+  "@state:assertTrue",
+  "start_task",
+  "@state:subTest",
+  "@state:repo",
+  "_open_legacy_run",
+  "open_run"
+ ]
+}
