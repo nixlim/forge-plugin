@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "c3eb0199568be8504176da85e464babccc792401529955c7e7e67e94535d9515",
+    "tests/test_revision9_coordination_gap_repair.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_gap_repair.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps",
+        "test_batch_recover_repairs_one_n_record_gap",
+        "test_batch_gap_repair_controls_are_independently_load_bearing",
+        "test_repair_receipt_is_rederived_on_every_load",
+        "test_torn_repair_receipt_resumes_only_its_derived_suffix",
+        "_leave_scope_receipt_gap",
+        "_leave_two_record_receipt_gap",
+        "test_batch_recover_repairs_proven_readmission_gap_and_stale_intent",
+        "test_batch_gap_repair_refuses_unproved_bytes_and_intent",
+        "test_repair_receipt_n_record_members_rederived",
+        "test_stable_reader_rederives_every_n_record_repair_member"
+      ],
+      "shape": "class",
+      "target_class": "Revision9GapRepairTests",
+      "alias": "test_revision9_coordination_gap_repair",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_gap_repair.py": [
+          "from __future__ import annotations",
+          "import base64",
+          "import json",
+          "import unittest",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_gap_repair_controls_are_independently_load_bearing": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_batch_gap_repair_controls_are_independently_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_gap_repair_refuses_unproved_bytes_and_intent": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_batch_gap_repair_refuses_unproved_bytes_and_intent",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_recover_repairs_one_n_record_gap": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_batch_recover_repairs_one_n_record_gap",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_recover_repairs_proven_readmission_gap_and_stale_intent": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_batch_recover_repairs_proven_readmission_gap_and_stale_intent",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_repair_receipt_is_rederived_on_every_load": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_repair_receipt_is_rederived_on_every_load",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_repair_receipt_n_record_members_rederived": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_repair_receipt_n_record_members_rederived",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_stable_reader_rederives_every_n_record_repair_member": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_stable_reader_rederives_every_n_record_repair_member",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_torn_repair_receipt_resumes_only_its_derived_suffix": "tests/test_revision9_coordination_gap_repair.py::Revision9GapRepairTests::test_torn_repair_receipt_resumes_only_its_derived_suffix"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_gap_repair_controls_are_independently_load_bearing": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_batch_gap_repair_controls_are_independently_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_batch_gap_repair_refuses_leading_trailing_and_ambiguous_gaps",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_gap_repair_refuses_unproved_bytes_and_intent": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_batch_gap_repair_refuses_unproved_bytes_and_intent",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_recover_repairs_one_n_record_gap": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_batch_recover_repairs_one_n_record_gap",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_recover_repairs_proven_readmission_gap_and_stale_intent": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_batch_recover_repairs_proven_readmission_gap_and_stale_intent",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_repair_receipt_is_rederived_on_every_load": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_repair_receipt_is_rederived_on_every_load",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_repair_receipt_n_record_members_rederived": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_repair_receipt_n_record_members_rederived",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_stable_reader_rederives_every_n_record_repair_member": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_stable_reader_rederives_every_n_record_repair_member",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_torn_repair_receipt_resumes_only_its_derived_suffix": "test_revision9_coordination_gap_repair.Revision9GapRepairTests.test_torn_repair_receipt_resumes_only_its_derived_suffix"
+    }
+  },
+  "base_commit": "666ab3ba14ec6ef6588393dac1e89b576a85d6b0"
+}

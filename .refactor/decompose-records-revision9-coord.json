@@ -38,5 +38,15 @@
   "dest": "tests/test_revision9_coordination_scope_change.py",
   "target_class": "Revision9ScopeChangeTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c04-gap_repair",
+  "commit": "d3d137aa86ed8bb552b7238ccd9cc652cd3b58a8",
+  "snapshot": ".refactor/revision9-coord-c04-gap_repair-before.json",
+  "manifest": ".refactor/family-revision9-coord-gap_repair.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c04-gap_repair.json",
+  "dest": "tests/test_revision9_coordination_gap_repair.py",
+  "target_class": "Revision9GapRepairTests",
+  "shape": "class"
  }
 ]

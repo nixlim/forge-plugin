@@ -1,0 +1,18 @@
+== c04-gap_repair start=2026-09-23T11:08:05Z head=666ab3b load=8.92 8.10 8.69
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2910 bodies across 2888 names -> .refactor/revision9-coord-c04-gap_repair-before.json
+id map: 9 unittest + 9 pytest -> .refactor/idmap-revision9-coord-gap_repair.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-gap_repair.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 238 files within budget (max 1000)
+Ran 9 tests in 2.894s OK (standalone tests.test_revision9_coordination_gap_repair without PYTHONPATH)
+== c04-gap_repair record SHA d3d137aa86ed8bb552b7238ccd9cc652cd3b58a8 (pre-amend); amending the record and the driver log into it end=2026-09-23T11:09:03Z
