@@ -1,0 +1,11 @@
+== gate results ==
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+gate rc=0 wall=23s load=7.87 8.25 8.64

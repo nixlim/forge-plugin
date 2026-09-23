@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "245cb0c09c3ef88ae3245be7d26487a61528503c79caa6d72e8dd93594dea6ff",
+    "tests/test_revision9_coordination_legacy_activation.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_legacy_activation.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_assert_first_batch_artifact_substitution_refuses",
+        "test_batch_lock_create_open_substitution_refuses",
+        "test_first_receipt_ledger_create_open_substitution_refuses",
+        "test_first_receipt_ledger_post_create_substitution_refuses",
+        "test_id_only_legacy_opening_activates_with_matching_marker_run_id",
+        "test_persisted_activation_candidate_requires_allocated_id_and_contract",
+        "test_activation_allocation_refuses_unicode_and_oversized_suffixes",
+        "test_removed_batch_lock_after_activation_is_not_recreated",
+        "test_legacy_first_typed_use_atomically_activates",
+        "test_legacy_activation_crash_matrix",
+        "test_typed_opened_run_bytes_are_unchanged",
+        "test_global_reconciliation_defers_torn_adopted_coverage"
+      ],
+      "shape": "class",
+      "target_class": "Revision9LegacyActivationTests",
+      "alias": "test_revision9_coordination_legacy_activation",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_legacy_activation.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import os",
+          "import unittest",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_allocation_refuses_unicode_and_oversized_suffixes": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_activation_allocation_refuses_unicode_and_oversized_suffixes",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_lock_create_open_substitution_refuses": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_batch_lock_create_open_substitution_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_first_receipt_ledger_create_open_substitution_refuses": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_first_receipt_ledger_create_open_substitution_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_first_receipt_ledger_post_create_substitution_refuses": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_first_receipt_ledger_post_create_substitution_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_global_reconciliation_defers_torn_adopted_coverage": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_global_reconciliation_defers_torn_adopted_coverage",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_id_only_legacy_opening_activates_with_matching_marker_run_id": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_id_only_legacy_opening_activates_with_matching_marker_run_id",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_legacy_activation_crash_matrix": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_legacy_activation_crash_matrix",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_legacy_first_typed_use_atomically_activates": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_legacy_first_typed_use_atomically_activates",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_persisted_activation_candidate_requires_allocated_id_and_contract": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_persisted_activation_candidate_requires_allocated_id_and_contract",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_removed_batch_lock_after_activation_is_not_recreated": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_removed_batch_lock_after_activation_is_not_recreated",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_typed_opened_run_bytes_are_unchanged": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_typed_opened_run_bytes_are_unchanged"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_allocation_refuses_unicode_and_oversized_suffixes": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_activation_allocation_refuses_unicode_and_oversized_suffixes",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_lock_create_open_substitution_refuses": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_batch_lock_create_open_substitution_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_first_receipt_ledger_create_open_substitution_refuses": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_first_receipt_ledger_create_open_substitution_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_first_receipt_ledger_post_create_substitution_refuses": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_first_receipt_ledger_post_create_substitution_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_global_reconciliation_defers_torn_adopted_coverage": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_global_reconciliation_defers_torn_adopted_coverage",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_id_only_legacy_opening_activates_with_matching_marker_run_id": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_id_only_legacy_opening_activates_with_matching_marker_run_id",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_legacy_activation_crash_matrix": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_legacy_activation_crash_matrix",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_legacy_first_typed_use_atomically_activates": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_legacy_first_typed_use_atomically_activates",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_persisted_activation_candidate_requires_allocated_id_and_contract": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_persisted_activation_candidate_requires_allocated_id_and_contract",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_removed_batch_lock_after_activation_is_not_recreated": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_removed_batch_lock_after_activation_is_not_recreated",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_typed_opened_run_bytes_are_unchanged": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_typed_opened_run_bytes_are_unchanged"
+    }
+  },
+  "base_commit": "744293d1eccc36565226a148e01a21498f190808"
+}
