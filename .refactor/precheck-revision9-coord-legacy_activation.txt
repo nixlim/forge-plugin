@@ -1,0 +1,1981 @@
+--- tests/test_revision9_coordination.py
++++ tests/test_revision9_coordination.py
+@@ -3691,144 +3691,6 @@
+         ):
+             yield totals
+ 
+-    def _assert_first_batch_artifact_substitution_refuses(
+-        self, target_name: str
+-    ) -> None:
+-        label = target_name.strip(".").replace(".", "-")
+-        repo, _ = self._new_repo(f"repo-create-open-{label}")
+-        run_id = f"run-20260910-create-open-{key(target_name)[:8]}"
+-        with self.api_environment():
+-            self._open_legacy_run(repo, run_id)
+-            run_dir = self.run_dir(repo, run_id)
+-            if target_name == journal.BATCH_RECEIPTS_NAME:
+-                with batch.batch_lock(run_dir, create=True):
+-                    pass
+-            journal_before = (run_dir / "journal.jsonl").read_bytes()
+-            displaced_name = f"{target_name}.displaced-original"
+-            observations: dict[str, journal.FileObservation] = {}
+-            original_create = batch._create_empty_at
+-
+-            def substitute_after_create(
+-                directory_descriptor: int, name: str
+-            ) -> journal.FileObservation:
+-                created = original_create(directory_descriptor, name)
+-                if name != target_name:
+-                    return created
+-                os.rename(
+-                    name,
+-                    displaced_name,
+-                    src_dir_fd=directory_descriptor,
+-                    dst_dir_fd=directory_descriptor,
+-                )
+-                replacement = original_create(directory_descriptor, name)
+-                observations["created"] = created
+-                observations["replacement"] = replacement
+-                return created
+-
+-            with mock.patch.object(
+-                batch,
+-                "_create_empty_at",
+-                side_effect=substitute_after_create,
+-            ), self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                journal.BATCH_DIVERGED,
+-            ):
+-                self.start_task(repo, run_id)
+-
+-            replacement_path = run_dir / target_name
+-            displaced_path = run_dir / displaced_name
+-            self.assertEqual(replacement_path.read_bytes(), b"")
+-            self.assertEqual(displaced_path.read_bytes(), b"")
+-            self.assertEqual(
+-                journal._file_observation(os.lstat(replacement_path)),
+-                observations["replacement"],
+-            )
+-            self.assertEqual(
+-                journal._file_observation(os.lstat(displaced_path)),
+-                observations["created"],
+-            )
+-            self.assertNotEqual(
+-                observations["created"], observations["replacement"]
+-            )
+-            self.assertEqual(
+-                (run_dir / "journal.jsonl").read_bytes(), journal_before
+-            )
+-            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+-
+-    def test_batch_lock_create_open_substitution_refuses(self) -> None:
+-        self._assert_first_batch_artifact_substitution_refuses(
+-            journal.BATCH_LOCK_NAME
+-        )
+-
+-    def test_first_receipt_ledger_create_open_substitution_refuses(self) -> None:
+-        self._assert_first_batch_artifact_substitution_refuses(
+-            journal.BATCH_RECEIPTS_NAME
+-        )
+-
+-    def test_first_receipt_ledger_post_create_substitution_refuses(self) -> None:
+-        repo, _ = self._new_repo("repo-receipt-post-create-substitution")
+-        run_id = "run-20260910-receipt-post-create-substitution"
+-        with self.api_environment():
+-            self._open_legacy_run(repo, run_id)
+-            run_dir = self.run_dir(repo, run_id)
+-            with batch.batch_lock(run_dir, create=True):
+-                pass
+-            journal_before = (run_dir / "journal.jsonl").read_bytes()
+-            displaced_name = (
+-                f"{journal.BATCH_RECEIPTS_NAME}.displaced-original"
+-            )
+-            observations: dict[str, journal.FileObservation] = {}
+-            original_ensure = batch._ensure_receipt_ledger
+-
+-            def substitute_after_ensure(
+-                locked: batch.BatchLock, *, allow_preintent: bool = False
+-            ) -> journal.FileObservation:
+-                created = original_ensure(
+-                    locked, allow_preintent=allow_preintent
+-                )
+-                os.rename(
+-                    journal.BATCH_RECEIPTS_NAME,
+-                    displaced_name,
+-                    src_dir_fd=locked.run_descriptor,
+-                    dst_dir_fd=locked.run_descriptor,
+-                )
+-                replacement = batch._create_empty_at(
+-                    locked.run_descriptor, journal.BATCH_RECEIPTS_NAME
+-                )
+-                observations["created"] = created
+-                observations["replacement"] = replacement
+-                return created
+-
+-            with mock.patch.object(
+-                batch,
+-                "_ensure_receipt_ledger",
+-                side_effect=substitute_after_ensure,
+-            ), self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                journal.BATCH_DIVERGED,
+-            ):
+-                self.start_task(repo, run_id)
+-
+-            replacement_path = run_dir / journal.BATCH_RECEIPTS_NAME
+-            displaced_path = run_dir / displaced_name
+-            self.assertEqual(replacement_path.read_bytes(), b"")
+-            self.assertEqual(displaced_path.read_bytes(), b"")
+-            self.assertEqual(
+-                journal._file_observation(os.lstat(replacement_path)),
+-                observations["replacement"],
+-            )
+-            self.assertEqual(
+-                journal._file_observation(os.lstat(displaced_path)),
+-                observations["created"],
+-            )
+-            self.assertNotEqual(
+-                observations["created"], observations["replacement"]
+-            )
+-            self.assertEqual(
+-                (run_dir / "journal.jsonl").read_bytes(), journal_before
+-            )
+-            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+-
+     def _activation_outbox_case(
+         self, name: str
+     ) -> tuple[
+@@ -5314,231 +5176,6 @@
+                     journal._writer_activation_marker(outcome.records[0])
+                 )
+ 
+-    def test_id_only_legacy_opening_activates_with_matching_marker_run_id(
+-        self,
+-    ) -> None:
+-        run_id = "run-20260910-id-only-legacy-activation"
+-        opening = {
+-            "type": "run_started",
+-            "id": run_id,
+-            "goal": "legacy identity is keyed only by id",
+-        }
+-        with self.api_environment():
+-            run_dir = self.run_dir(self.repo, run_id)
+-            run_dir.mkdir(parents=True)
+-            opening_bytes = journal._canonical_json_bytes(opening) + b"\n"
+-            journal_path = run_dir / "journal.jsonl"
+-            journal_path.write_bytes(opening_bytes)
+-
+-            started = self.start_task(self.repo, run_id)
+-
+-            self.assertFalse(started.repeated)
+-            self.assertEqual(len(started.records), 2)
+-            marker, task = started.records
+-            self.assertTrue(journal._writer_activation_marker(marker))
+-            self.assertEqual(marker["run_id"], run_id)
+-            self.assertEqual(marker["receipt_origin_size"], len(opening_bytes))
+-            self.assertEqual(
+-                marker["receipt_origin_sha256"],
+-                journal._sha256(opening_bytes),
+-            )
+-            self.assertEqual(task["type"], "task")
+-            persisted = journal_path.read_bytes()
+-            self.assertEqual(persisted[: len(opening_bytes)], opening_bytes)
+-            self.assertEqual(json.loads(persisted.splitlines()[0]), opening)
+-            self.assertNotIn("run_id", json.loads(persisted.splitlines()[0]))
+-            receipts = [
+-                json.loads(line)
+-                for line in (
+-                    run_dir / journal.BATCH_RECEIPTS_NAME
+-                ).read_bytes().splitlines()
+-            ]
+-            self.assertEqual(len(receipts), 1)
+-            self.assertEqual(receipts[0]["base_size"], len(opening_bytes))
+-            self.assertEqual(receipts[0]["record_count"], 2)
+-
+-    def test_persisted_activation_candidate_requires_allocated_id_and_contract(
+-        self,
+-    ) -> None:
+-        for attack in ("non-allocated-id", "writer-contract-v2"):
+-            with self.subTest(attack=attack):
+-                repo, _ = self._new_repo(f"repo-persisted-{attack}")
+-                run_id = f"run-20260910-persisted-{attack}"
+-                with self.api_environment():
+-                    self._open_legacy_run(repo, run_id)
+-                    run_dir = self.run_dir(repo, run_id)
+-                    journal_path = run_dir / "journal.jsonl"
+-                    journal.append_owned_record(
+-                        journal_path,
+-                        {
+-                            "type": "decision",
+-                            "id": "decision-01",
+-                            "resolution": "Establish the prior allocation",
+-                            "basis": [],
+-                            "run_id": run_id,
+-                            "recorded_at": "2026-09-10T03:30:00Z",
+-                        },
+-                    )
+-                    legacy_prefix = journal_path.read_bytes()
+-                    with batch.batch_lock(run_dir, create=True) as locked:
+-                        batch._ensure_receipt_ledger(locked)
+-                    state = journal._scan_run(run_dir)
+-                    marker = builders._writer_activation_decision(
+-                        state,
+-                        receipt_origin_size=len(legacy_prefix),
+-                        receipt_origin_sha256=journal._sha256(legacy_prefix),
+-                        recorded_at="2026-09-10T03:31:00Z",
+-                    )
+-                    if attack == "non-allocated-id":
+-                        marker["id"] = "decision-03"
+-                        self.assertTrue(journal._writer_activation_marker(marker))
+-                        self.assertFalse(
+-                            journal._writer_activation_id_is_allocated(
+-                                [*state.records, marker], marker
+-                            )
+-                        )
+-                    else:
+-                        marker["writer_contract"] = (
+-                            journal.WRITER_CONTRACT.rsplit("/", 1)[0] + "/2"
+-                        )
+-                        self.assertTrue(
+-                            journal._writer_activation_candidate(marker)
+-                        )
+-                        self.assertFalse(journal._writer_activation_marker(marker))
+-                    task = {
+-                        "type": "task",
+-                        "id": "task-01",
+-                        "status": "active",
+-                        "goal": "Refuse an unproved persisted activation",
+-                        "acceptance": ["No bytes change"],
+-                        "files": ["src/example.py"],
+-                        "run_id": run_id,
+-                        "recorded_at": "2026-09-10T03:31:00Z",
+-                    }
+-                    adopting_bytes = (
+-                        journal._journal_line(marker)
+-                        + journal._journal_line(task)
+-                    )
+-                    persisted = legacy_prefix + adopting_bytes
+-                    journal_path.write_bytes(persisted)
+-                    receipt = {
+-                        "schema": journal.BATCH_RECEIPT_SCHEMA,
+-                        "idempotency_key": key(
+-                            f"persisted-{attack}-activation"
+-                        ),
+-                        "request_sha256": key(
+-                            f"persisted-{attack}-request"
+-                        ),
+-                        "base_size": len(legacy_prefix),
+-                        "batch_sha256": journal._sha256(adopting_bytes),
+-                        "record_count": 2,
+-                        "journal_size": len(persisted),
+-                        "journal_sha256": journal._sha256(persisted),
+-                        "recorded_at": "2026-09-10T03:31:00Z",
+-                    }
+-                    (run_dir / journal.BATCH_RECEIPTS_NAME).write_bytes(
+-                        journal._canonical_json_bytes(receipt) + b"\n"
+-                    )
+-
+-                    before = self._run_file_bytes(run_dir)
+-                    with self.assertRaisesRegex(
+-                        journal.CoordinationRefusal,
+-                        journal.BATCH_DIVERGED,
+-                    ):
+-                        builders.task_finish(
+-                            repo,
+-                            run_id,
+-                            idempotency_key=key(
+-                                f"persisted-{attack}-competing-finish"
+-                            ),
+-                            task="task-01",
+-                            status="complete",
+-                        )
+-                    self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+-    def test_activation_allocation_refuses_unicode_and_oversized_suffixes(
+-        self,
+-    ) -> None:
+-        for attack, suffix in (
+-            ("unicode-digits", "１２"),
+-            ("oversized-suffix", "9" * 65),
+-        ):
+-            with self.subTest(attack=attack):
+-                repo, _ = self._new_repo(f"repo-allocation-{attack}")
+-                run_id = f"run-20260910-allocation-{attack}"
+-                with self.api_environment():
+-                    self._open_legacy_run(repo, run_id)
+-                    run_dir = self.run_dir(repo, run_id)
+-                    journal_path = run_dir / "journal.jsonl"
+-                    journal.append_owned_record(
+-                        journal_path,
+-                        {
+-                            "type": "decision",
+-                            "id": f"decision-{suffix}",
+-                            "resolution": "Hostile numeric-looking suffix",
+-                            "basis": [],
+-                            "run_id": run_id,
+-                            "recorded_at": "2026-09-10T03:40:00Z",
+-                        },
+-                    )
+-                    with batch.batch_lock(run_dir, create=True) as locked:
+-                        batch._ensure_receipt_ledger(locked)
+-                    before = self._run_file_bytes(run_dir)
+-                    with self.assertRaisesRegex(
+-                        journal.CoordinationRefusal,
+-                        journal.BATCH_DIVERGED,
+-                    ):
+-                        self.start_task(repo, run_id, label=attack)
+-                    self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+-                    state = journal._scan_run(run_dir)
+-                    marker = {
+-                        "type": "decision",
+-                        "id": f"decision-{int(suffix) + 1:02d}",
+-                        "resolution": journal.WRITER_ACTIVATION_RESOLUTION,
+-                        "writer_contract": journal.WRITER_CONTRACT,
+-                        "receipt_origin_size": len(
+-                            journal_path.read_bytes()
+-                        ),
+-                        "receipt_origin_sha256": journal._sha256(
+-                            journal_path.read_bytes()
+-                        ),
+-                        "run_id": run_id,
+-                        "recorded_at": "2026-09-10T03:41:00Z",
+-                    }
+-                    self.assertTrue(journal._writer_activation_marker(marker))
+-                    self.assertFalse(
+-                        journal._writer_activation_id_is_allocated(
+-                            [*state.records, marker], marker
+-                        )
+-                    )
+-
+-    def test_removed_batch_lock_after_activation_is_not_recreated(self) -> None:
+-        run_id = "run-20260910-removed-activation-lock"
+-        with self.api_environment():
+-            self._open_legacy_run(self.repo, run_id)
+-            self.start_task(self.repo, run_id)
+-            run_dir = self.run_dir(self.repo, run_id)
+-            lock_path = run_dir / journal.BATCH_LOCK_NAME
+-            self.assertTrue(lock_path.is_file())
+-            lock_path.unlink()
+-            before = self._run_file_bytes(run_dir)
+-
+-            with self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                journal.BATCH_DIVERGED,
+-            ):
+-                builders.task_finish(
+-                    self.repo,
+-                    run_id,
+-                    idempotency_key=key("removed-activation-lock-finish"),
+-                    task="task-01",
+-                    status="complete",
+-                )
+-
+-            self.assertFalse(lock_path.exists())
+-            self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+     def test_activation_outbox_blocks_raw_append_byte_exactly_then_drains(
+         self,
+     ) -> None:
+@@ -6291,575 +5928,6 @@
+                     )
+ 
+                 self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+-    def test_legacy_first_typed_use_atomically_activates(self) -> None:
+-        run_id = "run-20260910-legacy-first-typed-use"
+-        with self.api_environment():
+-            self._open_legacy_run(self.repo, run_id)
+-            run_dir = self.run_dir(self.repo, run_id)
+-            journal_path = run_dir / "journal.jsonl"
+-            journal.append_owned_record(
+-                journal_path,
+-                {
+-                    "type": "decision",
+-                    "id": "decision-01",
+-                    "resolution": "Preserve a legacy decision before adoption",
+-                    "basis": [],
+-                    "run_id": run_id,
+-                    "recorded_at": "2026-09-10T00:00:01Z",
+-                },
+-            )
+-            legacy_prefix = journal_path.read_bytes()
+-
+-            started = self.start_task(self.repo, run_id)
+-            self.assertFalse(started.repeated)
+-            self.assertEqual(len(started.records), 2)
+-            marker, task = started.records
+-            self.assertEqual(set(marker), set(journal.WRITER_ACTIVATION_FIELDS))
+-            self.assertEqual(marker["id"], "decision-02")
+-            self.assertEqual(
+-                marker["resolution"], journal.WRITER_ACTIVATION_RESOLUTION
+-            )
+-            self.assertEqual(marker["writer_contract"], journal.WRITER_CONTRACT)
+-            self.assertEqual(marker["receipt_origin_size"], len(legacy_prefix))
+-            self.assertEqual(
+-                marker["receipt_origin_sha256"],
+-                journal._sha256(legacy_prefix),
+-            )
+-            self.assertEqual(marker["run_id"], run_id)
+-            self.assertNotIn("basis", marker)
+-            self.assertEqual(task["type"], "task")
+-            self.assertEqual(task["id"], "task-01")
+-
+-            batch_bytes = journal._journal_line(marker) + journal._journal_line(task)
+-            ledger = run_dir / journal.BATCH_RECEIPTS_NAME
+-            receipts = [json.loads(line) for line in ledger.read_bytes().splitlines()]
+-            self.assertEqual(len(receipts), 1)
+-            adopting = receipts[0]
+-            self.assertEqual(adopting["base_size"], len(legacy_prefix))
+-            self.assertEqual(adopting["record_count"], 2)
+-            self.assertEqual(adopting["batch_sha256"], journal._sha256(batch_bytes))
+-            self.assertEqual(
+-                adopting["journal_size"], len(legacy_prefix) + len(batch_bytes)
+-            )
+-            self.assertEqual(
+-                adopting["journal_sha256"],
+-                journal._sha256(legacy_prefix + batch_bytes),
+-            )
+-            records, issues = journal.read_journal(journal_path)
+-            self.assertEqual(issues, [])
+-            self.assertTrue(journal._writer_contract_active(records))
+-            with batch.batch_lock(run_dir, create=False) as locked:
+-                self.assertTrue(
+-                    batch._writer_contract_activated(locked.run_descriptor)
+-                )
+-
+-            before_raw = self._run_file_bytes(run_dir)
+-            with self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                "activated writer requires typed builder",
+-            ):
+-                journal.append_owned_record(
+-                    journal_path,
+-                    {
+-                        "type": "verification",
+-                        "id": "check-01",
+-                        "task": "task-01",
+-                        "criterion": "raw append remains blocked after adoption",
+-                        "method": "unittest",
+-                        "check": "python3 -m unittest",
+-                        "result": "passed",
+-                        "observation": "must not append",
+-                        "evidence": [],
+-                        "run_id": run_id,
+-                        "recorded_at": "2026-09-10T00:00:02Z",
+-                    },
+-                )
+-            self.assertEqual(self._run_file_bytes(run_dir), before_raw)
+-
+-            finished = builders.task_finish(
+-                self.repo,
+-                run_id,
+-                idempotency_key=key("legacy-first-use-finish"),
+-                task="task-01",
+-                status="complete",
+-            )
+-            self.assertEqual(len(finished.records), 1)
+-            self.assertEqual(finished.records[0]["status"], "complete")
+-
+-    def test_legacy_activation_crash_matrix(self) -> None:
+-        fixed_time = "2026-09-10T00:10:00Z"
+-        for crash_point in (
+-            "before-intent",
+-            "torn-marker",
+-            "torn-user-record",
+-            "torn-receipt",
+-            "receipt-before-unlink",
+-        ):
+-            with self.subTest(crash_point=crash_point):
+-                repo, _ = self._new_repo(f"repo-activation-{crash_point}")
+-                run_id = f"run-20260910-activation-{crash_point}"
+-                with self.api_environment(), mock.patch.object(
+-                    journal, "_utc_now", return_value=fixed_time
+-                ):
+-                    self._open_legacy_run(repo, run_id)
+-                    run_dir = self.run_dir(repo, run_id)
+-                    journal_path = run_dir / "journal.jsonl"
+-                    legacy_prefix = journal_path.read_bytes()
+-                    original_append = batch._append_named_file
+-                    crashed = False
+-
+-                    def crash_append(
+-                        locked: batch.BatchLock,
+-                        name: str,
+-                        payload: bytes,
+-                        expected: journal.FileObservation,
+-                        **kwargs: object,
+-                    ) -> None:
+-                        nonlocal crashed
+-                        should_crash = (
+-                            not crashed
+-                            and (
+-                                (
+-                                    crash_point
+-                                    in {"torn-marker", "torn-user-record"}
+-                                    and name == "journal.jsonl"
+-                                )
+-                                or (
+-                                    crash_point == "torn-receipt"
+-                                    and name == journal.BATCH_RECEIPTS_NAME
+-                                )
+-                            )
+-                        )
+-                        if not should_crash:
+-                            original_append(
+-                                locked, name, payload, expected, **kwargs
+-                            )
+-                            return
+-                        crashed = True
+-                        if crash_point == "torn-marker":
+-                            first_end = payload.index(b"\n") + 1
+-                            prefix = payload[: max(1, first_end // 2)]
+-                        elif crash_point == "torn-user-record":
+-                            first_end = payload.index(b"\n") + 1
+-                            remaining = len(payload) - first_end
+-                            prefix = payload[
+-                                : first_end + max(1, remaining // 2)
+-                            ]
+-                        else:
+-                            prefix = payload[: max(1, len(payload) // 2)]
+-                        original_append(
+-                            locked, name, prefix, expected, **kwargs
+-                        )
+-                        raise RuntimeError(f"activation crash: {crash_point}")
+-
+-                    if crash_point == "before-intent":
+-                        patcher = mock.patch.object(
+-                            batch,
+-                            "_write_intent",
+-                            side_effect=RuntimeError(
+-                                f"activation crash: {crash_point}"
+-                            ),
+-                        )
+-                    elif crash_point == "receipt-before-unlink":
+-                        patcher = mock.patch.object(
+-                            batch,
+-                            "_unlink_intent",
+-                            side_effect=RuntimeError(
+-                                f"activation crash: {crash_point}"
+-                            ),
+-                        )
+-                    else:
+-                        patcher = mock.patch.object(
+-                            batch, "_append_named_file", side_effect=crash_append
+-                        )
+-                    with patcher, self.assertRaisesRegex(
+-                        RuntimeError, f"activation crash: {crash_point}"
+-                    ):
+-                        self.start_task(repo, run_id)
+-
+-                    intent_path = run_dir / journal.BATCH_INTENT_NAME
+-                    if crash_point == "before-intent":
+-                        self.assertFalse(intent_path.exists())
+-                        self.assertEqual(journal_path.read_bytes(), legacy_prefix)
+-                        outcome = self.start_task(repo, run_id)
+-                        self.assertFalse(outcome.repeated)
+-                    else:
+-                        self.assertTrue(intent_path.is_file())
+-                        intent = json.loads(
+-                            intent_path.read_text(encoding="utf-8")
+-                        )
+-                        intended_records = batch._records_from_batch(
+-                            batch._decode_base64url(intent["batch_bytes"])
+-                        )
+-                        self.assertEqual(len(intended_records), 2)
+-                        self.assertTrue(
+-                            journal._writer_activation_marker(
+-                                intended_records[0]
+-                            )
+-                        )
+-                        self.assertEqual(intended_records[1]["type"], "task")
+-                        before_read = self._run_file_bytes(run_dir)
+-                        visible, issues = journal.read_journal(journal_path)
+-                        self.assertEqual(visible, [])
+-                        self.assertEqual(
+-                            issues, [journal.JOURNAL_READ_TRANSACTION_REFUSAL]
+-                        )
+-                        self.assertEqual(
+-                            self._run_file_bytes(run_dir), before_read
+-                        )
+-                        outcome = batch.recover_batch(repo, run_id)
+-                        self.assertTrue(outcome.repeated)
+-
+-                    self.assertFalse(intent_path.exists())
+-                    records, issues = journal.read_journal(journal_path)
+-                    self.assertEqual(issues, [])
+-                    markers = self._activation_markers(records)
+-                    self.assertEqual(len(markers), 1)
+-                    self.assertEqual(
+-                        [record["type"] for record in records],
+-                        ["run_started", "decision", "task"],
+-                    )
+-                    receipts = [
+-                        json.loads(line)
+-                        for line in (
+-                            run_dir / journal.BATCH_RECEIPTS_NAME
+-                        ).read_bytes().splitlines()
+-                    ]
+-                    self.assertEqual(len(receipts), 1)
+-                    self.assertEqual(receipts[0]["base_size"], len(legacy_prefix))
+-                    self.assertEqual(receipts[0]["record_count"], 2)
+-                    adopting_bytes = b"".join(
+-                        journal._journal_line(record)
+-                        for record in outcome.records
+-                    )
+-                    self.assertEqual(
+-                        receipts[0]["batch_sha256"],
+-                        journal._sha256(adopting_bytes),
+-                    )
+-                    before_raw = self._run_file_bytes(run_dir)
+-                    with self.assertRaisesRegex(
+-                        journal.CoordinationRefusal,
+-                        "activated writer requires typed builder",
+-                    ):
+-                        journal.append_owned_record(
+-                            journal_path,
+-                            {
+-                                "type": "decision",
+-                                "id": "decision-02",
+-                                "resolution": "Raw retry stays blocked",
+-                                "basis": [],
+-                                "run_id": run_id,
+-                                "recorded_at": fixed_time,
+-                            },
+-                        )
+-                    self.assertEqual(
+-                        self._run_file_bytes(run_dir), before_raw
+-                    )
+-
+-    def test_typed_opened_run_bytes_are_unchanged(self) -> None:
+-        run_id = "run-20260910-typed-open-byte-golden"
+-        fixed_time = "2026-09-10T01:00:00Z"
+-        repository = self.repo.resolve()
+-        open_key = key(f"{run_id}-open")
+-        task_key = key(f"{run_id}-task")
+-        opening = {
+-            "type": "run_started",
+-            "goal": "Exercise Revision 9",
+-            "repo": str(repository),
+-            "repo_head": self.head,
+-            "repo_status": [],
+-            "plugin_ref": "forge-test-revision-9",
+-            "scope": ["src/**"],
+-            "writer_contract": journal.WRITER_CONTRACT,
+-            "run_id": run_id,
+-            "recorded_at": fixed_time,
+-        }
+-        opening_bytes = journal._journal_line(opening)
+-        open_inputs = {
+-            "goal": "Exercise Revision 9",
+-            "scope": ["src/**"],
+-            "plugin_ref": "forge-test-revision-9",
+-            "successor_of": None,
+-        }
+-        open_request = {
+-            "schema": journal.BATCH_REQUEST_SCHEMA,
+-            "verb": "run-open",
+-            "repository": str(repository),
+-            "run_id": run_id,
+-            "inputs": open_inputs,
+-        }
+-        open_request_sha256 = journal._sha256(
+-            journal._canonical_json_bytes(open_request)
+-        )
+-        open_receipt = {
+-            "schema": journal.BATCH_RECEIPT_SCHEMA,
+-            "idempotency_key": open_key,
+-            "request_sha256": open_request_sha256,
+-            "base_size": 0,
+-            "batch_sha256": journal._sha256(opening_bytes),
+-            "record_count": 1,
+-            "journal_size": len(opening_bytes),
+-            "journal_sha256": journal._sha256(opening_bytes),
+-            "recorded_at": fixed_time,
+-        }
+-        open_receipt_bytes = journal._canonical_json_bytes(open_receipt) + b"\n"
+-        open_intent = {
+-            "schema": journal.BATCH_INTENT_SCHEMA,
+-            "idempotency_key": open_key,
+-            "request_sha256": open_request_sha256,
+-            "base_size": 0,
+-            "base_sha256": journal._sha256(b""),
+-            "record_count": 1,
+-            "batch_bytes": batch._encode_base64url(opening_bytes),
+-            "batch_sha256": journal._sha256(opening_bytes),
+-            "receipt_base_size": 0,
+-            "receipt_base_sha256": journal._sha256(b""),
+-            "receipt_bytes": batch._encode_base64url(open_receipt_bytes),
+-        }
+-        expected_open_intent = (
+-            journal._canonical_json_bytes(open_intent) + b"\n"
+-        )
+-        captured_open: dict[str, bytes] = {}
+-        original_open = journal.open_run
+-
+-        def capture_open(*args: object, **kwargs: object) -> None:
+-            capability = kwargs.get("_batch")
+-            self.assertIsNotNone(capability)
+-            captured_open["intent"] = capability.intent_payload
+-            captured_open["receipt"] = capability.receipt_payload
+-            original_open(*args, **kwargs)
+-
+-        with self.api_environment(), mock.patch.object(
+-            journal, "_utc_now", return_value=fixed_time
+-        ), mock.patch.object(journal, "open_run", side_effect=capture_open):
+-            opened = self.open_run(self.repo, run_id)
+-        self.assertEqual(captured_open["intent"], expected_open_intent)
+-        self.assertEqual(captured_open["receipt"], open_receipt_bytes)
+-        self.assertEqual(
+-            opened.payload(),
+-            {
+-                "receipt": open_receipt,
+-                "records": [opening],
+-                "repeated": False,
+-            },
+-        )
+-
+-        task = {
+-            "type": "task",
+-            "id": "task-01",
+-            "status": "active",
+-            "goal": "Implement the typed transaction",
+-            "acceptance": ["The focused behavior passes"],
+-            "files": ["src/example.py"],
+-            "run_id": run_id,
+-            "recorded_at": fixed_time,
+-        }
+-        task_bytes = journal._journal_line(task)
+-        task_inputs = {
+-            "task": "task-01",
+-            "goal": "Implement the typed transaction",
+-            "acceptance": ["The focused behavior passes"],
+-            "file": ["src/example.py"],
+-        }
+-        task_request = {
+-            "schema": journal.BATCH_REQUEST_SCHEMA,
+-            "verb": "journal task-start",
+-            "repository": str(repository),
+-            "run_id": run_id,
+-            "inputs": task_inputs,
+-        }
+-        task_request_sha256 = journal._sha256(
+-            journal._canonical_json_bytes(task_request)
+-        )
+-        task_receipt = {
+-            "schema": journal.BATCH_RECEIPT_SCHEMA,
+-            "idempotency_key": task_key,
+-            "request_sha256": task_request_sha256,
+-            "base_size": len(opening_bytes),
+-            "batch_sha256": journal._sha256(task_bytes),
+-            "record_count": 1,
+-            "journal_size": len(opening_bytes) + len(task_bytes),
+-            "journal_sha256": journal._sha256(opening_bytes + task_bytes),
+-            "recorded_at": fixed_time,
+-        }
+-        task_receipt_bytes = journal._canonical_json_bytes(task_receipt) + b"\n"
+-        task_intent = {
+-            "schema": journal.BATCH_INTENT_SCHEMA,
+-            "idempotency_key": task_key,
+-            "request_sha256": task_request_sha256,
+-            "base_size": len(opening_bytes),
+-            "base_sha256": journal._sha256(opening_bytes),
+-            "record_count": 1,
+-            "batch_bytes": batch._encode_base64url(task_bytes),
+-            "batch_sha256": journal._sha256(task_bytes),
+-            "receipt_base_size": len(open_receipt_bytes),
+-            "receipt_base_sha256": journal._sha256(open_receipt_bytes),
+-            "receipt_bytes": batch._encode_base64url(task_receipt_bytes),
+-        }
+-        expected_task_intent = (
+-            journal._canonical_json_bytes(task_intent) + b"\n"
+-        )
+-        captured_task: dict[str, bytes] = {}
+-        original_write_intent = batch._write_intent
+-
+-        def capture_task_intent(
+-            locked: batch.BatchLock, intent: dict[str, object]
+-        ) -> journal.ExactFile:
+-            captured_task["intent"] = (
+-                journal._canonical_json_bytes(intent) + b"\n"
+-            )
+-            return original_write_intent(locked, intent)
+-
+-        with self.api_environment(), mock.patch.object(
+-            journal, "_utc_now", return_value=fixed_time
+-        ), mock.patch.object(
+-            batch, "_write_intent", side_effect=capture_task_intent
+-        ):
+-            started = self.start_task(self.repo, run_id)
+-
+-        run_dir = self.run_dir(self.repo, run_id)
+-        self.assertEqual(captured_task["intent"], expected_task_intent)
+-        self.assertEqual(
+-            (run_dir / "journal.jsonl").read_bytes(),
+-            opening_bytes + task_bytes,
+-        )
+-        self.assertEqual(
+-            (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
+-            open_receipt_bytes + task_receipt_bytes,
+-        )
+-        self.assertEqual(
+-            started.payload(),
+-            {
+-                "receipt": task_receipt,
+-                "records": [task],
+-                "repeated": False,
+-            },
+-        )
+-        self.assertEqual(started.records, (task,))
+-        self.assertFalse(
+-            any(
+-                journal._writer_activation_candidate(record)
+-                for record in started.records
+-            )
+-        )
+-
+-        before_retry = self._run_file_bytes(run_dir)
+-        with self.api_environment(), mock.patch.object(
+-            journal, "_utc_now", return_value="2099-01-01T00:00:00Z"
+-        ), mock.patch.object(
+-            batch,
+-            "_write_intent",
+-            side_effect=AssertionError("retry must not publish an intent"),
+-        ):
+-            repeated = self.start_task(self.repo, run_id)
+-        self.assertTrue(repeated.repeated)
+-        self.assertEqual(repeated.receipt, task_receipt)
+-        self.assertEqual(repeated.records, (task,))
+-        self.assertEqual(self._run_file_bytes(run_dir), before_retry)
+-
+-    def test_global_reconciliation_defers_torn_adopted_coverage(self) -> None:
+-        for condition in ("pending-intent", "stale-consistent-ledger"):
+-            with self.subTest(condition=condition):
+-                repo, _ = self._new_repo(f"repo-reconcile-{condition}")
+-                adopted = f"run-20260910-reconcile-{condition}"
+-                unrelated = f"run-20260910-unrelated-{condition}"
+-                with self.api_environment():
+-                    self._open_legacy_run(repo, adopted, scope=["src/**"])
+-                    self.start_task(repo, adopted)
+-                    run_dir = self.run_dir(repo, adopted)
+-                    journal_path = run_dir / "journal.jsonl"
+-
+-                    if condition == "pending-intent":
+-                        original_append = batch._append_named_file
+-
+-                        def crash_before_receipt(
+-                            locked: batch.BatchLock,
+-                            name: str,
+-                            payload: bytes,
+-                            expected: journal.FileObservation,
+-                            **kwargs: object,
+-                        ) -> None:
+-                            if name == journal.BATCH_RECEIPTS_NAME:
+-                                raise RuntimeError(
+-                                    "adopted journal appended before receipt"
+-                                )
+-                            original_append(
+-                                locked, name, payload, expected, **kwargs
+-                            )
+-
+-                        with mock.patch.object(
+-                            batch,
+-                            "_append_named_file",
+-                            side_effect=crash_before_receipt,
+-                        ), self.assertRaisesRegex(
+-                            RuntimeError,
+-                            "adopted journal appended before receipt",
+-                        ):
+-                            builders.verification_add(
+-                                repo,
+-                                adopted,
+-                                idempotency_key=key(
+-                                    "reconcile-adopted-torn-write"
+-                                ),
+-                                task="task-01",
+-                                criterion="unrelated reconciliation",
+-                                method="unittest",
+-                                check="focused torn adopted write",
+-                                result="passed",
+-                                observation="receipt append is interrupted",
+-                                evidence=[],
+-                                binding_chain=None,
+-                                binding_id=None,
+-                            )
+-                        self.assertTrue(
+-                            (run_dir / journal.BATCH_INTENT_NAME).is_file()
+-                        )
+-                    else:
+-                        historical_tail = {
+-                            "type": "verification",
+-                            "id": "check-01",
+-                            "task": "task-01",
+-                            "criterion": "historical stale receipt tail",
+-                            "method": "bash",
+-                            "check": "true",
+-                            "result": "passed",
+-                            "observation": "receipt ledger remains at its prior EOF",
+-                            "evidence": [],
+-                            "run_id": adopted,
+-                            "recorded_at": "2026-09-10T06:00:00Z",
+-                        }
+-                        with journal_path.open("ab") as stream:
+-                            stream.write(journal._journal_line(historical_tail))
+-                        self.assertFalse(
+-                            (run_dir / journal.BATCH_INTENT_NAME).exists()
+-                        )
+-
+-                    before = self._run_file_bytes(run_dir)
+-                    records, issues = journal.read_journal(journal_path)
+-                    self.assertEqual(records, [])
+-                    self.assertEqual(
+-                        issues, [journal.JOURNAL_READ_TRANSACTION_REFUSAL]
+-                    )
+-                    self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+-                    opened = builders.run_open(
+-                        repo,
+-                        unrelated,
+-                        idempotency_key=key(f"{condition}-unrelated-open"),
+-                        goal="Open a disjoint run during adopted recovery",
+-                        scope=["docs/**"],
+-                        plugin_ref="forge-test-revision-9",
+-                    )
+-                    self.assertEqual(opened.records[0]["run_id"], unrelated)
+-                    self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+-                    if condition == "pending-intent":
+-                        recovered = batch.recover_batch(repo, adopted)
+-                        self.assertTrue(recovered.repeated)
+-                        self.assertFalse(
+-                            (run_dir / journal.BATCH_INTENT_NAME).exists()
+-                        )
+ 
+     def _restore_prefix_wedge_fixture(
+         self,
+--- tests/test_revision9_coordination_legacy_activation.py
++++ tests/test_revision9_coordination_legacy_activation.py
+@@ -0,0 +1,946 @@
++from __future__ import annotations
++
++import json
++import os
++import unittest
++from unittest import mock
++
++from tests._revision9_coord_constants import key
++from tests._revision9_coord_support import Revision9BuilderBatchSupport
++
++from codex_orchestrator import batch, builders, journal
++
++
++class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.TestCase):
++
++    def _assert_first_batch_artifact_substitution_refuses(
++        self, target_name: str
++    ) -> None:
++        label = target_name.strip(".").replace(".", "-")
++        repo, _ = self._new_repo(f"repo-create-open-{label}")
++        run_id = f"run-20260910-create-open-{key(target_name)[:8]}"
++        with self.api_environment():
++            self._open_legacy_run(repo, run_id)
++            run_dir = self.run_dir(repo, run_id)
++            if target_name == journal.BATCH_RECEIPTS_NAME:
++                with batch.batch_lock(run_dir, create=True):
++                    pass
++            journal_before = (run_dir / "journal.jsonl").read_bytes()
++            displaced_name = f"{target_name}.displaced-original"
++            observations: dict[str, journal.FileObservation] = {}
++            original_create = batch._create_empty_at
++
++            def substitute_after_create(
++                directory_descriptor: int, name: str
++            ) -> journal.FileObservation:
++                created = original_create(directory_descriptor, name)
++                if name != target_name:
++                    return created
++                os.rename(
++                    name,
++                    displaced_name,
++                    src_dir_fd=directory_descriptor,
++                    dst_dir_fd=directory_descriptor,
++                )
++                replacement = original_create(directory_descriptor, name)
++                observations["created"] = created
++                observations["replacement"] = replacement
++                return created
++
++            with mock.patch.object(
++                batch,
++                "_create_empty_at",
++                side_effect=substitute_after_create,
++            ), self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                journal.BATCH_DIVERGED,
++            ):
++                self.start_task(repo, run_id)
++
++            replacement_path = run_dir / target_name
++            displaced_path = run_dir / displaced_name
++            self.assertEqual(replacement_path.read_bytes(), b"")
++            self.assertEqual(displaced_path.read_bytes(), b"")
++            self.assertEqual(
++                journal._file_observation(os.lstat(replacement_path)),
++                observations["replacement"],
++            )
++            self.assertEqual(
++                journal._file_observation(os.lstat(displaced_path)),
++                observations["created"],
++            )
++            self.assertNotEqual(
++                observations["created"], observations["replacement"]
++            )
++            self.assertEqual(
++                (run_dir / "journal.jsonl").read_bytes(), journal_before
++            )
++            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
++
++    def test_batch_lock_create_open_substitution_refuses(self) -> None:
++        self._assert_first_batch_artifact_substitution_refuses(
++            journal.BATCH_LOCK_NAME
++        )
++
++    def test_first_receipt_ledger_create_open_substitution_refuses(self) -> None:
++        self._assert_first_batch_artifact_substitution_refuses(
++            journal.BATCH_RECEIPTS_NAME
++        )
++
++    def test_first_receipt_ledger_post_create_substitution_refuses(self) -> None:
++        repo, _ = self._new_repo("repo-receipt-post-create-substitution")
++        run_id = "run-20260910-receipt-post-create-substitution"
++        with self.api_environment():
++            self._open_legacy_run(repo, run_id)
++            run_dir = self.run_dir(repo, run_id)
++            with batch.batch_lock(run_dir, create=True):
++                pass
++            journal_before = (run_dir / "journal.jsonl").read_bytes()
++            displaced_name = (
++                f"{journal.BATCH_RECEIPTS_NAME}.displaced-original"
++            )
++            observations: dict[str, journal.FileObservation] = {}
++            original_ensure = batch._ensure_receipt_ledger
++
++            def substitute_after_ensure(
++                locked: batch.BatchLock, *, allow_preintent: bool = False
++            ) -> journal.FileObservation:
++                created = original_ensure(
++                    locked, allow_preintent=allow_preintent
++                )
++                os.rename(
++                    journal.BATCH_RECEIPTS_NAME,
++                    displaced_name,
++                    src_dir_fd=locked.run_descriptor,
++                    dst_dir_fd=locked.run_descriptor,
++                )
++                replacement = batch._create_empty_at(
++                    locked.run_descriptor, journal.BATCH_RECEIPTS_NAME
++                )
++                observations["created"] = created
++                observations["replacement"] = replacement
++                return created
++
++            with mock.patch.object(
++                batch,
++                "_ensure_receipt_ledger",
++                side_effect=substitute_after_ensure,
++            ), self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                journal.BATCH_DIVERGED,
++            ):
++                self.start_task(repo, run_id)
++
++            replacement_path = run_dir / journal.BATCH_RECEIPTS_NAME
++            displaced_path = run_dir / displaced_name
++            self.assertEqual(replacement_path.read_bytes(), b"")
++            self.assertEqual(displaced_path.read_bytes(), b"")
++            self.assertEqual(
++                journal._file_observation(os.lstat(replacement_path)),
++                observations["replacement"],
++            )
++            self.assertEqual(
++                journal._file_observation(os.lstat(displaced_path)),
++                observations["created"],
++            )
++            self.assertNotEqual(
++                observations["created"], observations["replacement"]
++            )
++            self.assertEqual(
++                (run_dir / "journal.jsonl").read_bytes(), journal_before
++            )
++            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
++
++    def test_id_only_legacy_opening_activates_with_matching_marker_run_id(
++        self,
++    ) -> None:
++        run_id = "run-20260910-id-only-legacy-activation"
++        opening = {
++            "type": "run_started",
++            "id": run_id,
++            "goal": "legacy identity is keyed only by id",
++        }
++        with self.api_environment():
++            run_dir = self.run_dir(self.repo, run_id)
++            run_dir.mkdir(parents=True)
++            opening_bytes = journal._canonical_json_bytes(opening) + b"\n"
++            journal_path = run_dir / "journal.jsonl"
++            journal_path.write_bytes(opening_bytes)
++
++            started = self.start_task(self.repo, run_id)
++
++            self.assertFalse(started.repeated)
++            self.assertEqual(len(started.records), 2)
++            marker, task = started.records
++            self.assertTrue(journal._writer_activation_marker(marker))
++            self.assertEqual(marker["run_id"], run_id)
++            self.assertEqual(marker["receipt_origin_size"], len(opening_bytes))
++            self.assertEqual(
++                marker["receipt_origin_sha256"],
++                journal._sha256(opening_bytes),
++            )
++            self.assertEqual(task["type"], "task")
++            persisted = journal_path.read_bytes()
++            self.assertEqual(persisted[: len(opening_bytes)], opening_bytes)
++            self.assertEqual(json.loads(persisted.splitlines()[0]), opening)
++            self.assertNotIn("run_id", json.loads(persisted.splitlines()[0]))
++            receipts = [
++                json.loads(line)
++                for line in (
++                    run_dir / journal.BATCH_RECEIPTS_NAME
++                ).read_bytes().splitlines()
++            ]
++            self.assertEqual(len(receipts), 1)
++            self.assertEqual(receipts[0]["base_size"], len(opening_bytes))
++            self.assertEqual(receipts[0]["record_count"], 2)
++
++    def test_persisted_activation_candidate_requires_allocated_id_and_contract(
++        self,
++    ) -> None:
++        for attack in ("non-allocated-id", "writer-contract-v2"):
++            with self.subTest(attack=attack):
++                repo, _ = self._new_repo(f"repo-persisted-{attack}")
++                run_id = f"run-20260910-persisted-{attack}"
++                with self.api_environment():
++                    self._open_legacy_run(repo, run_id)
++                    run_dir = self.run_dir(repo, run_id)
++                    journal_path = run_dir / "journal.jsonl"
++                    journal.append_owned_record(
++                        journal_path,
++                        {
++                            "type": "decision",
++                            "id": "decision-01",
++                            "resolution": "Establish the prior allocation",
++                            "basis": [],
++                            "run_id": run_id,
++                            "recorded_at": "2026-09-10T03:30:00Z",
++                        },
++                    )
++                    legacy_prefix = journal_path.read_bytes()
++                    with batch.batch_lock(run_dir, create=True) as locked:
++                        batch._ensure_receipt_ledger(locked)
++                    state = journal._scan_run(run_dir)
++                    marker = builders._writer_activation_decision(
++                        state,
++                        receipt_origin_size=len(legacy_prefix),
++                        receipt_origin_sha256=journal._sha256(legacy_prefix),
++                        recorded_at="2026-09-10T03:31:00Z",
++                    )
++                    if attack == "non-allocated-id":
++                        marker["id"] = "decision-03"
++                        self.assertTrue(journal._writer_activation_marker(marker))
++                        self.assertFalse(
++                            journal._writer_activation_id_is_allocated(
++                                [*state.records, marker], marker
++                            )
++                        )
++                    else:
++                        marker["writer_contract"] = (
++                            journal.WRITER_CONTRACT.rsplit("/", 1)[0] + "/2"
++                        )
++                        self.assertTrue(
++                            journal._writer_activation_candidate(marker)
++                        )
++                        self.assertFalse(journal._writer_activation_marker(marker))
++                    task = {
++                        "type": "task",
++                        "id": "task-01",
++                        "status": "active",
++                        "goal": "Refuse an unproved persisted activation",
++                        "acceptance": ["No bytes change"],
++                        "files": ["src/example.py"],
++                        "run_id": run_id,
++                        "recorded_at": "2026-09-10T03:31:00Z",
++                    }
++                    adopting_bytes = (
++                        journal._journal_line(marker)
++                        + journal._journal_line(task)
++                    )
++                    persisted = legacy_prefix + adopting_bytes
++                    journal_path.write_bytes(persisted)
++                    receipt = {
++                        "schema": journal.BATCH_RECEIPT_SCHEMA,
++                        "idempotency_key": key(
++                            f"persisted-{attack}-activation"
++                        ),
++                        "request_sha256": key(
++                            f"persisted-{attack}-request"
++                        ),
++                        "base_size": len(legacy_prefix),
++                        "batch_sha256": journal._sha256(adopting_bytes),
++                        "record_count": 2,
++                        "journal_size": len(persisted),
++                        "journal_sha256": journal._sha256(persisted),
++                        "recorded_at": "2026-09-10T03:31:00Z",
++                    }
++                    (run_dir / journal.BATCH_RECEIPTS_NAME).write_bytes(
++                        journal._canonical_json_bytes(receipt) + b"\n"
++                    )
++
++                    before = self._run_file_bytes(run_dir)
++                    with self.assertRaisesRegex(
++                        journal.CoordinationRefusal,
++                        journal.BATCH_DIVERGED,
++                    ):
++                        builders.task_finish(
++                            repo,
++                            run_id,
++                            idempotency_key=key(
++                                f"persisted-{attack}-competing-finish"
++                            ),
++                            task="task-01",
++                            status="complete",
++                        )
++                    self.assertEqual(self._run_file_bytes(run_dir), before)
++
++    def test_activation_allocation_refuses_unicode_and_oversized_suffixes(
++        self,
++    ) -> None:
++        for attack, suffix in (
++            ("unicode-digits", "１２"),
++            ("oversized-suffix", "9" * 65),
++        ):
++            with self.subTest(attack=attack):
++                repo, _ = self._new_repo(f"repo-allocation-{attack}")
++                run_id = f"run-20260910-allocation-{attack}"
++                with self.api_environment():
++                    self._open_legacy_run(repo, run_id)
++                    run_dir = self.run_dir(repo, run_id)
++                    journal_path = run_dir / "journal.jsonl"
++                    journal.append_owned_record(
++                        journal_path,
++                        {
++                            "type": "decision",
++                            "id": f"decision-{suffix}",
++                            "resolution": "Hostile numeric-looking suffix",
++                            "basis": [],
++                            "run_id": run_id,
++                            "recorded_at": "2026-09-10T03:40:00Z",
++                        },
++                    )
++                    with batch.batch_lock(run_dir, create=True) as locked:
++                        batch._ensure_receipt_ledger(locked)
++                    before = self._run_file_bytes(run_dir)
++                    with self.assertRaisesRegex(
++                        journal.CoordinationRefusal,
++                        journal.BATCH_DIVERGED,
++                    ):
++                        self.start_task(repo, run_id, label=attack)
++                    self.assertEqual(self._run_file_bytes(run_dir), before)
++
++                    state = journal._scan_run(run_dir)
++                    marker = {
++                        "type": "decision",
++                        "id": f"decision-{int(suffix) + 1:02d}",
++                        "resolution": journal.WRITER_ACTIVATION_RESOLUTION,
++                        "writer_contract": journal.WRITER_CONTRACT,
++                        "receipt_origin_size": len(
++                            journal_path.read_bytes()
++                        ),
++                        "receipt_origin_sha256": journal._sha256(
++                            journal_path.read_bytes()
++                        ),
++                        "run_id": run_id,
++                        "recorded_at": "2026-09-10T03:41:00Z",
++                    }
++                    self.assertTrue(journal._writer_activation_marker(marker))
++                    self.assertFalse(
++                        journal._writer_activation_id_is_allocated(
++                            [*state.records, marker], marker
++                        )
++                    )
++
++    def test_removed_batch_lock_after_activation_is_not_recreated(self) -> None:
++        run_id = "run-20260910-removed-activation-lock"
++        with self.api_environment():
++            self._open_legacy_run(self.repo, run_id)
++            self.start_task(self.repo, run_id)
++            run_dir = self.run_dir(self.repo, run_id)
++            lock_path = run_dir / journal.BATCH_LOCK_NAME
++            self.assertTrue(lock_path.is_file())
++            lock_path.unlink()
++            before = self._run_file_bytes(run_dir)
++
++            with self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                journal.BATCH_DIVERGED,
++            ):
++                builders.task_finish(
++                    self.repo,
++                    run_id,
++                    idempotency_key=key("removed-activation-lock-finish"),
++                    task="task-01",
++                    status="complete",
++                )
++
++            self.assertFalse(lock_path.exists())
++            self.assertEqual(self._run_file_bytes(run_dir), before)
++
++    def test_legacy_first_typed_use_atomically_activates(self) -> None:
++        run_id = "run-20260910-legacy-first-typed-use"
++        with self.api_environment():
++            self._open_legacy_run(self.repo, run_id)
++            run_dir = self.run_dir(self.repo, run_id)
++            journal_path = run_dir / "journal.jsonl"
++            journal.append_owned_record(
++                journal_path,
++                {
++                    "type": "decision",
++                    "id": "decision-01",
++                    "resolution": "Preserve a legacy decision before adoption",
++                    "basis": [],
++                    "run_id": run_id,
++                    "recorded_at": "2026-09-10T00:00:01Z",
++                },
++            )
++            legacy_prefix = journal_path.read_bytes()
++
++            started = self.start_task(self.repo, run_id)
++            self.assertFalse(started.repeated)
++            self.assertEqual(len(started.records), 2)
++            marker, task = started.records
++            self.assertEqual(set(marker), set(journal.WRITER_ACTIVATION_FIELDS))
++            self.assertEqual(marker["id"], "decision-02")
++            self.assertEqual(
++                marker["resolution"], journal.WRITER_ACTIVATION_RESOLUTION
++            )
++            self.assertEqual(marker["writer_contract"], journal.WRITER_CONTRACT)
++            self.assertEqual(marker["receipt_origin_size"], len(legacy_prefix))
++            self.assertEqual(
++                marker["receipt_origin_sha256"],
++                journal._sha256(legacy_prefix),
++            )
++            self.assertEqual(marker["run_id"], run_id)
++            self.assertNotIn("basis", marker)
++            self.assertEqual(task["type"], "task")
++            self.assertEqual(task["id"], "task-01")
++
++            batch_bytes = journal._journal_line(marker) + journal._journal_line(task)
++            ledger = run_dir / journal.BATCH_RECEIPTS_NAME
++            receipts = [json.loads(line) for line in ledger.read_bytes().splitlines()]
++            self.assertEqual(len(receipts), 1)
++            adopting = receipts[0]
++            self.assertEqual(adopting["base_size"], len(legacy_prefix))
++            self.assertEqual(adopting["record_count"], 2)
++            self.assertEqual(adopting["batch_sha256"], journal._sha256(batch_bytes))
++            self.assertEqual(
++                adopting["journal_size"], len(legacy_prefix) + len(batch_bytes)
++            )
++            self.assertEqual(
++                adopting["journal_sha256"],
++                journal._sha256(legacy_prefix + batch_bytes),
++            )
++            records, issues = journal.read_journal(journal_path)
++            self.assertEqual(issues, [])
++            self.assertTrue(journal._writer_contract_active(records))
++            with batch.batch_lock(run_dir, create=False) as locked:
++                self.assertTrue(
++                    batch._writer_contract_activated(locked.run_descriptor)
++                )
++
++            before_raw = self._run_file_bytes(run_dir)
++            with self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                "activated writer requires typed builder",
++            ):
++                journal.append_owned_record(
++                    journal_path,
++                    {
++                        "type": "verification",
++                        "id": "check-01",
++                        "task": "task-01",
++                        "criterion": "raw append remains blocked after adoption",
++                        "method": "unittest",
++                        "check": "python3 -m unittest",
++                        "result": "passed",
++                        "observation": "must not append",
++                        "evidence": [],
++                        "run_id": run_id,
++                        "recorded_at": "2026-09-10T00:00:02Z",
++                    },
++                )
++            self.assertEqual(self._run_file_bytes(run_dir), before_raw)
++
++            finished = builders.task_finish(
++                self.repo,
++                run_id,
++                idempotency_key=key("legacy-first-use-finish"),
++                task="task-01",
++                status="complete",
++            )
++            self.assertEqual(len(finished.records), 1)
++            self.assertEqual(finished.records[0]["status"], "complete")
++
++    def test_legacy_activation_crash_matrix(self) -> None:
++        fixed_time = "2026-09-10T00:10:00Z"
++        for crash_point in (
++            "before-intent",
++            "torn-marker",
++            "torn-user-record",
++            "torn-receipt",
++            "receipt-before-unlink",
++        ):
++            with self.subTest(crash_point=crash_point):
++                repo, _ = self._new_repo(f"repo-activation-{crash_point}")
++                run_id = f"run-20260910-activation-{crash_point}"
++                with self.api_environment(), mock.patch.object(
++                    journal, "_utc_now", return_value=fixed_time
++                ):
++                    self._open_legacy_run(repo, run_id)
++                    run_dir = self.run_dir(repo, run_id)
++                    journal_path = run_dir / "journal.jsonl"
++                    legacy_prefix = journal_path.read_bytes()
++                    original_append = batch._append_named_file
++                    crashed = False
++
++                    def crash_append(
++                        locked: batch.BatchLock,
++                        name: str,
++                        payload: bytes,
++                        expected: journal.FileObservation,
++                        **kwargs: object,
++                    ) -> None:
++                        nonlocal crashed
++                        should_crash = (
++                            not crashed
++                            and (
++                                (
++                                    crash_point
++                                    in {"torn-marker", "torn-user-record"}
++                                    and name == "journal.jsonl"
++                                )
++                                or (
++                                    crash_point == "torn-receipt"
++                                    and name == journal.BATCH_RECEIPTS_NAME
++                                )
++                            )
++                        )
++                        if not should_crash:
++                            original_append(
++                                locked, name, payload, expected, **kwargs
++                            )
++                            return
++                        crashed = True
++                        if crash_point == "torn-marker":
++                            first_end = payload.index(b"\n") + 1
++                            prefix = payload[: max(1, first_end // 2)]
++                        elif crash_point == "torn-user-record":
++                            first_end = payload.index(b"\n") + 1
++                            remaining = len(payload) - first_end
++                            prefix = payload[
++                                : first_end + max(1, remaining // 2)
++                            ]
++                        else:
++                            prefix = payload[: max(1, len(payload) // 2)]
++                        original_append(
++                            locked, name, prefix, expected, **kwargs
++                        )
++                        raise RuntimeError(f"activation crash: {crash_point}")
++
++                    if crash_point == "before-intent":
++                        patcher = mock.patch.object(
++                            batch,
++                            "_write_intent",
++                            side_effect=RuntimeError(
++                                f"activation crash: {crash_point}"
++                            ),
++                        )
++                    elif crash_point == "receipt-before-unlink":
++                        patcher = mock.patch.object(
++                            batch,
++                            "_unlink_intent",
++                            side_effect=RuntimeError(
++                                f"activation crash: {crash_point}"
++                            ),
++                        )
++                    else:
++                        patcher = mock.patch.object(
++                            batch, "_append_named_file", side_effect=crash_append
++                        )
++                    with patcher, self.assertRaisesRegex(
++                        RuntimeError, f"activation crash: {crash_point}"
++                    ):
++                        self.start_task(repo, run_id)
++
++                    intent_path = run_dir / journal.BATCH_INTENT_NAME
++                    if crash_point == "before-intent":
++                        self.assertFalse(intent_path.exists())
++                        self.assertEqual(journal_path.read_bytes(), legacy_prefix)
++                        outcome = self.start_task(repo, run_id)
++                        self.assertFalse(outcome.repeated)
++                    else:
++                        self.assertTrue(intent_path.is_file())
++                        intent = json.loads(
++                            intent_path.read_text(encoding="utf-8")
++                        )
++                        intended_records = batch._records_from_batch(
++                            batch._decode_base64url(intent["batch_bytes"])
++                        )
++                        self.assertEqual(len(intended_records), 2)
++                        self.assertTrue(
++                            journal._writer_activation_marker(
++                                intended_records[0]
++                            )
++                        )
++                        self.assertEqual(intended_records[1]["type"], "task")
++                        before_read = self._run_file_bytes(run_dir)
++                        visible, issues = journal.read_journal(journal_path)
++                        self.assertEqual(visible, [])
++                        self.assertEqual(
++                            issues, [journal.JOURNAL_READ_TRANSACTION_REFUSAL]
++                        )
++                        self.assertEqual(
++                            self._run_file_bytes(run_dir), before_read
++                        )
++                        outcome = batch.recover_batch(repo, run_id)
++                        self.assertTrue(outcome.repeated)
++
++                    self.assertFalse(intent_path.exists())
++                    records, issues = journal.read_journal(journal_path)
++                    self.assertEqual(issues, [])
++                    markers = self._activation_markers(records)
++                    self.assertEqual(len(markers), 1)
++                    self.assertEqual(
++                        [record["type"] for record in records],
++                        ["run_started", "decision", "task"],
++                    )
++                    receipts = [
++                        json.loads(line)
++                        for line in (
++                            run_dir / journal.BATCH_RECEIPTS_NAME
++                        ).read_bytes().splitlines()
++                    ]
++                    self.assertEqual(len(receipts), 1)
++                    self.assertEqual(receipts[0]["base_size"], len(legacy_prefix))
++                    self.assertEqual(receipts[0]["record_count"], 2)
++                    adopting_bytes = b"".join(
++                        journal._journal_line(record)
++                        for record in outcome.records
++                    )
++                    self.assertEqual(
++                        receipts[0]["batch_sha256"],
++                        journal._sha256(adopting_bytes),
++                    )
++                    before_raw = self._run_file_bytes(run_dir)
++                    with self.assertRaisesRegex(
++                        journal.CoordinationRefusal,
++                        "activated writer requires typed builder",
++                    ):
++                        journal.append_owned_record(
++                            journal_path,
++                            {
++                                "type": "decision",
++                                "id": "decision-02",
++                                "resolution": "Raw retry stays blocked",
++                                "basis": [],
++                                "run_id": run_id,
++                                "recorded_at": fixed_time,
++                            },
++                        )
++                    self.assertEqual(
++                        self._run_file_bytes(run_dir), before_raw
++                    )
++
++    def test_typed_opened_run_bytes_are_unchanged(self) -> None:
++        run_id = "run-20260910-typed-open-byte-golden"
++        fixed_time = "2026-09-10T01:00:00Z"
++        repository = self.repo.resolve()
++        open_key = key(f"{run_id}-open")
++        task_key = key(f"{run_id}-task")
++        opening = {
++            "type": "run_started",
++            "goal": "Exercise Revision 9",
++            "repo": str(repository),
++            "repo_head": self.head,
++            "repo_status": [],
++            "plugin_ref": "forge-test-revision-9",
++            "scope": ["src/**"],
++            "writer_contract": journal.WRITER_CONTRACT,
++            "run_id": run_id,
++            "recorded_at": fixed_time,
++        }
++        opening_bytes = journal._journal_line(opening)
++        open_inputs = {
++            "goal": "Exercise Revision 9",
++            "scope": ["src/**"],
++            "plugin_ref": "forge-test-revision-9",
++            "successor_of": None,
++        }
++        open_request = {
++            "schema": journal.BATCH_REQUEST_SCHEMA,
++            "verb": "run-open",
++            "repository": str(repository),
++            "run_id": run_id,
++            "inputs": open_inputs,
++        }
++        open_request_sha256 = journal._sha256(
++            journal._canonical_json_bytes(open_request)
++        )
++        open_receipt = {
++            "schema": journal.BATCH_RECEIPT_SCHEMA,
++            "idempotency_key": open_key,
++            "request_sha256": open_request_sha256,
++            "base_size": 0,
++            "batch_sha256": journal._sha256(opening_bytes),
++            "record_count": 1,
++            "journal_size": len(opening_bytes),
++            "journal_sha256": journal._sha256(opening_bytes),
++            "recorded_at": fixed_time,
++        }
++        open_receipt_bytes = journal._canonical_json_bytes(open_receipt) + b"\n"
++        open_intent = {
++            "schema": journal.BATCH_INTENT_SCHEMA,
++            "idempotency_key": open_key,
++            "request_sha256": open_request_sha256,
++            "base_size": 0,
++            "base_sha256": journal._sha256(b""),
++            "record_count": 1,
++            "batch_bytes": batch._encode_base64url(opening_bytes),
++            "batch_sha256": journal._sha256(opening_bytes),
++            "receipt_base_size": 0,
++            "receipt_base_sha256": journal._sha256(b""),
++            "receipt_bytes": batch._encode_base64url(open_receipt_bytes),
++        }
++        expected_open_intent = (
++            journal._canonical_json_bytes(open_intent) + b"\n"
++        )
++        captured_open: dict[str, bytes] = {}
++        original_open = journal.open_run
++
++        def capture_open(*args: object, **kwargs: object) -> None:
++            capability = kwargs.get("_batch")
++            self.assertIsNotNone(capability)
++            captured_open["intent"] = capability.intent_payload
++            captured_open["receipt"] = capability.receipt_payload
++            original_open(*args, **kwargs)
++
++        with self.api_environment(), mock.patch.object(
++            journal, "_utc_now", return_value=fixed_time
++        ), mock.patch.object(journal, "open_run", side_effect=capture_open):
++            opened = self.open_run(self.repo, run_id)
++        self.assertEqual(captured_open["intent"], expected_open_intent)
++        self.assertEqual(captured_open["receipt"], open_receipt_bytes)
++        self.assertEqual(
++            opened.payload(),
++            {
++                "receipt": open_receipt,
++                "records": [opening],
++                "repeated": False,
++            },
++        )
++
++        task = {
++            "type": "task",
++            "id": "task-01",
++            "status": "active",
++            "goal": "Implement the typed transaction",
++            "acceptance": ["The focused behavior passes"],
++            "files": ["src/example.py"],
++            "run_id": run_id,
++            "recorded_at": fixed_time,
++        }
++        task_bytes = journal._journal_line(task)
++        task_inputs = {
++            "task": "task-01",
++            "goal": "Implement the typed transaction",
++            "acceptance": ["The focused behavior passes"],
++            "file": ["src/example.py"],
++        }
++        task_request = {
++            "schema": journal.BATCH_REQUEST_SCHEMA,
++            "verb": "journal task-start",
++            "repository": str(repository),
++            "run_id": run_id,
++            "inputs": task_inputs,
++        }
++        task_request_sha256 = journal._sha256(
++            journal._canonical_json_bytes(task_request)
++        )
++        task_receipt = {
++            "schema": journal.BATCH_RECEIPT_SCHEMA,
++            "idempotency_key": task_key,
++            "request_sha256": task_request_sha256,
++            "base_size": len(opening_bytes),
++            "batch_sha256": journal._sha256(task_bytes),
++            "record_count": 1,
++            "journal_size": len(opening_bytes) + len(task_bytes),
++            "journal_sha256": journal._sha256(opening_bytes + task_bytes),
++            "recorded_at": fixed_time,
++        }
++        task_receipt_bytes = journal._canonical_json_bytes(task_receipt) + b"\n"
++        task_intent = {
++            "schema": journal.BATCH_INTENT_SCHEMA,
++            "idempotency_key": task_key,
++            "request_sha256": task_request_sha256,
++            "base_size": len(opening_bytes),
++            "base_sha256": journal._sha256(opening_bytes),
++            "record_count": 1,
++            "batch_bytes": batch._encode_base64url(task_bytes),
++            "batch_sha256": journal._sha256(task_bytes),
++            "receipt_base_size": len(open_receipt_bytes),
++            "receipt_base_sha256": journal._sha256(open_receipt_bytes),
++            "receipt_bytes": batch._encode_base64url(task_receipt_bytes),
++        }
++        expected_task_intent = (
++            journal._canonical_json_bytes(task_intent) + b"\n"
++        )
++        captured_task: dict[str, bytes] = {}
++        original_write_intent = batch._write_intent
++
++        def capture_task_intent(
++            locked: batch.BatchLock, intent: dict[str, object]
++        ) -> journal.ExactFile:
++            captured_task["intent"] = (
++                journal._canonical_json_bytes(intent) + b"\n"
++            )
++            return original_write_intent(locked, intent)
++
++        with self.api_environment(), mock.patch.object(
++            journal, "_utc_now", return_value=fixed_time
++        ), mock.patch.object(
++            batch, "_write_intent", side_effect=capture_task_intent
++        ):
++            started = self.start_task(self.repo, run_id)
++
++        run_dir = self.run_dir(self.repo, run_id)
++        self.assertEqual(captured_task["intent"], expected_task_intent)
++        self.assertEqual(
++            (run_dir / "journal.jsonl").read_bytes(),
++            opening_bytes + task_bytes,
++        )
++        self.assertEqual(
++            (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
++            open_receipt_bytes + task_receipt_bytes,
++        )
++        self.assertEqual(
++            started.payload(),
++            {
++                "receipt": task_receipt,
++                "records": [task],
++                "repeated": False,
++            },
++        )
++        self.assertEqual(started.records, (task,))
++        self.assertFalse(
++            any(
++                journal._writer_activation_candidate(record)
++                for record in started.records
++            )
++        )
++
++        before_retry = self._run_file_bytes(run_dir)
++        with self.api_environment(), mock.patch.object(
++            journal, "_utc_now", return_value="2099-01-01T00:00:00Z"
++        ), mock.patch.object(
++            batch,
++            "_write_intent",
++            side_effect=AssertionError("retry must not publish an intent"),
++        ):
++            repeated = self.start_task(self.repo, run_id)
++        self.assertTrue(repeated.repeated)
++        self.assertEqual(repeated.receipt, task_receipt)
++        self.assertEqual(repeated.records, (task,))
++        self.assertEqual(self._run_file_bytes(run_dir), before_retry)
++
++    def test_global_reconciliation_defers_torn_adopted_coverage(self) -> None:
++        for condition in ("pending-intent", "stale-consistent-ledger"):
++            with self.subTest(condition=condition):
++                repo, _ = self._new_repo(f"repo-reconcile-{condition}")
++                adopted = f"run-20260910-reconcile-{condition}"
++                unrelated = f"run-20260910-unrelated-{condition}"
++                with self.api_environment():
++                    self._open_legacy_run(repo, adopted, scope=["src/**"])
++                    self.start_task(repo, adopted)
++                    run_dir = self.run_dir(repo, adopted)
++                    journal_path = run_dir / "journal.jsonl"
++
++                    if condition == "pending-intent":
++                        original_append = batch._append_named_file
++
++                        def crash_before_receipt(
++                            locked: batch.BatchLock,
++                            name: str,
++                            payload: bytes,
++                            expected: journal.FileObservation,
++                            **kwargs: object,
++                        ) -> None:
++                            if name == journal.BATCH_RECEIPTS_NAME:
++                                raise RuntimeError(
++                                    "adopted journal appended before receipt"
++                                )
++                            original_append(
++                                locked, name, payload, expected, **kwargs
++                            )
++
++                        with mock.patch.object(
++                            batch,
++                            "_append_named_file",
++                            side_effect=crash_before_receipt,
++                        ), self.assertRaisesRegex(
++                            RuntimeError,
++                            "adopted journal appended before receipt",
++                        ):
++                            builders.verification_add(
++                                repo,
++                                adopted,
++                                idempotency_key=key(
++                                    "reconcile-adopted-torn-write"
++                                ),
++                                task="task-01",
++                                criterion="unrelated reconciliation",
++                                method="unittest",
++                                check="focused torn adopted write",
++                                result="passed",
++                                observation="receipt append is interrupted",
++                                evidence=[],
++                                binding_chain=None,
++                                binding_id=None,
++                            )
++                        self.assertTrue(
++                            (run_dir / journal.BATCH_INTENT_NAME).is_file()
++                        )
++                    else:
++                        historical_tail = {
++                            "type": "verification",
++                            "id": "check-01",
++                            "task": "task-01",
++                            "criterion": "historical stale receipt tail",
++                            "method": "bash",
++                            "check": "true",
++                            "result": "passed",
++                            "observation": "receipt ledger remains at its prior EOF",
++                            "evidence": [],
++                            "run_id": adopted,
++                            "recorded_at": "2026-09-10T06:00:00Z",
++                        }
++                        with journal_path.open("ab") as stream:
++                            stream.write(journal._journal_line(historical_tail))
++                        self.assertFalse(
++                            (run_dir / journal.BATCH_INTENT_NAME).exists()
++                        )
++
++                    before = self._run_file_bytes(run_dir)
++                    records, issues = journal.read_journal(journal_path)
++                    self.assertEqual(records, [])
++                    self.assertEqual(
++                        issues, [journal.JOURNAL_READ_TRANSACTION_REFUSAL]
++                    )
++                    self.assertEqual(self._run_file_bytes(run_dir), before)
++
++                    opened = builders.run_open(
++                        repo,
++                        unrelated,
++                        idempotency_key=key(f"{condition}-unrelated-open"),
++                        goal="Open a disjoint run during adopted recovery",
++                        scope=["docs/**"],
++                        plugin_ref="forge-test-revision-9",
++                    )
++                    self.assertEqual(opened.records[0]["run_id"], unrelated)
++                    self.assertEqual(self._run_file_bytes(run_dir), before)
++
++                    if condition == "pending-intent":
++                        recovered = batch.recover_batch(repo, adopted)
++                        self.assertTrue(recovered.repeated)
++                        self.assertFalse(
++                            (run_dir / journal.BATCH_INTENT_NAME).exists()
++                        )
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "43e2044e7cf467aaa403e7e4e153a7c77cbeb0318e06a26aba2412dbb363b87f",
+    "tests/test_revision9_coordination_legacy_activation.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_legacy_activation.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_assert_first_batch_artifact_substitution_refuses",
+        "test_batch_lock_create_open_substitution_refuses",
+        "test_first_receipt_ledger_create_open_substitution_refuses",
+        "test_first_receipt_ledger_post_create_substitution_refuses",
+        "test_id_only_legacy_opening_activates_with_matching_marker_run_id",
+        "test_persisted_activation_candidate_requires_allocated_id_and_contract",
+        "test_activation_allocation_refuses_unicode_and_oversized_suffixes",
+        "test_removed_batch_lock_after_activation_is_not_recreated",
+        "test_legacy_first_typed_use_atomically_activates",
+        "test_legacy_activation_crash_matrix",
+        "test_typed_opened_run_bytes_are_unchanged",
+        "test_global_reconciliation_defers_torn_adopted_coverage"
+      ],
+      "shape": "class",
+      "target_class": "Revision9LegacyActivationTests",
+      "alias": "test_revision9_coordination_legacy_activation",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_legacy_activation.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import os",
+          "import unittest",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_allocation_refuses_unicode_and_oversized_suffixes": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_activation_allocation_refuses_unicode_and_oversized_suffixes",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_lock_create_open_substitution_refuses": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_batch_lock_create_open_substitution_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_first_receipt_ledger_create_open_substitution_refuses": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_first_receipt_ledger_create_open_substitution_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_first_receipt_ledger_post_create_substitution_refuses": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_first_receipt_ledger_post_create_substitution_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_global_reconciliation_defers_torn_adopted_coverage": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_global_reconciliation_defers_torn_adopted_coverage",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_id_only_legacy_opening_activates_with_matching_marker_run_id": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_id_only_legacy_opening_activates_with_matching_marker_run_id",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_legacy_activation_crash_matrix": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_legacy_activation_crash_matrix",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_legacy_first_typed_use_atomically_activates": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_legacy_first_typed_use_atomically_activates",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_persisted_activation_candidate_requires_allocated_id_and_contract": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_persisted_activation_candidate_requires_allocated_id_and_contract",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_removed_batch_lock_after_activation_is_not_recreated": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_removed_batch_lock_after_activation_is_not_recreated",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_typed_opened_run_bytes_are_unchanged": "tests/test_revision9_coordination_legacy_activation.py::Revision9LegacyActivationTests::test_typed_opened_run_bytes_are_unchanged"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_allocation_refuses_unicode_and_oversized_suffixes": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_activation_allocation_refuses_unicode_and_oversized_suffixes",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_lock_create_open_substitution_refuses": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_batch_lock_create_open_substitution_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_first_receipt_ledger_create_open_substitution_refuses": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_first_receipt_ledger_create_open_substitution_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_first_receipt_ledger_post_create_substitution_refuses": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_first_receipt_ledger_post_create_substitution_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_global_reconciliation_defers_torn_adopted_coverage": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_global_reconciliation_defers_torn_adopted_coverage",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_id_only_legacy_opening_activates_with_matching_marker_run_id": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_id_only_legacy_opening_activates_with_matching_marker_run_id",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_legacy_activation_crash_matrix": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_legacy_activation_crash_matrix",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_legacy_first_typed_use_atomically_activates": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_legacy_first_typed_use_atomically_activates",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_persisted_activation_candidate_requires_allocated_id_and_contract": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_persisted_activation_candidate_requires_allocated_id_and_contract",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_removed_batch_lock_after_activation_is_not_recreated": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_removed_batch_lock_after_activation_is_not_recreated",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_typed_opened_run_bytes_are_unchanged": "test_revision9_coordination_legacy_activation.Revision9LegacyActivationTests.test_typed_opened_run_bytes_are_unchanged"
+    }
+  }
+}
+DRY RUN: verified; no files written
