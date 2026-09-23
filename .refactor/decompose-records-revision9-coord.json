@@ -8,5 +8,15 @@
   "dest": "tests/_revision9_coord_support.py",
   "target_class": "Revision9BuilderBatchSupport",
   "shape": "mixin"
+ },
+ {
+  "cluster": "c01-cli_diagnostics",
+  "commit": "c46bb8ccebd18a4abf3576f0daa4500123095190",
+  "snapshot": ".refactor/revision9-coord-c01-cli_diagnostics-before.json",
+  "manifest": ".refactor/family-revision9-coord-cli_diagnostics.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c01-cli_diagnostics.json",
+  "dest": "tests/test_revision9_coordination_cli_diagnostics.py",
+  "target_class": "Revision9CliDiagnosticsTests",
+  "shape": "class"
  }
 ]
