@@ -1,0 +1,685 @@
+{
+ "module": "tests/test_revision9_cli_surfaces.py",
+ "class": "Revision9BoundCLIIntegrationTests",
+ "branch_tip_planned_at": "5ef45a3",
+ "base": "69bc28d",
+ "mixin": {
+  "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods revision9_environment,cli_process_context,invoke_cli,invoke_cli_at,open_run_and_task,start_bound_chain,start_bound_fast_chain,configure_changelog_gate,start_bound_multicell_stack_chain,selected_commit_ingest_event_digests,normalized_journal_records,prepare_unbound_fast_ingest,_quarantine_and_tombstone,_journal_records,assert_commit_identity_drain_crash_replays_once --dest tests/_revision9_cli_support.py --shape mixin --target-class Revision9CliSupport --test-only --test-snapshot .refactor/tests-revision9-cli-before.json --format-imports --manifest .refactor/mixin-revision9-cli.json",
+  "methods": [
+   "revision9_environment",
+   "cli_process_context",
+   "invoke_cli",
+   "invoke_cli_at",
+   "open_run_and_task",
+   "start_bound_chain",
+   "start_bound_fast_chain",
+   "configure_changelog_gate",
+   "start_bound_multicell_stack_chain",
+   "selected_commit_ingest_event_digests",
+   "normalized_journal_records",
+   "prepare_unbound_fast_ingest",
+   "_quarantine_and_tombstone",
+   "_journal_records",
+   "assert_commit_identity_drain_crash_replays_once"
+  ],
+  "dest": "tests/_revision9_cli_support.py",
+  "target_class": "Revision9CliSupport",
+  "test_mode": "identity",
+  "measured_code_lines": 674,
+  "dry_run": ".refactor/dryrun-revision9-cli-mixin.txt"
+ },
+ "families": [
+  {
+   "name": "dispositions",
+   "module": "tests/test_revision9_cli_surfaces_dispositions.py",
+   "class": "Revision9CliSurfacesDispositionsTests",
+   "tests": 20,
+   "methods": [
+    "test_frozen_abort_writes_explicit_tombstone_without_replay",
+    "test_explicit_abort_of_readable_bound_chain_is_a_terminal_disposition",
+    "test_abort_refuses_terminal_chains_before_any_mutation",
+    "test_abort_refuses_landed_chain_and_keeps_its_landing",
+    "test_retrospective_abort_disposition_carries_the_decision_once",
+    "test_tombstone_disposition_retires_a_frozen_chain_after_its_task_closed",
+    "test_tombstone_disposition_refuses_a_nonexistent_run_before_any_lock",
+    "test_abort_disposition_run_id_must_name_a_readable_chains_bound_run",
+    "test_tombstone_disposition_guard_and_correlation_controls_are_load_bearing",
+    "test_abort_disposition_refuses_every_ineligible_chain",
+    "test_abort_disposition_preconditions_are_independently_load_bearing",
+    "test_abort_disposition_reaches_a_dead_in_place_chain",
+    "test_abort_disposition_is_exempt_from_the_iteration_cap",
+    "test_abort_disposition_requires_a_chain_id_and_a_readable_journal",
+    "test_abort_disposition_refuses_a_live_bound_chain",
+    "test_abort_disposition_refuses_an_unbound_aborted_chain",
+    "test_task_finish_inspects_only_the_finishing_tasks_chains",
+    "test_operator_tombstone_admits_absent_chain_and_refuses_healthy_chain",
+    "test_tombstone_publication_recovers_only_authenticated_temp_alias",
+    "test_tombstone_publication_retries_prelink_and_postunlink_failures"
+   ],
+   "methods_arg": "test_frozen_abort_writes_explicit_tombstone_without_replay,test_explicit_abort_of_readable_bound_chain_is_a_terminal_disposition,test_abort_refuses_terminal_chains_before_any_mutation,test_abort_refuses_landed_chain_and_keeps_its_landing,test_retrospective_abort_disposition_carries_the_decision_once,test_tombstone_disposition_retires_a_frozen_chain_after_its_task_closed,test_tombstone_disposition_refuses_a_nonexistent_run_before_any_lock,test_abort_disposition_run_id_must_name_a_readable_chains_bound_run,test_tombstone_disposition_guard_and_correlation_controls_are_load_bearing,test_abort_disposition_refuses_every_ineligible_chain,test_abort_disposition_preconditions_are_independently_load_bearing,test_abort_disposition_reaches_a_dead_in_place_chain,test_abort_disposition_is_exempt_from_the_iteration_cap,test_abort_disposition_requires_a_chain_id_and_a_readable_journal,test_abort_disposition_refuses_a_live_bound_chain,test_abort_disposition_refuses_an_unbound_aborted_chain,test_task_finish_inspects_only_the_finishing_tasks_chains,test_operator_tombstone_admits_absent_chain_and_refuses_healthy_chain,test_tombstone_publication_recovers_only_authenticated_temp_alias,test_tombstone_publication_retries_prelink_and_postunlink_failures",
+   "method_lines": [
+    [
+     4023,
+     4115,
+     86
+    ],
+    [
+     4117,
+     4281,
+     151
+    ],
+    [
+     4283,
+     4313,
+     30
+    ],
+    [
+     4315,
+     4356,
+     42
+    ],
+    [
+     4358,
+     4435,
+     71
+    ],
+    [
+     4459,
+     4576,
+     105
+    ],
+    [
+     4578,
+     4596,
+     19
+    ],
+    [
+     4598,
+     4621,
+     24
+    ],
+    [
+     4623,
+     4703,
+     77
+    ],
+    [
+     4705,
+     4719,
+     14
+    ],
+    [
+     4721,
+     4753,
+     31
+    ],
+    [
+     4755,
+     4781,
+     26
+    ],
+    [
+     4783,
+     4816,
+     32
+    ],
+    [
+     4818,
+     4836,
+     19
+    ],
+    [
+     4838,
+     4846,
+     9
+    ],
+    [
+     4848,
+     4859,
+     12
+    ],
+    [
+     4861,
+     4924,
+     60
+    ],
+    [
+     4926,
+     4977,
+     50
+    ],
+    [
+     4979,
+     5019,
+     38
+    ],
+    [
+     5021,
+     5085,
+     60
+    ]
+   ],
+   "est_method_code_lines": 956,
+   "est_header_lines": 20,
+   "est_code_lines": 976,
+   "helpers_used": [
+    "_journal_records",
+    "_quarantine_and_tombstone",
+    "cli_process_context",
+    "invoke_cli",
+    "start_bound_chain",
+    "start_bound_fast_chain"
+   ],
+   "module_globals_used": [
+    "CLI",
+    "RUNTIME",
+    "datetime",
+    "json",
+    "key",
+    "mock",
+    "os",
+    "patch_engine",
+    "stat"
+   ],
+   "scenario": "Abort and tombstone dispositions: frozen abort writes an explicit tombstone without replay, explicit abort of a readable bound chain is terminal, abort refuses terminal/landed/live/unbound-aborted chains before any mutation, retrospective abort carries the decision once, tombstone disposition retires a frozen chain after its task closed and refuses a nonexistent run before any lock, the disposition guard/correlation/precondition controls are load-bearing, dead-in-place chains are reachable and exempt from the iteration cap, task finish inspects only the finishing task's chains, operator tombstone admits an absent chain and refuses a healthy one, and tombstone publication recovers only the authenticated temp alias and retries prelink/postunlink failures (contiguous source range 4023..5085 of cluster 2 plus the cluster-13 singleton at 4755).",
+   "fallback_seam": "split at the source gap 4859/4861: `dispositions` keeps 4023..4859 (16 tests, 748 -> 768) and the four task-finish/operator-tombstone/tombstone-publication tests 4861..5085 (208) move into `replay` (658 + 208 = 866 -> 886); both stay in the band.",
+   "id_map": ".refactor/idmap-revision9-cli-dispositions.json",
+   "manifest": ".refactor/family-revision9-cli-dispositions.json",
+   "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_frozen_abort_writes_explicit_tombstone_without_replay,test_explicit_abort_of_readable_bound_chain_is_a_terminal_disposition,test_abort_refuses_terminal_chains_before_any_mutation,test_abort_refuses_landed_chain_and_keeps_its_landing,test_retrospective_abort_disposition_carries_the_decision_once,test_tombstone_disposition_retires_a_frozen_chain_after_its_task_closed,test_tombstone_disposition_refuses_a_nonexistent_run_before_any_lock,test_abort_disposition_run_id_must_name_a_readable_chains_bound_run,test_tombstone_disposition_guard_and_correlation_controls_are_load_bearing,test_abort_disposition_refuses_every_ineligible_chain,test_abort_disposition_preconditions_are_independently_load_bearing,test_abort_disposition_reaches_a_dead_in_place_chain,test_abort_disposition_is_exempt_from_the_iteration_cap,test_abort_disposition_requires_a_chain_id_and_a_readable_journal,test_abort_disposition_refuses_a_live_bound_chain,test_abort_disposition_refuses_an_unbound_aborted_chain,test_task_finish_inspects_only_the_finishing_tasks_chains,test_operator_tombstone_admits_absent_chain_and_refuses_healthy_chain,test_tombstone_publication_recovers_only_authenticated_temp_alias,test_tombstone_publication_retries_prelink_and_postunlink_failures --dest tests/test_revision9_cli_surfaces_dispositions.py --shape class --target-class Revision9CliSurfacesDispositionsTests --test-only --test-snapshot .refactor/tests-revision9-cli-dispositions.json --format-imports --manifest .refactor/family-revision9-cli-dispositions.json --id-map .refactor/idmap-revision9-cli-dispositions.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-dispositions-before.json --manifest .refactor/family-revision9-cli-dispositions.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-dispositions.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_dispositions; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_dispositions' (standalone import, first in a Gate 1 shard)"
+  },
+  {
+   "name": "start_locks",
+   "module": "tests/test_revision9_cli_surfaces_start_locks.py",
+   "class": "Revision9CliSurfacesStartLocksTests",
+   "tests": 17,
+   "methods": [
+    "test_lockless_bound_start_refuses_nonexistent_run_without_creating_it",
+    "test_lockless_bound_start_halt_precedes_stable_lock_creation",
+    "test_start_lock_disappearance_never_recreates_before_halt",
+    "test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing",
+    "test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory",
+    "test_commit_activation_rejects_event_one_rebinding_before_replay",
+    "test_lockless_bound_start_refuses_foreign_owner_without_creating_lock",
+    "test_lockless_bound_start_refuses_other_worktree_without_creating_lock",
+    "test_lockless_bound_start_creation_control_is_load_bearing",
+    "test_lockless_chain_batch_creation_revalidates_in_lock_order",
+    "test_existing_chain_batch_lock_skips_creation_only_validation",
+    "test_existing_locked_bound_start_succeeds_without_session_pid",
+    "test_existing_locked_bound_start_preserves_foreign_owner_behavior",
+    "test_lockless_merge_start_binding_creates_stable_batch_lock",
+    "test_lockless_read_only_binding_validator_does_not_create_batch_lock",
+    "test_bound_start_persists_exact_immutable_binding",
+    "test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive"
+   ],
+   "methods_arg": "test_lockless_bound_start_refuses_nonexistent_run_without_creating_it,test_lockless_bound_start_halt_precedes_stable_lock_creation,test_start_lock_disappearance_never_recreates_before_halt,test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing,test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory,test_commit_activation_rejects_event_one_rebinding_before_replay,test_lockless_bound_start_refuses_foreign_owner_without_creating_lock,test_lockless_bound_start_refuses_other_worktree_without_creating_lock,test_lockless_bound_start_creation_control_is_load_bearing,test_lockless_chain_batch_creation_revalidates_in_lock_order,test_existing_chain_batch_lock_skips_creation_only_validation,test_existing_locked_bound_start_succeeds_without_session_pid,test_existing_locked_bound_start_preserves_foreign_owner_behavior,test_lockless_merge_start_binding_creates_stable_batch_lock,test_lockless_read_only_binding_validator_does_not_create_batch_lock,test_bound_start_persists_exact_immutable_binding,test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive",
+   "method_lines": [
+    [
+     2990,
+     3019,
+     28
+    ],
+    [
+     3021,
+     3069,
+     47
+    ],
+    [
+     3071,
+     3122,
+     48
+    ],
+    [
+     3124,
+     3197,
+     71
+    ],
+    [
+     3199,
+     3257,
+     57
+    ],
+    [
+     3259,
+     3308,
+     50
+    ],
+    [
+     3310,
+     3353,
+     42
+    ],
+    [
+     3355,
+     3389,
+     33
+    ],
+    [
+     3391,
+     3430,
+     37
+    ],
+    [
+     3432,
+     3516,
+     80
+    ],
+    [
+     3518,
+     3558,
+     38
+    ],
+    [
+     3560,
+     3598,
+     37
+    ],
+    [
+     3600,
+     3629,
+     28
+    ],
+    [
+     3631,
+     3663,
+     30
+    ],
+    [
+     3665,
+     3699,
+     32
+    ],
+    [
+     3701,
+     3720,
+     20
+    ],
+    [
+     3837,
+     3956,
+     114
+    ]
+   ],
+   "est_method_code_lines": 792,
+   "est_header_lines": 20,
+   "est_code_lines": 812,
+   "helpers_used": [
+    "cli_process_context",
+    "invoke_cli",
+    "invoke_cli_at",
+    "open_run_and_task",
+    "revision9_environment",
+    "start_bound_chain"
+   ],
+   "module_globals_used": [
+    "CLI",
+    "CORE",
+    "ROOT",
+    "RUNTIME",
+    "contextlib",
+    "copy",
+    "io",
+    "json",
+    "key",
+    "mock",
+    "os",
+    "patch_chain_core",
+    "patch_engine"
+   ],
+   "scenario": "Bound start and lock creation: lockless bound start refusals (nonexistent run, foreign owner, other worktree) that never create a lock, halt-before-lock and lock-disappearance ordering, legacy first-use chain receipt bootstrap and in-memory prevalidation, commit activation rejecting event-one rebinding, the lock-creation control, chain batch lock creation/revalidation in lock order, existing-lock behaviours (creation-only validation skip, no session pid, foreign owner preserved), merge-start binding creating a stable batch lock, the read-only binding validator, the immutable binding persisted at bound start, and linked worktrees sharing chain authority across CLI builders and the archive (inventory clusters 0, 1, 5..12 and the start/binding tests of cluster 2, contiguous source range 2990..3720 plus 3837..3956).",
+   "fallback_seam": "not expected (upper bound 812). If needed: split at the source gap 3430/3432 into `lockless_start` (2990..3430: 9 tests, 413) and `batch_locks` (3432..3720 plus 3837..3956: 8 tests, 379); both halves are under 500, so only for the ceiling case.",
+   "id_map": ".refactor/idmap-revision9-cli-start_locks.json",
+   "manifest": ".refactor/family-revision9-cli-start_locks.json",
+   "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_lockless_bound_start_refuses_nonexistent_run_without_creating_it,test_lockless_bound_start_halt_precedes_stable_lock_creation,test_start_lock_disappearance_never_recreates_before_halt,test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing,test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory,test_commit_activation_rejects_event_one_rebinding_before_replay,test_lockless_bound_start_refuses_foreign_owner_without_creating_lock,test_lockless_bound_start_refuses_other_worktree_without_creating_lock,test_lockless_bound_start_creation_control_is_load_bearing,test_lockless_chain_batch_creation_revalidates_in_lock_order,test_existing_chain_batch_lock_skips_creation_only_validation,test_existing_locked_bound_start_succeeds_without_session_pid,test_existing_locked_bound_start_preserves_foreign_owner_behavior,test_lockless_merge_start_binding_creates_stable_batch_lock,test_lockless_read_only_binding_validator_does_not_create_batch_lock,test_bound_start_persists_exact_immutable_binding,test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive --dest tests/test_revision9_cli_surfaces_start_locks.py --shape class --target-class Revision9CliSurfacesStartLocksTests --test-only --test-snapshot .refactor/tests-revision9-cli-start_locks.json --format-imports --manifest .refactor/family-revision9-cli-start_locks.json --id-map .refactor/idmap-revision9-cli-start_locks.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-start_locks-before.json --manifest .refactor/family-revision9-cli-start_locks.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-start_locks.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_start_locks; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_start_locks' (standalone import, first in a Gate 1 shard)"
+  },
+  {
+   "name": "replay",
+   "module": "tests/test_revision9_cli_surfaces_replay.py",
+   "class": "Revision9CliSurfacesReplayTests",
+   "tests": 10,
+   "methods": [
+    "test_fresh_key_cannot_replay_typed_verification_or_decision_binding",
+    "test_historical_receipted_binding_replays_after_restage",
+    "test_bound_replay_refuses_noncanonical_event_without_state_repair",
+    "test_failed_ingest_proof_captures_but_never_references_or_mutates_journal",
+    "test_event_carrier_survives_drain_crash_and_replays_once",
+    "test_commit_identity_carrier_pre_drain_crash_replays_once",
+    "test_commit_identity_journal_append_crash_replays_once",
+    "test_commit_identity_receipt_append_crash_replays_once",
+    "test_chain_receipt_replay_reader_is_read_only_and_fail_closed",
+    "test_receipted_commit_produced_crash_recovers_one_landing"
+   ],
+   "methods_arg": "test_fresh_key_cannot_replay_typed_verification_or_decision_binding,test_historical_receipted_binding_replays_after_restage,test_bound_replay_refuses_noncanonical_event_without_state_repair,test_failed_ingest_proof_captures_but_never_references_or_mutates_journal,test_event_carrier_survives_drain_crash_and_replays_once,test_commit_identity_carrier_pre_drain_crash_replays_once,test_commit_identity_journal_append_crash_replays_once,test_commit_identity_receipt_append_crash_replays_once,test_chain_receipt_replay_reader_is_read_only_and_fail_closed,test_receipted_commit_produced_crash_recovers_one_landing",
+   "method_lines": [
+    [
+     3722,
+     3835,
+     110
+    ],
+    [
+     3958,
+     4021,
+     60
+    ],
+    [
+     5087,
+     5135,
+     46
+    ],
+    [
+     5137,
+     5205,
+     66
+    ],
+    [
+     5207,
+     5327,
+     115
+    ],
+    [
+     5444,
+     5445,
+     2
+    ],
+    [
+     5447,
+     5448,
+     2
+    ],
+    [
+     5450,
+     5451,
+     2
+    ],
+    [
+     5453,
+     5599,
+     141
+    ],
+    [
+     5601,
+     5719,
+     114
+    ]
+   ],
+   "est_method_code_lines": 658,
+   "est_header_lines": 20,
+   "est_code_lines": 678,
+   "helpers_used": [
+    "assert_commit_identity_drain_crash_replays_once",
+    "cli_process_context",
+    "invoke_cli",
+    "open_run_and_task",
+    "start_bound_chain",
+    "start_bound_fast_chain"
+   ],
+   "module_globals_used": [
+    "CLI",
+    "copy",
+    "hashlib",
+    "json",
+    "key",
+    "mock"
+   ],
+   "scenario": "Replay and crash recovery: a fresh key cannot replay a typed verification or decision binding, a historical receipted binding replays after restage, bound replay refuses a noncanonical event without state repair, a failed ingest proof captures but never references or mutates the journal, the event carrier survives a drain crash and replays once, the three commit-identity crash points (pre-drain, journal append, receipt append) replay once, the chain receipt replay reader is read-only and fail-closed, and a receipted commit-produced crash recovers exactly one landing (the two binding-replay tests 3722..4021 of cluster 2 plus the contiguous source tail 5087..5719 of clusters 2 and 3).",
+   "fallback_seam": "not expected (upper bound 678). If needed: move the two binding-replay tests 3722..3835 and 3958..4021 (170) into `start_locks` (-> 962); only for the ceiling case.",
+   "id_map": ".refactor/idmap-revision9-cli-replay.json",
+   "manifest": ".refactor/family-revision9-cli-replay.json",
+   "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_fresh_key_cannot_replay_typed_verification_or_decision_binding,test_historical_receipted_binding_replays_after_restage,test_bound_replay_refuses_noncanonical_event_without_state_repair,test_failed_ingest_proof_captures_but_never_references_or_mutates_journal,test_event_carrier_survives_drain_crash_and_replays_once,test_commit_identity_carrier_pre_drain_crash_replays_once,test_commit_identity_journal_append_crash_replays_once,test_commit_identity_receipt_append_crash_replays_once,test_chain_receipt_replay_reader_is_read_only_and_fail_closed,test_receipted_commit_produced_crash_recovers_one_landing --dest tests/test_revision9_cli_surfaces_replay.py --shape class --target-class Revision9CliSurfacesReplayTests --test-only --test-snapshot .refactor/tests-revision9-cli-replay.json --format-imports --manifest .refactor/family-revision9-cli-replay.json --id-map .refactor/idmap-revision9-cli-replay.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-replay-before.json --manifest .refactor/family-revision9-cli-replay.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-replay.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_replay; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_replay' (standalone import, first in a Gate 1 shard)"
+  },
+  {
+   "name": "multicell_stack",
+   "module": "tests/test_revision9_cli_surfaces_multicell_stack.py",
+   "class": "Revision9CliSurfacesMulticellStackTests",
+   "tests": 6,
+   "methods": [
+    "test_bound_multicell_stack_journals_one_completed_batch",
+    "test_bound_multicell_stack_failure_journals_failed_cell_and_stops",
+    "test_bound_multicell_stack_journal_deferral_is_load_bearing",
+    "test_bound_changelog_output_is_committed_policy_machinery",
+    "test_bound_non_changelog_output_still_names_out_of_scope_path",
+    "test_real_unbound_multicell_stack_ingest_keeps_every_head_record"
+   ],
+   "methods_arg": "test_bound_multicell_stack_journals_one_completed_batch,test_bound_multicell_stack_failure_journals_failed_cell_and_stops,test_bound_multicell_stack_journal_deferral_is_load_bearing,test_bound_changelog_output_is_committed_policy_machinery,test_bound_non_changelog_output_still_names_out_of_scope_path,test_real_unbound_multicell_stack_ingest_keeps_every_head_record",
+   "method_lines": [
+    [
+     1439,
+     1584,
+     140
+    ],
+    [
+     1586,
+     1859,
+     263
+    ],
+    [
+     1861,
+     1896,
+     34
+    ],
+    [
+     1898,
+     1926,
+     25
+    ],
+    [
+     1928,
+     1947,
+     18
+    ],
+    [
+     2399,
+     2504,
+     102
+    ]
+   ],
+   "est_method_code_lines": 582,
+   "est_header_lines": 20,
+   "est_code_lines": 602,
+   "helpers_used": [
+    "cli_process_context",
+    "configure_changelog_gate",
+    "invoke_cli",
+    "normalized_journal_records",
+    "open_run_and_task",
+    "prepare_unbound_fast_ingest",
+    "start_bound_chain",
+    "start_bound_multicell_stack_chain"
+   ],
+   "module_globals_used": [
+    "CLI",
+    "hashlib",
+    "patch_chain_core",
+    "patch_engine"
+   ],
+   "scenario": "Multicell stack execution: a bound multicell stack journals one completed batch, a failed cell is journaled and stops the stack, the stack journal-deferral control is load-bearing, and a real unbound multicell stack ingest keeps every head record; plus the two source-adjacent gate-output classification tests of the bound chain (1898..1947: changelog output is committed-policy machinery, a non-changelog output path is still named out of scope).",
+   "fallback_seam": "not expected (upper bound 602). If needed: move `test_real_unbound_multicell_stack_ingest_keeps_every_head_record` (2399..2504, 102) to `ingest` (-> 480 / 660); the two changelog-gate tests (43) may follow it.",
+   "id_map": ".refactor/idmap-revision9-cli-multicell_stack.json",
+   "manifest": ".refactor/family-revision9-cli-multicell_stack.json",
+   "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_bound_multicell_stack_journals_one_completed_batch,test_bound_multicell_stack_failure_journals_failed_cell_and_stops,test_bound_multicell_stack_journal_deferral_is_load_bearing,test_bound_changelog_output_is_committed_policy_machinery,test_bound_non_changelog_output_still_names_out_of_scope_path,test_real_unbound_multicell_stack_ingest_keeps_every_head_record --dest tests/test_revision9_cli_surfaces_multicell_stack.py --shape class --target-class Revision9CliSurfacesMulticellStackTests --test-only --test-snapshot .refactor/tests-revision9-cli-multicell_stack.json --format-imports --manifest .refactor/family-revision9-cli-multicell_stack.json --id-map .refactor/idmap-revision9-cli-multicell_stack.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-multicell_stack-before.json --manifest .refactor/family-revision9-cli-multicell_stack.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-multicell_stack.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_multicell_stack; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_multicell_stack' (standalone import, first in a Gate 1 shard)"
+  },
+  {
+   "name": "ingest",
+   "module": "tests/test_revision9_cli_surfaces_ingest.py",
+   "class": "Revision9CliSurfacesIngestTests",
+   "tests": 9,
+   "methods": [
+    "test_real_unbound_fast_chain_ingests_and_receipted_retry_skips_reproof",
+    "test_legacy_run_ingest_first_typed_use_activates_once_and_is_receipted",
+    "test_legacy_run_ingest_allocation_projection_is_load_bearing",
+    "test_captured_commit_and_merge_sources_reopen_from_the_run_root",
+    "test_captured_source_substitution_before_intent_refuses_without_append",
+    "test_captured_source_substitution_before_builder_keeps_exact_diagnostic",
+    "test_each_ingest_proof_control_refuses_at_its_named_boundary",
+    "test_fast_mechanical_skip_is_rejected_at_current_gates_proof",
+    "test_lockless_legacy_bound_chain_activates_and_lands_cleanly"
+   ],
+   "methods_arg": "test_real_unbound_fast_chain_ingests_and_receipted_retry_skips_reproof,test_legacy_run_ingest_first_typed_use_activates_once_and_is_receipted,test_legacy_run_ingest_allocation_projection_is_load_bearing,test_captured_commit_and_merge_sources_reopen_from_the_run_root,test_captured_source_substitution_before_intent_refuses_without_append,test_captured_source_substitution_before_builder_keeps_exact_diagnostic,test_each_ingest_proof_control_refuses_at_its_named_boundary,test_fast_mechanical_skip_is_rejected_at_current_gates_proof,test_lockless_legacy_bound_chain_activates_and_lands_cleanly",
+   "method_lines": [
+    [
+     2284,
+     2397,
+     111
+    ],
+    [
+     2506,
+     2555,
+     48
+    ],
+    [
+     2557,
+     2613,
+     55
+    ],
+    [
+     2615,
+     2664,
+     45
+    ],
+    [
+     2666,
+     2710,
+     42
+    ],
+    [
+     2712,
+     2757,
+     43
+    ],
+    [
+     2759,
+     2819,
+     56
+    ],
+    [
+     2821,
+     2860,
+     38
+    ],
+    [
+     2862,
+     2988,
+     120
+    ]
+   ],
+   "est_method_code_lines": 558,
+   "est_header_lines": 20,
+   "est_code_lines": 578,
+   "helpers_used": [
+    "cli_process_context",
+    "invoke_cli",
+    "normalized_journal_records",
+    "open_run_and_task",
+    "prepare_unbound_fast_ingest"
+   ],
+   "module_globals_used": [
+    "CLI",
+    "contextlib",
+    "hashlib",
+    "io",
+    "json",
+    "key",
+    "mock",
+    "os",
+    "patch_chain_core",
+    "warnings"
+   ],
+   "scenario": "Commit ingest proofs and legacy activation: a real unbound fast chain ingests and a receipted retry skips re-proof, legacy-run ingest activates once on first typed use and is receipted, the allocation projection is load-bearing, captured commit/merge sources reopen from the run root and refuse substitution before intent/builder with exact diagnostics, each ingest-proof control refuses at its named boundary, the fast mechanical skip is rejected at the current gates proof, and a lockless legacy bound chain activates and lands cleanly (inventory cluster 4 plus the four ingest-proof/captured-source tests of cluster 2/3 that sit between them in the source).",
+   "fallback_seam": "not expected (upper bound 578). If needed: split `captured_sources` (2615..2757: 3 tests, 130) off and merge it into `multicell_stack` (-> 712); `ingest` then 428 + 20 = 448 is under 500, so the seam is only for the ceiling case.",
+   "id_map": ".refactor/idmap-revision9-cli-ingest.json",
+   "manifest": ".refactor/family-revision9-cli-ingest.json",
+   "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_real_unbound_fast_chain_ingests_and_receipted_retry_skips_reproof,test_legacy_run_ingest_first_typed_use_activates_once_and_is_receipted,test_legacy_run_ingest_allocation_projection_is_load_bearing,test_captured_commit_and_merge_sources_reopen_from_the_run_root,test_captured_source_substitution_before_intent_refuses_without_append,test_captured_source_substitution_before_builder_keeps_exact_diagnostic,test_each_ingest_proof_control_refuses_at_its_named_boundary,test_fast_mechanical_skip_is_rejected_at_current_gates_proof,test_lockless_legacy_bound_chain_activates_and_lands_cleanly --dest tests/test_revision9_cli_surfaces_ingest.py --shape class --target-class Revision9CliSurfacesIngestTests --test-only --test-snapshot .refactor/tests-revision9-cli-ingest.json --format-imports --manifest .refactor/family-revision9-cli-ingest.json --id-map .refactor/idmap-revision9-cli-ingest.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-ingest-before.json --manifest .refactor/family-revision9-cli-ingest.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-ingest.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_ingest; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_ingest' (standalone import, first in a Gate 1 shard)"
+  }
+ ],
+ "family_order": [
+  "dispositions",
+  "start_locks",
+  "replay",
+  "multicell_stack",
+  "ingest"
+ ],
+ "provisional_baseline": {
+  "tests/_revision9_cli_support.py": 674,
+  "tests/test_revision9_cli_surfaces_dispositions.py": 976,
+  "tests/test_revision9_cli_surfaces_ingest.py": 578,
+  "tests/test_revision9_cli_surfaces_multicell_stack.py": 602,
+  "tests/test_revision9_cli_surfaces_replay.py": 678,
+  "tests/test_revision9_cli_surfaces_start_locks.py": 812
+ },
+ "provisional_baseline_note": "true method code lines (inventory-revision9-cli-1 spans re-measured on the current file AST, check_file_length.code_lines rule) + 20 header = upper bounds; the mixin at its dry-run measured destination size (674); commit these exact values in C2 (a low entry fails the family gate at the file-length step; a high one is inert); finalize replaces them with measured sizes",
+ "debt": [
+  {
+   "item": "tests/_revision9_cli_support.py 674 code lines (> module_target 500; measured from the dry run's destination hunk, 708 physical lines)",
+   "disposition": "provisional baseline entry (C2); accepted: one support mixin per class (brief section 4); follow-up bead at handover (split by role: process/invocation context vs chain starters vs ingest fixtures)"
+  },
+  {
+   "item": "tests/_revision9_cli_support.py holds 15 methods (< class_target 30)",
+   "disposition": "no debt"
+  },
+  {
+   "item": "every family module over module_target 500 (upper bounds 578..976)",
+   "disposition": "provisional baseline entries (C2); 500..1000 is the brief's band; finalize replaces them with measured sizes"
+  },
+  {
+   "item": "prepare_unbound_fast_ingest 2025..2282 (258 physical lines, > function_target 150; helper, moves in the mixin)",
+   "disposition": "function-length debt, moved verbatim (mixin)"
+  },
+  {
+   "item": "test_bound_multicell_stack_failure_journals_failed_cell_and_stops 1586..1859 (274 physical, 263 code)",
+   "disposition": "function-length debt, moved verbatim (multicell_stack)"
+  },
+  {
+   "item": "test_explicit_abort_of_readable_bound_chain_is_a_terminal_disposition 4117..4281 (165 physical, 151 code)",
+   "disposition": "function-length debt, moved verbatim (dispositions)"
+  },
+  {
+   "item": "tests/test_revision9_cli_surfaces.py ends at ~1,233 code lines after C7 (eight untouched classes 1,207 + 21-line preamble + the 2-line shell `class ...: pass` + the support import + __main__), over the 1,000 ceiling",
+   "disposition": "covered by the existing grandfathered entry .refactor-baseline.json:58 (5456, shrink-only); finalize replaces it with the measured size and pyproject.toml:252 with a measured entry; follow-up bead at handover names what remains (Revision9CoordinationSeamTests 415, Revision9CLIParsingTests 255, Revision9IngestProofControlTests 235 are the next seams; out of scope for this lane per brief section 4: 'eight other classes stay')"
+  },
+  {
+   "item": "the source class has no docstring, so the mover leaves `pass` (retained or [pass]) as the class body",
+   "disposition": "default keep (see source_shell); the shell collects 0 tests under both collectors"
+  }
+ ],
+ "census": {
+  "census_complete": false,
+  "sites": 0,
+  "reproduced_in_this_worktree": "grep -rn 'Revision9BoundCLIIntegrationTests\\|test_revision9_cli_surfaces' . --exclude-dir=.git --exclude-dir=.refactor -> the class name appears only at the source class line 1224 (0 code sites); the file name appears only in config (pyproject.toml:252 per-file ignores, pyproject.toml:253 temporary glob, .refactor-baseline.json:58 = 5456, .claude/settings.local.json:5 REFACTOR_TEST_CMD pattern) and in prose (docs/analysis/refactoring-review-2026-09-11.md, refactoring-candidates-2026-09-19.md, refactor-plan-2026-09-19.md, .forge/history/runs/run-20260827-archive-fidelity.md: records of past sizes/candidates, nothing to repoint)"
+ },
+ "expected_refusals": [],
+ "inventory": ".refactor/inventory-revision9-cli-1.json",
+ "inventory_note": "regenerated after the constants commit b4d3c4f (prerequisites: []); 77 methods = 62 test_* + 15 helpers, 75 ok, 2 wrap (cli_process_context contextmanager, normalized_journal_records staticmethod: helpers, in the mixin). Spans re-measured on the current file AST: identical for all 62 tests; the two wrap helpers differ by their decorator line (inventory 1229/2017 vs decorator-inclusive 1228/2016) which the mixin dry run carries verbatim",
+ "partition_check": "PARTITION CHECK (inventory-revision9-cli-1.json): inventory tests=62 placed=62 unique=62 duplicates=[] missing=[] extra=[] sum_code_lines=3546",
+ "config_prep": {
+  "commit": "a30d535 (already committed; no open operator decision)",
+  "change": "pyproject.toml: temporary per-file-ignore globs tests/test_revision9_cli_surfaces_*.py and tests/_revision9_cli_*.py (source entry minus I001), [tool.ruff.lint.isort] known-local-folder (operator ruling 2026-09-23 11:30), tests/test_migration.py allowed_prefixes gains .refactor/ (operator ruling 2026-09-23 14:10)",
+  "status": "DONE",
+  "followed_by": "b4d3c4f constants module (hand-written prep), 5ef45a3 re-freeze + inventory + verified mixin dry run"
+ },
+ "source_shell": {
+  "default": "keep tests/test_revision9_cli_surfaces.py: the eight untouched classes, the module preamble, `class Revision9BoundCLIIntegrationTests(Revision9CliSupport, CLI_FIXTURE_SUPPORT.ForgeCLIFixture): pass` (no docstring in the source class), and `if __name__ == \"__main__\"` at 5722 (three classes follow it)",
+  "estimated_code_lines_after_wave": 1233,
+  "reason": "the eight other classes are out of scope by the brief (section 4/5: eight classes stay); the source stays over 1,000 under its existing grandfathered entry (.refactor-baseline.json:58, 5456, shrink-only) which finalize replaces with the measured size; a follow-up bead names the remaining classes; deleting the shell is not planned (Gate 1 shard re-partition, precedent plan-revision8 section 0.3)"
+ },
+ "gate_1_shards_after_split": {
+  "4": [
+   "test_revision9_cli_surfaces",
+   "test_revision9_cli_surfaces_replay"
+  ],
+  "1": [
+   "test_revision9_cli_surfaces_dispositions",
+   "test_revision9_cli_surfaces_start_locks"
+  ],
+  "2": [
+   "test_revision9_cli_surfaces_ingest"
+  ],
+  "3": [
+   "test_revision9_cli_surfaces_multicell_stack"
+  ]
+ },
+ "loader_sweep": "python3 -m unittest tests.test_cli_loader runs in every cluster gate (driver line 205)"
+}
