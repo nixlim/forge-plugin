@@ -8,6 +8,8 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-09-23
+
 ### Changed
 
 - Historical route readers now accept legacy and canonical role, provider, and event-source vocabulary through one shared normalizer.
@@ -21,6 +23,11 @@ Release dates are the UTC dates of the release commits.
 - Refactor (chain_core): `scripts/forge/forge_cli/chain_core.py` (about 19,300 code lines) is now the package `scripts/forge/forge_cli/chain_core/`: 45 submodules hold the 315 moved symbols with every function and class body unchanged (strict AST oracle 881/881), and the root `__init__.py` keeps the verbatim `__all__` and re-exports every symbol the module defined, so `forge_cli.chain_core.<name>` and the CLI shim's forwarding are unchanged. Unused imports are no longer bound on the package root; test patches of moved controls go through `tests/_cli_loader.patch_chain_core`, which patches every submodule binding the name. The spec's package sentence, the size baseline (eight over-budget chain_core files recorded at measured size) and a `forge_cli.chain_core layers` import-linter contract follow (bead forge-plugin-deb; follow-ups in forge-plugin-r0b and forge-plugin-4j7).
 - File categories: `*.js` now belongs to the `config` category (and the changelog gate's code-suffix list), so a tracked JavaScript file such as the chain_core split's Workflow script `.refactor/split-chain-core.workflow.js` matches a category and `tests.test_repo_conformance` file-category coverage passes (bead forge-plugin-g9i).
 - Review evidence for the chain_core split is tracked under `.refactor/`: the Codex review transcripts (`codex-review.jsonl`, `codex-review-chain_core.jsonl`, thread `01a0a015-b9f3-7072-9abd-4d4a29f96082`) and their verdict summaries (`codex-review.md`, `codex-review-chain_core.md`), cited by the handback on bead forge-plugin-deb. Evidence only; no runtime surface changes.
+
+### Release notes
+
+- 0.6.13 is the routing plan's vocabulary **readers** release (chain V1): `scripts/forge/route_vocab.py` gives every journal reader one legacy/canonical map for `role`, `provider` and `event_source`; writers are unchanged, so records written by 0.6.12 and by 0.6.13 read identically. 0.6.14 will switch the writers and refuse the legacy spellings (`implementation`, `implement`, `review`/`reviewer`, `codex-cli`, `agent-tool`, `orchestrator-inline`) on new `execution` records — one-release notice.
+- Also ships the refactor campaign's Engine and MergeEngine decompositions and the app package split (no behaviour change).
 
 ## [0.6.12] - 2026-09-13
 
