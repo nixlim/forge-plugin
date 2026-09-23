@@ -1,6 +1,6 @@
 # Per-developer model routing — design record (2026-09-20)
 
-Status: **design discussion, no implementation**. Untracked analysis note; nothing here is
+Status: **design discussion, no implementation**. Non-authoritative analysis note (tracked since `69bc28d`); nothing here is
 spec authority. Method: two read-only multi-agent workflows (7 surface readers + completeness
 critic; 3 designs x 3 adversarial critic lenses x 2 judges + synthesis), every claim
 spot-verified against the tree at `78d9610` (branch `refactor/split-engine-class`).
@@ -576,10 +576,10 @@ written into the engine-owned events file and digested by the completion record.
 same-uid evidence, not authentication, but it is the same trust class as the rest of the lane
 and needs no hook. The Codex lane still has no observed-model source.
 
-### 10.5 Provider interchange (operator decision: all three roles)
+### 10.5 Provider interchange (operator decision: every launched role — implementer, review-cheap, review-final, and, per 11.4 item 6, plan)
 
-A role's route is `{provider: codex | claude, model, effort}`, all three per-developer in
-`routes.toml`. This reverses section 8.4.9 items 3, 5 and 6 (provider committed;
+A role's route is `{provider: codex | claude, model, effort}`, all three keys per-developer in
+`routes.toml`, for each of the four launched roles (the plan role was added by 11.4 item 6). This reverses section 8.4.9 items 3, 5 and 6 (provider committed;
 `(claude, implementer)` refused; provider substitution a spec-level extension) and therefore
 cuts deeper into the AGREED eki / GH#13 position than the second pass did. The GH#13 incident
 was a *silent, unrecorded* provider switch; a declared, snapshotted, journaled provider is a
@@ -682,8 +682,7 @@ GH#13 or the channel before that.
 
 ## 11. Re-derivation against `657f6c1` (2026-09-22, post engine and MergeEngine splits)
 
-Requested by the operator once the refactor campaign's engine work landed (engine class split
-`b764d5a`, MergeEngine decompose `657f6c1`). Method: three read-only readers (route surfaces,
+Requested by the operator once the refactor campaign's engine work landed (Engine class split `d885f97`, MergeEngine decompose `657f6c1`). Method: three read-only readers (route surfaces,
 review-lane layout, corpus/tracker/host) plus two direct probes from the orchestrating session;
 no repository change other than this section. Operator directions taken at the same time:
 **this record takes precedence over the GH#13 / `forge-plugin-eki` position wherever they
@@ -841,9 +840,13 @@ L967; `hooks/hooks.json` registrations.
    (`bwrap` + `socat`) when `provider = "claude"` and refuse the launch when its dependencies
    are absent. Sections 1 and 10.5 are read with this item.
 5. **Detached-lane fail-closed controls are plan-level requirements, not open design.** Raised
-   as [INC-07/SEC-09/OPS-02]: 10.3/10.6 name only "a wrapper timeout". The generalised lane
-   inherits the existing lane's controls verbatim and the plan must state them as executable
-   tests: `start_new_session=True` process group with TERM-then-KILL on timeout; a fixed
+   as [INC-07/SEC-09/OPS-02]: 10.3/10.6 name only "a wrapper timeout". Measured on `engine/_state.py` `REVIEW_LAUNCHER_CODE` (L119-260) at `69bc28d`: the existing
+   wrapper **has** argv- and prompt-digest recomputation, owner-controlled `O_NOFOLLOW` descriptors
+   for prompt / events / verdict, a 65,536-byte verdict cap, and a tmp-then-`os.replace`
+   completion record; it **lacks** a timeout, process-group termination, any cap on the
+   `events.jsonl` output, and any validation of the event stream (the child's stdout/stderr go
+   straight to the file). The generalised lane keeps the former and **must add** the latter,
+   stated in the plan as executable tests: `start_new_session=True` process group with TERM-then-KILL on timeout; a fixed
    fail-closed timeout per (provider, role) profile; a combined-output byte cap on the events
    file with over-cap = failure; a completion record written tmp-then-`os.replace` whose absence
    after the wrapper exits is a failure; exit-code-and-`is_error` keyed success (never
@@ -852,15 +855,60 @@ L967; `hooks/hooks.json` registrations.
    survivor states (wrapper alive / child dead and the reverse) reported by `review collect`
    exactly as today's `_verbs_review_collect` does for the Codex lane. None of these is new
    policy; they are the FR-149 / DM-012 discipline applied to a second argv template.
-6. **`[plan]` route has no launch path in v1.** Raised as [AMB-04/INC-11]: 8.4.1 admits `plan`
-   as a non-mutating role and 10.6 lists `[plan]` in `routes.toml`, but 10.5 supplies argv
-   templates and typed launches only for implementer and the two reviewers. Resolution for the
-   plan: v1 ships `[plan]` as a **Codex-only, read-only** route (the one live record is a Codex
-   plan execution) using the review-cheap argv template with the plan prompt; a `claude`
-   provider for `plan` is refused at `execution-start` with a diagnostic naming the v1 limit.
-   If the operator prefers, drop `[plan]` from the v1 seed instead; either way the enum,
-   template matrix and refusal are stated together in the spec text.
-7. **Ready for the implementation plan** once items 3 and 4 are decided. The plan's inputs are
-   fixed: the shape in 10.6, the vocabulary in 8.4.1 (minus `orchestrator`), the per-provider
-   templates in 10.5 with the controls of item 5, the `[plan]` rule of item 6, the layout
+6. **`[plan]` route — full interchange (operator decision, 2026-09-22).** Raised as
+   [AMB-04/INC-11]: 8.4.1 admits `plan` and 10.6 lists `[plan]` in `routes.toml`, but 10.5 supplied
+   argv templates only for implementer and the two reviewers, and the tree holds no plan prompt
+   (`system/codex/prompts/` has `implementer.md` and `review-cheap.md` only; the one live plan
+   execution is `codex-plan-01` in `run-20260910-release-0611`, codex / `gpt-5.6-sol` / `high`,
+   detached). The operator chose **option (c), full interchange**: `plan` is a routable role like
+   the other three, `provider` `codex` | `claude`, read-only on both providers (the operator
+   prefers Claude models for planning; other developers may prefer Codex). The two plan profiles,
+   stated here so this record stands alone:
+   - `(codex, plan)`: the review-cheap argv shape of 10.5 with the plan prompt — `codex exec --json
+     --output-last-message <plan.md> -s read-only -c approval_policy=never -c model=<m>
+     -c model_reasoning_effort=<e> -C <worktree> -`, prompt = `system/codex/prompts/plan.md` +
+     brief on stdin; OS sandbox `read-only`; recorded `sandbox: read-only`.
+   - `(claude, plan)`: `claude -p --safe-mode --strict-mcp-config --output-format stream-json
+     --verbose --model <m> --effort <e> --system-prompt-file <plugin>/system/claude/prompts/plan.md
+     --tools "Read,Grep,Glob,LS" --permission-prompts none`, brief on stdin, cwd = worktree; no
+     Bash and no write tools, so the host's file-tool confinement is the whole confinement;
+     recorded `sandbox: read-only`; the plan text is the final `result` event.
+   Both profiles are committed control (one row each in the profile table). **Launch and collection
+   path — the same typed lane as the implementer (10.5, last paragraph):** the orchestrating session
+   never hand-substitutes argv; it calls the engine's typed launch verb (`launch --role plan
+   --run-id … --task …`), which resolves the route at the launch HEAD, emits the profile's argv,
+   writes `prompt.md` and the brief, appends the journal `execution` (provider, canonical role
+   `plan`, model, effort, `sandbox: read-only`, `route_source`, `route_sha256`), and starts the
+   detached wrapper of 10.4 (process group, fixed timeout, output caps, `child.pid` sidecar); the
+   wrapper owns the child, its `events.jsonl` and the plan text (Codex: `--output-last-message`;
+   Claude: the final `result` event), and writes the completion record; `launch collect` reads
+   that record, writes the plan text to `handoff.md`, and appends the terminal `execution_result`
+   (`complete` on exit 0 with a nonempty plan, otherwise `failed` with the wrapper's error), the
+   Claude lane adding the stream-observed model. `execution-start` refuses any other provider for
+   `plan` and any `sandbox` other than `read-only`. Consequences: v1 ships **eight** committed (provider, role)
+   profiles; `system/codex/prompts/plan.md` and `system/codex/agents/plan.toml` are auto-installed
+   by `install_codex_layer` (which mirrors every `system/codex/**` file), so the `.codex` inventory
+   pin at `tests/test_installer.py:340-352` gains the two paths, as does every test that names a
+   `system/codex/prompts/` or `.codex/prompts/` path (the exact set is re-derived by `grep -rn`
+   at that chain's start, not asserted here); the Claude plan body lives beside the Claude
+   implementer body under `system/claude/prompts/`; the orchestrate role table gains a `plan`
+   row; `committed_route` and `check_run` gain the `(codex|claude, plan)` rows. `monitoring`
+   remains a vocabulary id only — it names the session's own monitoring pass and is never
+   routable. The implementation plan that sequences this work is a separate working document,
+   not part of this record.
+7. **Ready for the implementation plan.** Items 3, 4 and 6 were decided on 2026-09-22 (11.5); the
+   plan is a separate working document (not in this record). Its inputs are fixed: the shape in 10.6, the vocabulary in 8.4.1 (minus `orchestrator`), the per-provider
+   templates in 10.5 with the controls of item 5, the `[plan]` interchange of item 6, the layout
    constraints in 11.3, and the version-floor probe as the first task.
+
+### 11.5 Operator decisions (terminal, 2026-09-22 evening)
+
+| Item | Decision | Consequence |
+|---|---|---|
+| 11.4.3 sequencing | **Routing first.** The routing work precedes `8mf` (0.7.0) and `b0b`; the order of every other open bead is re-adjusted afterwards, operator-led. Decision 16 of 8.4.7 is superseded. | vocabulary chain = next patch release; routes = the next minor; version placement proposed in the plan, confirmed by the operator at release |
+| 11.4.4 confinement | **As ruled** in 10.5: the Claude implementer is instruction-bounded; `provider` stays per-developer for every launched role. | legibility floor = journal `sandbox` field + `check_run` finding `implementer ran instruction-bounded`; the threat-model sentence and FR-030 sandbox column gain per-provider values |
+| 11.4.6 `[plan]` | **Full interchange** (option c). | eight committed (provider, role) profiles; plan prompt per provider; `plan` row in the role table and in `committed_route` / `check_run` |
+
+Also taken: the record's four MINORs from the `69bc28d` review (bead `forge-plugin-dwf1`) are
+corrected in place above; the reviewer's claim about `REVIEW_LAUNCHER_CODE` was measured before the
+text was changed (11.4 item 5).
