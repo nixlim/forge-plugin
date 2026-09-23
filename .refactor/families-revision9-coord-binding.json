@@ -1,0 +1,201 @@
+{
+ "source": "tests/test_revision9_coordination.py",
+ "class": "Revision9BindingTests",
+ "order": [
+  "c01b-binding_shape",
+  "c02b-binding_resolver",
+  "c03b-binding_replay"
+ ],
+ "families": {
+  "binding_shape": {
+   "label": "c01b-binding_shape",
+   "module": "tests/test_revision9_coordination_binding_shape.py",
+   "class": "Revision9BindingShapeTests",
+   "theme": "Binding shape and currentness vectors: the DM-001 exact-shape candidate/review vectors, the commit-candidate v2 reconstruction without relabeling history, the identity binding projecting an existing verification type, and binding currentness rejecting superseded gate facts and a superseded review tuple (journal._binding_shape_valid, builders._binding_is_current, builders._candidate_binding_for_state, builders.tombstone_abort_binding).",
+   "tests": [
+    "test_dm001_exact_shape_candidate_and_review_vectors",
+    "test_commit_candidate_binding_reconstructs_v2_without_relabeling_history",
+    "test_commit_identity_binding_projects_existing_verification_type",
+    "test_binding_currentness_rejects_superseded_gate_facts",
+    "test_binding_currentness_rejects_superseded_review_tuple"
+   ],
+   "private_helpers": [],
+   "private_helper_lines": 0,
+   "test_code_lines": 536,
+   "methods_csv": "test_dm001_exact_shape_candidate_and_review_vectors,test_commit_candidate_binding_reconstructs_v2_without_relabeling_history,test_commit_identity_binding_projects_existing_verification_type,test_binding_currentness_rejects_superseded_gate_facts,test_binding_currentness_rejects_superseded_review_tuple",
+   "code_lines": 536,
+   "estimated_module_code_lines": 544,
+   "provisional_baseline_entry": 590,
+   "destination_imports_expected": [
+    "from __future__ import annotations",
+    "import copy",
+    "import unittest",
+    "from unittest import mock",
+    "from tests._revision9_coord_binding_support import Revision9BindingSupport",
+    "from tests._revision9_coord_constants import key",
+    "from codex_orchestrator import builders, journal"
+   ],
+   "direct_helpers": [
+    "binding"
+   ],
+   "transitive_helpers": [
+    "binding"
+   ],
+   "subtest_tests": [
+    "test_commit_candidate_binding_reconstructs_v2_without_relabeling_history"
+   ],
+   "nested_def_tests": [],
+   "manifest": ".refactor/family-revision9-coord-binding-binding_shape.json",
+   "id_map": ".refactor/idmap-revision9-coord-binding-binding_shape.json"
+  },
+  "binding_resolver": {
+   "label": "c02b-binding_resolver",
+   "module": "tests/test_revision9_coordination_binding_resolver.py",
+   "class": "Revision9BindingResolverTests",
+   "theme": "builders.resolve_binding refusals over receipted commit-chain histories: stale and result-mismatched gate bindings, recreated approval and skip facts, and candidate cycles retaining decision facts, with the two chain writers (_write_commit_gate_binding_chain, _write_commit_decision_cycle_chain) that build those histories.",
+   "tests": [
+    "test_resolver_rejects_stale_and_result_mismatched_gate_bindings",
+    "test_resolver_rejects_recreated_approval_and_skip_facts",
+    "test_resolver_rejects_candidate_cycles_retaining_decision_facts"
+   ],
+   "private_helpers": [
+    "_write_commit_gate_binding_chain",
+    "_write_commit_decision_cycle_chain"
+   ],
+   "private_helper_lines": 584,
+   "test_code_lines": 136,
+   "methods_csv": "_write_commit_gate_binding_chain,_write_commit_decision_cycle_chain,test_resolver_rejects_stale_and_result_mismatched_gate_bindings,test_resolver_rejects_recreated_approval_and_skip_facts,test_resolver_rejects_candidate_cycles_retaining_decision_facts",
+   "code_lines": 720,
+   "estimated_module_code_lines": 729,
+   "provisional_baseline_entry": 770,
+   "destination_imports_expected": [
+    "from __future__ import annotations",
+    "import copy",
+    "import json",
+    "import unittest",
+    "from unittest import mock",
+    "from tests._revision9_coord_binding_support import Revision9BindingSupport",
+    "from tests._revision9_coord_constants import key",
+    "from codex_orchestrator import builders, journal"
+   ],
+   "direct_helpers": [
+    "_write_commit_decision_cycle_chain",
+    "_write_commit_gate_binding_chain"
+   ],
+   "transitive_helpers": [
+    "_write_commit_decision_cycle_chain",
+    "_write_commit_gate_binding_chain"
+   ],
+   "subtest_tests": [
+    "test_resolver_rejects_stale_and_result_mismatched_gate_bindings",
+    "test_resolver_rejects_recreated_approval_and_skip_facts",
+    "test_resolver_rejects_candidate_cycles_retaining_decision_facts"
+   ],
+   "nested_def_tests": [],
+   "manifest": ".refactor/family-revision9-coord-binding-binding_resolver.json",
+   "id_map": ".refactor/idmap-revision9-coord-binding-binding_resolver.json"
+  },
+  "binding_replay": {
+   "label": "c03b-binding_replay",
+   "module": "tests/test_revision9_coordination_binding_replay.py",
+   "class": "Revision9BindingReplayTests",
+   "theme": "Replay-time binding checks over a run's records and a chain's events: the FR-021 binding-correlation issues (journal._check_binding_correlation via issue_for over correlation_records: abort retirement, superseded candidate sets, the precedence rule, post-landing results, the four exact issues and the disabled control) and the commit/merge chain-replay refusals of invented self-consistent transitions and digest-valid candidate rollback (_semantic_state, _write_semantic_chain, builders.resolve_binding).",
+   "tests": [
+    "test_fr021_abort_decision_retires_its_chain_and_orders_terminal_task",
+    "test_fr021_superseded_candidate_records_are_retired",
+    "test_fr021_precedence_rule_scopes_to_the_landed_candidate",
+    "test_fr021_post_landing_result_moves_no_boundary",
+    "test_fr021_four_exact_correlation_issues_and_disabled_control",
+    "test_commit_and_merge_replay_reject_invented_self_consistent_transitions",
+    "test_commit_and_merge_replay_reject_digest_valid_candidate_rollback"
+   ],
+   "private_helpers": [
+    "correlation_records",
+    "issue_for",
+    "_relined",
+    "_superseded_set",
+    "_with_control_removed",
+    "_semantic_state",
+    "_write_semantic_chain"
+   ],
+   "private_helper_lines": 293,
+   "test_code_lines": 449,
+   "methods_csv": "correlation_records,issue_for,test_fr021_abort_decision_retires_its_chain_and_orders_terminal_task,_relined,_superseded_set,_with_control_removed,test_fr021_superseded_candidate_records_are_retired,test_fr021_precedence_rule_scopes_to_the_landed_candidate,test_fr021_post_landing_result_moves_no_boundary,test_fr021_four_exact_correlation_issues_and_disabled_control,_semantic_state,_write_semantic_chain,test_commit_and_merge_replay_reject_invented_self_consistent_transitions,test_commit_and_merge_replay_reject_digest_valid_candidate_rollback",
+   "code_lines": 742,
+   "estimated_module_code_lines": 752,
+   "provisional_baseline_entry": 800,
+   "destination_imports_expected": [
+    "from __future__ import annotations",
+    "import copy",
+    "import subprocess",
+    "import unittest",
+    "from pathlib import Path",
+    "from unittest import mock",
+    "from tests._revision9_coord_binding_support import Revision9BindingSupport",
+    "from tests._revision9_coord_constants import key",
+    "from codex_orchestrator import builders, journal"
+   ],
+   "direct_helpers": [
+    "_relined",
+    "_superseded_set",
+    "_with_control_removed",
+    "_write_semantic_chain",
+    "binding",
+    "correlation_records",
+    "issue_for"
+   ],
+   "transitive_helpers": [
+    "_relined",
+    "_semantic_state",
+    "_superseded_set",
+    "_with_control_removed",
+    "_write_semantic_chain",
+    "binding",
+    "correlation_records",
+    "issue_for"
+   ],
+   "subtest_tests": [
+    "test_commit_and_merge_replay_reject_invented_self_consistent_transitions",
+    "test_commit_and_merge_replay_reject_digest_valid_candidate_rollback"
+   ],
+   "nested_def_tests": [],
+   "manifest": ".refactor/family-revision9-coord-binding-binding_replay.json",
+   "id_map": ".refactor/idmap-revision9-coord-binding-binding_replay.json"
+  }
+ },
+ "mixin": {
+  "class": "Revision9BindingSupport",
+  "module": "tests/_revision9_coord_binding_support.py",
+  "methods": [
+   "setUp",
+   "binding"
+  ],
+  "methods_csv": "setUp,binding",
+  "code_lines": 24,
+  "estimated_module_code_lines": 31,
+  "measured_code_lines": null,
+  "measured_dry_run": null,
+  "provisional_baseline_entry": null,
+  "globals": [
+   "Path",
+   "journal",
+   "key",
+   "subprocess",
+   "tempfile"
+  ]
+ },
+ "allocation": {
+  "setUp": "mixin",
+  "binding": "mixin",
+  "_write_commit_gate_binding_chain": "binding_resolver",
+  "_write_commit_decision_cycle_chain": "binding_resolver",
+  "correlation_records": "binding_replay",
+  "issue_for": "binding_replay",
+  "_relined": "binding_replay",
+  "_superseded_set": "binding_replay",
+  "_with_control_removed": "binding_replay",
+  "_semantic_state": "binding_replay",
+  "_write_semantic_chain": "binding_replay"
+ },
+ "mixin_methods_csv": "setUp,binding"
+}

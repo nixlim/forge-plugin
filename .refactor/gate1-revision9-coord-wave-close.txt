@@ -1,0 +1,59 @@
+head=9b7599a5160c53ec919c8a3b8b3ea674ae9657d7 start=2026-09-23T11:16:16Z worktree=0 tracked changes
+gate-1 shard 1/4: exit 0 OK
+.......................................................................................................................................................................................................................................................................................................s......................................................................................................................
+----------------------------------------------------------------------
+Ran 414 tests in 335.107s
+
+OK (skipped=1)
+
+gate-1 shard 2/4: exit 1 FAILED
+................................................................................................................................................................................................................................................................................................................................................................................................F..................................................................................................................................................................................................................s.......
+======================================================================
+FAIL: test_shipped_files_limit_opencode_to_migration_carve_out (tests.test_migration.LegacyRuntimeNameCarveOutTests.test_shipped_files_limit_opencode_to_migration_carve_out)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s4/tests/test_migration.py", line 129, in test_shipped_files_limit_opencode_to_migration_carve_out
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        sorted(violations),
+        ^^^^^^^^^^^^^^^^^^^
+        [],
+        ^^^
+        f"legacy runtime name appears outside migration carve-out: {sorted(violations)}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Lists differ: ['.refactor/before-revision9-coord.json', [1721 chars]son'] != []
+
+First list contains 31 additional elements.
+First extra element 0:
+'.refactor/before-revision9-coord.json'
+
+Diff is 1866 characters long. Set self.maxDiff to None to see it. : legacy runtime name appears outside migration carve-out: ['.refactor/before-revision9-coord.json', '.refactor/revision9-coord-c00-before-attempt1.json', '.refactor/revision9-coord-c00-mixin-before.json', '.refactor/revision9-coord-c01-cli_diagnostics-before.json', '.refactor/revision9-coord-c02-batch_builder-before.json', '.refactor/revision9-coord-c03-scope_change-before.json', '.refactor/revision9-coord-c04-gap_repair-before.json', '.refactor/revision9-coord-c05-staging_crashes-before.json', '.refactor/revision9-coord-c06-chain_drain-before.json', '.refactor/revision9-coord-c07-terminal_builder-before.json', '.refactor/revision9-coord-c08-legacy_activation-before.json', '.refactor/revision9-coord-c09-receipted_chain-before.json', '.refactor/revision9-coord-c10-activation_scan-before.json', '.refactor/revision9-coord-c11-activation_outbox-before.json', '.refactor/revision9-coord-c12-ledger_recovery-before.json', '.refactor/tests-revision9-coord-1.json', '.refactor/tests-revision9-coord-before.json', '.refactor/tests-revision9-coord-c00-mixin.json', '.refactor/tests-revision9-coord-c01-cli_diagnostics.json', '.refactor/tests-revision9-coord-c02-batch_builder.json', '.refactor/tests-revision9-coord-c03-scope_change.json', '.refactor/tests-revision9-coord-c04-gap_repair.json', '.refactor/tests-revision9-coord-c05-staging_crashes.json', '.refactor/tests-revision9-coord-c06-chain_drain.json', '.refactor/tests-revision9-coord-c07-terminal_builder.json', '.refactor/tests-revision9-coord-c08-legacy_activation.json', '.refactor/tests-revision9-coord-c09-receipted_chain.json', '.refactor/tests-revision9-coord-c10-activation_scan.json', '.refactor/tests-revision9-coord-c11-activation_outbox.json', '.refactor/tests-revision9-coord-c12-ledger_recovery.json', '.refactor/tests-revision9-coord-precheck.json']
+
+----------------------------------------------------------------------
+Ran 603 tests in 297.881s
+
+FAILED (failures=1, skipped=1)
+
+gate-1 shard 3/4: exit 0 OK
+..................................................................................................forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating merge chains
+forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating commit chains
+......................................................................................................................................................................................................................sss...................................................................s......
+----------------------------------------------------------------------
+Ran 389 tests in 353.493s
+
+OK (skipped=4)
+
+gate-1 shard 4/4: exit 0 OK
+................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................/usr/lib/python3.13/unittest/case.py:606: ResourceWarning: unclosed file <_io.BufferedWriter name=6>
+  if method() is not None:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......
+----------------------------------------------------------------------
+Ran 502 tests in 534.786s
+
+OK
+
+gate1_rc=1
+end=2026-09-23T11:25:12Z
