@@ -1,0 +1,50 @@
+{
+ "tests/_revision9_coord_support.py": {
+  "reason": "806 code lines: 18 helpers shared by two or more scenario families of the 109-test Revision9BuilderBatchTests class (mixin shape); _write_bound_chain_state alone is 253 lines and is read by 5 families, _seed_gh17_wedge 162 by 3",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_activation_outbox.py": {
+  "reason": "790 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_activation_scan.py": {
+  "reason": "618 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_batch_builder.py": {
+  "reason": "576 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_gap_repair.py": {
+  "reason": "760 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_ledger_recovery.py": {
+  "reason": "810 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_legacy_activation.py": {
+  "reason": "896 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_receipted_chain.py": {
+  "reason": "799 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_scope_change.py": {
+  "reason": "521 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_staging_crashes.py": {
+  "reason": "536 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination_terminal_builder.py": {
+  "reason": "655 code lines: scenario family of the 109-test Revision9BuilderBatchTests class, sized 500..1,000 per the overnight brief 2026-09-23 section 4 (test bodies moved verbatim; no tier-2 pass on tests)",
+  "follow_up": "forge-plugin-z50i (session-4 remainder and debt rows)"
+ },
+ "tests/test_revision9_coordination.py": {
+  "reason": "4931 code lines (from 13,222): still holds Revision9FixtureTests, the Revision9BuilderBatchTests shell (one unittest.skipUnless test the mover refuses), Revision9BindingTests (2,022) and Revision9MergeTransitionGrammarTests (2,679, class-dependent parameter defaults on its hub helpers)",
+  "follow_up": "forge-plugin-z50i (binding plan ready, grammar needs an operator-directed hand edit)"
+ }
+}
