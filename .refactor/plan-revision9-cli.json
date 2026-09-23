@@ -26,7 +26,9 @@
   "target_class": "Revision9CliSupport",
   "test_mode": "identity",
   "measured_code_lines": 674,
-  "dry_run": ".refactor/dryrun-revision9-cli-mixin.txt"
+  "dry_run": ".refactor/dryrun-revision9-cli-mixin.txt",
+  "source_import_deletions": [],
+  "committed": "ce6eb08"
  },
  "families": [
   {
@@ -186,7 +188,12 @@
    "id_map": ".refactor/idmap-revision9-cli-dispositions.json",
    "manifest": ".refactor/family-revision9-cli-dispositions.json",
    "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_frozen_abort_writes_explicit_tombstone_without_replay,test_explicit_abort_of_readable_bound_chain_is_a_terminal_disposition,test_abort_refuses_terminal_chains_before_any_mutation,test_abort_refuses_landed_chain_and_keeps_its_landing,test_retrospective_abort_disposition_carries_the_decision_once,test_tombstone_disposition_retires_a_frozen_chain_after_its_task_closed,test_tombstone_disposition_refuses_a_nonexistent_run_before_any_lock,test_abort_disposition_run_id_must_name_a_readable_chains_bound_run,test_tombstone_disposition_guard_and_correlation_controls_are_load_bearing,test_abort_disposition_refuses_every_ineligible_chain,test_abort_disposition_preconditions_are_independently_load_bearing,test_abort_disposition_reaches_a_dead_in_place_chain,test_abort_disposition_is_exempt_from_the_iteration_cap,test_abort_disposition_requires_a_chain_id_and_a_readable_journal,test_abort_disposition_refuses_a_live_bound_chain,test_abort_disposition_refuses_an_unbound_aborted_chain,test_task_finish_inspects_only_the_finishing_tasks_chains,test_operator_tombstone_admits_absent_chain_and_refuses_healthy_chain,test_tombstone_publication_recovers_only_authenticated_temp_alias,test_tombstone_publication_retries_prelink_and_postunlink_failures --dest tests/test_revision9_cli_surfaces_dispositions.py --shape class --target-class Revision9CliSurfacesDispositionsTests --test-only --test-snapshot .refactor/tests-revision9-cli-dispositions.json --format-imports --manifest .refactor/family-revision9-cli-dispositions.json --id-map .refactor/idmap-revision9-cli-dispositions.json",
-   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-dispositions-before.json --manifest .refactor/family-revision9-cli-dispositions.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-dispositions.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_dispositions; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_dispositions' (standalone import, first in a Gate 1 shard)"
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-dispositions-before.json --manifest .refactor/family-revision9-cli-dispositions.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-dispositions.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_dispositions; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_dispositions' (standalone import, first in a Gate 1 shard)",
+   "source_import_deletions": [
+    "import datetime",
+    "import stat"
+   ],
+   "measured_code_lines_simulated": 966
   },
   {
    "name": "start_locks",
@@ -331,7 +338,11 @@
    "id_map": ".refactor/idmap-revision9-cli-start_locks.json",
    "manifest": ".refactor/family-revision9-cli-start_locks.json",
    "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_lockless_bound_start_refuses_nonexistent_run_without_creating_it,test_lockless_bound_start_halt_precedes_stable_lock_creation,test_start_lock_disappearance_never_recreates_before_halt,test_legacy_first_use_chain_receipt_bootstrap_is_load_bearing,test_legacy_first_use_chain_prevalidation_is_load_bearing_in_memory,test_commit_activation_rejects_event_one_rebinding_before_replay,test_lockless_bound_start_refuses_foreign_owner_without_creating_lock,test_lockless_bound_start_refuses_other_worktree_without_creating_lock,test_lockless_bound_start_creation_control_is_load_bearing,test_lockless_chain_batch_creation_revalidates_in_lock_order,test_existing_chain_batch_lock_skips_creation_only_validation,test_existing_locked_bound_start_succeeds_without_session_pid,test_existing_locked_bound_start_preserves_foreign_owner_behavior,test_lockless_merge_start_binding_creates_stable_batch_lock,test_lockless_read_only_binding_validator_does_not_create_batch_lock,test_bound_start_persists_exact_immutable_binding,test_linked_worktree_shares_chain_authority_across_cli_builders_and_archive --dest tests/test_revision9_cli_surfaces_start_locks.py --shape class --target-class Revision9CliSurfacesStartLocksTests --test-only --test-snapshot .refactor/tests-revision9-cli-start_locks.json --format-imports --manifest .refactor/family-revision9-cli-start_locks.json --id-map .refactor/idmap-revision9-cli-start_locks.json",
-   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-start_locks-before.json --manifest .refactor/family-revision9-cli-start_locks.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-start_locks.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_start_locks; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_start_locks' (standalone import, first in a Gate 1 shard)"
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-start_locks-before.json --manifest .refactor/family-revision9-cli-start_locks.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-start_locks.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_start_locks; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_start_locks' (standalone import, first in a Gate 1 shard)",
+   "source_import_deletions": [
+    "ROOT from: from tests._revision9_cli_constants import CANDIDATE, CLI, CLI_FIXTURE_SUPPORT, CORE, ENVELOPE_KEYS, ROOT, RUNTIME, key"
+   ],
+   "measured_code_lines_simulated": 803
   },
   {
    "name": "replay",
@@ -427,7 +438,9 @@
    "id_map": ".refactor/idmap-revision9-cli-replay.json",
    "manifest": ".refactor/family-revision9-cli-replay.json",
    "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_fresh_key_cannot_replay_typed_verification_or_decision_binding,test_historical_receipted_binding_replays_after_restage,test_bound_replay_refuses_noncanonical_event_without_state_repair,test_failed_ingest_proof_captures_but_never_references_or_mutates_journal,test_event_carrier_survives_drain_crash_and_replays_once,test_commit_identity_carrier_pre_drain_crash_replays_once,test_commit_identity_journal_append_crash_replays_once,test_commit_identity_receipt_append_crash_replays_once,test_chain_receipt_replay_reader_is_read_only_and_fail_closed,test_receipted_commit_produced_crash_recovers_one_landing --dest tests/test_revision9_cli_surfaces_replay.py --shape class --target-class Revision9CliSurfacesReplayTests --test-only --test-snapshot .refactor/tests-revision9-cli-replay.json --format-imports --manifest .refactor/family-revision9-cli-replay.json --id-map .refactor/idmap-revision9-cli-replay.json",
-   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-replay-before.json --manifest .refactor/family-revision9-cli-replay.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-replay.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_replay; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_replay' (standalone import, first in a Gate 1 shard)"
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-replay-before.json --manifest .refactor/family-revision9-cli-replay.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-replay.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_replay; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_replay' (standalone import, first in a Gate 1 shard)",
+   "source_import_deletions": [],
+   "measured_code_lines_simulated": 666
   },
   {
    "name": "multicell_stack",
@@ -499,7 +512,9 @@
    "id_map": ".refactor/idmap-revision9-cli-multicell_stack.json",
    "manifest": ".refactor/family-revision9-cli-multicell_stack.json",
    "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_bound_multicell_stack_journals_one_completed_batch,test_bound_multicell_stack_failure_journals_failed_cell_and_stops,test_bound_multicell_stack_journal_deferral_is_load_bearing,test_bound_changelog_output_is_committed_policy_machinery,test_bound_non_changelog_output_still_names_out_of_scope_path,test_real_unbound_multicell_stack_ingest_keeps_every_head_record --dest tests/test_revision9_cli_surfaces_multicell_stack.py --shape class --target-class Revision9CliSurfacesMulticellStackTests --test-only --test-snapshot .refactor/tests-revision9-cli-multicell_stack.json --format-imports --manifest .refactor/family-revision9-cli-multicell_stack.json --id-map .refactor/idmap-revision9-cli-multicell_stack.json",
-   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-multicell_stack-before.json --manifest .refactor/family-revision9-cli-multicell_stack.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-multicell_stack.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_multicell_stack; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_multicell_stack' (standalone import, first in a Gate 1 shard)"
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-multicell_stack-before.json --manifest .refactor/family-revision9-cli-multicell_stack.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-multicell_stack.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_multicell_stack; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_multicell_stack' (standalone import, first in a Gate 1 shard)",
+   "source_import_deletions": [],
+   "measured_code_lines_simulated": 588
   },
   {
    "name": "ingest",
@@ -592,7 +607,13 @@
    "id_map": ".refactor/idmap-revision9-cli-ingest.json",
    "manifest": ".refactor/family-revision9-cli-ingest.json",
    "argv": "TMPDIR=/dev/shm/refactor-s6 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision9_cli_surfaces.py --class Revision9BoundCLIIntegrationTests --methods test_real_unbound_fast_chain_ingests_and_receipted_retry_skips_reproof,test_legacy_run_ingest_first_typed_use_activates_once_and_is_receipted,test_legacy_run_ingest_allocation_projection_is_load_bearing,test_captured_commit_and_merge_sources_reopen_from_the_run_root,test_captured_source_substitution_before_intent_refuses_without_append,test_captured_source_substitution_before_builder_keeps_exact_diagnostic,test_each_ingest_proof_control_refuses_at_its_named_boundary,test_fast_mechanical_skip_is_rejected_at_current_gates_proof,test_lockless_legacy_bound_chain_activates_and_lands_cleanly --dest tests/test_revision9_cli_surfaces_ingest.py --shape class --target-class Revision9CliSurfacesIngestTests --test-only --test-snapshot .refactor/tests-revision9-cli-ingest.json --format-imports --manifest .refactor/family-revision9-cli-ingest.json --id-map .refactor/idmap-revision9-cli-ingest.json",
-   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-ingest-before.json --manifest .refactor/family-revision9-cli-ingest.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-ingest.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_ingest; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_ingest' (standalone import, first in a Gate 1 shard)"
+   "gate": "bash $S/verify.sh --pkg tests --snapshot .refactor/revision9-cli-ingest-before.json --manifest .refactor/family-revision9-cli-ingest.json --strict-bodies --test-snapshot .refactor/tests-revision9-cli-ingest.json --test-mode mapping (GATE: PASS required); then python3 scripts/check_file_length.py tests; then python3 -m unittest tests.test_cli_loader (lane B2 loader sweep); then env -u PYTHONPATH python3 -m unittest tests.test_revision9_cli_surfaces_ingest; then env -u PYTHONPATH python3 -c 'import tests.test_revision9_cli_surfaces_ingest' (standalone import, first in a Gate 1 shard)",
+   "source_import_deletions": [
+    "import os",
+    "import warnings",
+    "patch_chain_core from: from tests._cli_loader import load_script, package_module, patch_chain_core, patch_engine"
+   ],
+   "measured_code_lines_simulated": 570
   }
  ],
  "family_order": [
@@ -637,12 +658,20 @@
    "disposition": "function-length debt, moved verbatim (dispositions)"
   },
   {
-   "item": "tests/test_revision9_cli_surfaces.py ends at ~1,233 code lines after C7 (eight untouched classes 1,207 + 21-line preamble + the 2-line shell `class ...: pass` + the support import + __main__), over the 1,000 ceiling",
+   "item": "tests/test_revision9_cli_surfaces.py ends at 1,229 code lines (critic-measured) after C7 (eight untouched classes 1,207 + 21-line preamble + the 2-line shell `class ...: pass` + the support import + __main__), over the 1,000 ceiling",
    "disposition": "covered by the existing grandfathered entry .refactor-baseline.json:58 (5456, shrink-only); finalize replaces it with the measured size and pyproject.toml:252 with a measured entry; follow-up bead at handover names what remains (Revision9CoordinationSeamTests 415, Revision9CLIParsingTests 255, Revision9IngestProofControlTests 235 are the next seams; out of scope for this lane per brief section 4: 'eight other classes stay')"
   },
   {
    "item": "the source class has no docstring, so the mover leaves `pass` (retained or [pass]) as the class body",
    "disposition": "default keep (see source_shell); the shell collects 0 tests under both collectors"
+  },
+  {
+   "item": "source import pruning per family: dispositions -datetime -stat; start_locks -ROOT; ingest -os -warnings -patch_chain_core; replay/multicell_stack none",
+   "disposition": "mover-performed (repair_source_imports), manifest-covered, not debt; recorded so the per-commit reviewer expects the preamble hunk"
+  },
+  {
+   "item": "load_script and package_module are dead names in the source before and after the wave (only hit: the import line)",
+   "disposition": "finalize keeps F401 in the source's measured ruff entry; hand-deleting them would be a body edit outside this lane"
   }
  ],
  "census": {
@@ -661,9 +690,14 @@
   "followed_by": "b4d3c4f constants module (hand-written prep), 5ef45a3 re-freeze + inventory + verified mixin dry run"
  },
  "source_shell": {
-  "default": "keep tests/test_revision9_cli_surfaces.py: the eight untouched classes, the module preamble, `class Revision9BoundCLIIntegrationTests(Revision9CliSupport, CLI_FIXTURE_SUPPORT.ForgeCLIFixture): pass` (no docstring in the source class), and `if __name__ == \"__main__\"` at 5722 (three classes follow it)",
-  "estimated_code_lines_after_wave": 1233,
-  "reason": "the eight other classes are out of scope by the brief (section 4/5: eight classes stay); the source stays over 1,000 under its existing grandfathered entry (.refactor-baseline.json:58, 5456, shrink-only) which finalize replaces with the measured size; a follow-up bead names the remaining classes; deleting the shell is not planned (Gate 1 shard re-partition, precedent plan-revision8 section 0.3)"
+  "default": "keep tests/test_revision9_cli_surfaces.py: the eight untouched classes, the module preamble as pruned by the mover (minus datetime, stat, os, warnings, ROOT, patch_chain_core; load_script/package_module stay as already-dead names), `class Revision9BoundCLIIntegrationTests(Revision9CliSupport, CLI_FIXTURE_SUPPORT.ForgeCLIFixture): pass` (no docstring in the source class), and `if __name__ == \"__main__\"` at 5722 (three classes follow it)",
+  "estimated_code_lines_after_wave": 1229,
+  "reason": "the eight other classes are out of scope by the brief (section 4/5: eight classes stay); the source stays over 1,000 under its existing grandfathered entry (.refactor-baseline.json:58, 5456, shrink-only) which finalize replaces with the measured size; a follow-up bead names the remaining classes; deleting the shell is not planned (Gate 1 shard re-partition, precedent plan-revision8 section 0.3)",
+  "retained_preamble_after_wave": [
+   "from tests._cli_loader import load_script, package_module, patch_engine",
+   "from tests._revision9_cli_constants import CANDIDATE, CLI, CLI_FIXTURE_SUPPORT, CORE, ENVELOPE_KEYS, RUNTIME, key",
+   "from tests._revision9_cli_support import Revision9CliSupport"
+  ]
  },
  "gate_1_shards_after_split": {
   "4": [
@@ -681,5 +715,15 @@
    "test_revision9_cli_surfaces_multicell_stack"
   ]
  },
- "loader_sweep": "python3 -m unittest tests.test_cli_loader runs in every cluster gate (driver line 205)"
+ "loader_sweep": "python3 -m unittest tests.test_cli_loader runs in every cluster gate (driver line 207)",
+ "revision": 2,
+ "branch_tip_revised_at": "451cf2f",
+ "critique": ".refactor/critique-revision9-cli.md",
+ "committed": {
+  "C1": "ce6eb08 (mixin, 674 code lines measured, gate PASS, source 4778)",
+  "C2": "451cf2f (provisional baseline entries 674/976/812/678/602/578; orchestrator commit, guard clean at the 500 default, no CHANGELOG entry until finalize)"
+ },
+ "measured_sizes_note": "critic's in-memory mover simulation (move_methods.plan, class shape, family_order): dest code lines 966/803/666/588/570 against entries 976/812/678/602/578; mixin 674 measured == entry (zero slack); source import deletions per family come from the same simulation (repair_source_imports, move_methods.py:418), are performed by the mover in the same manifest-covered operation and are the only source changes outside the class range",
+ "finalize_note": "the source's measured ruff entry keeps F401 (load_script/package_module are dead names already; deleting them is a body edit outside this lane); driver line citations: loader sweep 207, id-map mismatch refusal 154-157, gate 192-227; the driver's guard runs under REFACTOR_MAX_LINES=1000 (line 42), so C2 correctness is proved by the orchestrator's default-limit guard run",
+ "cluster_histogram": "(tests,total) = (38,43) (6,9) (5,6) (2,3) (2,2) + 9 one-test clusters + 4 helper-only = 18 clusters, 62 tests"
 }
