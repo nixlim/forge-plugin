@@ -1,0 +1,1747 @@
+--- tests/test_revision9_coordination.py
++++ tests/test_revision9_coordination.py
+@@ -11,7 +11,6 @@
+ import subprocess
+ import sys
+ import tempfile
+-import threading
+ import unittest
+ from contextlib import contextmanager, nullcontext, redirect_stderr, redirect_stdout
+ from pathlib import Path
+@@ -36,7 +35,6 @@
+ sys.path.insert(0, str(ROOT / "scripts"))
+ import codex_orch_tools as ORCH_TOOLS  # noqa: E402
+ from codex_orchestrator import batch, builders, journal  # noqa: E402
+-from forge_cli import chain_core as CHAIN_CORE  # noqa: E402
+ 
+ 
+ class Revision9FixtureTests(unittest.TestCase):
+@@ -3936,591 +3934,6 @@
+             binding_id=None,
+         )
+ 
+-    def _bound_chain_outbox(
+-        self, repo: Path, chain_id: str
+-    ) -> tuple[str, tuple[dict[str, object], ...]]:
+-        events_path = (
+-            builders.chain_storage_root(repo) / f"{chain_id}.events.jsonl"
+-        )
+-        events = [
+-            json.loads(line)
+-            for line in events_path.read_text(encoding="utf-8").splitlines()
+-        ]
+-        carriers = [
+-            event["payload"]["details"]
+-            for event in events
+-            if isinstance(event.get("payload"), dict)
+-            and isinstance(event["payload"].get("details"), dict)
+-            and isinstance(
+-                event["payload"]["details"].get("journal_batch"), dict
+-            )
+-        ]
+-        self.assertEqual(len(carriers), 1)
+-        carrier = carriers[0]
+-        journal_batch = carrier["journal_batch"]
+-        assert isinstance(journal_batch, dict)
+-        raw_records = journal_batch["records"]
+-        assert isinstance(raw_records, list)
+-        return (
+-            str(carrier["source_event_digest"]),
+-            tuple(copy.deepcopy(raw_records)),
+-        )
+-
+-    def _acknowledge_bound_chain(
+-        self,
+-        repo: Path,
+-        chain_id: str,
+-        state_path: Path,
+-        receipt: dict[str, object],
+-    ) -> None:
+-        chains_root = builders.chain_storage_root(repo)
+-        events_path = chains_root / f"{chain_id}.events.jsonl"
+-        events = [
+-            json.loads(line)
+-            for line in events_path.read_text(encoding="utf-8").splitlines()
+-        ]
+-        state = json.loads(state_path.read_bytes())
+-        pending = state["journal_outbox"]
+-        assert isinstance(pending, dict)
+-        state = copy.deepcopy(state)
+-        state["last_event_at"] = "2026-08-28T12:04:00Z"
+-        state["journal_outbox"] = None
+-        unsigned = {
+-            "sequence": len(events) + 1,
+-            "prev_digest": events[-1]["digest"],
+-            "payload": {
+-                "at": state["last_event_at"],
+-                "details": batch.journal_receipted_details(
+-                    pending, receipt
+-                ),
+-                "event": "journal_receipted",
+-                "state": copy.deepcopy(state),
+-            },
+-        }
+-        event = {
+-            **unsigned,
+-            "digest": journal._sha256(
+-                journal._canonical_json_bytes(unsigned)
+-            ),
+-        }
+-        events.append(event)
+-        events_path.write_bytes(
+-            b"".join(
+-                journal._canonical_json_bytes(item) + b"\n"
+-                for item in events
+-            )
+-        )
+-        state_path.write_bytes(
+-            journal._canonical_json_bytes(state) + b"\n"
+-        )
+-
+-    def _legacy_receipted_chain_case(
+-        self,
+-        repo: Path,
+-        run_id: str,
+-        *,
+-        chain_id: str,
+-        scope: str,
+-        task_file: str,
+-    ) -> tuple[str, str, tuple[dict[str, object], ...]]:
+-        self._open_legacy_run(repo, run_id, scope=[scope])
+-        _repository, state_root = journal._resolve_repository(
+-            repo, "journal append"
+-        )
+-        run_dir = state_root / ".codex-orchestrator/runs" / run_id
+-        journal_path = run_dir / "journal.jsonl"
+-        journal.append_owned_record(
+-            journal_path,
+-            {
+-                "type": "task",
+-                "id": "task-01",
+-                "status": "active",
+-                "goal": "Preserve one historical chain receipt",
+-                "acceptance": ["Later activation cannot cross-lock runs"],
+-                "files": [task_file],
+-                "run_id": run_id,
+-                "recorded_at": "2026-08-28T12:01:00Z",
+-            },
+-        )
+-        historical_prefix = journal_path.read_bytes()
+-        with batch.batch_lock(run_dir, create=True) as locked:
+-            batch._ensure_receipt_ledger(locked)
+-        run_binding = {
+-            "run_id": run_id,
+-            "task_id": "task-01",
+-            "repository": str(repo.resolve()),
+-            "policy_digest": key(f"{chain_id}-policy"),
+-        }
+-        _chain_id, state_path = self._write_bound_chain_state(
+-            repo,
+-            run_id,
+-            chain_id=chain_id,
+-            run_binding=run_binding,
+-            outbox={"fixture": True},
+-        )
+-        self.assertEqual(_chain_id, chain_id)
+-        source_digest, records = self._bound_chain_outbox(repo, chain_id)
+-        batch_bytes = b"".join(
+-            journal._journal_line(record) for record in records
+-        )
+-        inputs = {
+-            "chain_id": chain_id,
+-            "source_event_digest": source_digest,
+-            "batch_digest": journal._sha256(batch_bytes),
+-            "record_count": len(records),
+-        }
+-        _, request_sha256 = batch.normalized_request(
+-            repo.resolve(), run_id, "chain outbox-drain", inputs
+-        )
+-        journal_bytes = historical_prefix + batch_bytes
+-        journal_path.write_bytes(journal_bytes)
+-        receipt = {
+-            "schema": journal.BATCH_RECEIPT_SCHEMA,
+-            "idempotency_key": source_digest,
+-            "request_sha256": request_sha256,
+-            "base_size": len(historical_prefix),
+-            "batch_sha256": journal._sha256(batch_bytes),
+-            "record_count": len(records),
+-            "journal_size": len(journal_bytes),
+-            "journal_sha256": journal._sha256(journal_bytes),
+-            "recorded_at": "2026-08-28T12:03:00Z",
+-        }
+-        (run_dir / journal.BATCH_RECEIPTS_NAME).write_bytes(
+-            journal._canonical_json_bytes(receipt) + b"\n"
+-        )
+-        self._acknowledge_bound_chain(
+-            repo, chain_id, state_path, receipt
+-        )
+-        binding = records[0]["binding"]
+-        assert isinstance(binding, dict)
+-        return source_digest, str(binding["binding_id"]), records
+-
+-    def _rewrite_commit_events(
+-        self,
+-        repo: Path,
+-        chain_id: str,
+-        events: list[dict[str, object]],
+-    ) -> None:
+-        previous = "0" * 64
+-        for sequence, event in enumerate(events, start=1):
+-            event["sequence"] = sequence
+-            event["prev_digest"] = previous
+-            unsigned = {
+-                name: value for name, value in event.items() if name != "digest"
+-            }
+-            event["digest"] = journal._sha256(
+-                journal._canonical_json_bytes(unsigned)
+-            )
+-            previous = str(event["digest"])
+-        (
+-            builders.chain_storage_root(repo) / f"{chain_id}.events.jsonl"
+-        ).write_bytes(
+-            b"".join(
+-                journal._canonical_json_bytes(event) + b"\n"
+-                for event in events
+-            )
+-        )
+-
+-    def test_commit_sibling_receipt_request_authentication_is_load_bearing(
+-        self,
+-    ) -> None:
+-        run_id = "run-20260910-commit-sibling-receipt"
+-        chain_id = "c-2026-09-10T050000Z-b101"
+-        with self.api_environment():
+-            self._legacy_receipted_chain_case(
+-                self.repo,
+-                run_id,
+-                chain_id=chain_id,
+-                scope="src/**",
+-                task_file="src/example.py",
+-            )
+-            chains_root = builders.chain_storage_root(self.repo)
+-            run_dir = self.run_dir(self.repo, run_id)
+-            events_path = chains_root / f"{chain_id}.events.jsonl"
+-            state_path = chains_root / f"{chain_id}.json"
+-            journal_path = run_dir / "journal.jsonl"
+-            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+-            descriptor, _observation = journal._open_bound_directory(chains_root)
+-            try:
+-                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
+-                    self.repo.resolve()
+-                )
+-                with mock.patch.object(
+-                    builders,
+-                    "_verify_receipted_batch",
+-                    side_effect=AssertionError(
+-                        "commit sibling replay nested the canonical run lock"
+-                    ),
+-                ) as default_verifier:
+-                    summary = CHAIN_CORE._chain_activation_ownership_summary(
+-                        self.repo.resolve(),
+-                        descriptor,
+-                        chain_id,
+-                        receipt_verifier=verifier,
+-                    )
+-                default_verifier.assert_not_called()
+-                self.assertEqual(summary["family"], "commit")
+-                self.assertEqual(
+-                    summary["snapshot_state"]["chain_id"], chain_id
+-                )
+-
+-                receipt = json.loads(receipts_path.read_bytes())
+-                receipt["request_sha256"] = key("forged-commit-request")
+-                receipts_path.write_bytes(
+-                    journal._canonical_json_bytes(receipt) + b"\n"
+-                )
+-                events = [
+-                    json.loads(line)
+-                    for line in events_path.read_text(
+-                        encoding="utf-8"
+-                    ).splitlines()
+-                ]
+-                acknowledgement = events[-1]["payload"]["details"]
+-                assert isinstance(acknowledgement, dict)
+-                acknowledgement["receipt_digest"] = journal._sha256(
+-                    journal._canonical_json_bytes(receipt) + b"\n"
+-                )
+-                self._rewrite_commit_events(self.repo, chain_id, events)
+-                unchanged = (
+-                    state_path.read_bytes(),
+-                    events_path.read_bytes(),
+-                    journal_path.read_bytes(),
+-                    receipts_path.read_bytes(),
+-                )
+-
+-                with mock.patch.object(
+-                    builders,
+-                    "_verify_receipted_batch",
+-                    side_effect=AssertionError(
+-                        "commit sibling replay nested the canonical run lock"
+-                    ),
+-                ) as default_verifier, self.assertRaises(
+-                    journal.CoordinationRefusal
+-                ) as raised:
+-                    CHAIN_CORE._chain_activation_ownership_summary(
+-                        self.repo.resolve(),
+-                        descriptor,
+-                        chain_id,
+-                        receipt_verifier=(
+-                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+-                                self.repo.resolve()
+-                            )
+-                        ),
+-                    )
+-                self.assertEqual(
+-                    str(raised.exception),
+-                    str(builders._binding_replay_refusal()),
+-                )
+-                default_verifier.assert_not_called()
+-                self.assertEqual(
+-                    (
+-                        state_path.read_bytes(),
+-                        events_path.read_bytes(),
+-                        journal_path.read_bytes(),
+-                        receipts_path.read_bytes(),
+-                    ),
+-                    unchanged,
+-                )
+-
+-                with mock.patch.object(
+-                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
+-                    "__call__",
+-                    return_value=None,
+-                ) as disabled_receipt_auth, mock.patch.object(
+-                    builders,
+-                    "_verify_receipted_batch",
+-                    side_effect=AssertionError(
+-                        "commit sibling replay nested the canonical run lock"
+-                    ),
+-                ) as default_verifier:
+-                    admitted = CHAIN_CORE._chain_activation_ownership_summary(
+-                        self.repo.resolve(),
+-                        descriptor,
+-                        chain_id,
+-                        receipt_verifier=(
+-                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+-                                self.repo.resolve()
+-                            )
+-                        ),
+-                    )
+-                disabled_receipt_auth.assert_called_once()
+-                default_verifier.assert_not_called()
+-                self.assertEqual(admitted["family"], "commit")
+-                self.assertEqual(
+-                    admitted["snapshot_state"]["chain_id"], chain_id
+-                )
+-                self.assertEqual(
+-                    (
+-                        state_path.read_bytes(),
+-                        events_path.read_bytes(),
+-                        journal_path.read_bytes(),
+-                        receipts_path.read_bytes(),
+-                    ),
+-                    unchanged,
+-                )
+-            finally:
+-                os.close(descriptor)
+-
+-    def test_commit_sibling_carried_binding_authentication_is_load_bearing(
+-        self,
+-    ) -> None:
+-        run_id = "run-20260910-commit-sibling-binding"
+-        chain_id = "c-2026-09-10T050001Z-b102"
+-        with self.api_environment():
+-            self._legacy_receipted_chain_case(
+-                self.repo,
+-                run_id,
+-                chain_id=chain_id,
+-                scope="src/**",
+-                task_file="src/example.py",
+-            )
+-            chains_root = builders.chain_storage_root(self.repo)
+-            run_dir = self.run_dir(self.repo, run_id)
+-            events_path = chains_root / f"{chain_id}.events.jsonl"
+-            state_path = chains_root / f"{chain_id}.json"
+-            journal_path = run_dir / "journal.jsonl"
+-            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+-            events = [
+-                json.loads(line)
+-                for line in events_path.read_text(encoding="utf-8").splitlines()
+-            ]
+-            carrier = next(
+-                event
+-                for event in events
+-                if isinstance(event["payload"]["details"], dict)
+-                and "journal_batch" in event["payload"]["details"]
+-            )
+-            details = carrier["payload"]["details"]
+-            assert isinstance(details, dict)
+-            journal_batch = details["journal_batch"]
+-            assert isinstance(journal_batch, dict)
+-            records = journal_batch["records"]
+-            assert isinstance(records, list)
+-            record = records[-1]
+-            assert isinstance(record, dict)
+-            binding = record["binding"]
+-            assert isinstance(binding, dict)
+-            candidate = binding["candidate"]
+-            assert isinstance(candidate, dict)
+-            candidate["value"] = key("forged-commit-candidate")
+-            binding_preimage = {
+-                name: value for name, value in binding.items() if name != "binding_id"
+-            }
+-            binding["binding_id"] = journal._sha256(
+-                journal._canonical_json_bytes(binding_preimage)
+-            )
+-            self.assertTrue(journal._binding_shape_valid(binding, record=record))
+-            batch_bytes = b"".join(
+-                journal._journal_line(item) for item in records
+-            )
+-            forged_batch_digest = journal._sha256(batch_bytes)
+-            journal_batch["batch_digest"] = forged_batch_digest
+-            carrier_state = carrier["payload"]["state"]
+-            assert isinstance(carrier_state, dict)
+-            carrier_outbox = carrier_state["journal_outbox"]
+-            assert isinstance(carrier_outbox, dict)
+-            carrier_outbox["batch_digest"] = forged_batch_digest
+-            acknowledgement = events[-1]["payload"]["details"]
+-            assert isinstance(acknowledgement, dict)
+-            acknowledgement["batch_digest"] = forged_batch_digest
+-            self._rewrite_commit_events(self.repo, chain_id, events)
+-            unchanged = (
+-                state_path.read_bytes(),
+-                events_path.read_bytes(),
+-                journal_path.read_bytes(),
+-                receipts_path.read_bytes(),
+-            )
+-            descriptor, _observation = journal._open_bound_directory(chains_root)
+-            original_matcher = builders._binding_matches_source_fact
+-            try:
+-                with mock.patch.object(
+-                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
+-                    "__call__",
+-                    return_value=None,
+-                ) as receipt_auth, mock.patch.object(
+-                    builders,
+-                    "_verify_receipted_batch",
+-                    side_effect=AssertionError(
+-                        "commit sibling replay nested the canonical run lock"
+-                    ),
+-                ) as default_verifier, mock.patch.object(
+-                    builders,
+-                    "_binding_matches_source_fact",
+-                    wraps=original_matcher,
+-                ) as matcher, self.assertRaises(
+-                    journal.CoordinationRefusal
+-                ) as raised:
+-                    CHAIN_CORE._chain_activation_ownership_summary(
+-                        self.repo.resolve(),
+-                        descriptor,
+-                        chain_id,
+-                        receipt_verifier=(
+-                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+-                                self.repo.resolve()
+-                            )
+-                        ),
+-                    )
+-                self.assertEqual(
+-                    str(raised.exception),
+-                    str(builders._binding_replay_refusal()),
+-                )
+-                receipt_auth.assert_not_called()
+-                default_verifier.assert_not_called()
+-                matcher.assert_called_once()
+-                self.assertEqual(
+-                    (
+-                        state_path.read_bytes(),
+-                        events_path.read_bytes(),
+-                        journal_path.read_bytes(),
+-                        receipts_path.read_bytes(),
+-                    ),
+-                    unchanged,
+-                )
+-
+-                with mock.patch.object(
+-                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
+-                    "__call__",
+-                    return_value=None,
+-                ) as receipt_auth, mock.patch.object(
+-                    builders,
+-                    "_verify_receipted_batch",
+-                    side_effect=AssertionError(
+-                        "commit sibling replay nested the canonical run lock"
+-                    ),
+-                ) as default_verifier, mock.patch.object(
+-                    builders,
+-                    "_binding_matches_source_fact",
+-                    return_value=True,
+-                ) as disabled_matcher:
+-                    admitted = CHAIN_CORE._chain_activation_ownership_summary(
+-                        self.repo.resolve(),
+-                        descriptor,
+-                        chain_id,
+-                        receipt_verifier=(
+-                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
+-                                self.repo.resolve()
+-                            )
+-                        ),
+-                    )
+-                receipt_auth.assert_called_once()
+-                default_verifier.assert_not_called()
+-                disabled_matcher.assert_called_once()
+-                self.assertEqual(admitted["family"], "commit")
+-                self.assertEqual(
+-                    admitted["snapshot_state"]["chain_id"], chain_id
+-                )
+-                self.assertEqual(
+-                    (
+-                        state_path.read_bytes(),
+-                        events_path.read_bytes(),
+-                        journal_path.read_bytes(),
+-                        receipts_path.read_bytes(),
+-                    ),
+-                    unchanged,
+-                )
+-            finally:
+-                os.close(descriptor)
+-
+-    def test_commit_sibling_receipt_snapshot_recheck_is_load_bearing(
+-        self,
+-    ) -> None:
+-        run_id = "run-20260910-commit-sibling-recheck"
+-        chain_id = "c-2026-09-10T050002Z-b103"
+-        with self.api_environment():
+-            self._legacy_receipted_chain_case(
+-                self.repo,
+-                run_id,
+-                chain_id=chain_id,
+-                scope="src/**",
+-                task_file="src/example.py",
+-            )
+-            chains_root = builders.chain_storage_root(self.repo)
+-            run_dir = self.run_dir(self.repo, run_id)
+-            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
+-            original_receipts = receipts_path.read_bytes()
+-            events_path = chains_root / f"{chain_id}.events.jsonl"
+-            state_path = chains_root / f"{chain_id}.json"
+-            chain_before = (events_path.read_bytes(), state_path.read_bytes())
+-            descriptor, _observation = journal._open_bound_directory(chains_root)
+-            original_resolver = builders._resolve_binding_from_descriptor
+-            try:
+-                def mutate_after_resolve(*args: object, **kwargs: object):
+-                    resolved = original_resolver(*args, **kwargs)
+-                    receipts_path.write_bytes(original_receipts + b" ")
+-                    return resolved
+-
+-                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
+-                    self.repo.resolve()
+-                )
+-                with mock.patch.object(
+-                    builders,
+-                    "_resolve_binding_from_descriptor",
+-                    side_effect=mutate_after_resolve,
+-                ) as resolver, mock.patch.object(
+-                    builders,
+-                    "_verify_receipted_batch",
+-                    side_effect=AssertionError(
+-                        "commit sibling replay nested the canonical run lock"
+-                    ),
+-                ) as default_verifier, self.assertRaises(
+-                    journal.CoordinationRefusal
+-                ) as raised:
+-                    CHAIN_CORE._resolve_chain_activation_snapshot(
+-                        self.repo.resolve(),
+-                        descriptor,
+-                        chain_id,
+-                        allow_pending=True,
+-                        validate_lineage=False,
+-                        receipt_verifier=verifier,
+-                    )
+-                self.assertEqual(
+-                    str(raised.exception),
+-                    str(builders._binding_replay_refusal()),
+-                )
+-                resolver.assert_called_once()
+-                default_verifier.assert_not_called()
+-                self.assertEqual(
+-                    (events_path.read_bytes(), state_path.read_bytes()),
+-                    chain_before,
+-                )
+-
+-                receipts_path.write_bytes(original_receipts)
+-                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
+-                    self.repo.resolve()
+-                )
+-                with mock.patch.object(
+-                    builders,
+-                    "_resolve_binding_from_descriptor",
+-                    side_effect=mutate_after_resolve,
+-                ) as resolver, mock.patch.object(
+-                    verifier, "recheck", return_value=None
+-                ) as disabled_recheck, mock.patch.object(
+-                    builders,
+-                    "_verify_receipted_batch",
+-                    side_effect=AssertionError(
+-                        "commit sibling replay nested the canonical run lock"
+-                    ),
+-                ) as default_verifier:
+-                    admitted = CHAIN_CORE._resolve_chain_activation_snapshot(
+-                        self.repo.resolve(),
+-                        descriptor,
+-                        chain_id,
+-                        allow_pending=True,
+-                        validate_lineage=False,
+-                        receipt_verifier=verifier,
+-                    )
+-                resolver.assert_called_once()
+-                disabled_recheck.assert_called_once()
+-                default_verifier.assert_not_called()
+-                self.assertEqual(admitted.family, "commit")
+-                self.assertEqual(admitted.state["chain_id"], chain_id)
+-                self.assertEqual(
+-                    (events_path.read_bytes(), state_path.read_bytes()),
+-                    chain_before,
+-                )
+-            finally:
+-                os.close(descriptor)
+-
+     def test_activation_scan_tolerates_unreplayable_unrelated_chain(self) -> None:
+         warning = (
+             "forge: warning — skipped unreadable chain "
+@@ -5089,230 +4502,6 @@
+                     )
+                 else:
+                     self.assertEqual(journal_path.read_bytes(), before)
+-
+-    def test_activation_scan_skips_external_sibling_chain_and_run_lock(
+-        self,
+-    ) -> None:
+-        linked = Path(self.temporary.name) / "linked-activation-sibling"
+-        subprocess.run(
+-            [
+-                "git",
+-                "-C",
+-                str(self.repo),
+-                "worktree",
+-                "add",
+-                "--detach",
+-                "--quiet",
+-                str(linked),
+-                "HEAD",
+-            ],
+-            check=True,
+-        )
+-        sibling_run = "run-20260910-linked-sibling-receipt"
+-        sibling_chain = "c-2026-09-10T040000Z-a101"
+-        current_run = "run-20260910-current-legacy-scan"
+-        with self.api_environment():
+-            _source, binding_id, _records = (
+-                self._legacy_receipted_chain_case(
+-                    linked,
+-                    sibling_run,
+-                    chain_id=sibling_chain,
+-                    scope="src/**",
+-                    task_file="src/example.py",
+-                )
+-            )
+-            resolved = builders.resolve_binding(
+-                linked,
+-                sibling_chain,
+-                binding_id,
+-                expected_type="verification",
+-                expected_fields={
+-                    "task": "task-01",
+-                    "criterion": "gate-1: terminal fixture",
+-                    "result": "passed",
+-                },
+-                expected_run_id=sibling_run,
+-                expected_task_id="task-01",
+-            )
+-            self.assertEqual(resolved["binding_id"], binding_id)
+-            self._open_legacy_run(
+-                self.repo, current_run, scope=["docs/**"]
+-            )
+-
+-            original_lock = batch.batch_lock
+-            lock_targets: list[str] = []
+-
+-            @contextmanager
+-            def probed_lock(run_dir: Path, *, create: bool):
+-                target = Path(run_dir).name
+-                lock_targets.append(target)
+-                if target == sibling_run:
+-                    raise AssertionError("sibling run lock was acquired")
+-                with original_lock(run_dir, create=create) as locked:
+-                    yield locked
+-
+-            original_resolver = builders._resolve_binding_from_descriptor
+-            with mock.patch.object(
+-                batch, "batch_lock", side_effect=probed_lock
+-            ), mock.patch.object(
+-                builders,
+-                "_verify_receipted_batch",
+-                side_effect=AssertionError(
+-                    "sibling receipt was externally rederived"
+-                ),
+-            ) as external, mock.patch.object(
+-                builders,
+-                "_resolve_binding_from_descriptor",
+-                wraps=original_resolver,
+-            ) as resolver:
+-                activated = builders.task_start(
+-                    self.repo,
+-                    current_run,
+-                    idempotency_key=key("current-legacy-scan-task"),
+-                    task="task-01",
+-                    goal="Activate without locking the sibling run",
+-                    acceptance=["Only self-contained sibling replay occurs"],
+-                    files=["docs/example.md"],
+-                )
+-
+-            external.assert_not_called()
+-            self.assertNotIn(sibling_run, lock_targets)
+-            resolver.assert_not_called()
+-            self.assertTrue(
+-                journal._writer_activation_marker(activated.records[0])
+-            )
+-
+-    def test_concurrent_legacy_activation_never_cross_acquires_run_locks(
+-        self,
+-    ) -> None:
+-        linked = Path(self.temporary.name) / "linked-activation-peer"
+-        subprocess.run(
+-            [
+-                "git",
+-                "-C",
+-                str(self.repo),
+-                "worktree",
+-                "add",
+-                "--detach",
+-                "--quiet",
+-                str(linked),
+-                "HEAD",
+-            ],
+-            check=True,
+-        )
+-        cases = (
+-            (
+-                self.repo,
+-                "run-20260910-concurrent-legacy-a",
+-                "c-2026-09-10T040100Z-a102",
+-                "src/a/**",
+-                "src/a/example.py",
+-            ),
+-            (
+-                linked,
+-                "run-20260910-concurrent-legacy-b",
+-                "c-2026-09-10T040200Z-a103",
+-                "src/b/**",
+-                "src/b/example.py",
+-            ),
+-        )
+-        with self.api_environment():
+-            for repo, run_id, chain_id, scope, task_file in cases:
+-                self._legacy_receipted_chain_case(
+-                    repo,
+-                    run_id,
+-                    chain_id=chain_id,
+-                    scope=scope,
+-                    task_file=task_file,
+-                )
+-
+-            original_lock = batch.batch_lock
+-            rendezvous = threading.Barrier(2, timeout=5)
+-            local = threading.local()
+-            cross_acquisitions: list[tuple[str, str]] = []
+-
+-            @contextmanager
+-            def probed_lock(run_dir: Path, *, create: bool):
+-                target = Path(run_dir).name
+-                held = getattr(local, "run_id", None)
+-                if held is not None and target != held:
+-                    cross_acquisitions.append((held, target))
+-                    raise AssertionError(
+-                        f"cross-run lock acquisition: {held} -> {target}"
+-                    )
+-                outer = held is None and target in {
+-                    case[1] for case in cases
+-                }
+-                if outer:
+-                    local.run_id = target
+-                try:
+-                    with original_lock(run_dir, create=create) as locked:
+-                        if outer:
+-                            rendezvous.wait()
+-                        yield locked
+-                finally:
+-                    if outer:
+-                        del local.run_id
+-
+-            outcomes: dict[str, batch.BatchOutcome] = {}
+-            failures: list[BaseException] = []
+-
+-            def activate(repo: Path, run_id: str) -> None:
+-                try:
+-                    outcomes[run_id] = builders.verification_add(
+-                        repo,
+-                        run_id,
+-                        idempotency_key=key(f"{run_id}-concurrent-activation"),
+-                        task="task-01",
+-                        criterion="concurrent activation lock order",
+-                        method="unittest",
+-                        check="bounded lock probe",
+-                        result="passed",
+-                        observation="No foreign run lock is acquired",
+-                        evidence=[],
+-                        binding_chain=None,
+-                        binding_id=None,
+-                    )
+-                except BaseException as exc:
+-                    failures.append(exc)
+-
+-            original_resolver = builders._resolve_binding_from_descriptor
+-            with mock.patch.object(
+-                batch, "batch_lock", side_effect=probed_lock
+-            ), mock.patch.object(
+-                builders,
+-                "_resolve_binding_from_descriptor",
+-                wraps=original_resolver,
+-            ) as resolver:
+-                threads = [
+-                    threading.Thread(
+-                        target=activate,
+-                        args=(repo, run_id),
+-                        daemon=True,
+-                    )
+-                    for repo, run_id, _chain, _scope, _task_file in cases
+-                ]
+-                for thread in threads:
+-                    thread.start()
+-                for thread in threads:
+-                    thread.join(timeout=10)
+-
+-            self.assertFalse(
+-                any(thread.is_alive() for thread in threads),
+-                "concurrent activation exceeded its bounded join",
+-            )
+-            self.assertEqual(failures, [])
+-            self.assertEqual(cross_acquisitions, [])
+-            self.assertEqual(set(outcomes), {case[1] for case in cases})
+-            external_modes = [
+-                call.kwargs.get("verify_external")
+-                for call in resolver.call_args_list
+-            ]
+-            self.assertEqual(external_modes, [True, True])
+-            for outcome in outcomes.values():
+-                self.assertTrue(
+-                    journal._writer_activation_marker(outcome.records[0])
+-                )
+ 
+     def test_id_only_legacy_opening_activates_with_matching_marker_run_id(
+         self,
+--- tests/test_revision9_coordination_receipted_chain.py
++++ tests/test_revision9_coordination_receipted_chain.py
+@@ -0,0 +1,829 @@
++from __future__ import annotations
++
++import copy
++import json
++import os
++import subprocess
++import threading
++import unittest
++from contextlib import contextmanager
++from pathlib import Path
++from unittest import mock
++
++from tests._revision9_coord_constants import key
++from tests._revision9_coord_support import Revision9BuilderBatchSupport
++
++from codex_orchestrator import batch, builders, journal
++from forge_cli import chain_core as CHAIN_CORE
++
++
++class Revision9ReceiptedChainTests(Revision9BuilderBatchSupport, unittest.TestCase):
++
++    def _bound_chain_outbox(
++        self, repo: Path, chain_id: str
++    ) -> tuple[str, tuple[dict[str, object], ...]]:
++        events_path = (
++            builders.chain_storage_root(repo) / f"{chain_id}.events.jsonl"
++        )
++        events = [
++            json.loads(line)
++            for line in events_path.read_text(encoding="utf-8").splitlines()
++        ]
++        carriers = [
++            event["payload"]["details"]
++            for event in events
++            if isinstance(event.get("payload"), dict)
++            and isinstance(event["payload"].get("details"), dict)
++            and isinstance(
++                event["payload"]["details"].get("journal_batch"), dict
++            )
++        ]
++        self.assertEqual(len(carriers), 1)
++        carrier = carriers[0]
++        journal_batch = carrier["journal_batch"]
++        assert isinstance(journal_batch, dict)
++        raw_records = journal_batch["records"]
++        assert isinstance(raw_records, list)
++        return (
++            str(carrier["source_event_digest"]),
++            tuple(copy.deepcopy(raw_records)),
++        )
++
++    def _acknowledge_bound_chain(
++        self,
++        repo: Path,
++        chain_id: str,
++        state_path: Path,
++        receipt: dict[str, object],
++    ) -> None:
++        chains_root = builders.chain_storage_root(repo)
++        events_path = chains_root / f"{chain_id}.events.jsonl"
++        events = [
++            json.loads(line)
++            for line in events_path.read_text(encoding="utf-8").splitlines()
++        ]
++        state = json.loads(state_path.read_bytes())
++        pending = state["journal_outbox"]
++        assert isinstance(pending, dict)
++        state = copy.deepcopy(state)
++        state["last_event_at"] = "2026-08-28T12:04:00Z"
++        state["journal_outbox"] = None
++        unsigned = {
++            "sequence": len(events) + 1,
++            "prev_digest": events[-1]["digest"],
++            "payload": {
++                "at": state["last_event_at"],
++                "details": batch.journal_receipted_details(
++                    pending, receipt
++                ),
++                "event": "journal_receipted",
++                "state": copy.deepcopy(state),
++            },
++        }
++        event = {
++            **unsigned,
++            "digest": journal._sha256(
++                journal._canonical_json_bytes(unsigned)
++            ),
++        }
++        events.append(event)
++        events_path.write_bytes(
++            b"".join(
++                journal._canonical_json_bytes(item) + b"\n"
++                for item in events
++            )
++        )
++        state_path.write_bytes(
++            journal._canonical_json_bytes(state) + b"\n"
++        )
++
++    def _legacy_receipted_chain_case(
++        self,
++        repo: Path,
++        run_id: str,
++        *,
++        chain_id: str,
++        scope: str,
++        task_file: str,
++    ) -> tuple[str, str, tuple[dict[str, object], ...]]:
++        self._open_legacy_run(repo, run_id, scope=[scope])
++        _repository, state_root = journal._resolve_repository(
++            repo, "journal append"
++        )
++        run_dir = state_root / ".codex-orchestrator/runs" / run_id
++        journal_path = run_dir / "journal.jsonl"
++        journal.append_owned_record(
++            journal_path,
++            {
++                "type": "task",
++                "id": "task-01",
++                "status": "active",
++                "goal": "Preserve one historical chain receipt",
++                "acceptance": ["Later activation cannot cross-lock runs"],
++                "files": [task_file],
++                "run_id": run_id,
++                "recorded_at": "2026-08-28T12:01:00Z",
++            },
++        )
++        historical_prefix = journal_path.read_bytes()
++        with batch.batch_lock(run_dir, create=True) as locked:
++            batch._ensure_receipt_ledger(locked)
++        run_binding = {
++            "run_id": run_id,
++            "task_id": "task-01",
++            "repository": str(repo.resolve()),
++            "policy_digest": key(f"{chain_id}-policy"),
++        }
++        _chain_id, state_path = self._write_bound_chain_state(
++            repo,
++            run_id,
++            chain_id=chain_id,
++            run_binding=run_binding,
++            outbox={"fixture": True},
++        )
++        self.assertEqual(_chain_id, chain_id)
++        source_digest, records = self._bound_chain_outbox(repo, chain_id)
++        batch_bytes = b"".join(
++            journal._journal_line(record) for record in records
++        )
++        inputs = {
++            "chain_id": chain_id,
++            "source_event_digest": source_digest,
++            "batch_digest": journal._sha256(batch_bytes),
++            "record_count": len(records),
++        }
++        _, request_sha256 = batch.normalized_request(
++            repo.resolve(), run_id, "chain outbox-drain", inputs
++        )
++        journal_bytes = historical_prefix + batch_bytes
++        journal_path.write_bytes(journal_bytes)
++        receipt = {
++            "schema": journal.BATCH_RECEIPT_SCHEMA,
++            "idempotency_key": source_digest,
++            "request_sha256": request_sha256,
++            "base_size": len(historical_prefix),
++            "batch_sha256": journal._sha256(batch_bytes),
++            "record_count": len(records),
++            "journal_size": len(journal_bytes),
++            "journal_sha256": journal._sha256(journal_bytes),
++            "recorded_at": "2026-08-28T12:03:00Z",
++        }
++        (run_dir / journal.BATCH_RECEIPTS_NAME).write_bytes(
++            journal._canonical_json_bytes(receipt) + b"\n"
++        )
++        self._acknowledge_bound_chain(
++            repo, chain_id, state_path, receipt
++        )
++        binding = records[0]["binding"]
++        assert isinstance(binding, dict)
++        return source_digest, str(binding["binding_id"]), records
++
++    def _rewrite_commit_events(
++        self,
++        repo: Path,
++        chain_id: str,
++        events: list[dict[str, object]],
++    ) -> None:
++        previous = "0" * 64
++        for sequence, event in enumerate(events, start=1):
++            event["sequence"] = sequence
++            event["prev_digest"] = previous
++            unsigned = {
++                name: value for name, value in event.items() if name != "digest"
++            }
++            event["digest"] = journal._sha256(
++                journal._canonical_json_bytes(unsigned)
++            )
++            previous = str(event["digest"])
++        (
++            builders.chain_storage_root(repo) / f"{chain_id}.events.jsonl"
++        ).write_bytes(
++            b"".join(
++                journal._canonical_json_bytes(event) + b"\n"
++                for event in events
++            )
++        )
++
++    def test_commit_sibling_receipt_request_authentication_is_load_bearing(
++        self,
++    ) -> None:
++        run_id = "run-20260910-commit-sibling-receipt"
++        chain_id = "c-2026-09-10T050000Z-b101"
++        with self.api_environment():
++            self._legacy_receipted_chain_case(
++                self.repo,
++                run_id,
++                chain_id=chain_id,
++                scope="src/**",
++                task_file="src/example.py",
++            )
++            chains_root = builders.chain_storage_root(self.repo)
++            run_dir = self.run_dir(self.repo, run_id)
++            events_path = chains_root / f"{chain_id}.events.jsonl"
++            state_path = chains_root / f"{chain_id}.json"
++            journal_path = run_dir / "journal.jsonl"
++            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
++            descriptor, _observation = journal._open_bound_directory(chains_root)
++            try:
++                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
++                    self.repo.resolve()
++                )
++                with mock.patch.object(
++                    builders,
++                    "_verify_receipted_batch",
++                    side_effect=AssertionError(
++                        "commit sibling replay nested the canonical run lock"
++                    ),
++                ) as default_verifier:
++                    summary = CHAIN_CORE._chain_activation_ownership_summary(
++                        self.repo.resolve(),
++                        descriptor,
++                        chain_id,
++                        receipt_verifier=verifier,
++                    )
++                default_verifier.assert_not_called()
++                self.assertEqual(summary["family"], "commit")
++                self.assertEqual(
++                    summary["snapshot_state"]["chain_id"], chain_id
++                )
++
++                receipt = json.loads(receipts_path.read_bytes())
++                receipt["request_sha256"] = key("forged-commit-request")
++                receipts_path.write_bytes(
++                    journal._canonical_json_bytes(receipt) + b"\n"
++                )
++                events = [
++                    json.loads(line)
++                    for line in events_path.read_text(
++                        encoding="utf-8"
++                    ).splitlines()
++                ]
++                acknowledgement = events[-1]["payload"]["details"]
++                assert isinstance(acknowledgement, dict)
++                acknowledgement["receipt_digest"] = journal._sha256(
++                    journal._canonical_json_bytes(receipt) + b"\n"
++                )
++                self._rewrite_commit_events(self.repo, chain_id, events)
++                unchanged = (
++                    state_path.read_bytes(),
++                    events_path.read_bytes(),
++                    journal_path.read_bytes(),
++                    receipts_path.read_bytes(),
++                )
++
++                with mock.patch.object(
++                    builders,
++                    "_verify_receipted_batch",
++                    side_effect=AssertionError(
++                        "commit sibling replay nested the canonical run lock"
++                    ),
++                ) as default_verifier, self.assertRaises(
++                    journal.CoordinationRefusal
++                ) as raised:
++                    CHAIN_CORE._chain_activation_ownership_summary(
++                        self.repo.resolve(),
++                        descriptor,
++                        chain_id,
++                        receipt_verifier=(
++                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
++                                self.repo.resolve()
++                            )
++                        ),
++                    )
++                self.assertEqual(
++                    str(raised.exception),
++                    str(builders._binding_replay_refusal()),
++                )
++                default_verifier.assert_not_called()
++                self.assertEqual(
++                    (
++                        state_path.read_bytes(),
++                        events_path.read_bytes(),
++                        journal_path.read_bytes(),
++                        receipts_path.read_bytes(),
++                    ),
++                    unchanged,
++                )
++
++                with mock.patch.object(
++                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
++                    "__call__",
++                    return_value=None,
++                ) as disabled_receipt_auth, mock.patch.object(
++                    builders,
++                    "_verify_receipted_batch",
++                    side_effect=AssertionError(
++                        "commit sibling replay nested the canonical run lock"
++                    ),
++                ) as default_verifier:
++                    admitted = CHAIN_CORE._chain_activation_ownership_summary(
++                        self.repo.resolve(),
++                        descriptor,
++                        chain_id,
++                        receipt_verifier=(
++                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
++                                self.repo.resolve()
++                            )
++                        ),
++                    )
++                disabled_receipt_auth.assert_called_once()
++                default_verifier.assert_not_called()
++                self.assertEqual(admitted["family"], "commit")
++                self.assertEqual(
++                    admitted["snapshot_state"]["chain_id"], chain_id
++                )
++                self.assertEqual(
++                    (
++                        state_path.read_bytes(),
++                        events_path.read_bytes(),
++                        journal_path.read_bytes(),
++                        receipts_path.read_bytes(),
++                    ),
++                    unchanged,
++                )
++            finally:
++                os.close(descriptor)
++
++    def test_commit_sibling_carried_binding_authentication_is_load_bearing(
++        self,
++    ) -> None:
++        run_id = "run-20260910-commit-sibling-binding"
++        chain_id = "c-2026-09-10T050001Z-b102"
++        with self.api_environment():
++            self._legacy_receipted_chain_case(
++                self.repo,
++                run_id,
++                chain_id=chain_id,
++                scope="src/**",
++                task_file="src/example.py",
++            )
++            chains_root = builders.chain_storage_root(self.repo)
++            run_dir = self.run_dir(self.repo, run_id)
++            events_path = chains_root / f"{chain_id}.events.jsonl"
++            state_path = chains_root / f"{chain_id}.json"
++            journal_path = run_dir / "journal.jsonl"
++            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
++            events = [
++                json.loads(line)
++                for line in events_path.read_text(encoding="utf-8").splitlines()
++            ]
++            carrier = next(
++                event
++                for event in events
++                if isinstance(event["payload"]["details"], dict)
++                and "journal_batch" in event["payload"]["details"]
++            )
++            details = carrier["payload"]["details"]
++            assert isinstance(details, dict)
++            journal_batch = details["journal_batch"]
++            assert isinstance(journal_batch, dict)
++            records = journal_batch["records"]
++            assert isinstance(records, list)
++            record = records[-1]
++            assert isinstance(record, dict)
++            binding = record["binding"]
++            assert isinstance(binding, dict)
++            candidate = binding["candidate"]
++            assert isinstance(candidate, dict)
++            candidate["value"] = key("forged-commit-candidate")
++            binding_preimage = {
++                name: value for name, value in binding.items() if name != "binding_id"
++            }
++            binding["binding_id"] = journal._sha256(
++                journal._canonical_json_bytes(binding_preimage)
++            )
++            self.assertTrue(journal._binding_shape_valid(binding, record=record))
++            batch_bytes = b"".join(
++                journal._journal_line(item) for item in records
++            )
++            forged_batch_digest = journal._sha256(batch_bytes)
++            journal_batch["batch_digest"] = forged_batch_digest
++            carrier_state = carrier["payload"]["state"]
++            assert isinstance(carrier_state, dict)
++            carrier_outbox = carrier_state["journal_outbox"]
++            assert isinstance(carrier_outbox, dict)
++            carrier_outbox["batch_digest"] = forged_batch_digest
++            acknowledgement = events[-1]["payload"]["details"]
++            assert isinstance(acknowledgement, dict)
++            acknowledgement["batch_digest"] = forged_batch_digest
++            self._rewrite_commit_events(self.repo, chain_id, events)
++            unchanged = (
++                state_path.read_bytes(),
++                events_path.read_bytes(),
++                journal_path.read_bytes(),
++                receipts_path.read_bytes(),
++            )
++            descriptor, _observation = journal._open_bound_directory(chains_root)
++            original_matcher = builders._binding_matches_source_fact
++            try:
++                with mock.patch.object(
++                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
++                    "__call__",
++                    return_value=None,
++                ) as receipt_auth, mock.patch.object(
++                    builders,
++                    "_verify_receipted_batch",
++                    side_effect=AssertionError(
++                        "commit sibling replay nested the canonical run lock"
++                    ),
++                ) as default_verifier, mock.patch.object(
++                    builders,
++                    "_binding_matches_source_fact",
++                    wraps=original_matcher,
++                ) as matcher, self.assertRaises(
++                    journal.CoordinationRefusal
++                ) as raised:
++                    CHAIN_CORE._chain_activation_ownership_summary(
++                        self.repo.resolve(),
++                        descriptor,
++                        chain_id,
++                        receipt_verifier=(
++                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
++                                self.repo.resolve()
++                            )
++                        ),
++                    )
++                self.assertEqual(
++                    str(raised.exception),
++                    str(builders._binding_replay_refusal()),
++                )
++                receipt_auth.assert_not_called()
++                default_verifier.assert_not_called()
++                matcher.assert_called_once()
++                self.assertEqual(
++                    (
++                        state_path.read_bytes(),
++                        events_path.read_bytes(),
++                        journal_path.read_bytes(),
++                        receipts_path.read_bytes(),
++                    ),
++                    unchanged,
++                )
++
++                with mock.patch.object(
++                    CHAIN_CORE._ChainReceiptSnapshotVerifier,
++                    "__call__",
++                    return_value=None,
++                ) as receipt_auth, mock.patch.object(
++                    builders,
++                    "_verify_receipted_batch",
++                    side_effect=AssertionError(
++                        "commit sibling replay nested the canonical run lock"
++                    ),
++                ) as default_verifier, mock.patch.object(
++                    builders,
++                    "_binding_matches_source_fact",
++                    return_value=True,
++                ) as disabled_matcher:
++                    admitted = CHAIN_CORE._chain_activation_ownership_summary(
++                        self.repo.resolve(),
++                        descriptor,
++                        chain_id,
++                        receipt_verifier=(
++                            CHAIN_CORE._ChainReceiptSnapshotVerifier(
++                                self.repo.resolve()
++                            )
++                        ),
++                    )
++                receipt_auth.assert_called_once()
++                default_verifier.assert_not_called()
++                disabled_matcher.assert_called_once()
++                self.assertEqual(admitted["family"], "commit")
++                self.assertEqual(
++                    admitted["snapshot_state"]["chain_id"], chain_id
++                )
++                self.assertEqual(
++                    (
++                        state_path.read_bytes(),
++                        events_path.read_bytes(),
++                        journal_path.read_bytes(),
++                        receipts_path.read_bytes(),
++                    ),
++                    unchanged,
++                )
++            finally:
++                os.close(descriptor)
++
++    def test_commit_sibling_receipt_snapshot_recheck_is_load_bearing(
++        self,
++    ) -> None:
++        run_id = "run-20260910-commit-sibling-recheck"
++        chain_id = "c-2026-09-10T050002Z-b103"
++        with self.api_environment():
++            self._legacy_receipted_chain_case(
++                self.repo,
++                run_id,
++                chain_id=chain_id,
++                scope="src/**",
++                task_file="src/example.py",
++            )
++            chains_root = builders.chain_storage_root(self.repo)
++            run_dir = self.run_dir(self.repo, run_id)
++            receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
++            original_receipts = receipts_path.read_bytes()
++            events_path = chains_root / f"{chain_id}.events.jsonl"
++            state_path = chains_root / f"{chain_id}.json"
++            chain_before = (events_path.read_bytes(), state_path.read_bytes())
++            descriptor, _observation = journal._open_bound_directory(chains_root)
++            original_resolver = builders._resolve_binding_from_descriptor
++            try:
++                def mutate_after_resolve(*args: object, **kwargs: object):
++                    resolved = original_resolver(*args, **kwargs)
++                    receipts_path.write_bytes(original_receipts + b" ")
++                    return resolved
++
++                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
++                    self.repo.resolve()
++                )
++                with mock.patch.object(
++                    builders,
++                    "_resolve_binding_from_descriptor",
++                    side_effect=mutate_after_resolve,
++                ) as resolver, mock.patch.object(
++                    builders,
++                    "_verify_receipted_batch",
++                    side_effect=AssertionError(
++                        "commit sibling replay nested the canonical run lock"
++                    ),
++                ) as default_verifier, self.assertRaises(
++                    journal.CoordinationRefusal
++                ) as raised:
++                    CHAIN_CORE._resolve_chain_activation_snapshot(
++                        self.repo.resolve(),
++                        descriptor,
++                        chain_id,
++                        allow_pending=True,
++                        validate_lineage=False,
++                        receipt_verifier=verifier,
++                    )
++                self.assertEqual(
++                    str(raised.exception),
++                    str(builders._binding_replay_refusal()),
++                )
++                resolver.assert_called_once()
++                default_verifier.assert_not_called()
++                self.assertEqual(
++                    (events_path.read_bytes(), state_path.read_bytes()),
++                    chain_before,
++                )
++
++                receipts_path.write_bytes(original_receipts)
++                verifier = CHAIN_CORE._ChainReceiptSnapshotVerifier(
++                    self.repo.resolve()
++                )
++                with mock.patch.object(
++                    builders,
++                    "_resolve_binding_from_descriptor",
++                    side_effect=mutate_after_resolve,
++                ) as resolver, mock.patch.object(
++                    verifier, "recheck", return_value=None
++                ) as disabled_recheck, mock.patch.object(
++                    builders,
++                    "_verify_receipted_batch",
++                    side_effect=AssertionError(
++                        "commit sibling replay nested the canonical run lock"
++                    ),
++                ) as default_verifier:
++                    admitted = CHAIN_CORE._resolve_chain_activation_snapshot(
++                        self.repo.resolve(),
++                        descriptor,
++                        chain_id,
++                        allow_pending=True,
++                        validate_lineage=False,
++                        receipt_verifier=verifier,
++                    )
++                resolver.assert_called_once()
++                disabled_recheck.assert_called_once()
++                default_verifier.assert_not_called()
++                self.assertEqual(admitted.family, "commit")
++                self.assertEqual(admitted.state["chain_id"], chain_id)
++                self.assertEqual(
++                    (events_path.read_bytes(), state_path.read_bytes()),
++                    chain_before,
++                )
++            finally:
++                os.close(descriptor)
++
++    def test_activation_scan_skips_external_sibling_chain_and_run_lock(
++        self,
++    ) -> None:
++        linked = Path(self.temporary.name) / "linked-activation-sibling"
++        subprocess.run(
++            [
++                "git",
++                "-C",
++                str(self.repo),
++                "worktree",
++                "add",
++                "--detach",
++                "--quiet",
++                str(linked),
++                "HEAD",
++            ],
++            check=True,
++        )
++        sibling_run = "run-20260910-linked-sibling-receipt"
++        sibling_chain = "c-2026-09-10T040000Z-a101"
++        current_run = "run-20260910-current-legacy-scan"
++        with self.api_environment():
++            _source, binding_id, _records = (
++                self._legacy_receipted_chain_case(
++                    linked,
++                    sibling_run,
++                    chain_id=sibling_chain,
++                    scope="src/**",
++                    task_file="src/example.py",
++                )
++            )
++            resolved = builders.resolve_binding(
++                linked,
++                sibling_chain,
++                binding_id,
++                expected_type="verification",
++                expected_fields={
++                    "task": "task-01",
++                    "criterion": "gate-1: terminal fixture",
++                    "result": "passed",
++                },
++                expected_run_id=sibling_run,
++                expected_task_id="task-01",
++            )
++            self.assertEqual(resolved["binding_id"], binding_id)
++            self._open_legacy_run(
++                self.repo, current_run, scope=["docs/**"]
++            )
++
++            original_lock = batch.batch_lock
++            lock_targets: list[str] = []
++
++            @contextmanager
++            def probed_lock(run_dir: Path, *, create: bool):
++                target = Path(run_dir).name
++                lock_targets.append(target)
++                if target == sibling_run:
++                    raise AssertionError("sibling run lock was acquired")
++                with original_lock(run_dir, create=create) as locked:
++                    yield locked
++
++            original_resolver = builders._resolve_binding_from_descriptor
++            with mock.patch.object(
++                batch, "batch_lock", side_effect=probed_lock
++            ), mock.patch.object(
++                builders,
++                "_verify_receipted_batch",
++                side_effect=AssertionError(
++                    "sibling receipt was externally rederived"
++                ),
++            ) as external, mock.patch.object(
++                builders,
++                "_resolve_binding_from_descriptor",
++                wraps=original_resolver,
++            ) as resolver:
++                activated = builders.task_start(
++                    self.repo,
++                    current_run,
++                    idempotency_key=key("current-legacy-scan-task"),
++                    task="task-01",
++                    goal="Activate without locking the sibling run",
++                    acceptance=["Only self-contained sibling replay occurs"],
++                    files=["docs/example.md"],
++                )
++
++            external.assert_not_called()
++            self.assertNotIn(sibling_run, lock_targets)
++            resolver.assert_not_called()
++            self.assertTrue(
++                journal._writer_activation_marker(activated.records[0])
++            )
++
++    def test_concurrent_legacy_activation_never_cross_acquires_run_locks(
++        self,
++    ) -> None:
++        linked = Path(self.temporary.name) / "linked-activation-peer"
++        subprocess.run(
++            [
++                "git",
++                "-C",
++                str(self.repo),
++                "worktree",
++                "add",
++                "--detach",
++                "--quiet",
++                str(linked),
++                "HEAD",
++            ],
++            check=True,
++        )
++        cases = (
++            (
++                self.repo,
++                "run-20260910-concurrent-legacy-a",
++                "c-2026-09-10T040100Z-a102",
++                "src/a/**",
++                "src/a/example.py",
++            ),
++            (
++                linked,
++                "run-20260910-concurrent-legacy-b",
++                "c-2026-09-10T040200Z-a103",
++                "src/b/**",
++                "src/b/example.py",
++            ),
++        )
++        with self.api_environment():
++            for repo, run_id, chain_id, scope, task_file in cases:
++                self._legacy_receipted_chain_case(
++                    repo,
++                    run_id,
++                    chain_id=chain_id,
++                    scope=scope,
++                    task_file=task_file,
++                )
++
++            original_lock = batch.batch_lock
++            rendezvous = threading.Barrier(2, timeout=5)
++            local = threading.local()
++            cross_acquisitions: list[tuple[str, str]] = []
++
++            @contextmanager
++            def probed_lock(run_dir: Path, *, create: bool):
++                target = Path(run_dir).name
++                held = getattr(local, "run_id", None)
++                if held is not None and target != held:
++                    cross_acquisitions.append((held, target))
++                    raise AssertionError(
++                        f"cross-run lock acquisition: {held} -> {target}"
++                    )
++                outer = held is None and target in {
++                    case[1] for case in cases
++                }
++                if outer:
++                    local.run_id = target
++                try:
++                    with original_lock(run_dir, create=create) as locked:
++                        if outer:
++                            rendezvous.wait()
++                        yield locked
++                finally:
++                    if outer:
++                        del local.run_id
++
++            outcomes: dict[str, batch.BatchOutcome] = {}
++            failures: list[BaseException] = []
++
++            def activate(repo: Path, run_id: str) -> None:
++                try:
++                    outcomes[run_id] = builders.verification_add(
++                        repo,
++                        run_id,
++                        idempotency_key=key(f"{run_id}-concurrent-activation"),
++                        task="task-01",
++                        criterion="concurrent activation lock order",
++                        method="unittest",
++                        check="bounded lock probe",
++                        result="passed",
++                        observation="No foreign run lock is acquired",
++                        evidence=[],
++                        binding_chain=None,
++                        binding_id=None,
++                    )
++                except BaseException as exc:
++                    failures.append(exc)
++
++            original_resolver = builders._resolve_binding_from_descriptor
++            with mock.patch.object(
++                batch, "batch_lock", side_effect=probed_lock
++            ), mock.patch.object(
++                builders,
++                "_resolve_binding_from_descriptor",
++                wraps=original_resolver,
++            ) as resolver:
++                threads = [
++                    threading.Thread(
++                        target=activate,
++                        args=(repo, run_id),
++                        daemon=True,
++                    )
++                    for repo, run_id, _chain, _scope, _task_file in cases
++                ]
++                for thread in threads:
++                    thread.start()
++                for thread in threads:
++                    thread.join(timeout=10)
++
++            self.assertFalse(
++                any(thread.is_alive() for thread in threads),
++                "concurrent activation exceeded its bounded join",
++            )
++            self.assertEqual(failures, [])
++            self.assertEqual(cross_acquisitions, [])
++            self.assertEqual(set(outcomes), {case[1] for case in cases})
++            external_modes = [
++                call.kwargs.get("verify_external")
++                for call in resolver.call_args_list
++            ]
++            self.assertEqual(external_modes, [True, True])
++            for outcome in outcomes.values():
++                self.assertTrue(
++                    journal._writer_activation_marker(outcome.records[0])
++                )
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "43e2044e7cf467aaa403e7e4e153a7c77cbeb0318e06a26aba2412dbb363b87f",
+    "tests/test_revision9_coordination_receipted_chain.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_receipted_chain.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_bound_chain_outbox",
+        "_acknowledge_bound_chain",
+        "_legacy_receipted_chain_case",
+        "_rewrite_commit_events",
+        "test_commit_sibling_receipt_request_authentication_is_load_bearing",
+        "test_commit_sibling_carried_binding_authentication_is_load_bearing",
+        "test_commit_sibling_receipt_snapshot_recheck_is_load_bearing",
+        "test_activation_scan_skips_external_sibling_chain_and_run_lock",
+        "test_concurrent_legacy_activation_never_cross_acquires_run_locks"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ReceiptedChainTests",
+      "alias": "test_revision9_coordination_receipted_chain",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_receipted_chain.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import json",
+          "import os",
+          "import subprocess",
+          "import threading",
+          "import unittest",
+          "from contextlib import contextmanager",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal",
+          "from forge_cli import chain_core as CHAIN_CORE"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_coordination.py": [
+          "CHAIN_CORE",
+          "threading"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_skips_external_sibling_chain_and_run_lock": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_activation_scan_skips_external_sibling_chain_and_run_lock",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_commit_sibling_carried_binding_authentication_is_load_bearing": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_commit_sibling_carried_binding_authentication_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_commit_sibling_receipt_request_authentication_is_load_bearing": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_commit_sibling_receipt_request_authentication_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_commit_sibling_receipt_snapshot_recheck_is_load_bearing": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_commit_sibling_receipt_snapshot_recheck_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_concurrent_legacy_activation_never_cross_acquires_run_locks": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_concurrent_legacy_activation_never_cross_acquires_run_locks"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_skips_external_sibling_chain_and_run_lock": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_activation_scan_skips_external_sibling_chain_and_run_lock",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_commit_sibling_carried_binding_authentication_is_load_bearing": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_commit_sibling_carried_binding_authentication_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_commit_sibling_receipt_request_authentication_is_load_bearing": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_commit_sibling_receipt_request_authentication_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_commit_sibling_receipt_snapshot_recheck_is_load_bearing": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_commit_sibling_receipt_snapshot_recheck_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_concurrent_legacy_activation_never_cross_acquires_run_locks": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_concurrent_legacy_activation_never_cross_acquires_run_locks"
+    }
+  }
+}
+DRY RUN: verified; no files written

@@ -1,0 +1,1778 @@
+--- tests/test_revision9_coordination.py
++++ tests/test_revision9_coordination.py
+@@ -3828,113 +3828,6 @@
+                 (run_dir / "journal.jsonl").read_bytes(), journal_before
+             )
+             self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+-
+-    def _activation_outbox_case(
+-        self, name: str
+-    ) -> tuple[
+-        Path,
+-        str,
+-        Path,
+-        bytes,
+-        str,
+-        str,
+-        tuple[dict[str, object], ...],
+-    ]:
+-        repo, _ = self._new_repo(name)
+-        run_id = f"run-20260910-{name}"
+-        self._open_legacy_run(repo, run_id)
+-        run_dir = self.run_dir(repo, run_id)
+-        journal_path = run_dir / "journal.jsonl"
+-        journal.append_owned_record(
+-            journal_path,
+-            {
+-                "type": "task",
+-                "id": "task-01",
+-                "status": "active",
+-                "goal": "Drain the activation-bearing chain outbox",
+-                "acceptance": ["The durable outbox reserves first use"],
+-                "files": ["src/example.py"],
+-                "run_id": run_id,
+-                "recorded_at": "2026-08-28T12:01:00Z",
+-            },
+-        )
+-        legacy_prefix = journal_path.read_bytes()
+-        with batch.batch_lock(run_dir, create=True) as locked:
+-            batch._ensure_receipt_ledger(locked)
+-            state = journal._scan_run(run_dir)
+-            marker = builders._writer_activation_decision(
+-                state,
+-                receipt_origin_size=len(legacy_prefix),
+-                receipt_origin_sha256=journal._sha256(legacy_prefix),
+-                recorded_at="2026-08-28T12:03:00Z",
+-            )
+-
+-        run_binding = {
+-            "run_id": run_id,
+-            "task_id": "task-01",
+-            "repository": str(repo.resolve()),
+-            "policy_digest": key(f"{name}-policy"),
+-        }
+-        chain_id, state_path = self._write_bound_chain_state(
+-            repo,
+-            run_id,
+-            run_binding=run_binding,
+-            outbox={"fixture": True},
+-            activation_marker=marker,
+-        )
+-        events = [
+-            json.loads(line)
+-            for line in (
+-                repo / ".forge/chains" / f"{chain_id}.events.jsonl"
+-            ).read_text(encoding="utf-8").splitlines()
+-        ]
+-        carriers = [
+-            event["payload"]["details"]
+-            for event in events
+-            if isinstance(event.get("payload"), dict)
+-            and isinstance(event["payload"].get("details"), dict)
+-            and isinstance(
+-                event["payload"]["details"].get("journal_batch"), dict
+-            )
+-        ]
+-        self.assertEqual(len(carriers), 1)
+-        carrier = carriers[0]
+-        carried_batch = carrier["journal_batch"]
+-        assert isinstance(carried_batch, dict)
+-        raw_records = carried_batch["records"]
+-        assert isinstance(raw_records, list)
+-        records = tuple(copy.deepcopy(raw_records))
+-        self.assertEqual(len(records), 2)
+-        self.assertEqual(records[0], marker)
+-        self.assertTrue(journal._writer_activation_marker(records[0]))
+-        self.assertEqual(records[1]["type"], "verification")
+-        return (
+-            repo,
+-            run_id,
+-            state_path,
+-            legacy_prefix,
+-            chain_id,
+-            str(carrier["source_event_digest"]),
+-            records,
+-        )
+-
+-    def _compete_with_activation_outbox(
+-        self, repo: Path, run_id: str, label: str
+-    ) -> batch.BatchOutcome:
+-        return builders.verification_add(
+-            repo,
+-            run_id,
+-            idempotency_key=key(f"{run_id}-{label}"),
+-            task="task-01",
+-            criterion="activation outbox first-use reservation",
+-            method="unittest",
+-            check="focused activation outbox test",
+-            result="passed",
+-            observation="The competing typed mutation must not commit",
+-            evidence=[],
+-            binding_chain=None,
+-            binding_id=None,
+-        )
+ 
+     def _bound_chain_outbox(
+         self, repo: Path, chain_id: str
+@@ -5539,542 +5432,6 @@
+             self.assertFalse(lock_path.exists())
+             self.assertEqual(self._run_file_bytes(run_dir), before)
+ 
+-    def test_activation_outbox_blocks_raw_append_byte_exactly_then_drains(
+-        self,
+-    ) -> None:
+-        with self.api_environment():
+-            (
+-                repo,
+-                run_id,
+-                state_path,
+-                legacy_prefix,
+-                chain_id,
+-                source_digest,
+-                records,
+-            ) = self._activation_outbox_case(
+-                "activation-outbox-raw-append"
+-            )
+-            run_dir = self.run_dir(repo, run_id)
+-            event_path = (
+-                builders.chain_storage_root(repo)
+-                / f"{chain_id}.events.jsonl"
+-            )
+-            before_run = self._run_file_bytes(run_dir)
+-            before_state = state_path.read_bytes()
+-            before_events = event_path.read_bytes()
+-            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+-
+-            raw_record = {
+-                "type": "decision",
+-                "id": "decision-01",
+-                "resolution": "Raw append cannot steal first use",
+-                "basis": [],
+-                "run_id": run_id,
+-                "recorded_at": "2026-09-10T03:20:00Z",
+-            }
+-            for raw_api in ("owned", "repository"):
+-                with self.subTest(raw_api=raw_api), self.assertRaisesRegex(
+-                    journal.CoordinationRefusal,
+-                    journal.BATCH_PENDING,
+-                ):
+-                    if raw_api == "owned":
+-                        journal.append_owned_record(
+-                            run_dir / "journal.jsonl", raw_record
+-                        )
+-                    else:
+-                        journal.append_run_record(repo, run_id, raw_record)
+-
+-                self.assertEqual(self._run_file_bytes(run_dir), before_run)
+-                self.assertEqual(state_path.read_bytes(), before_state)
+-                self.assertEqual(event_path.read_bytes(), before_events)
+-                self.assertFalse(
+-                    (run_dir / journal.BATCH_INTENT_NAME).exists()
+-                )
+-
+-            for operation in ("close", "retire", "readmit"):
+-                with self.subTest(operation=operation), self.assertRaisesRegex(
+-                    journal.CoordinationRefusal,
+-                    journal.BATCH_PENDING,
+-                ):
+-                    self._invoke_raw_lifecycle(repo, run_id, operation)
+-
+-                self.assertEqual(self._run_file_bytes(run_dir), before_run)
+-                self.assertEqual(state_path.read_bytes(), before_state)
+-                self.assertEqual(event_path.read_bytes(), before_events)
+-                self.assertFalse(
+-                    (run_dir / journal.BATCH_INTENT_NAME).exists()
+-                )
+-
+-            capability, authorizer, calls = self._chain_drain_authorizer(
+-                repo,
+-                run_id,
+-                chain_id,
+-                source_digest,
+-                records,
+-            )
+-            with mock.patch.object(batch, "_CHAIN_BATCH_AUTHORIZER", None):
+-                batch._register_chain_batch_authorizer(authorizer)
+-                drained = batch.drain_chain_batch(
+-                    repo,
+-                    run_id,
+-                    chain_id=chain_id,
+-                    source_event_digest=source_digest,
+-                    records=records,
+-                    capability=capability,
+-                )
+-            self.assertFalse(drained.repeated)
+-            self.assertEqual(drained.records, records)
+-            self.assertEqual(len(calls), 1)
+-            self.assertEqual(
+-                (run_dir / "journal.jsonl").read_bytes()[
+-                    : len(legacy_prefix)
+-                ],
+-                legacy_prefix,
+-            )
+-            self.assertEqual(
+-                len(
+-                    self._activation_markers(
+-                        journal._parse_raw_records(
+-                            (run_dir / "journal.jsonl").read_bytes()
+-                        )
+-                    )
+-                ),
+-                1,
+-            )
+-
+-    def test_activation_outbox_lifecycle_guard_is_load_bearing(self) -> None:
+-        for operation in ("close", "retire", "readmit"):
+-            with self.subTest(operation=operation), self.api_environment():
+-                (
+-                    repo,
+-                    run_id,
+-                    state_path,
+-                    _legacy_prefix,
+-                    chain_id,
+-                    _source_digest,
+-                    _records,
+-                ) = self._activation_outbox_case(
+-                    f"activation-outbox-disabled-{operation}"
+-                )
+-                run_dir = self.run_dir(repo, run_id)
+-                event_path = (
+-                    builders.chain_storage_root(repo)
+-                    / f"{chain_id}.events.jsonl"
+-                )
+-                before_run = self._run_file_bytes(run_dir)
+-                before_state = state_path.read_bytes()
+-                before_events = event_path.read_bytes()
+-
+-                with patch_chain_core("register_activation_reservation_seam",
+-                    return_value=None,
+-                ) as disabled_registration, mock.patch.object(
+-                    builders,
+-                    "_require_no_pending_activation_outbox",
+-                    return_value=None,
+-                ) as disabled_outbox_guard:
+-                    self._invoke_raw_lifecycle(repo, run_id, operation)
+-
+-                disabled_registration.assert_called()
+-                disabled_outbox_guard.assert_called_once_with(
+-                    repo.resolve(), run_id
+-                )
+-                self.assertNotEqual(self._run_file_bytes(run_dir), before_run)
+-                self.assertEqual(state_path.read_bytes(), before_state)
+-                self.assertEqual(event_path.read_bytes(), before_events)
+-
+-    def test_legacy_raw_guard_intent_conditions_are_load_bearing(self) -> None:
+-        cases = ("published-intent", "orphan-intent-temporary")
+-        for condition in cases:
+-            with self.subTest(condition=condition), self.api_environment():
+-                repo, _ = self._new_repo(f"repo-raw-guard-{condition}")
+-                run_id = f"run-20260910-raw-guard-{condition}"
+-                if condition == "published-intent":
+-                    run_dir, _context = self._seed_gh17_wedge(repo, run_id)
+-                    patcher = mock.patch.object(
+-                        batch, "_load_intent", return_value=None
+-                    )
+-                else:
+-                    self._open_legacy_run(repo, run_id)
+-                    run_dir = self.run_dir(repo, run_id)
+-                    with batch.batch_lock(run_dir, create=True):
+-                        temporary = run_dir / batch._intent_temporary_name(
+-                            key(f"{run_id}-intent"),
+-                            key(f"{run_id}-request"),
+-                        )
+-                        temporary.write_bytes(b"orphan first-use authority\n")
+-                    patcher = mock.patch.object(
+-                        batch,
+-                        "_validate_no_orphan_intent_temporary",
+-                        return_value=None,
+-                    )
+-
+-                before = self._run_file_bytes(run_dir)
+-                with self.assertRaisesRegex(
+-                    journal.CoordinationRefusal, journal.BATCH_PENDING
+-                ):
+-                    journal.retire_run(repo, run_id)
+-                self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+-                with patcher as disabled_condition:
+-                    journal.retire_run(repo, run_id)
+-                self.assertTrue(disabled_condition.called)
+-                self.assertNotEqual(self._run_file_bytes(run_dir), before)
+-
+-    def test_raw_lifecycle_validation_precedes_batch_reservation(self) -> None:
+-        for operation in ("close", "retire", "readmit"):
+-            with self.subTest(operation=operation), self.api_environment():
+-                repo, _ = self._new_repo(
+-                    f"repo-lifecycle-prevalidate-{operation}"
+-                )
+-                run_id = f"run-20260910-prevalidate-{operation}"
+-                self._open_legacy_run(
+-                    repo, run_id, scope=["src/target/**"]
+-                )
+-                run_dir = self.run_dir(repo, run_id)
+-                lock_path = run_dir / journal.BATCH_LOCK_NAME
+-                registry_path = repo / ".forge/tmp/run-registry.json"
+-
+-                if operation == "readmit":
+-                    self._open_legacy_run(
+-                        repo,
+-                        f"{run_id}-blocker",
+-                        scope=["docs/**"],
+-                    )
+-                    invoke = lambda: journal.readmit_run(
+-                        repo, run_id, ["docs/**"], replace=True
+-                    )
+-                elif operation == "retire":
+-                    (run_dir / "owner").unlink()
+-                    invoke = lambda: journal.retire_run(repo, run_id)
+-                else:
+-                    invalid_close = {
+-                        "type": "decision",
+-                        "id": "decision-01",
+-                        "resolution": "Not a lifecycle closure",
+-                        "basis": [],
+-                        "run_id": run_id,
+-                        "recorded_at": "2026-09-10T03:20:02Z",
+-                    }
+-                    invoke = lambda: journal.close_run(
+-                        repo, run_id, invalid_close
+-                    )
+-
+-                before_run = self._run_file_bytes(run_dir)
+-                before_registry = registry_path.read_bytes()
+-                self.assertFalse(lock_path.exists())
+-                with mock.patch.object(
+-                    journal,
+-                    "_legacy_raw_append_guard",
+-                    side_effect=AssertionError(
+-                        "invalid lifecycle reached batch reservation"
+-                    ),
+-                ) as reservation, self.assertRaises(
+-                    journal.CoordinationRefusal
+-                ):
+-                    invoke()
+-
+-                reservation.assert_not_called()
+-                self.assertFalse(lock_path.exists())
+-                self.assertEqual(self._run_file_bytes(run_dir), before_run)
+-                self.assertEqual(registry_path.read_bytes(), before_registry)
+-
+-    def test_raw_lifecycle_lock_order_is_load_bearing(self) -> None:
+-        for operation in ("close", "retire", "readmit"):
+-            with self.subTest(operation=operation), self.api_environment():
+-                repo, _ = self._new_repo(
+-                    f"repo-lifecycle-order-{operation}"
+-                )
+-                run_id = f"run-20260910-order-{operation}"
+-                self._open_legacy_run(repo, run_id)
+-                run_dir = self.run_dir(repo, run_id)
+-                if operation == "readmit":
+-                    invoke = lambda: journal.readmit_run(
+-                        repo, run_id, ["src/**", "tests/**"]
+-                    )
+-                elif operation == "retire":
+-                    invoke = lambda: journal.retire_run(repo, run_id)
+-                else:
+-                    closing_record = {
+-                        "type": "run_closed",
+-                        "recorded_at": "2026-09-10T03:20:03Z",
+-                        "run_id": run_id,
+-                        "judgment": "blocked",
+-                        "summary": "Observe the raw lifecycle lock order",
+-                        "validation": journal.validate_run(
+-                            run_dir, gates=True
+-                        ),
+-                        "risks": [],
+-                        "follow_ups": [],
+-                    }
+-                    invoke = lambda: journal.close_run(
+-                        repo, run_id, closing_record
+-                    )
+-
+-                original_guard = journal._legacy_raw_append_guard
+-                original_registry_lock = journal._registry_lock
+-                original_locked_journal = journal._locked_journal
+-                original_write_registry = journal._write_registry
+-                active = {"batch": 0, "registry": 0, "journal": 0}
+-                events: list[str] = []
+-
+-                @contextmanager
+-                def observed_guard(*args: object, **kwargs: object):
+-                    self.assertEqual(active, {
+-                        "batch": 0,
+-                        "registry": 0,
+-                        "journal": 0,
+-                    })
+-                    with original_guard(*args, **kwargs):
+-                        active["batch"] += 1
+-                        events.append("batch-enter")
+-                        try:
+-                            yield
+-                        finally:
+-                            events.append("batch-exit")
+-                            active["batch"] -= 1
+-
+-                @contextmanager
+-                def observed_registry_lock(*args: object, **kwargs: object):
+-                    phase = (
+-                        "mutation" if active["batch"] else "prevalidation"
+-                    )
+-                    if phase == "mutation":
+-                        self.assertEqual(active["batch"], 1)
+-                    self.assertEqual(active["registry"], 0)
+-                    self.assertEqual(active["journal"], 0)
+-                    events.append(f"{phase}-registry-enter")
+-                    with original_registry_lock(*args, **kwargs) as locked:
+-                        active["registry"] += 1
+-                        try:
+-                            yield locked
+-                        finally:
+-                            active["registry"] -= 1
+-                            events.append(f"{phase}-registry-exit")
+-
+-                @contextmanager
+-                def observed_locked_journal(*args: object, **kwargs: object):
+-                    phase = (
+-                        "mutation" if active["batch"] else "prevalidation"
+-                    )
+-                    self.assertEqual(active["registry"], 1)
+-                    self.assertEqual(active["journal"], 0)
+-                    events.append(f"{phase}-journal-enter")
+-                    with original_locked_journal(*args, **kwargs) as locked:
+-                        active["journal"] += 1
+-                        try:
+-                            yield locked
+-                        finally:
+-                            active["journal"] -= 1
+-                            events.append(f"{phase}-journal-exit")
+-
+-                def observed_write_registry(*args: object, **kwargs: object):
+-                    self.assertEqual(active, {
+-                        "batch": 1,
+-                        "registry": 1,
+-                        "journal": 1,
+-                    })
+-                    events.append("registry-write")
+-                    return original_write_registry(*args, **kwargs)
+-
+-                with mock.patch.object(
+-                    journal,
+-                    "_legacy_raw_append_guard",
+-                    side_effect=observed_guard,
+-                ), mock.patch.object(
+-                    journal,
+-                    "_registry_lock",
+-                    side_effect=observed_registry_lock,
+-                ), mock.patch.object(
+-                    journal,
+-                    "_locked_journal",
+-                    side_effect=observed_locked_journal,
+-                ), mock.patch.object(
+-                    journal,
+-                    "_write_registry",
+-                    side_effect=observed_write_registry,
+-                ):
+-                    invoke()
+-
+-                self.assertEqual(
+-                    events,
+-                    [
+-                        "prevalidation-registry-enter",
+-                        "prevalidation-journal-enter",
+-                        "prevalidation-journal-exit",
+-                        "prevalidation-registry-exit",
+-                        "batch-enter",
+-                        "mutation-registry-enter",
+-                        "mutation-journal-enter",
+-                        "registry-write",
+-                        "mutation-journal-exit",
+-                        "mutation-registry-exit",
+-                        "batch-exit",
+-                    ],
+-                )
+-                self.assertEqual(active, {
+-                    "batch": 0,
+-                    "registry": 0,
+-                    "journal": 0,
+-                })
+-                self.assertTrue(
+-                    (run_dir / journal.BATCH_LOCK_NAME).is_file()
+-                )
+-
+-    def test_published_first_use_intent_blocks_outbox_before_publication(
+-        self,
+-    ) -> None:
+-        run_id = "run-20260910-intent-before-activation-outbox"
+-        with self.api_environment():
+-            self._open_legacy_run(self.repo, run_id)
+-            run_dir = self.run_dir(self.repo, run_id)
+-            journal_before = (run_dir / "journal.jsonl").read_bytes()
+-            original_write = batch._write_intent
+-
+-            def publish_then_crash(*args: object, **kwargs: object):
+-                result = original_write(*args, **kwargs)
+-                raise RuntimeError("first-use intent published")
+-
+-            with mock.patch.object(
+-                batch, "_write_intent", side_effect=publish_then_crash
+-            ), self.assertRaisesRegex(
+-                RuntimeError, "first-use intent published"
+-            ):
+-                self.start_task(self.repo, run_id)
+-
+-            intent_path = run_dir / journal.BATCH_INTENT_NAME
+-            self.assertTrue(intent_path.is_file())
+-            intent_before = intent_path.read_bytes()
+-            self.assertEqual(
+-                (run_dir / "journal.jsonl").read_bytes(), journal_before
+-            )
+-            publisher = mock.Mock()
+-            chain_id = "c-2026-09-10T032100Z-a104"
+-            event_path = (
+-                builders.chain_storage_root(self.repo)
+-                / f"{chain_id}.events.jsonl"
+-            )
+-            with batch.batch_lock(
+-                run_dir, create=False
+-            ) as locked, self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                journal.BATCH_PENDING,
+-            ):
+-                state = journal._scan_run(run_dir)
+-                prepared = batch.prepare_outbox_records(
+-                    self.repo.resolve(),
+-                    state,
+-                    (),
+-                    recorded_at="2026-09-10T03:21:00Z",
+-                )
+-                publisher(prepared)
+-
+-            publisher.assert_not_called()
+-            self.assertFalse(event_path.exists())
+-            self.assertEqual(intent_path.read_bytes(), intent_before)
+-            self.assertEqual(
+-                (run_dir / "journal.jsonl").read_bytes(), journal_before
+-            )
+-
+-    def test_staged_first_use_intent_blocks_outbox_before_publication(
+-        self,
+-    ) -> None:
+-        run_id = "run-20260910-staged-intent-before-activation-outbox"
+-        with self.api_environment():
+-            self._open_legacy_run(self.repo, run_id)
+-            run_dir = self.run_dir(self.repo, run_id)
+-            event_publisher = mock.Mock()
+-            with batch.batch_lock(run_dir, create=True) as locked:
+-                temporary = run_dir / batch._intent_temporary_name(
+-                    key("staged-activation-key"),
+-                    key("staged-activation-request"),
+-                )
+-                temporary.write_bytes(b"staged intent authority\n")
+-                before = self._run_file_bytes(run_dir)
+-                state = journal._scan_run(run_dir)
+-                with self.assertRaisesRegex(
+-                    journal.CoordinationRefusal,
+-                    journal.BATCH_PENDING,
+-                ):
+-                    prepared = batch.prepare_outbox_records(
+-                        self.repo.resolve(),
+-                        state,
+-                        (),
+-                        recorded_at="2026-09-10T03:21:01Z",
+-                    )
+-                    event_publisher(prepared)
+-
+-                event_publisher.assert_not_called()
+-                self.assertEqual(self._run_file_bytes(run_dir), before)
+-
+-    def test_raw_open_cannot_supply_writer_contract_before_any_mutation(
+-        self,
+-    ) -> None:
+-        expected = (
+-            "forge: run open refused — writer_contract is builder-injected; use typed "
+-            "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
+-            "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
+-            "--scope <pathspec>"
+-        )
+-        for label, supplied_value in (
+-            ("activation-value", journal.WRITER_CONTRACT),
+-            ("attacker-value", "attacker-value"),
+-        ):
+-            with self.subTest(label=label):
+-                repo, _ = self._new_repo(f"repo-raw-open-{label}")
+-                run_id = f"run-20260910-raw-open-{label}"
+-                state_root = repo / ".codex-orchestrator"
+-                registry = repo / ".forge/tmp/run-registry.json"
+-                target = self.run_dir(repo, run_id)
+-                self.assertFalse(state_root.exists())
+-                self.assertFalse(registry.exists())
+-                with self.api_environment(), self.assertRaises(
+-                    journal.CoordinationRefusal
+-                ) as raised:
+-                    journal.open_run(
+-                        repo,
+-                        run_id,
+-                        ["src/**"],
+-                        {
+-                            "type": "run_started",
+-                            "writer_contract": supplied_value,
+-                        },
+-                    )
+-                self.assertEqual(str(raised.exception), expected)
+-                self.assertFalse(state_root.exists())
+-                self.assertFalse(registry.exists())
+-                self.assertFalse(target.exists())
+-
+-    def test_raw_open_writer_contract_refusal_is_load_bearing(self) -> None:
+-        run_id = "run-20260910-raw-open-refusal-disabled"
+-        record = {
+-            "type": "run_started",
+-            "recorded_at": "2026-09-10T12:00:00Z",
+-            "run_id": run_id,
+-            "goal": "Prove the raw writer-contract refusal is load-bearing",
+-            "repo": str(self.repo.resolve()),
+-            "repo_head": self.head,
+-            "repo_status": [],
+-            "plugin_ref": "forge-test-revision-9",
+-            "writer_contract": "attacker-value",
+-        }
+-        expected = (
+-            "forge: journal append refused — invalid journal record: "
+-            "run_started.writer_contract must be exactly forge-journal-binding/1"
+-        )
+-        with self.api_environment(), mock.patch.object(
+-            journal, "_raw_open_writer_contract_supplied", return_value=False
+-        ) as disabled_guard, mock.patch.object(
+-            journal, "_resolve_repository", wraps=journal._resolve_repository
+-        ) as repository_resolver, self.assertRaises(
+-            journal.CoordinationRefusal
+-        ) as raised:
+-            journal.open_run(self.repo, run_id, ["src/**"], record)
+-
+-        self.assertEqual(str(raised.exception), expected)
+-        disabled_guard.assert_called_once_with(record, None)
+-        repository_resolver.assert_called_once_with(self.repo, "new run")
+-        self.assertFalse(self.run_dir(self.repo, run_id).exists())
+-
+     def test_legacy_open_without_stderr_never_falls_back_to_stdout(self) -> None:
+         run_id = "run-20260910-legacy-open-without-stderr"
+         record_path = Path(self.temporary.name) / "legacy-open-no-stderr.json"
+@@ -6165,132 +5522,6 @@
+         self.assertEqual(exit_code, 0)
+         self.assertEqual(captured_stdout.getvalue(), str(target) + "\n")
+         self.assertTrue(target.is_dir())
+-
+-    def test_activation_outbox_reserves_first_use_then_drains_exact_batch(
+-        self,
+-    ) -> None:
+-        with self.api_environment():
+-            case = self._activation_outbox_case(
+-                "activation-outbox-reservation"
+-            )
+-            (
+-                repo,
+-                run_id,
+-                _state_path,
+-                legacy_prefix,
+-                chain_id,
+-                source_digest,
+-                records,
+-            ) = case
+-            run_dir = self.run_dir(repo, run_id)
+-            before = self._run_file_bytes(run_dir)
+-            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+-            with self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                builders.JOURNAL_OUTBOX_PENDING,
+-            ):
+-                self._compete_with_activation_outbox(
+-                    repo, run_id, "before-drain"
+-                )
+-            self.assertEqual(self._run_file_bytes(run_dir), before)
+-            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+-
+-            capability, authorizer, calls = self._chain_drain_authorizer(
+-                repo,
+-                run_id,
+-                chain_id,
+-                source_digest,
+-                records,
+-            )
+-            with mock.patch.object(batch, "_CHAIN_BATCH_AUTHORIZER", None):
+-                batch._register_chain_batch_authorizer(authorizer)
+-                created = batch.drain_chain_batch(
+-                    repo,
+-                    run_id,
+-                    chain_id=chain_id,
+-                    source_event_digest=source_digest,
+-                    records=records,
+-                    capability=capability,
+-                )
+-            self.assertFalse(created.repeated)
+-            self.assertEqual(created.records, records)
+-            self.assertEqual(len(calls), 1)
+-            journal_raw = (run_dir / "journal.jsonl").read_bytes()
+-            self.assertEqual(journal_raw[: len(legacy_prefix)], legacy_prefix)
+-            persisted, issues = journal.read_journal(
+-                run_dir / "journal.jsonl"
+-            )
+-            self.assertEqual(issues, [])
+-            persisted_markers = [
+-                {
+-                    name: value
+-                    for name, value in marker.items()
+-                    if name != "_line"
+-                }
+-                for marker in self._activation_markers(persisted)
+-            ]
+-            self.assertEqual(persisted_markers, [records[0]])
+-            receipts = [
+-                json.loads(line)
+-                for line in (
+-                    run_dir / journal.BATCH_RECEIPTS_NAME
+-                ).read_bytes().splitlines()
+-            ]
+-            self.assertEqual(len(receipts), 1)
+-            self.assertEqual(receipts[0]["base_size"], len(legacy_prefix))
+-            self.assertEqual(receipts[0]["record_count"], 2)
+-            self.assertEqual(
+-                receipts[0]["batch_sha256"],
+-                journal._sha256(
+-                    b"".join(
+-                        journal._journal_line(record) for record in records
+-                    )
+-                ),
+-            )
+-            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+-
+-    def test_activation_outbox_missing_events_or_tampered_state_refuses_first_use(
+-        self,
+-    ) -> None:
+-        for attack in ("missing-events", "tampered-state"):
+-            with self.subTest(attack=attack), self.api_environment():
+-                (
+-                    repo,
+-                    run_id,
+-                    state_path,
+-                    _legacy_prefix,
+-                    _chain_id,
+-                    _source_digest,
+-                    _records,
+-                ) = self._activation_outbox_case(
+-                    f"activation-outbox-{attack}"
+-                )
+-                if attack == "missing-events":
+-                    state_path.with_name(
+-                        f"{_chain_id}.events.jsonl"
+-                    ).unlink()
+-                else:
+-                    state = json.loads(state_path.read_bytes())
+-                    outbox = state["journal_outbox"]
+-                    assert isinstance(outbox, dict)
+-                    outbox["batch_digest"] = key(
+-                        "tampered-materialized-activation-outbox"
+-                    )
+-                    state_path.write_bytes(
+-                        journal._canonical_json_bytes(state) + b"\n"
+-                    )
+-                run_dir = self.run_dir(repo, run_id)
+-                before = self._run_file_bytes(run_dir)
+-
+-                with self.assertRaisesRegex(
+-                    journal.CoordinationRefusal,
+-                    journal.BATCH_DIVERGED,
+-                ):
+-                    self._compete_with_activation_outbox(
+-                        repo, run_id, attack
+-                    )
+-
+-                self.assertEqual(self._run_file_bytes(run_dir), before)
+ 
+     def test_legacy_first_typed_use_atomically_activates(self) -> None:
+         run_id = "run-20260910-legacy-first-typed-use"
+@@ -7925,59 +7156,6 @@
+         )
+         self.assertEqual(owner_path.read_bytes(), mutated_owner)
+ 
+-    def test_internal_typed_flag_cannot_bypass_activated_batch_builders(self) -> None:
+-        with self.api_environment():
+-            repo, _ = self._new_repo("repo-typed-append-bypass")
+-            run_id = "run-20260828-typed-append-bypass"
+-            self.open_run(repo, run_id)
+-            run_dir = self.run_dir(repo, run_id)
+-            journal_before = (run_dir / "journal.jsonl").read_bytes()
+-            with self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                "activated writer requires typed builder",
+-            ):
+-                journal.append_run_record(
+-                    repo,
+-                    run_id,
+-                    {
+-                        "type": "decision",
+-                        "recorded_at": "2026-08-28T12:00:00Z",
+-                        "run_id": run_id,
+-                        "id": "decision-01",
+-                        "resolution": "Raw append must remain forbidden",
+-                        "basis": [],
+-                    },
+-                    _typed=True,
+-                )
+-            self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+-
+-            repo, _ = self._new_repo("repo-typed-close-bypass")
+-            run_id = "run-20260828-typed-close-bypass"
+-            self.open_run(repo, run_id)
+-            run_dir = self.run_dir(repo, run_id)
+-            journal_before = (run_dir / "journal.jsonl").read_bytes()
+-            validation = journal.validate_run(run_dir, gates=True)
+-            with self.assertRaisesRegex(
+-                journal.CoordinationRefusal,
+-                "activated writer requires typed builder",
+-            ):
+-                journal.close_run(
+-                    repo,
+-                    run_id,
+-                    {
+-                        "type": "run_closed",
+-                        "recorded_at": "2026-08-28T12:00:00Z",
+-                        "run_id": run_id,
+-                        "judgment": "blocked",
+-                        "summary": "Raw close must remain forbidden",
+-                        "validation": validation,
+-                        "risks": [],
+-                        "follow_ups": [],
+-                    },
+-                    _typed=True,
+-                )
+-            self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+-
+     def test_cli_legacy_open_notice_is_stderr_only_and_typed_open_is_quiet(
+         self,
+     ) -> None:
+--- tests/test_revision9_coordination_activation_outbox.py
++++ tests/test_revision9_coordination_activation_outbox.py
+@@ -0,0 +1,839 @@
++from __future__ import annotations
++
++import copy
++import json
++import unittest
++from contextlib import contextmanager
++from pathlib import Path
++from unittest import mock
++
++from tests._cli_loader import patch_chain_core
++from tests._revision9_coord_constants import key
++from tests._revision9_coord_support import Revision9BuilderBatchSupport
++
++from codex_orchestrator import batch, builders, journal
++
++
++class Revision9ActivationOutboxTests(Revision9BuilderBatchSupport, unittest.TestCase):
++
++    def _activation_outbox_case(
++        self, name: str
++    ) -> tuple[
++        Path,
++        str,
++        Path,
++        bytes,
++        str,
++        str,
++        tuple[dict[str, object], ...],
++    ]:
++        repo, _ = self._new_repo(name)
++        run_id = f"run-20260910-{name}"
++        self._open_legacy_run(repo, run_id)
++        run_dir = self.run_dir(repo, run_id)
++        journal_path = run_dir / "journal.jsonl"
++        journal.append_owned_record(
++            journal_path,
++            {
++                "type": "task",
++                "id": "task-01",
++                "status": "active",
++                "goal": "Drain the activation-bearing chain outbox",
++                "acceptance": ["The durable outbox reserves first use"],
++                "files": ["src/example.py"],
++                "run_id": run_id,
++                "recorded_at": "2026-08-28T12:01:00Z",
++            },
++        )
++        legacy_prefix = journal_path.read_bytes()
++        with batch.batch_lock(run_dir, create=True) as locked:
++            batch._ensure_receipt_ledger(locked)
++            state = journal._scan_run(run_dir)
++            marker = builders._writer_activation_decision(
++                state,
++                receipt_origin_size=len(legacy_prefix),
++                receipt_origin_sha256=journal._sha256(legacy_prefix),
++                recorded_at="2026-08-28T12:03:00Z",
++            )
++
++        run_binding = {
++            "run_id": run_id,
++            "task_id": "task-01",
++            "repository": str(repo.resolve()),
++            "policy_digest": key(f"{name}-policy"),
++        }
++        chain_id, state_path = self._write_bound_chain_state(
++            repo,
++            run_id,
++            run_binding=run_binding,
++            outbox={"fixture": True},
++            activation_marker=marker,
++        )
++        events = [
++            json.loads(line)
++            for line in (
++                repo / ".forge/chains" / f"{chain_id}.events.jsonl"
++            ).read_text(encoding="utf-8").splitlines()
++        ]
++        carriers = [
++            event["payload"]["details"]
++            for event in events
++            if isinstance(event.get("payload"), dict)
++            and isinstance(event["payload"].get("details"), dict)
++            and isinstance(
++                event["payload"]["details"].get("journal_batch"), dict
++            )
++        ]
++        self.assertEqual(len(carriers), 1)
++        carrier = carriers[0]
++        carried_batch = carrier["journal_batch"]
++        assert isinstance(carried_batch, dict)
++        raw_records = carried_batch["records"]
++        assert isinstance(raw_records, list)
++        records = tuple(copy.deepcopy(raw_records))
++        self.assertEqual(len(records), 2)
++        self.assertEqual(records[0], marker)
++        self.assertTrue(journal._writer_activation_marker(records[0]))
++        self.assertEqual(records[1]["type"], "verification")
++        return (
++            repo,
++            run_id,
++            state_path,
++            legacy_prefix,
++            chain_id,
++            str(carrier["source_event_digest"]),
++            records,
++        )
++
++    def _compete_with_activation_outbox(
++        self, repo: Path, run_id: str, label: str
++    ) -> batch.BatchOutcome:
++        return builders.verification_add(
++            repo,
++            run_id,
++            idempotency_key=key(f"{run_id}-{label}"),
++            task="task-01",
++            criterion="activation outbox first-use reservation",
++            method="unittest",
++            check="focused activation outbox test",
++            result="passed",
++            observation="The competing typed mutation must not commit",
++            evidence=[],
++            binding_chain=None,
++            binding_id=None,
++        )
++
++    def test_activation_outbox_blocks_raw_append_byte_exactly_then_drains(
++        self,
++    ) -> None:
++        with self.api_environment():
++            (
++                repo,
++                run_id,
++                state_path,
++                legacy_prefix,
++                chain_id,
++                source_digest,
++                records,
++            ) = self._activation_outbox_case(
++                "activation-outbox-raw-append"
++            )
++            run_dir = self.run_dir(repo, run_id)
++            event_path = (
++                builders.chain_storage_root(repo)
++                / f"{chain_id}.events.jsonl"
++            )
++            before_run = self._run_file_bytes(run_dir)
++            before_state = state_path.read_bytes()
++            before_events = event_path.read_bytes()
++            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
++
++            raw_record = {
++                "type": "decision",
++                "id": "decision-01",
++                "resolution": "Raw append cannot steal first use",
++                "basis": [],
++                "run_id": run_id,
++                "recorded_at": "2026-09-10T03:20:00Z",
++            }
++            for raw_api in ("owned", "repository"):
++                with self.subTest(raw_api=raw_api), self.assertRaisesRegex(
++                    journal.CoordinationRefusal,
++                    journal.BATCH_PENDING,
++                ):
++                    if raw_api == "owned":
++                        journal.append_owned_record(
++                            run_dir / "journal.jsonl", raw_record
++                        )
++                    else:
++                        journal.append_run_record(repo, run_id, raw_record)
++
++                self.assertEqual(self._run_file_bytes(run_dir), before_run)
++                self.assertEqual(state_path.read_bytes(), before_state)
++                self.assertEqual(event_path.read_bytes(), before_events)
++                self.assertFalse(
++                    (run_dir / journal.BATCH_INTENT_NAME).exists()
++                )
++
++            for operation in ("close", "retire", "readmit"):
++                with self.subTest(operation=operation), self.assertRaisesRegex(
++                    journal.CoordinationRefusal,
++                    journal.BATCH_PENDING,
++                ):
++                    self._invoke_raw_lifecycle(repo, run_id, operation)
++
++                self.assertEqual(self._run_file_bytes(run_dir), before_run)
++                self.assertEqual(state_path.read_bytes(), before_state)
++                self.assertEqual(event_path.read_bytes(), before_events)
++                self.assertFalse(
++                    (run_dir / journal.BATCH_INTENT_NAME).exists()
++                )
++
++            capability, authorizer, calls = self._chain_drain_authorizer(
++                repo,
++                run_id,
++                chain_id,
++                source_digest,
++                records,
++            )
++            with mock.patch.object(batch, "_CHAIN_BATCH_AUTHORIZER", None):
++                batch._register_chain_batch_authorizer(authorizer)
++                drained = batch.drain_chain_batch(
++                    repo,
++                    run_id,
++                    chain_id=chain_id,
++                    source_event_digest=source_digest,
++                    records=records,
++                    capability=capability,
++                )
++            self.assertFalse(drained.repeated)
++            self.assertEqual(drained.records, records)
++            self.assertEqual(len(calls), 1)
++            self.assertEqual(
++                (run_dir / "journal.jsonl").read_bytes()[
++                    : len(legacy_prefix)
++                ],
++                legacy_prefix,
++            )
++            self.assertEqual(
++                len(
++                    self._activation_markers(
++                        journal._parse_raw_records(
++                            (run_dir / "journal.jsonl").read_bytes()
++                        )
++                    )
++                ),
++                1,
++            )
++
++    def test_activation_outbox_lifecycle_guard_is_load_bearing(self) -> None:
++        for operation in ("close", "retire", "readmit"):
++            with self.subTest(operation=operation), self.api_environment():
++                (
++                    repo,
++                    run_id,
++                    state_path,
++                    _legacy_prefix,
++                    chain_id,
++                    _source_digest,
++                    _records,
++                ) = self._activation_outbox_case(
++                    f"activation-outbox-disabled-{operation}"
++                )
++                run_dir = self.run_dir(repo, run_id)
++                event_path = (
++                    builders.chain_storage_root(repo)
++                    / f"{chain_id}.events.jsonl"
++                )
++                before_run = self._run_file_bytes(run_dir)
++                before_state = state_path.read_bytes()
++                before_events = event_path.read_bytes()
++
++                with patch_chain_core("register_activation_reservation_seam",
++                    return_value=None,
++                ) as disabled_registration, mock.patch.object(
++                    builders,
++                    "_require_no_pending_activation_outbox",
++                    return_value=None,
++                ) as disabled_outbox_guard:
++                    self._invoke_raw_lifecycle(repo, run_id, operation)
++
++                disabled_registration.assert_called()
++                disabled_outbox_guard.assert_called_once_with(
++                    repo.resolve(), run_id
++                )
++                self.assertNotEqual(self._run_file_bytes(run_dir), before_run)
++                self.assertEqual(state_path.read_bytes(), before_state)
++                self.assertEqual(event_path.read_bytes(), before_events)
++
++    def test_legacy_raw_guard_intent_conditions_are_load_bearing(self) -> None:
++        cases = ("published-intent", "orphan-intent-temporary")
++        for condition in cases:
++            with self.subTest(condition=condition), self.api_environment():
++                repo, _ = self._new_repo(f"repo-raw-guard-{condition}")
++                run_id = f"run-20260910-raw-guard-{condition}"
++                if condition == "published-intent":
++                    run_dir, _context = self._seed_gh17_wedge(repo, run_id)
++                    patcher = mock.patch.object(
++                        batch, "_load_intent", return_value=None
++                    )
++                else:
++                    self._open_legacy_run(repo, run_id)
++                    run_dir = self.run_dir(repo, run_id)
++                    with batch.batch_lock(run_dir, create=True):
++                        temporary = run_dir / batch._intent_temporary_name(
++                            key(f"{run_id}-intent"),
++                            key(f"{run_id}-request"),
++                        )
++                        temporary.write_bytes(b"orphan first-use authority\n")
++                    patcher = mock.patch.object(
++                        batch,
++                        "_validate_no_orphan_intent_temporary",
++                        return_value=None,
++                    )
++
++                before = self._run_file_bytes(run_dir)
++                with self.assertRaisesRegex(
++                    journal.CoordinationRefusal, journal.BATCH_PENDING
++                ):
++                    journal.retire_run(repo, run_id)
++                self.assertEqual(self._run_file_bytes(run_dir), before)
++
++                with patcher as disabled_condition:
++                    journal.retire_run(repo, run_id)
++                self.assertTrue(disabled_condition.called)
++                self.assertNotEqual(self._run_file_bytes(run_dir), before)
++
++    def test_raw_lifecycle_validation_precedes_batch_reservation(self) -> None:
++        for operation in ("close", "retire", "readmit"):
++            with self.subTest(operation=operation), self.api_environment():
++                repo, _ = self._new_repo(
++                    f"repo-lifecycle-prevalidate-{operation}"
++                )
++                run_id = f"run-20260910-prevalidate-{operation}"
++                self._open_legacy_run(
++                    repo, run_id, scope=["src/target/**"]
++                )
++                run_dir = self.run_dir(repo, run_id)
++                lock_path = run_dir / journal.BATCH_LOCK_NAME
++                registry_path = repo / ".forge/tmp/run-registry.json"
++
++                if operation == "readmit":
++                    self._open_legacy_run(
++                        repo,
++                        f"{run_id}-blocker",
++                        scope=["docs/**"],
++                    )
++                    invoke = lambda: journal.readmit_run(
++                        repo, run_id, ["docs/**"], replace=True
++                    )
++                elif operation == "retire":
++                    (run_dir / "owner").unlink()
++                    invoke = lambda: journal.retire_run(repo, run_id)
++                else:
++                    invalid_close = {
++                        "type": "decision",
++                        "id": "decision-01",
++                        "resolution": "Not a lifecycle closure",
++                        "basis": [],
++                        "run_id": run_id,
++                        "recorded_at": "2026-09-10T03:20:02Z",
++                    }
++                    invoke = lambda: journal.close_run(
++                        repo, run_id, invalid_close
++                    )
++
++                before_run = self._run_file_bytes(run_dir)
++                before_registry = registry_path.read_bytes()
++                self.assertFalse(lock_path.exists())
++                with mock.patch.object(
++                    journal,
++                    "_legacy_raw_append_guard",
++                    side_effect=AssertionError(
++                        "invalid lifecycle reached batch reservation"
++                    ),
++                ) as reservation, self.assertRaises(
++                    journal.CoordinationRefusal
++                ):
++                    invoke()
++
++                reservation.assert_not_called()
++                self.assertFalse(lock_path.exists())
++                self.assertEqual(self._run_file_bytes(run_dir), before_run)
++                self.assertEqual(registry_path.read_bytes(), before_registry)
++
++    def test_raw_lifecycle_lock_order_is_load_bearing(self) -> None:
++        for operation in ("close", "retire", "readmit"):
++            with self.subTest(operation=operation), self.api_environment():
++                repo, _ = self._new_repo(
++                    f"repo-lifecycle-order-{operation}"
++                )
++                run_id = f"run-20260910-order-{operation}"
++                self._open_legacy_run(repo, run_id)
++                run_dir = self.run_dir(repo, run_id)
++                if operation == "readmit":
++                    invoke = lambda: journal.readmit_run(
++                        repo, run_id, ["src/**", "tests/**"]
++                    )
++                elif operation == "retire":
++                    invoke = lambda: journal.retire_run(repo, run_id)
++                else:
++                    closing_record = {
++                        "type": "run_closed",
++                        "recorded_at": "2026-09-10T03:20:03Z",
++                        "run_id": run_id,
++                        "judgment": "blocked",
++                        "summary": "Observe the raw lifecycle lock order",
++                        "validation": journal.validate_run(
++                            run_dir, gates=True
++                        ),
++                        "risks": [],
++                        "follow_ups": [],
++                    }
++                    invoke = lambda: journal.close_run(
++                        repo, run_id, closing_record
++                    )
++
++                original_guard = journal._legacy_raw_append_guard
++                original_registry_lock = journal._registry_lock
++                original_locked_journal = journal._locked_journal
++                original_write_registry = journal._write_registry
++                active = {"batch": 0, "registry": 0, "journal": 0}
++                events: list[str] = []
++
++                @contextmanager
++                def observed_guard(*args: object, **kwargs: object):
++                    self.assertEqual(active, {
++                        "batch": 0,
++                        "registry": 0,
++                        "journal": 0,
++                    })
++                    with original_guard(*args, **kwargs):
++                        active["batch"] += 1
++                        events.append("batch-enter")
++                        try:
++                            yield
++                        finally:
++                            events.append("batch-exit")
++                            active["batch"] -= 1
++
++                @contextmanager
++                def observed_registry_lock(*args: object, **kwargs: object):
++                    phase = (
++                        "mutation" if active["batch"] else "prevalidation"
++                    )
++                    if phase == "mutation":
++                        self.assertEqual(active["batch"], 1)
++                    self.assertEqual(active["registry"], 0)
++                    self.assertEqual(active["journal"], 0)
++                    events.append(f"{phase}-registry-enter")
++                    with original_registry_lock(*args, **kwargs) as locked:
++                        active["registry"] += 1
++                        try:
++                            yield locked
++                        finally:
++                            active["registry"] -= 1
++                            events.append(f"{phase}-registry-exit")
++
++                @contextmanager
++                def observed_locked_journal(*args: object, **kwargs: object):
++                    phase = (
++                        "mutation" if active["batch"] else "prevalidation"
++                    )
++                    self.assertEqual(active["registry"], 1)
++                    self.assertEqual(active["journal"], 0)
++                    events.append(f"{phase}-journal-enter")
++                    with original_locked_journal(*args, **kwargs) as locked:
++                        active["journal"] += 1
++                        try:
++                            yield locked
++                        finally:
++                            active["journal"] -= 1
++                            events.append(f"{phase}-journal-exit")
++
++                def observed_write_registry(*args: object, **kwargs: object):
++                    self.assertEqual(active, {
++                        "batch": 1,
++                        "registry": 1,
++                        "journal": 1,
++                    })
++                    events.append("registry-write")
++                    return original_write_registry(*args, **kwargs)
++
++                with mock.patch.object(
++                    journal,
++                    "_legacy_raw_append_guard",
++                    side_effect=observed_guard,
++                ), mock.patch.object(
++                    journal,
++                    "_registry_lock",
++                    side_effect=observed_registry_lock,
++                ), mock.patch.object(
++                    journal,
++                    "_locked_journal",
++                    side_effect=observed_locked_journal,
++                ), mock.patch.object(
++                    journal,
++                    "_write_registry",
++                    side_effect=observed_write_registry,
++                ):
++                    invoke()
++
++                self.assertEqual(
++                    events,
++                    [
++                        "prevalidation-registry-enter",
++                        "prevalidation-journal-enter",
++                        "prevalidation-journal-exit",
++                        "prevalidation-registry-exit",
++                        "batch-enter",
++                        "mutation-registry-enter",
++                        "mutation-journal-enter",
++                        "registry-write",
++                        "mutation-journal-exit",
++                        "mutation-registry-exit",
++                        "batch-exit",
++                    ],
++                )
++                self.assertEqual(active, {
++                    "batch": 0,
++                    "registry": 0,
++                    "journal": 0,
++                })
++                self.assertTrue(
++                    (run_dir / journal.BATCH_LOCK_NAME).is_file()
++                )
++
++    def test_published_first_use_intent_blocks_outbox_before_publication(
++        self,
++    ) -> None:
++        run_id = "run-20260910-intent-before-activation-outbox"
++        with self.api_environment():
++            self._open_legacy_run(self.repo, run_id)
++            run_dir = self.run_dir(self.repo, run_id)
++            journal_before = (run_dir / "journal.jsonl").read_bytes()
++            original_write = batch._write_intent
++
++            def publish_then_crash(*args: object, **kwargs: object):
++                result = original_write(*args, **kwargs)
++                raise RuntimeError("first-use intent published")
++
++            with mock.patch.object(
++                batch, "_write_intent", side_effect=publish_then_crash
++            ), self.assertRaisesRegex(
++                RuntimeError, "first-use intent published"
++            ):
++                self.start_task(self.repo, run_id)
++
++            intent_path = run_dir / journal.BATCH_INTENT_NAME
++            self.assertTrue(intent_path.is_file())
++            intent_before = intent_path.read_bytes()
++            self.assertEqual(
++                (run_dir / "journal.jsonl").read_bytes(), journal_before
++            )
++            publisher = mock.Mock()
++            chain_id = "c-2026-09-10T032100Z-a104"
++            event_path = (
++                builders.chain_storage_root(self.repo)
++                / f"{chain_id}.events.jsonl"
++            )
++            with batch.batch_lock(
++                run_dir, create=False
++            ) as locked, self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                journal.BATCH_PENDING,
++            ):
++                state = journal._scan_run(run_dir)
++                prepared = batch.prepare_outbox_records(
++                    self.repo.resolve(),
++                    state,
++                    (),
++                    recorded_at="2026-09-10T03:21:00Z",
++                )
++                publisher(prepared)
++
++            publisher.assert_not_called()
++            self.assertFalse(event_path.exists())
++            self.assertEqual(intent_path.read_bytes(), intent_before)
++            self.assertEqual(
++                (run_dir / "journal.jsonl").read_bytes(), journal_before
++            )
++
++    def test_staged_first_use_intent_blocks_outbox_before_publication(
++        self,
++    ) -> None:
++        run_id = "run-20260910-staged-intent-before-activation-outbox"
++        with self.api_environment():
++            self._open_legacy_run(self.repo, run_id)
++            run_dir = self.run_dir(self.repo, run_id)
++            event_publisher = mock.Mock()
++            with batch.batch_lock(run_dir, create=True) as locked:
++                temporary = run_dir / batch._intent_temporary_name(
++                    key("staged-activation-key"),
++                    key("staged-activation-request"),
++                )
++                temporary.write_bytes(b"staged intent authority\n")
++                before = self._run_file_bytes(run_dir)
++                state = journal._scan_run(run_dir)
++                with self.assertRaisesRegex(
++                    journal.CoordinationRefusal,
++                    journal.BATCH_PENDING,
++                ):
++                    prepared = batch.prepare_outbox_records(
++                        self.repo.resolve(),
++                        state,
++                        (),
++                        recorded_at="2026-09-10T03:21:01Z",
++                    )
++                    event_publisher(prepared)
++
++                event_publisher.assert_not_called()
++                self.assertEqual(self._run_file_bytes(run_dir), before)
++
++    def test_raw_open_cannot_supply_writer_contract_before_any_mutation(
++        self,
++    ) -> None:
++        expected = (
++            "forge: run open refused — writer_contract is builder-injected; use typed "
++            "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
++            "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
++            "--scope <pathspec>"
++        )
++        for label, supplied_value in (
++            ("activation-value", journal.WRITER_CONTRACT),
++            ("attacker-value", "attacker-value"),
++        ):
++            with self.subTest(label=label):
++                repo, _ = self._new_repo(f"repo-raw-open-{label}")
++                run_id = f"run-20260910-raw-open-{label}"
++                state_root = repo / ".codex-orchestrator"
++                registry = repo / ".forge/tmp/run-registry.json"
++                target = self.run_dir(repo, run_id)
++                self.assertFalse(state_root.exists())
++                self.assertFalse(registry.exists())
++                with self.api_environment(), self.assertRaises(
++                    journal.CoordinationRefusal
++                ) as raised:
++                    journal.open_run(
++                        repo,
++                        run_id,
++                        ["src/**"],
++                        {
++                            "type": "run_started",
++                            "writer_contract": supplied_value,
++                        },
++                    )
++                self.assertEqual(str(raised.exception), expected)
++                self.assertFalse(state_root.exists())
++                self.assertFalse(registry.exists())
++                self.assertFalse(target.exists())
++
++    def test_raw_open_writer_contract_refusal_is_load_bearing(self) -> None:
++        run_id = "run-20260910-raw-open-refusal-disabled"
++        record = {
++            "type": "run_started",
++            "recorded_at": "2026-09-10T12:00:00Z",
++            "run_id": run_id,
++            "goal": "Prove the raw writer-contract refusal is load-bearing",
++            "repo": str(self.repo.resolve()),
++            "repo_head": self.head,
++            "repo_status": [],
++            "plugin_ref": "forge-test-revision-9",
++            "writer_contract": "attacker-value",
++        }
++        expected = (
++            "forge: journal append refused — invalid journal record: "
++            "run_started.writer_contract must be exactly forge-journal-binding/1"
++        )
++        with self.api_environment(), mock.patch.object(
++            journal, "_raw_open_writer_contract_supplied", return_value=False
++        ) as disabled_guard, mock.patch.object(
++            journal, "_resolve_repository", wraps=journal._resolve_repository
++        ) as repository_resolver, self.assertRaises(
++            journal.CoordinationRefusal
++        ) as raised:
++            journal.open_run(self.repo, run_id, ["src/**"], record)
++
++        self.assertEqual(str(raised.exception), expected)
++        disabled_guard.assert_called_once_with(record, None)
++        repository_resolver.assert_called_once_with(self.repo, "new run")
++        self.assertFalse(self.run_dir(self.repo, run_id).exists())
++
++    def test_activation_outbox_reserves_first_use_then_drains_exact_batch(
++        self,
++    ) -> None:
++        with self.api_environment():
++            case = self._activation_outbox_case(
++                "activation-outbox-reservation"
++            )
++            (
++                repo,
++                run_id,
++                _state_path,
++                legacy_prefix,
++                chain_id,
++                source_digest,
++                records,
++            ) = case
++            run_dir = self.run_dir(repo, run_id)
++            before = self._run_file_bytes(run_dir)
++            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
++            with self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                builders.JOURNAL_OUTBOX_PENDING,
++            ):
++                self._compete_with_activation_outbox(
++                    repo, run_id, "before-drain"
++                )
++            self.assertEqual(self._run_file_bytes(run_dir), before)
++            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
++
++            capability, authorizer, calls = self._chain_drain_authorizer(
++                repo,
++                run_id,
++                chain_id,
++                source_digest,
++                records,
++            )
++            with mock.patch.object(batch, "_CHAIN_BATCH_AUTHORIZER", None):
++                batch._register_chain_batch_authorizer(authorizer)
++                created = batch.drain_chain_batch(
++                    repo,
++                    run_id,
++                    chain_id=chain_id,
++                    source_event_digest=source_digest,
++                    records=records,
++                    capability=capability,
++                )
++            self.assertFalse(created.repeated)
++            self.assertEqual(created.records, records)
++            self.assertEqual(len(calls), 1)
++            journal_raw = (run_dir / "journal.jsonl").read_bytes()
++            self.assertEqual(journal_raw[: len(legacy_prefix)], legacy_prefix)
++            persisted, issues = journal.read_journal(
++                run_dir / "journal.jsonl"
++            )
++            self.assertEqual(issues, [])
++            persisted_markers = [
++                {
++                    name: value
++                    for name, value in marker.items()
++                    if name != "_line"
++                }
++                for marker in self._activation_markers(persisted)
++            ]
++            self.assertEqual(persisted_markers, [records[0]])
++            receipts = [
++                json.loads(line)
++                for line in (
++                    run_dir / journal.BATCH_RECEIPTS_NAME
++                ).read_bytes().splitlines()
++            ]
++            self.assertEqual(len(receipts), 1)
++            self.assertEqual(receipts[0]["base_size"], len(legacy_prefix))
++            self.assertEqual(receipts[0]["record_count"], 2)
++            self.assertEqual(
++                receipts[0]["batch_sha256"],
++                journal._sha256(
++                    b"".join(
++                        journal._journal_line(record) for record in records
++                    )
++                ),
++            )
++            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
++
++    def test_activation_outbox_missing_events_or_tampered_state_refuses_first_use(
++        self,
++    ) -> None:
++        for attack in ("missing-events", "tampered-state"):
++            with self.subTest(attack=attack), self.api_environment():
++                (
++                    repo,
++                    run_id,
++                    state_path,
++                    _legacy_prefix,
++                    _chain_id,
++                    _source_digest,
++                    _records,
++                ) = self._activation_outbox_case(
++                    f"activation-outbox-{attack}"
++                )
++                if attack == "missing-events":
++                    state_path.with_name(
++                        f"{_chain_id}.events.jsonl"
++                    ).unlink()
++                else:
++                    state = json.loads(state_path.read_bytes())
++                    outbox = state["journal_outbox"]
++                    assert isinstance(outbox, dict)
++                    outbox["batch_digest"] = key(
++                        "tampered-materialized-activation-outbox"
++                    )
++                    state_path.write_bytes(
++                        journal._canonical_json_bytes(state) + b"\n"
++                    )
++                run_dir = self.run_dir(repo, run_id)
++                before = self._run_file_bytes(run_dir)
++
++                with self.assertRaisesRegex(
++                    journal.CoordinationRefusal,
++                    journal.BATCH_DIVERGED,
++                ):
++                    self._compete_with_activation_outbox(
++                        repo, run_id, attack
++                    )
++
++                self.assertEqual(self._run_file_bytes(run_dir), before)
++
++    def test_internal_typed_flag_cannot_bypass_activated_batch_builders(self) -> None:
++        with self.api_environment():
++            repo, _ = self._new_repo("repo-typed-append-bypass")
++            run_id = "run-20260828-typed-append-bypass"
++            self.open_run(repo, run_id)
++            run_dir = self.run_dir(repo, run_id)
++            journal_before = (run_dir / "journal.jsonl").read_bytes()
++            with self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                "activated writer requires typed builder",
++            ):
++                journal.append_run_record(
++                    repo,
++                    run_id,
++                    {
++                        "type": "decision",
++                        "recorded_at": "2026-08-28T12:00:00Z",
++                        "run_id": run_id,
++                        "id": "decision-01",
++                        "resolution": "Raw append must remain forbidden",
++                        "basis": [],
++                    },
++                    _typed=True,
++                )
++            self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
++
++            repo, _ = self._new_repo("repo-typed-close-bypass")
++            run_id = "run-20260828-typed-close-bypass"
++            self.open_run(repo, run_id)
++            run_dir = self.run_dir(repo, run_id)
++            journal_before = (run_dir / "journal.jsonl").read_bytes()
++            validation = journal.validate_run(run_dir, gates=True)
++            with self.assertRaisesRegex(
++                journal.CoordinationRefusal,
++                "activated writer requires typed builder",
++            ):
++                journal.close_run(
++                    repo,
++                    run_id,
++                    {
++                        "type": "run_closed",
++                        "recorded_at": "2026-08-28T12:00:00Z",
++                        "run_id": run_id,
++                        "judgment": "blocked",
++                        "summary": "Raw close must remain forbidden",
++                        "validation": validation,
++                        "risks": [],
++                        "follow_ups": [],
++                    },
++                    _typed=True,
++                )
++            self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "43e2044e7cf467aaa403e7e4e153a7c77cbeb0318e06a26aba2412dbb363b87f",
+    "tests/test_revision9_coordination_activation_outbox.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_activation_outbox.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_activation_outbox_case",
+        "_compete_with_activation_outbox",
+        "test_activation_outbox_blocks_raw_append_byte_exactly_then_drains",
+        "test_activation_outbox_lifecycle_guard_is_load_bearing",
+        "test_legacy_raw_guard_intent_conditions_are_load_bearing",
+        "test_raw_lifecycle_validation_precedes_batch_reservation",
+        "test_raw_lifecycle_lock_order_is_load_bearing",
+        "test_published_first_use_intent_blocks_outbox_before_publication",
+        "test_staged_first_use_intent_blocks_outbox_before_publication",
+        "test_raw_open_cannot_supply_writer_contract_before_any_mutation",
+        "test_raw_open_writer_contract_refusal_is_load_bearing",
+        "test_activation_outbox_reserves_first_use_then_drains_exact_batch",
+        "test_activation_outbox_missing_events_or_tampered_state_refuses_first_use",
+        "test_internal_typed_flag_cannot_bypass_activated_batch_builders"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ActivationOutboxTests",
+      "alias": "test_revision9_coordination_activation_outbox",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_activation_outbox.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import json",
+          "import unittest",
+          "from contextlib import contextmanager",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._cli_loader import patch_chain_core",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_blocks_raw_append_byte_exactly_then_drains": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_blocks_raw_append_byte_exactly_then_drains",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_lifecycle_guard_is_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_lifecycle_guard_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_missing_events_or_tampered_state_refuses_first_use": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_missing_events_or_tampered_state_refuses_first_use",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_outbox_reserves_first_use_then_drains_exact_batch": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_activation_outbox_reserves_first_use_then_drains_exact_batch",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_internal_typed_flag_cannot_bypass_activated_batch_builders": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_internal_typed_flag_cannot_bypass_activated_batch_builders",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_legacy_raw_guard_intent_conditions_are_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_legacy_raw_guard_intent_conditions_are_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_published_first_use_intent_blocks_outbox_before_publication": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_published_first_use_intent_blocks_outbox_before_publication",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_lifecycle_lock_order_is_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_lifecycle_lock_order_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_lifecycle_validation_precedes_batch_reservation": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_lifecycle_validation_precedes_batch_reservation",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_open_cannot_supply_writer_contract_before_any_mutation": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_open_cannot_supply_writer_contract_before_any_mutation",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_raw_open_writer_contract_refusal_is_load_bearing": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_raw_open_writer_contract_refusal_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_staged_first_use_intent_blocks_outbox_before_publication": "tests/test_revision9_coordination_activation_outbox.py::Revision9ActivationOutboxTests::test_staged_first_use_intent_blocks_outbox_before_publication"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_blocks_raw_append_byte_exactly_then_drains": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_blocks_raw_append_byte_exactly_then_drains",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_lifecycle_guard_is_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_lifecycle_guard_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_missing_events_or_tampered_state_refuses_first_use": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_missing_events_or_tampered_state_refuses_first_use",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_outbox_reserves_first_use_then_drains_exact_batch": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_activation_outbox_reserves_first_use_then_drains_exact_batch",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_internal_typed_flag_cannot_bypass_activated_batch_builders": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_internal_typed_flag_cannot_bypass_activated_batch_builders",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_legacy_raw_guard_intent_conditions_are_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_legacy_raw_guard_intent_conditions_are_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_published_first_use_intent_blocks_outbox_before_publication": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_published_first_use_intent_blocks_outbox_before_publication",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_lifecycle_lock_order_is_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_lifecycle_lock_order_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_lifecycle_validation_precedes_batch_reservation": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_lifecycle_validation_precedes_batch_reservation",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_open_cannot_supply_writer_contract_before_any_mutation": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_open_cannot_supply_writer_contract_before_any_mutation",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_raw_open_writer_contract_refusal_is_load_bearing": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_raw_open_writer_contract_refusal_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_staged_first_use_intent_blocks_outbox_before_publication": "test_revision9_coordination_activation_outbox.Revision9ActivationOutboxTests.test_staged_first_use_intent_blocks_outbox_before_publication"
+    }
+  }
+}
+DRY RUN: verified; no files written

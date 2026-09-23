@@ -20,6 +20,7 @@ CLASS=Revision9BuilderBatchTests
 R=.refactor
 REC=$R/decompose-records-revision9-coord.json
 log="$R/driver-revision9-coord-$label.txt"
+exec 3>&1
 exec > >(tee -a "$log") 2>&1
 echo "== $label start=$(date -u +%FT%TZ) head=$(git rev-parse --short HEAD) load=$(cut -d' ' -f1-3 /proc/loadavg)"
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "FAIL: tracked tree not clean"; exit 1; fi
@@ -55,6 +56,13 @@ grep -E '^(PASS|FAIL|SKIP|GATE|BASELINED)|^Ran |^OK$|^FAILED' "$R/gate-revision9
 if [ $rc -ne 0 ]; then echo "FAIL: gate rc=$rc (files left in place for inspection; revert by hand)"; exit 1; fi
 if ! git ls-files -z "*.py" | xargs -0 python3 scripts/check_file_length.py "$dest"; then echo "FAIL: repo file-length guard"; exit 1; fi
 if [ -n "$(git diff --stat HEAD -- scripts docs/specs .forge)" ]; then echo "FAIL: production paths changed"; exit 1; fi
+# Standalone-import check (operator ruling 2026-09-23 11:30, brief section 4 item 1): the destination module must
+# import and run in a fresh process WITHOUT PYTHONPATH, as the committed Gate 1 cell does in CI and the merge chain.
+stem=$(basename "$dest" .py)
+if ! env -u PYTHONPATH -u MYPYPATH python3 -m unittest "tests.$stem" > "$R/standalone-revision9-coord-$label.txt" 2>&1; then
+  tail -5 "$R/standalone-revision9-coord-$label.txt"; echo "FAIL: standalone import/run of tests.$stem without PYTHONPATH"; exit 1
+fi
+grep -E '^Ran |^OK' "$R/standalone-revision9-coord-$label.txt" | tr '\n' ' '; echo "(standalone tests.$stem without PYTHONPATH)"
 python3 - "$label" "$bodies" "$manifest" "$ids" "$dest" "$cls" "$shape" <<'EOF'
 import json, os, sys
 label, bodies, manifest, ids, dest, cls, shape = sys.argv[1:]
@@ -64,7 +72,7 @@ recs.append({"cluster": label, "commit": "(pending)", "snapshot": bodies, "manif
              "test_snapshot": ids, "dest": dest, "target_class": cls, "shape": shape})
 json.dump(recs, open(p, "w"), indent=1)
 EOF
-git add "$SRC" "$dest" "$ids" "$bodies" "$manifest" "$REC" "$log" "$R/dryrun-revision9-coord-$label.txt" "$R/apply-revision9-coord-$label.txt" "$R/gate-revision9-coord-$label.txt"
+git add "$SRC" "$dest" "$ids" "$bodies" "$manifest" "$REC" "$log" "$R/dryrun-revision9-coord-$label.txt" "$R/apply-revision9-coord-$label.txt" "$R/gate-revision9-coord-$label.txt" "$R/standalone-revision9-coord-$label.txt"
 if [ -n "$idmap" ]; then git add "$idmap"; fi
 git commit -q -m "$subject
 
@@ -85,5 +93,7 @@ for r in recs:
         r["commit"] = sha
 json.dump(recs, open(p, "w"), indent=1)
 EOF
-git add "$REC" "$log" && git commit -q --amend --no-edit || { echo "FAIL: amend"; exit 1; }
-echo "== $label COMMITTED $(git rev-parse HEAD) (record SHA $sha is the pre-amend commit; the amended commit is the record) end=$(date -u +%FT%TZ)"
+echo "== $label record SHA $sha (pre-amend); amending the record and the driver log into it end=$(date -u +%FT%TZ)"
+sleep 1  # let tee flush the log before it is staged
+git add "$REC" "$log" && git commit -q --amend --no-edit || { echo "FAIL: amend" >&3; exit 1; }
+echo "== $label COMMITTED $(git rev-parse HEAD) (the amended commit is the record)" >&3
