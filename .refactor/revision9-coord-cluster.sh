@@ -73,7 +73,7 @@ Gate: verify.sh --pkg tests --strict-bodies --test-mode $mode PASS (see .refacto
 manifest $manifest; body snapshot $bodies; id snapshot $ids.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_017g2JAy2x8MhLXW1d4YmAab" || { echo "FAIL: commit"; exit 1; }
+Claude-Session: https://claude.ai/code/session_013wij85NCdPt57LTPrfKdJw" || { echo "FAIL: commit"; exit 1; }
 sha=$(git rev-parse HEAD)
 python3 - "$label" "$sha" <<'EOF'
 import json, sys
