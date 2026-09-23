@@ -15,9 +15,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "scripts/forge"))
 
 import route_vocab  # noqa: E402
-from codex_orchestrator import journal, monitor  # noqa: E402
 
 from tests.test_repo_conformance import check_run  # noqa: E402
+
+from codex_orchestrator import journal, monitor  # noqa: E402
 
 PATTERNS = ROOT / "scripts/forge/journal-patterns.py"
 RUN_ID = "run-vocabulary"
