@@ -1,0 +1,18 @@
+== c10-activation_scan start=2026-09-23T11:13:11Z head=cbac4a4 load=7.05 8.07 8.56
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2916 bodies across 2894 names -> .refactor/revision9-coord-c10-activation_scan-before.json
+id map: 11 unittest + 11 pytest -> .refactor/idmap-revision9-coord-activation_scan.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-activation_scan.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 244 files within budget (max 1000)
+Ran 11 tests in 0.936s OK (standalone tests.test_revision9_coordination_activation_scan without PYTHONPATH)
+== c10-activation_scan record SHA 74ce1c99b67973ced66ab7e19ff0b094d5059638 (pre-amend); amending the record and the driver log into it end=2026-09-23T11:13:54Z

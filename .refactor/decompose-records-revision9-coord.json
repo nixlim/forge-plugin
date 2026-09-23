@@ -98,5 +98,15 @@
   "dest": "tests/test_revision9_coordination_receipted_chain.py",
   "target_class": "Revision9ReceiptedChainTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c10-activation_scan",
+  "commit": "74ce1c99b67973ced66ab7e19ff0b094d5059638",
+  "snapshot": ".refactor/revision9-coord-c10-activation_scan-before.json",
+  "manifest": ".refactor/family-revision9-coord-activation_scan.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c10-activation_scan.json",
+  "dest": "tests/test_revision9_coordination_activation_scan.py",
+  "target_class": "Revision9ActivationScanTests",
+  "shape": "class"
  }
 ]
