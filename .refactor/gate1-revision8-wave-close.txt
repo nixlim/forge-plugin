@@ -1,0 +1,59 @@
+head=3982972a6c7717172275224052603ff709c84ce7 start=2026-09-23T11:06:16Z load=5.04 7.33 8.54 worktree=0 tracked changes
+gate-1 shard 1/4: exit 0 OK
+.......................................................................................................................................................................................................................................................................................................s...............................................................................................................................................s.......
+----------------------------------------------------------------------
+Ran 447 tests in 360.309s
+
+OK (skipped=2)
+
+gate-1 shard 2/4: exit 1 FAILED
+................................................................................................................................................................................................................................................................................................................................................................................................F............................................................................................sss.........................................s......
+======================================================================
+FAIL: test_shipped_files_limit_opencode_to_migration_carve_out (tests.test_migration.LegacyRuntimeNameCarveOutTests.test_shipped_files_limit_opencode_to_migration_carve_out)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s8/tests/test_migration.py", line 129, in test_shipped_files_limit_opencode_to_migration_carve_out
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        sorted(violations),
+        ^^^^^^^^^^^^^^^^^^^
+        [],
+        ^^^
+        f"legacy runtime name appears outside migration carve-out: {sorted(violations)}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: Lists differ: ['.refactor/before-revision8-1.json', '.re[810 chars]son'] != []
+
+First list contains 19 additional elements.
+First extra element 0:
+'.refactor/before-revision8-1.json'
+
+Diff is 919 characters long. Set self.maxDiff to None to see it. : legacy runtime name appears outside migration carve-out: ['.refactor/before-revision8-1.json', '.refactor/before-revision8.json', '.refactor/revision8-append_schema-before.json', '.refactor/revision8-interruptions-before.json', '.refactor/revision8-mixin-before.json', '.refactor/revision8-orphan_identity-before.json', '.refactor/revision8-precedence-before.json', '.refactor/revision8-registry_races-before.json', '.refactor/revision8-rollback-before.json', '.refactor/revision8-successors-before.json', '.refactor/tests-revision8-append_schema.json', '.refactor/tests-revision8-before.json', '.refactor/tests-revision8-interruptions.json', '.refactor/tests-revision8-mixin.json', '.refactor/tests-revision8-orphan_identity.json', '.refactor/tests-revision8-precedence.json', '.refactor/tests-revision8-registry_races.json', '.refactor/tests-revision8-rollback.json', '.refactor/tests-revision8-successors.json']
+
+----------------------------------------------------------------------
+Ran 528 tests in 258.722s
+
+FAILED (failures=1, skipped=4)
+
+gate-1 shard 3/4: exit 0 OK
+..................................................................................................forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating merge chains
+forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating commit chains
+......................................................................................................................................................................................................................................................................................................................................../usr/lib/python3.13/unittest/case.py:606: ResourceWarning: unclosed file <_io.BufferedWriter name=6>
+  if method() is not None:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......
+----------------------------------------------------------------------
+Ran 432 tests in 425.226s
+
+OK
+
+gate-1 shard 4/4: exit 0 OK
+.....................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+----------------------------------------------------------------------
+Ran 501 tests in 466.061s
+
+OK
+
+gate1_rc=1
+end=2026-09-23T11:14:03Z load=8.51 8.26 8.60
