@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "1d9e913fa68f67a9f4f69bfec5c1b7b81ae19976ee33b39cae47946e428a1d89",
+    "tests/test_revision9_coordination_scope_change.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_scope_change.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "test_activated_scope_readmission_uses_typed_builder",
+        "test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume",
+        "test_scope_change_recovers_intent_and_receipted_registry_publication",
+        "test_scope_change_recovery_refuses_unproved_replace_and_disabled_control",
+        "test_activated_scope_change_rechecks_superset_containment_and_conflicts",
+        "test_concurrent_admission_and_scope_change_remain_disjoint"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ScopeChangeTests",
+      "alias": "test_revision9_coordination_scope_change",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_scope_change.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import subprocess",
+          "import sys",
+          "import unittest",
+          "from contextlib import contextmanager",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import ROOT, key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activated_scope_change_rechecks_superset_containment_and_conflicts": "tests/test_revision9_coordination_scope_change.py::Revision9ScopeChangeTests::test_activated_scope_change_rechecks_superset_containment_and_conflicts",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activated_scope_readmission_uses_typed_builder": "tests/test_revision9_coordination_scope_change.py::Revision9ScopeChangeTests::test_activated_scope_readmission_uses_typed_builder",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_concurrent_admission_and_scope_change_remain_disjoint": "tests/test_revision9_coordination_scope_change.py::Revision9ScopeChangeTests::test_concurrent_admission_and_scope_change_remain_disjoint",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume": "tests/test_revision9_coordination_scope_change.py::Revision9ScopeChangeTests::test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_scope_change_recovers_intent_and_receipted_registry_publication": "tests/test_revision9_coordination_scope_change.py::Revision9ScopeChangeTests::test_scope_change_recovers_intent_and_receipted_registry_publication",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_scope_change_recovery_refuses_unproved_replace_and_disabled_control": "tests/test_revision9_coordination_scope_change.py::Revision9ScopeChangeTests::test_scope_change_recovery_refuses_unproved_replace_and_disabled_control"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activated_scope_change_rechecks_superset_containment_and_conflicts": "test_revision9_coordination_scope_change.Revision9ScopeChangeTests.test_activated_scope_change_rechecks_superset_containment_and_conflicts",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activated_scope_readmission_uses_typed_builder": "test_revision9_coordination_scope_change.Revision9ScopeChangeTests.test_activated_scope_readmission_uses_typed_builder",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_concurrent_admission_and_scope_change_remain_disjoint": "test_revision9_coordination_scope_change.Revision9ScopeChangeTests.test_concurrent_admission_and_scope_change_remain_disjoint",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume": "test_revision9_coordination_scope_change.Revision9ScopeChangeTests.test_readmit_sequence_keeps_receipts_contiguous_and_appends_resume",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_scope_change_recovers_intent_and_receipted_registry_publication": "test_revision9_coordination_scope_change.Revision9ScopeChangeTests.test_scope_change_recovers_intent_and_receipted_registry_publication",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_scope_change_recovery_refuses_unproved_replace_and_disabled_control": "test_revision9_coordination_scope_change.Revision9ScopeChangeTests.test_scope_change_recovery_refuses_unproved_replace_and_disabled_control"
+    }
+  },
+  "base_commit": "ba4188372fe29e98783e4cda1e3f4775b1d8dfaa"
+}

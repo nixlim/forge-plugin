@@ -1,0 +1,18 @@
+== c03-scope_change start=2026-09-23T11:07:04Z head=ba41883 load=7.86 7.74 8.62
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2909 bodies across 2887 names -> .refactor/revision9-coord-c03-scope_change-before.json
+id map: 6 unittest + 6 pytest -> .refactor/idmap-revision9-coord-scope_change.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-scope_change.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 237 files within budget (max 1000)
+Ran 6 tests in 1.482s OK (standalone tests.test_revision9_coordination_scope_change without PYTHONPATH)
+== c03-scope_change record SHA ed265c0268a4705ea9412b8474b5e8191934e7d5 (pre-amend); amending the record and the driver log into it end=2026-09-23T11:08:04Z
