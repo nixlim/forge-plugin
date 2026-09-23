@@ -118,5 +118,15 @@
   "dest": "tests/test_revision9_coordination_activation_outbox.py",
   "target_class": "Revision9ActivationOutboxTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c12-ledger_recovery",
+  "commit": "38f731918544b11393322b342ddfeb577139d47b",
+  "snapshot": ".refactor/revision9-coord-c12-ledger_recovery-before.json",
+  "manifest": ".refactor/family-revision9-coord-ledger_recovery.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c12-ledger_recovery.json",
+  "dest": "tests/test_revision9_coordination_ledger_recovery.py",
+  "target_class": "Revision9LedgerRecoveryTests",
+  "shape": "class"
  }
 ]
