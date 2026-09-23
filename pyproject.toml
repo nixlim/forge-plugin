@@ -39,6 +39,14 @@ max-returns = 6
 max-public-methods = 20
 max-nested-blocks = 4
 
+# Operator ruling 2026-09-23 (docs/analysis/refactor-overnight-brief-2026-09-23.md
+# section 4 item 1): the scripts/-resident packages that tests reach through their own
+# sys.path bootstrap sort after the first-party tests.* block, so a generated test
+# header imports the bootstrapping tests._<name>_constants module first. Measured
+# repository-wide with zero new findings.
+[tool.ruff.lint.isort]
+known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "commitment_paths"]
+
 # Grandfathered violations, generated per file from `ruff check` on
 # 2026-09-13 (473 file/rule pairs across 90 files). Each entry lists only the
 # rules that file already violated, so a new file gets the full rule set and an
@@ -242,6 +250,8 @@ max-nested-blocks = 4
 "tests/test_revision8_coordination.py" = ["B023", "C901", "I001", "PLR0904", "PLR0912", "PLR0915", "PLR1702", "UP012"]
 "tests/test_revision9_archive.py" = ["C901", "I001", "PLR0904", "PLR0915"]
 "tests/test_revision9_cli_surfaces.py" = ["B023", "E402", "E501", "F401", "I001", "PLR0904", "PLR0915", "PLR1702"]
+"tests/test_revision9_cli_surfaces_*.py" = ["B023", "E402", "E501", "F401", "PLR0904", "PLR0915", "PLR1702"]  # temporary: revision9 cli-surfaces test split (forge-plugin-kzu0)
+"tests/_revision9_cli_*.py" = ["B023", "E402", "E501", "F401", "PLR0904", "PLR0915", "PLR1702"]  # temporary: revision9 cli-surfaces test split (forge-plugin-kzu0)
 "tests/test_revision9_coordination.py" = ["B023", "B905", "C901", "E501", "E702", "E731", "F841", "I001", "PLR0904", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012"]
 "tests/test_revision9_ingest_negatives.py" = ["C901", "E402", "F401", "I001", "PLR0904", "PLR0915"]
 "tests/test_revision9_matrix.py" = ["E402", "E501", "F401", "I001", "PLR0913", "PLR0915", "UP012"]
