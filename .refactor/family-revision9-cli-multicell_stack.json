@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_cli_surfaces.py": "5527923ea7ffb7c9ad229050b515d947f123e1c199b61950f30ba182af7e4e48",
+    "tests/test_revision9_cli_surfaces_multicell_stack.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_cli_surfaces.py",
+      "dest": "tests/test_revision9_cli_surfaces_multicell_stack.py",
+      "class": "Revision9BoundCLIIntegrationTests",
+      "methods": [
+        "test_bound_multicell_stack_journals_one_completed_batch",
+        "test_bound_multicell_stack_failure_journals_failed_cell_and_stops",
+        "test_bound_multicell_stack_journal_deferral_is_load_bearing",
+        "test_bound_changelog_output_is_committed_policy_machinery",
+        "test_bound_non_changelog_output_still_names_out_of_scope_path",
+        "test_real_unbound_multicell_stack_ingest_keeps_every_head_record"
+      ],
+      "shape": "class",
+      "target_class": "Revision9CliSurfacesMulticellStackTests",
+      "alias": "test_revision9_cli_surfaces_multicell_stack",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_cli_surfaces.py": [],
+        "tests/test_revision9_cli_surfaces_multicell_stack.py": [
+          "from __future__ import annotations",
+          "import hashlib",
+          "from tests._cli_loader import patch_chain_core, patch_engine",
+          "from tests._revision9_cli_constants import CLI, CLI_FIXTURE_SUPPORT",
+          "from tests._revision9_cli_support import Revision9CliSupport"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_bound_changelog_output_is_committed_policy_machinery": "tests/test_revision9_cli_surfaces_multicell_stack.py::Revision9CliSurfacesMulticellStackTests::test_bound_changelog_output_is_committed_policy_machinery",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_bound_multicell_stack_failure_journals_failed_cell_and_stops": "tests/test_revision9_cli_surfaces_multicell_stack.py::Revision9CliSurfacesMulticellStackTests::test_bound_multicell_stack_failure_journals_failed_cell_and_stops",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_bound_multicell_stack_journal_deferral_is_load_bearing": "tests/test_revision9_cli_surfaces_multicell_stack.py::Revision9CliSurfacesMulticellStackTests::test_bound_multicell_stack_journal_deferral_is_load_bearing",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_bound_multicell_stack_journals_one_completed_batch": "tests/test_revision9_cli_surfaces_multicell_stack.py::Revision9CliSurfacesMulticellStackTests::test_bound_multicell_stack_journals_one_completed_batch",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_bound_non_changelog_output_still_names_out_of_scope_path": "tests/test_revision9_cli_surfaces_multicell_stack.py::Revision9CliSurfacesMulticellStackTests::test_bound_non_changelog_output_still_names_out_of_scope_path",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_real_unbound_multicell_stack_ingest_keeps_every_head_record": "tests/test_revision9_cli_surfaces_multicell_stack.py::Revision9CliSurfacesMulticellStackTests::test_real_unbound_multicell_stack_ingest_keeps_every_head_record"
+    },
+    "unittest": {
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_bound_changelog_output_is_committed_policy_machinery": "test_revision9_cli_surfaces_multicell_stack.Revision9CliSurfacesMulticellStackTests.test_bound_changelog_output_is_committed_policy_machinery",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_bound_multicell_stack_failure_journals_failed_cell_and_stops": "test_revision9_cli_surfaces_multicell_stack.Revision9CliSurfacesMulticellStackTests.test_bound_multicell_stack_failure_journals_failed_cell_and_stops",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_bound_multicell_stack_journal_deferral_is_load_bearing": "test_revision9_cli_surfaces_multicell_stack.Revision9CliSurfacesMulticellStackTests.test_bound_multicell_stack_journal_deferral_is_load_bearing",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_bound_multicell_stack_journals_one_completed_batch": "test_revision9_cli_surfaces_multicell_stack.Revision9CliSurfacesMulticellStackTests.test_bound_multicell_stack_journals_one_completed_batch",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_bound_non_changelog_output_still_names_out_of_scope_path": "test_revision9_cli_surfaces_multicell_stack.Revision9CliSurfacesMulticellStackTests.test_bound_non_changelog_output_still_names_out_of_scope_path",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_real_unbound_multicell_stack_ingest_keeps_every_head_record": "test_revision9_cli_surfaces_multicell_stack.Revision9CliSurfacesMulticellStackTests.test_real_unbound_multicell_stack_ingest_keeps_every_head_record"
+    }
+  },
+  "base_commit": "e9a0250fb19255ac239309af80415b204171fac9"
+}
