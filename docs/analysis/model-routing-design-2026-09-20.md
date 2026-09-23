@@ -888,9 +888,9 @@ L967; `hooks/hooks.json` registrations.
    `plan` and any `sandbox` other than `read-only`. Consequences: v1 ships **eight** committed (provider, role)
    profiles; `system/codex/prompts/plan.md` and `system/codex/agents/plan.toml` are auto-installed
    by `install_codex_layer` (which mirrors every `system/codex/**` file), so the `.codex` inventory
-   pin at `tests/test_installer.py:340-352` gains the two paths, as does every test that names a
-   `system/codex/prompts/` or `.codex/prompts/` path (the exact set is re-derived by `grep -rn`
-   at that chain's start, not asserted here); the Claude plan body lives beside the Claude
+   pin at `tests/test_installer.py:340-352` gains the two paths, as do the exhaustive-inventory and
+   plan-role contract tests (only those; the exact set is re-derived by `grep -rn` at that chain's
+   start, not asserted here); the Claude plan body lives beside the Claude
    implementer body under `system/claude/prompts/`; the orchestrate role table gains a `plan`
    row; `committed_route` and `check_run` gain the `(codex|claude, plan)` rows. `monitoring`
    remains a vocabulary id only — it names the session's own monitoring pass and is never
@@ -912,3 +912,35 @@ L967; `hooks/hooks.json` registrations.
 Also taken: the record's four MINORs from the `69bc28d` review (bead `forge-plugin-dwf1`) are
 corrected in place above; the reviewer's claim about `REVIEW_LAUNCHER_CODE` was measured before the
 text was changed (11.4 item 5).
+
+## 12. Host probes (2026-09-23, run `run-20260923-route-p0`)
+
+Executed by the orchestrating session (the Codex `workspace-write` sandbox has no `network_access`
+override, so a Codex implementer cannot call the `claude` CLI; enabling it would be a control-class
+sandbox change). Scratch git repository under `/dev/shm/forge-p0/scratch` (one failing test,
+`calc.py` / `test_calc.py`); every probe run with `timeout`, stdin from a brief file, stdout and
+stderr captured per probe under `/dev/shm/forge-p0/out/<probe>/` (`argv.txt`, `exit`, `seconds`,
+`stdout`, `stderr`), model `haiku` at effort `low` to keep the cost trivial; home paths redacted.
+Script: session scratchpad `routing/p0-probes.sh`. Journal: verification records `check-01..`
+on task-01 of the run.
+
+| # | Probe | Result |
+|---|---|---|
+| 1 | Versions | Claude Code **2.1.280**; codex-cli **0.155.1**; Python 3.13.5; `bwrap` present; `socat` absent |
+| 2 | Flag presence | all of `--safe-mode --strict-mcp-config --permission-prompts --effort --tools --allowedTools --permission-mode --output-format --verbose --model --append-system-prompt --system-prompt --plugin-dir --agent --bare --setting-sources` documented in `--help`; `--system-prompt-file` and `--append-system-prompt-file` **absent from `--help` but accepted** (nonexistent path → exit 1, `Error: System prompt file not found` / `Error: Append system prompt file not found`, not "unknown option") |
+| 3 | review-cheap (claude): `--safe-mode --strict-mcp-config --output-format stream-json --verbose --model haiku --effort low --system-prompt-file <body> --tools Read,Grep,Glob,LS,Bash --permission-prompts none` | exit 0 in 9 s; `init.model` `claude-haiku-4-5-20251001`; tools ['Bash', 'Glob', 'Grep', 'Read']; result `subtype=success is_error=False terminal_reason=completed num_turns=4`; `modelUsage` keys ['claude-haiku-4-5-20251001']; verdict text starts `VERDICT: BLOCK finding: add(2, 3) returns -1 (subtraction in` (the planted bug was caught) |
+| 3b | same with `--allowedTools ""` and a brief asking for `touch DENY_ME.txt` | exit 0; **inconclusive**: the model reviewed instead of attempting the command (`permission_denials` empty, file absent) — the denial path must be exercised with a brief that forces the tool call |
+| 4 | plan (claude): as 3 without Bash (`--tools Read,Grep,Glob,LS`) | exit 0 in 8 s; tools ['Glob', 'Grep', 'Read']; `terminal_reason=completed`; a 3-step plan came back as the `result` text |
+| 5 | implementer (claude): `--safe-mode --strict-mcp-config --append-system-prompt-file <impl body> --tools Read,Write,Edit,Bash,Grep,Glob --permission-mode acceptEdits --allowedTools Bash --permission-prompts none` | exit 0 in 14 s, 7 turns, zero denials; `calc.py` fixed and **committed inside the scratch repo** (`fix add`, Co-Authored-By trailer added by the CLI); tools ['Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Write'] |
+| 5b | implementer Write outside cwd (`/dev/shm/forge-p0/OUTSIDE.txt`) | exit 0; **denied by the host**: `permission_denials` = [('Write', '/dev/shm/forge-p0/OUTSIDE.txt')]; file absent; result text explains the path is outside the allowed working directory |
+| 6 | not logged in (`HOME` = empty dir) | exit **1** in 1 s; `is_error=True`, `terminal_reason=api_error`, **`subtype=success`**, `modelUsage` empty, `assistant.message.model` `<synthetic>`, result text `Not logged in · Please run /login` — the launcher keys on exit code + `is_error`, never `subtype` |
+| 7 | timeout kill shape (`timeout -k 5 8`) | **inconclusive**: the child completed in 6 s before the limit; all 7 stream lines parsed as JSON. Re-run with a longer brief or a 2 s limit at L's run-open |
+| 8 | Codex counterpart (`codex exec --json --output-last-message … -s read-only -c approval_policy=never -c model=gpt-5.6-sol -c model_reasoning_effort=low -C <scratch> -`) | exit 0 in 53 s; **no `"model"` field in any stream event** (0 lines); last message `VERDICT: BLOCK finding: calc.py and test_calc.py are not present in the accessib` — the reviewer reported the files as not present in its accessible directory under `read-only` on `/dev/shm` (to re-check with a disk-backed scratch at L's run-open) |
+| 8b | Codex not logged in (`HOME`/`CODEX_HOME` = empty) | exit 1 in 0 s, **inconclusive**: fails first on `CODEX_HOME points to … but that path does not exist`; the real not-logged-in shape needs an existing empty `CODEX_HOME` |
+| 9 | Claude OS sandbox | `socat` absent on this host: fails open (10.3); not probed |
+
+**Version floor (measured):** Claude Code ≥ 2.1.278 is known-good for every flag the 10.5 templates
+use (2.1.278 probed on 2026-09-20, 2.1.280 today, both accepting the hidden `-file` flags); codex-cli
+≥ 0.155.0. The launcher detects support by **version floor**, never by `--help` text (probe 2).
+Open at chain L's run-open: probes 3b, 7 and 8b re-run with corrected briefs, and probe 8 on a
+disk-backed scratch directory.
