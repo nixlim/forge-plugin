@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_cli_surfaces.py": "dc770416739b4a10a5f90898c5765074c5ca016155d2c1bbf4e58823aafd8b4e",
+    "tests/test_revision9_cli_surfaces_replay.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_cli_surfaces.py",
+      "dest": "tests/test_revision9_cli_surfaces_replay.py",
+      "class": "Revision9BoundCLIIntegrationTests",
+      "methods": [
+        "test_fresh_key_cannot_replay_typed_verification_or_decision_binding",
+        "test_historical_receipted_binding_replays_after_restage",
+        "test_bound_replay_refuses_noncanonical_event_without_state_repair",
+        "test_failed_ingest_proof_captures_but_never_references_or_mutates_journal",
+        "test_event_carrier_survives_drain_crash_and_replays_once",
+        "test_commit_identity_carrier_pre_drain_crash_replays_once",
+        "test_commit_identity_journal_append_crash_replays_once",
+        "test_commit_identity_receipt_append_crash_replays_once",
+        "test_chain_receipt_replay_reader_is_read_only_and_fail_closed",
+        "test_receipted_commit_produced_crash_recovers_one_landing"
+      ],
+      "shape": "class",
+      "target_class": "Revision9CliSurfacesReplayTests",
+      "alias": "test_revision9_cli_surfaces_replay",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_cli_surfaces.py": [],
+        "tests/test_revision9_cli_surfaces_replay.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import hashlib",
+          "import json",
+          "from unittest import mock",
+          "from tests._revision9_cli_constants import CLI, CLI_FIXTURE_SUPPORT, key",
+          "from tests._revision9_cli_support import Revision9CliSupport"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_bound_replay_refuses_noncanonical_event_without_state_repair": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_bound_replay_refuses_noncanonical_event_without_state_repair",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_chain_receipt_replay_reader_is_read_only_and_fail_closed": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_chain_receipt_replay_reader_is_read_only_and_fail_closed",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_commit_identity_carrier_pre_drain_crash_replays_once": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_commit_identity_carrier_pre_drain_crash_replays_once",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_commit_identity_journal_append_crash_replays_once": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_commit_identity_journal_append_crash_replays_once",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_commit_identity_receipt_append_crash_replays_once": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_commit_identity_receipt_append_crash_replays_once",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_event_carrier_survives_drain_crash_and_replays_once": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_event_carrier_survives_drain_crash_and_replays_once",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_failed_ingest_proof_captures_but_never_references_or_mutates_journal": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_failed_ingest_proof_captures_but_never_references_or_mutates_journal",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_fresh_key_cannot_replay_typed_verification_or_decision_binding": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_fresh_key_cannot_replay_typed_verification_or_decision_binding",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_historical_receipted_binding_replays_after_restage": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_historical_receipted_binding_replays_after_restage",
+      "tests/test_revision9_cli_surfaces.py::Revision9BoundCLIIntegrationTests::test_receipted_commit_produced_crash_recovers_one_landing": "tests/test_revision9_cli_surfaces_replay.py::Revision9CliSurfacesReplayTests::test_receipted_commit_produced_crash_recovers_one_landing"
+    },
+    "unittest": {
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_bound_replay_refuses_noncanonical_event_without_state_repair": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_bound_replay_refuses_noncanonical_event_without_state_repair",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_chain_receipt_replay_reader_is_read_only_and_fail_closed": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_chain_receipt_replay_reader_is_read_only_and_fail_closed",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_commit_identity_carrier_pre_drain_crash_replays_once": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_commit_identity_carrier_pre_drain_crash_replays_once",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_commit_identity_journal_append_crash_replays_once": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_commit_identity_journal_append_crash_replays_once",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_commit_identity_receipt_append_crash_replays_once": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_commit_identity_receipt_append_crash_replays_once",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_event_carrier_survives_drain_crash_and_replays_once": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_event_carrier_survives_drain_crash_and_replays_once",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_failed_ingest_proof_captures_but_never_references_or_mutates_journal": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_failed_ingest_proof_captures_but_never_references_or_mutates_journal",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_fresh_key_cannot_replay_typed_verification_or_decision_binding": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_fresh_key_cannot_replay_typed_verification_or_decision_binding",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_historical_receipted_binding_replays_after_restage": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_historical_receipted_binding_replays_after_restage",
+      "test_revision9_cli_surfaces.Revision9BoundCLIIntegrationTests.test_receipted_commit_produced_crash_recovers_one_landing": "test_revision9_cli_surfaces_replay.Revision9CliSurfacesReplayTests.test_receipted_commit_produced_crash_recovers_one_landing"
+    }
+  },
+  "base_commit": "e31e72773c3c8d55695dc680aaf0fa5bab568021"
+}
