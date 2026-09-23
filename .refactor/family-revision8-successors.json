@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision8_coordination.py": "eaa51577309bdf9c513ad4394ba11660d5483973cdac53a72a7e44819457b6f4",
+    "tests/test_revision8_successors.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision8_coordination.py",
+      "dest": "tests/test_revision8_successors.py",
+      "class": "Revision8CoordinationTests",
+      "methods": [
+        "test_successor_transfer_control_is_load_bearing",
+        "test_successor_chain_transfers_ancestry_releases_and_readmits",
+        "test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved",
+        "test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope",
+        "test_persisted_dangling_successor_edge_is_generic_and_nonmutating",
+        "test_persisted_successor_cycle_is_generic_and_nonmutating",
+        "test_persisted_disjoint_successor_edge_is_generic_and_nonmutating",
+        "test_legacy_successor_close_without_valid_judgment_cannot_release_scope",
+        "test_mixed_open_and_retired_conflicts_are_byte_sorted",
+        "test_concurrent_successor_and_ordinary_admission_serialize_atomically",
+        "test_only_a_retired_successor_may_close_and_release_ancestry",
+        "test_close_rollback_preserves_effective_ancestral_reservation",
+        "test_release_control_disabled_keeps_retired_ancestry_reserved",
+        "test_historical_fork_releases_shared_ancestor_only_after_both_branches_close"
+      ],
+      "shape": "class",
+      "target_class": "Revision8SuccessorsTests",
+      "alias": "test_revision8_successors",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision8_coordination.py": [],
+        "tests/test_revision8_successors.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import os",
+          "import socket",
+          "import subprocess",
+          "import sys",
+          "import time",
+          "import unittest",
+          "from unittest import mock",
+          "from tests._revision8_constants import RECORDED_AT, TOOLS",
+          "from tests._revision8_support import Revision8Support",
+          "from codex_orchestrator import journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision8_coordination.py": [
+          "RECORDED_AT",
+          "TOOLS",
+          "journal",
+          "json",
+          "mock",
+          "os",
+          "socket",
+          "subprocess",
+          "time"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_close_rollback_preserves_effective_ancestral_reservation": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_close_rollback_preserves_effective_ancestral_reservation",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_concurrent_successor_and_ordinary_admission_serialize_atomically": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_concurrent_successor_and_ordinary_admission_serialize_atomically",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_historical_fork_releases_shared_ancestor_only_after_both_branches_close": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_historical_fork_releases_shared_ancestor_only_after_both_branches_close",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_legacy_successor_close_without_valid_judgment_cannot_release_scope": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_legacy_successor_close_without_valid_judgment_cannot_release_scope",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_mixed_open_and_retired_conflicts_are_byte_sorted": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_mixed_open_and_retired_conflicts_are_byte_sorted",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_only_a_retired_successor_may_close_and_release_ancestry": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_only_a_retired_successor_may_close_and_release_ancestry",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_persisted_dangling_successor_edge_is_generic_and_nonmutating": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_persisted_dangling_successor_edge_is_generic_and_nonmutating",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_persisted_disjoint_successor_edge_is_generic_and_nonmutating": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_persisted_disjoint_successor_edge_is_generic_and_nonmutating",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_persisted_successor_cycle_is_generic_and_nonmutating": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_persisted_successor_cycle_is_generic_and_nonmutating",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_release_control_disabled_keeps_retired_ancestry_reserved": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_release_control_disabled_keeps_retired_ancestry_reserved",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_successor_chain_transfers_ancestry_releases_and_readmits": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_successor_chain_transfers_ancestry_releases_and_readmits",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_successor_transfer_control_is_load_bearing": "tests/test_revision8_successors.py::Revision8SuccessorsTests::test_successor_transfer_control_is_load_bearing"
+    },
+    "unittest": {
+      "test_revision8_coordination.Revision8CoordinationTests.test_close_rollback_preserves_effective_ancestral_reservation": "test_revision8_successors.Revision8SuccessorsTests.test_close_rollback_preserves_effective_ancestral_reservation",
+      "test_revision8_coordination.Revision8CoordinationTests.test_concurrent_successor_and_ordinary_admission_serialize_atomically": "test_revision8_successors.Revision8SuccessorsTests.test_concurrent_successor_and_ordinary_admission_serialize_atomically",
+      "test_revision8_coordination.Revision8CoordinationTests.test_historical_fork_releases_shared_ancestor_only_after_both_branches_close": "test_revision8_successors.Revision8SuccessorsTests.test_historical_fork_releases_shared_ancestor_only_after_both_branches_close",
+      "test_revision8_coordination.Revision8CoordinationTests.test_legacy_successor_close_without_valid_judgment_cannot_release_scope": "test_revision8_successors.Revision8SuccessorsTests.test_legacy_successor_close_without_valid_judgment_cannot_release_scope",
+      "test_revision8_coordination.Revision8CoordinationTests.test_mixed_open_and_retired_conflicts_are_byte_sorted": "test_revision8_successors.Revision8SuccessorsTests.test_mixed_open_and_retired_conflicts_are_byte_sorted",
+      "test_revision8_coordination.Revision8CoordinationTests.test_only_a_retired_successor_may_close_and_release_ancestry": "test_revision8_successors.Revision8SuccessorsTests.test_only_a_retired_successor_may_close_and_release_ancestry",
+      "test_revision8_coordination.Revision8CoordinationTests.test_persisted_dangling_successor_edge_is_generic_and_nonmutating": "test_revision8_successors.Revision8SuccessorsTests.test_persisted_dangling_successor_edge_is_generic_and_nonmutating",
+      "test_revision8_coordination.Revision8CoordinationTests.test_persisted_disjoint_successor_edge_is_generic_and_nonmutating": "test_revision8_successors.Revision8SuccessorsTests.test_persisted_disjoint_successor_edge_is_generic_and_nonmutating",
+      "test_revision8_coordination.Revision8CoordinationTests.test_persisted_successor_cycle_is_generic_and_nonmutating": "test_revision8_successors.Revision8SuccessorsTests.test_persisted_successor_cycle_is_generic_and_nonmutating",
+      "test_revision8_coordination.Revision8CoordinationTests.test_release_control_disabled_keeps_retired_ancestry_reserved": "test_revision8_successors.Revision8SuccessorsTests.test_release_control_disabled_keeps_retired_ancestry_reserved",
+      "test_revision8_coordination.Revision8CoordinationTests.test_successor_chain_transfers_ancestry_releases_and_readmits": "test_revision8_successors.Revision8SuccessorsTests.test_successor_chain_transfers_ancestry_releases_and_readmits",
+      "test_revision8_coordination.Revision8CoordinationTests.test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved": "test_revision8_successors.Revision8SuccessorsTests.test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved",
+      "test_revision8_coordination.Revision8CoordinationTests.test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope": "test_revision8_successors.Revision8SuccessorsTests.test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope",
+      "test_revision8_coordination.Revision8CoordinationTests.test_successor_transfer_control_is_load_bearing": "test_revision8_successors.Revision8SuccessorsTests.test_successor_transfer_control_is_load_bearing"
+    }
+  },
+  "base_commit": "1e260315c341b4d01b5431264a29a8f9a796934b"
+}
