@@ -1,7 +1,7 @@
 {
  "module": "tests/test_revision8_coordination.py",
  "class": "Revision8CoordinationTests",
- "branch_tip_planned_at": "0c05015",
+ "branch_tip_planned_at": "4d4d7c9",
  "base": "69bc28d",
  "mixin": {
   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods setUp,runs_root,registry_path,run_dir,journal_path,write_record,command,api_environment,opening_record,task_record,execution_record,execution_result_record,verification_record,decision_record,closure_record,create_citation_files,open_run,append_record,readmit,retire,close,coordination_snapshot,write_registry,prime_registry_lock,prime_batch_lock,assert_absent_registry_node_collision,valid_candidate,assert_invalid_candidate,assert_valid_candidate,plant_run_state,proven_dead_pid --dest tests/_revision8_support.py --shape mixin --target-class Revision8Support --test-only --test-snapshot .refactor/tests-revision8-before.json --format-imports --manifest .refactor/mixin-revision8.json",
@@ -42,7 +42,9 @@
   "target_class": "Revision8Support",
   "measured_code_lines_from_dry_run": 539,
   "test_mode": "identity",
-  "evidence": ".refactor/dryrun-revision8-mixin.txt"
+  "evidence": ".refactor/dryrun-revision8-mixin.txt",
+  "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-C-config-head> --manifest .refactor/mixin-revision8.json --strict-bodies --test-snapshot <ids-snapshot-at-C-config-head> --test-mode identity; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_coordination and env -u PYTHONPATH python3 -c 'import tests._revision8_support'",
+  "note": "FIXED argv; the dry run must be re-run under the C-config commit (same argv) because the isort setting changes the emitted header order; verdict and manifest unchanged (normalise_header)"
  },
  "families": [
   {
@@ -65,59 +67,59 @@
    "methods_arg": "test_all_seven_strict_minimum_record_types_append,test_per_type_first_required_field_diagnostics_are_exact,test_fr019_common_and_required_string_boundaries,test_fr019_format_enum_repository_and_scope_boundaries,test_fr019_all_arrays_and_nested_validation_boundaries,test_fr019_inheritance_events_handoff_optionals_and_extensions,test_first_failure_examples_and_envelope_literal_are_exact,test_array_members_fail_at_the_first_ascending_index,test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes,test_sparse_history_reads_unchanged_but_same_new_shape_refuses",
    "method_lines": [
     [
-     590,
-     625,
-     33
-    ],
-    [
-     627,
-     686,
-     58
-    ],
-    [
-     688,
-     830,
-     141
-    ],
-    [
-     832,
-     957,
-     122
-    ],
-    [
-     959,
-     1077,
-     116
-    ],
-    [
-     1079,
-     1196,
-     112
-    ],
-    [
-     1198,
-     1232,
-     33
-    ],
-    [
-     1234,
-     1253,
-     17
-    ],
-    [
-     1255,
-     1284,
-     28
-    ],
-    [
-     1286,
-     1323,
+     588,
+     623,
      34
+    ],
+    [
+     625,
+     684,
+     59
+    ],
+    [
+     686,
+     828,
+     142
+    ],
+    [
+     830,
+     955,
+     123
+    ],
+    [
+     957,
+     1075,
+     117
+    ],
+    [
+     1077,
+     1194,
+     113
+    ],
+    [
+     1196,
+     1230,
+     34
+    ],
+    [
+     1232,
+     1251,
+     18
+    ],
+    [
+     1253,
+     1282,
+     29
+    ],
+    [
+     1284,
+     1321,
+     35
     ]
    ],
-   "est_method_code_lines": 694,
+   "est_method_code_lines": 704,
    "est_header_lines": 20,
-   "est_code_lines": 714,
+   "est_code_lines": 724,
    "helpers_used": [
     "append_record",
     "assert_invalid_candidate",
@@ -147,7 +149,8 @@
    "fallback_seam": "split into `append` (590..1323 minus the four fr019 tests: 6 tests, 203 lines) and `candidates` (the four test_fr019_* tests, 688..1196: 491 lines) \u2014 the fr019 tests use only valid_candidate/assert_*_candidate.",
    "id_map": ".refactor/idmap-revision8-append_schema.json",
    "manifest": ".refactor/family-revision8-append_schema.json",
-   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_all_seven_strict_minimum_record_types_append,test_per_type_first_required_field_diagnostics_are_exact,test_fr019_common_and_required_string_boundaries,test_fr019_format_enum_repository_and_scope_boundaries,test_fr019_all_arrays_and_nested_validation_boundaries,test_fr019_inheritance_events_handoff_optionals_and_extensions,test_first_failure_examples_and_envelope_literal_are_exact,test_array_members_fail_at_the_first_ascending_index,test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes,test_sparse_history_reads_unchanged_but_same_new_shape_refuses --dest tests/test_revision8_append_schema.py --shape class --target-class Revision8AppendSchemaTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-append_schema.json --format-imports --manifest .refactor/family-revision8-append_schema.json"
+   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_all_seven_strict_minimum_record_types_append,test_per_type_first_required_field_diagnostics_are_exact,test_fr019_common_and_required_string_boundaries,test_fr019_format_enum_repository_and_scope_boundaries,test_fr019_all_arrays_and_nested_validation_boundaries,test_fr019_inheritance_events_handoff_optionals_and_extensions,test_first_failure_examples_and_envelope_literal_are_exact,test_array_members_fail_at_the_first_ascending_index,test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes,test_sparse_history_reads_unchanged_but_same_new_shape_refuses --dest tests/test_revision8_append_schema.py --shape class --target-class Revision8AppendSchemaTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-append_schema.json --format-imports --manifest .refactor/family-revision8-append_schema.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-merged-head> --manifest .refactor/family-revision8-append_schema.json --strict-bodies --test-snapshot <ids-snapshot-at-merged-head> --test-mode mapping; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_append_schema and env -u PYTHONPATH python3 -c 'import tests.test_revision8_append_schema'"
   },
   {
    "name": "precedence",
@@ -175,89 +178,89 @@
    "methods_arg": "test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes,test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes,test_foreign_owner_classification_precedes_candidate_schema,test_engine_lifecycle_owner_classification_precedes_schema,test_engine_lifecycle_envelope_is_built_before_session_identity,test_citation_controls_precede_current_session_identity_refusals,test_current_session_identity_literals_are_exact_and_nonmutating,test_citation_controls_precede_recorded_owner_classification,test_new_write_validator_control_is_load_bearing,test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry,test_invalid_session_pid_literal_is_retained,test_live_session_identity_is_stable_across_fresh_cli_shells,test_operation_specific_invalid_id_and_missing_run_literals,test_operation_specific_repository_unavailable_literals,test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct,test_lock_registry_update_and_rollback_failure_literals_are_exact",
    "method_lines": [
     [
-     1325,
+     1323,
+     1351,
+     27
+    ],
+    [
      1353,
-     26
+     1377,
+     23
     ],
     [
-     1355,
      1379,
-     22
+     1398,
+     18
     ],
     [
-     1381,
      1400,
-     17
+     1443,
+     43
     ],
     [
-     1402,
      1445,
-     42
+     1493,
+     46
     ],
     [
-     1447,
      1495,
-     45
+     1534,
+     39
     ],
     [
-     1497,
      1536,
+     1573,
      38
     ],
     [
-     1538,
      1575,
-     37
+     1650,
+     75
     ],
     [
-     1577,
      1652,
-     74
+     1669,
+     16
     ],
     [
-     1654,
      1671,
-     15
+     1697,
+     27
     ],
     [
-     1673,
      1699,
-     26
+     1709,
+     11
     ],
     [
-     1701,
      1711,
-     10
+     1741,
+     29
     ],
     [
-     1713,
      1743,
-     28
+     1775,
+     32
     ],
     [
-     1745,
      1777,
-     31
+     1853,
+     77
     ],
     [
-     1779,
      1855,
-     76
+     1908,
+     50
     ],
     [
-     1857,
      1910,
-     49
-    ],
-    [
-     1912,
-     1959,
-     45
+     1957,
+     46
     ]
    ],
-   "est_method_code_lines": 581,
+   "est_method_code_lines": 597,
    "est_header_lines": 20,
-   "est_code_lines": 601,
+   "est_code_lines": 617,
    "helpers_used": [
     "api_environment",
     "append_record",
@@ -292,7 +295,8 @@
    "fallback_seam": "split at the source seam 1652/1654: `owner_precedence` (1325..1652, 8 tests, 301 lines) and `session_literals` (1654..1959, 8 tests, 280 lines).",
    "id_map": ".refactor/idmap-revision8-precedence.json",
    "manifest": ".refactor/family-revision8-precedence.json",
-   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes,test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes,test_foreign_owner_classification_precedes_candidate_schema,test_engine_lifecycle_owner_classification_precedes_schema,test_engine_lifecycle_envelope_is_built_before_session_identity,test_citation_controls_precede_current_session_identity_refusals,test_current_session_identity_literals_are_exact_and_nonmutating,test_citation_controls_precede_recorded_owner_classification,test_new_write_validator_control_is_load_bearing,test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry,test_invalid_session_pid_literal_is_retained,test_live_session_identity_is_stable_across_fresh_cli_shells,test_operation_specific_invalid_id_and_missing_run_literals,test_operation_specific_repository_unavailable_literals,test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct,test_lock_registry_update_and_rollback_failure_literals_are_exact --dest tests/test_revision8_precedence.py --shape class --target-class Revision8PrecedenceTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-precedence.json --format-imports --manifest .refactor/family-revision8-precedence.json"
+   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_invalid_candidate_precedes_stale_owner_takeover_and_changes_no_bytes,test_unserializable_candidate_precedes_stale_takeover_and_changes_no_bytes,test_foreign_owner_classification_precedes_candidate_schema,test_engine_lifecycle_owner_classification_precedes_schema,test_engine_lifecycle_envelope_is_built_before_session_identity,test_citation_controls_precede_current_session_identity_refusals,test_current_session_identity_literals_are_exact_and_nonmutating,test_citation_controls_precede_recorded_owner_classification,test_new_write_validator_control_is_load_bearing,test_dead_or_unverifiable_session_pid_refuses_every_coordination_entry,test_invalid_session_pid_literal_is_retained,test_live_session_identity_is_stable_across_fresh_cli_shells,test_operation_specific_invalid_id_and_missing_run_literals,test_operation_specific_repository_unavailable_literals,test_scope_existing_closed_retired_and_recorded_repo_causes_are_distinct,test_lock_registry_update_and_rollback_failure_literals_are_exact --dest tests/test_revision8_precedence.py --shape class --target-class Revision8PrecedenceTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-precedence.json --format-imports --manifest .refactor/family-revision8-precedence.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-merged-head> --manifest .refactor/family-revision8-precedence.json --strict-bodies --test-snapshot <ids-snapshot-at-merged-head> --test-mode mapping; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_precedence and env -u PYTHONPATH python3 -c 'import tests.test_revision8_precedence'"
   },
   {
    "name": "rollback",
@@ -313,54 +317,54 @@
    "methods_arg": "test_ordinary_append_registry_drift_after_fsync_rolls_back_append,test_postpublication_fault_restores_every_lifecycle_transaction,test_initially_absent_registry_is_removed_after_postpublication_fault,test_registry_restoration_failure_retains_published_run_and_journal,test_existing_registry_publication_keeps_canonical_name_present,test_stale_owner_append_failure_restores_owner_and_journal,test_stale_owner_lifecycle_failure_restores_all_transaction_bytes,test_owner_restoration_identity_conflict_preserves_foreign_owner,test_registry_restoration_cleanup_occurs_only_after_final_proof",
    "method_lines": [
     [
-     2030,
-     2067,
-     34
+     2028,
+     2065,
+     35
     ],
     [
-     2233,
+     2231,
+     2303,
+     69
+    ],
+    [
      2305,
-     68
+     2339,
+     32
     ],
     [
-     2307,
      2341,
-     31
+     2407,
+     63
     ],
     [
-     2343,
      2409,
-     62
+     2520,
+     107
     ],
     [
-     2411,
      2522,
-     106
+     2576,
+     52
     ],
     [
-     2524,
      2578,
-     51
+     2660,
+     79
     ],
     [
-     2580,
      2662,
-     78
+     2740,
+     75
     ],
     [
-     2664,
-     2742,
-     74
-    ],
-    [
-     3837,
-     3901,
-     60
+     3835,
+     3899,
+     61
     ]
    ],
-   "est_method_code_lines": 564,
+   "est_method_code_lines": 573,
    "est_header_lines": 20,
-   "est_code_lines": 584,
+   "est_code_lines": 593,
    "helpers_used": [
     "api_environment",
     "closure_record",
@@ -386,7 +390,8 @@
    "fallback_seam": "split `stale_owner_rollback` (2524, 2580, 2664: 203 lines) from `publication_rollback` (the rest, 361 lines).",
    "id_map": ".refactor/idmap-revision8-rollback.json",
    "manifest": ".refactor/family-revision8-rollback.json",
-   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_ordinary_append_registry_drift_after_fsync_rolls_back_append,test_postpublication_fault_restores_every_lifecycle_transaction,test_initially_absent_registry_is_removed_after_postpublication_fault,test_registry_restoration_failure_retains_published_run_and_journal,test_existing_registry_publication_keeps_canonical_name_present,test_stale_owner_append_failure_restores_owner_and_journal,test_stale_owner_lifecycle_failure_restores_all_transaction_bytes,test_owner_restoration_identity_conflict_preserves_foreign_owner,test_registry_restoration_cleanup_occurs_only_after_final_proof --dest tests/test_revision8_rollback.py --shape class --target-class Revision8RollbackTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-rollback.json --format-imports --manifest .refactor/family-revision8-rollback.json"
+   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_ordinary_append_registry_drift_after_fsync_rolls_back_append,test_postpublication_fault_restores_every_lifecycle_transaction,test_initially_absent_registry_is_removed_after_postpublication_fault,test_registry_restoration_failure_retains_published_run_and_journal,test_existing_registry_publication_keeps_canonical_name_present,test_stale_owner_append_failure_restores_owner_and_journal,test_stale_owner_lifecycle_failure_restores_all_transaction_bytes,test_owner_restoration_identity_conflict_preserves_foreign_owner,test_registry_restoration_cleanup_occurs_only_after_final_proof --dest tests/test_revision8_rollback.py --shape class --target-class Revision8RollbackTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-rollback.json --format-imports --manifest .refactor/family-revision8-rollback.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-merged-head> --manifest .refactor/family-revision8-rollback.json --strict-bodies --test-snapshot <ids-snapshot-at-merged-head> --test-mode mapping; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_rollback and env -u PYTHONPATH python3 -c 'import tests.test_revision8_rollback'"
   },
   {
    "name": "registry_races",
@@ -410,69 +415,69 @@
    "methods_arg": "test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating,test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting,test_registry_exchange_race_restores_foreign_canonical_without_publish,test_absent_registry_link_race_never_clobbers_foreign_canonical,test_absent_registry_directory_collision_preserves_foreign_node,test_absent_registry_symlink_collision_preserves_foreign_node,test_absent_registry_broken_symlink_collision_preserves_foreign_node,test_absent_registry_unreadable_file_collision_preserves_foreign_node,test_exact_staged_registry_prelink_is_recognized_as_published,test_exact_staged_registry_prelink_rolls_back_after_validation_failure,test_exact_staged_owner_prelink_is_recognized_as_adopted,test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner",
    "method_lines": [
     [
-     2076,
-     2152,
-     73
-    ],
-    [
-     2154,
-     2231,
+     2074,
+     2150,
      74
     ],
     [
-     2744,
+     2152,
+     2229,
+     75
+    ],
+    [
+     2742,
+     2808,
+     64
+    ],
+    [
      2810,
-     63
+     2872,
+     60
     ],
     [
-     2812,
      2874,
-     59
+     2875,
+     2
     ],
     [
-     2876,
      2877,
-     1
+     2878,
+     2
     ],
     [
-     2879,
      2880,
-     1
+     2883,
+     4
     ],
     [
-     2882,
      2885,
-     3
+     2888,
+     4
     ],
     [
-     2887,
      2890,
-     3
+     2960,
+     68
     ],
     [
-     2892,
      2962,
-     67
+     3021,
+     57
     ],
     [
-     2964,
      3023,
+     3081,
      56
     ],
     [
-     3025,
      3083,
-     55
-    ],
-    [
-     3085,
-     3233,
-     141
+     3231,
+     142
     ]
    ],
-   "est_method_code_lines": 596,
+   "est_method_code_lines": 608,
    "est_header_lines": 20,
-   "est_code_lines": 616,
+   "est_code_lines": 628,
    "helpers_used": [
     "api_environment",
     "assert_absent_registry_node_collision",
@@ -498,7 +503,8 @@
    "fallback_seam": "split `registry_swaps` (2076, 2154, 2744, 2812: 269 lines) from `registry_prelinks` (the four collisions + 2892, 2964, 3025, 3085: 327 lines).",
    "id_map": ".refactor/idmap-revision8-registry_races.json",
    "manifest": ".refactor/family-revision8-registry_races.json",
-   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating,test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting,test_registry_exchange_race_restores_foreign_canonical_without_publish,test_absent_registry_link_race_never_clobbers_foreign_canonical,test_absent_registry_directory_collision_preserves_foreign_node,test_absent_registry_symlink_collision_preserves_foreign_node,test_absent_registry_broken_symlink_collision_preserves_foreign_node,test_absent_registry_unreadable_file_collision_preserves_foreign_node,test_exact_staged_registry_prelink_is_recognized_as_published,test_exact_staged_registry_prelink_rolls_back_after_validation_failure,test_exact_staged_owner_prelink_is_recognized_as_adopted,test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner --dest tests/test_revision8_registry_races.py --shape class --target-class Revision8RegistryRacesTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-registry_races.json --format-imports --manifest .refactor/family-revision8-registry_races.json"
+   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_registry_stat_to_open_identity_swaps_are_generic_and_nonmutating,test_registry_parent_and_lock_epoch_swaps_refuse_without_redirecting,test_registry_exchange_race_restores_foreign_canonical_without_publish,test_absent_registry_link_race_never_clobbers_foreign_canonical,test_absent_registry_directory_collision_preserves_foreign_node,test_absent_registry_symlink_collision_preserves_foreign_node,test_absent_registry_broken_symlink_collision_preserves_foreign_node,test_absent_registry_unreadable_file_collision_preserves_foreign_node,test_exact_staged_registry_prelink_is_recognized_as_published,test_exact_staged_registry_prelink_rolls_back_after_validation_failure,test_exact_staged_owner_prelink_is_recognized_as_adopted,test_postexchange_foreign_canonicals_are_preserved_for_registry_and_owner --dest tests/test_revision8_registry_races.py --shape class --target-class Revision8RegistryRacesTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-registry_races.json --format-imports --manifest .refactor/family-revision8-registry_races.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-merged-head> --manifest .refactor/family-revision8-registry_races.json --strict-bodies --test-snapshot <ids-snapshot-at-merged-head> --test-mode mapping; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_registry_races and env -u PYTHONPATH python3 -c 'import tests.test_revision8_registry_races'"
   },
   {
    "name": "interruptions",
@@ -513,24 +519,24 @@
    "methods_arg": "test_postsyscall_baseexception_restores_registry_and_owner_begin_paths,test_postsyscall_baseexception_during_rollback_retains_coherent_candidate,test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent",
    "method_lines": [
     [
-     3235,
+     3233,
+     3433,
+     185
+    ],
+    [
      3435,
-     184
+     3655,
+     205
     ],
     [
-     3437,
      3657,
-     204
-    ],
-    [
-     3659,
-     3835,
-     165
+     3833,
+     166
     ]
    ],
-   "est_method_code_lines": 553,
+   "est_method_code_lines": 556,
    "est_header_lines": 20,
-   "est_code_lines": 573,
+   "est_code_lines": 576,
    "helpers_used": [
     "api_environment",
     "coordination_snapshot",
@@ -555,7 +561,8 @@
    "fallback_seam": "one test per module if ever needed (184/204/165 lines each); no seam under 500 exists that keeps two of them together \u2014 a real scenario boundary, so leave as is.",
    "id_map": ".refactor/idmap-revision8-interruptions.json",
    "manifest": ".refactor/family-revision8-interruptions.json",
-   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_postsyscall_baseexception_restores_registry_and_owner_begin_paths,test_postsyscall_baseexception_during_rollback_retains_coherent_candidate,test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent --dest tests/test_revision8_interruptions.py --shape class --target-class Revision8InterruptionsTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-interruptions.json --format-imports --manifest .refactor/family-revision8-interruptions.json"
+   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_postsyscall_baseexception_restores_registry_and_owner_begin_paths,test_postsyscall_baseexception_during_rollback_retains_coherent_candidate,test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent --dest tests/test_revision8_interruptions.py --shape class --target-class Revision8InterruptionsTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-interruptions.json --format-imports --manifest .refactor/family-revision8-interruptions.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-merged-head> --manifest .refactor/family-revision8-interruptions.json --strict-bodies --test-snapshot <ids-snapshot-at-merged-head> --test-mode mapping; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_interruptions and env -u PYTHONPATH python3 -c 'import tests.test_revision8_interruptions'"
   },
   {
    "name": "orphan_identity",
@@ -584,94 +591,94 @@
    "methods_arg": "test_post_scan_journal_target_swaps_are_generic_and_never_followed,test_malformed_registry_remains_generic,test_registered_missing_journal_remains_generic,test_empty_placeholder_is_silent_for_all_unrelated_coordination,test_empty_placeholder_targeted_validate_and_monitor_remain_unchanged,test_same_id_state_created_after_final_classification_is_never_overwritten,test_nonempty_ownerless_orphan_names_validated_repo_relative_path,test_non_dot_regular_file_in_runs_root_is_silently_ignored,test_ambiguous_orphan_kinds_remain_generic_and_nonmutating,test_orphan_classifier_control_is_load_bearing,test_runs_root_inode_swap_after_phase_two_is_generic_even_when_empty,test_claimed_candidate_child_is_preserved_but_never_published,test_cleanup_identity_replacements_preserve_foreign_state_and_fail,test_placeholder_mutation_at_publication_refuses_and_rolls_back_candidate,test_placeholder_inode_and_type_replacement_at_publication_are_generic,test_run_directory_identity_swap_at_publication_rolls_back_original,test_journal_identity_swap_at_publication_rolls_back_bound_original",
    "method_lines": [
     [
-     1961,
-     2028,
-     64
+     1959,
+     2026,
+     65
     ],
     [
-     2069,
-     2074,
-     5
+     2067,
+     2072,
+     6
     ],
     [
-     3903,
+     3901,
+     3912,
+     10
+    ],
+    [
      3914,
-     9
+     3962,
+     45
     ],
     [
-     3916,
      3964,
+     4006,
+     41
+    ],
+    [
+     4008,
+     4106,
+     96
+    ],
+    [
+     4108,
+     4124,
+     15
+    ],
+    [
+     4126,
+     4135,
+     8
+    ],
+    [
+     4137,
+     4240,
+     100
+    ],
+    [
+     4242,
+     4261,
+     19
+    ],
+    [
+     4686,
+     4750,
+     62
+    ],
+    [
+     4752,
+     4798,
      44
     ],
     [
-     3966,
-     4008,
-     40
-    ],
-    [
-     4010,
-     4108,
-     95
-    ],
-    [
-     4110,
-     4126,
-     14
-    ],
-    [
-     4128,
-     4137,
-     7
-    ],
-    [
-     4139,
-     4242,
-     99
-    ],
-    [
-     4244,
-     4263,
-     18
-    ],
-    [
-     4688,
-     4752,
-     61
-    ],
-    [
-     4754,
      4800,
-     43
+     4889,
+     87
     ],
     [
-     4802,
      4891,
-     86
+     4945,
+     51
     ],
     [
-     4893,
      4947,
-     50
+     5029,
+     80
     ],
     [
-     4949,
      5031,
-     79
+     5066,
+     33
     ],
     [
-     5033,
      5068,
-     32
-    ],
-    [
-     5070,
-     5109,
-     36
+     5107,
+     37
     ]
    ],
-   "est_method_code_lines": 782,
+   "est_method_code_lines": 799,
    "est_header_lines": 20,
-   "est_code_lines": 802,
+   "est_code_lines": 819,
    "helpers_used": [
     "api_environment",
     "append_record",
@@ -699,7 +706,8 @@
    "fallback_seam": "split `orphans` (2069, 3903, 3916..4263: 9 tests, 331 lines) from `identity_swaps` (1961, 4688..5109: 8 tests, 451 lines) \u2014 the seam is the source gap 4263/4265 plus the two early tests.",
    "id_map": ".refactor/idmap-revision8-orphan_identity.json",
    "manifest": ".refactor/family-revision8-orphan_identity.json",
-   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_post_scan_journal_target_swaps_are_generic_and_never_followed,test_malformed_registry_remains_generic,test_registered_missing_journal_remains_generic,test_empty_placeholder_is_silent_for_all_unrelated_coordination,test_empty_placeholder_targeted_validate_and_monitor_remain_unchanged,test_same_id_state_created_after_final_classification_is_never_overwritten,test_nonempty_ownerless_orphan_names_validated_repo_relative_path,test_non_dot_regular_file_in_runs_root_is_silently_ignored,test_ambiguous_orphan_kinds_remain_generic_and_nonmutating,test_orphan_classifier_control_is_load_bearing,test_runs_root_inode_swap_after_phase_two_is_generic_even_when_empty,test_claimed_candidate_child_is_preserved_but_never_published,test_cleanup_identity_replacements_preserve_foreign_state_and_fail,test_placeholder_mutation_at_publication_refuses_and_rolls_back_candidate,test_placeholder_inode_and_type_replacement_at_publication_are_generic,test_run_directory_identity_swap_at_publication_rolls_back_original,test_journal_identity_swap_at_publication_rolls_back_bound_original --dest tests/test_revision8_orphan_identity.py --shape class --target-class Revision8OrphanIdentityTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-orphan_identity.json --format-imports --manifest .refactor/family-revision8-orphan_identity.json"
+   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_post_scan_journal_target_swaps_are_generic_and_never_followed,test_malformed_registry_remains_generic,test_registered_missing_journal_remains_generic,test_empty_placeholder_is_silent_for_all_unrelated_coordination,test_empty_placeholder_targeted_validate_and_monitor_remain_unchanged,test_same_id_state_created_after_final_classification_is_never_overwritten,test_nonempty_ownerless_orphan_names_validated_repo_relative_path,test_non_dot_regular_file_in_runs_root_is_silently_ignored,test_ambiguous_orphan_kinds_remain_generic_and_nonmutating,test_orphan_classifier_control_is_load_bearing,test_runs_root_inode_swap_after_phase_two_is_generic_even_when_empty,test_claimed_candidate_child_is_preserved_but_never_published,test_cleanup_identity_replacements_preserve_foreign_state_and_fail,test_placeholder_mutation_at_publication_refuses_and_rolls_back_candidate,test_placeholder_inode_and_type_replacement_at_publication_are_generic,test_run_directory_identity_swap_at_publication_rolls_back_original,test_journal_identity_swap_at_publication_rolls_back_bound_original --dest tests/test_revision8_orphan_identity.py --shape class --target-class Revision8OrphanIdentityTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-orphan_identity.json --format-imports --manifest .refactor/family-revision8-orphan_identity.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-merged-head> --manifest .refactor/family-revision8-orphan_identity.json --strict-bodies --test-snapshot <ids-snapshot-at-merged-head> --test-mode mapping; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_orphan_identity and env -u PYTHONPATH python3 -c 'import tests.test_revision8_orphan_identity'"
   },
   {
    "name": "successors",
@@ -725,79 +733,79 @@
    "methods_arg": "test_successor_transfer_control_is_load_bearing,test_successor_chain_transfers_ancestry_releases_and_readmits,test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved,test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope,test_persisted_dangling_successor_edge_is_generic_and_nonmutating,test_persisted_successor_cycle_is_generic_and_nonmutating,test_persisted_disjoint_successor_edge_is_generic_and_nonmutating,test_legacy_successor_close_without_valid_judgment_cannot_release_scope,test_mixed_open_and_retired_conflicts_are_byte_sorted,test_concurrent_successor_and_ordinary_admission_serialize_atomically,test_only_a_retired_successor_may_close_and_release_ancestry,test_close_rollback_preserves_effective_ancestral_reservation,test_release_control_disabled_keeps_retired_ancestry_reserved,test_historical_fork_releases_shared_ancestor_only_after_both_branches_close",
    "method_lines": [
     [
-     4265,
+     4263,
+     4286,
+     23
+    ],
+    [
      4288,
-     22
+     4365,
+     73
     ],
     [
-     4290,
      4367,
-     72
+     4406,
+     38
     ],
     [
-     4369,
      4408,
-     37
-    ],
-    [
-     4410,
-     4429,
-     18
-    ],
-    [
-     4431,
-     4447,
-     14
-    ],
-    [
-     4449,
-     4472,
-     21
-    ],
-    [
-     4474,
-     4491,
-     15
-    ],
-    [
-     4493,
-     4541,
-     46
-    ],
-    [
-     4543,
-     4564,
+     4427,
      19
     ],
     [
-     4566,
-     4686,
-     119
+     4429,
+     4445,
+     15
     ],
     [
-     5111,
+     4447,
+     4470,
+     22
+    ],
+    [
+     4472,
+     4489,
+     16
+    ],
+    [
+     4491,
+     4539,
+     47
+    ],
+    [
+     4541,
+     4562,
+     20
+    ],
+    [
+     4564,
+     4684,
+     120
+    ],
+    [
+     5109,
+     5133,
+     22
+    ],
+    [
      5135,
-     21
+     5168,
+     32
     ],
     [
-     5137,
      5170,
+     5201,
      31
     ],
     [
-     5172,
      5203,
-     30
-    ],
-    [
-     5205,
-     5249,
-     40
+     5247,
+     42
     ]
    ],
-   "est_method_code_lines": 505,
+   "est_method_code_lines": 520,
    "est_header_lines": 20,
-   "est_code_lines": 525,
+   "est_code_lines": 540,
    "helpers_used": [
     "api_environment",
     "close",
@@ -832,7 +840,8 @@
    "fallback_seam": "split at the source gap 4686/5111: `successor_admission` (4265..4686, 10 tests, 383 lines) and `successor_release` (5111..5249, 4 tests, 122 lines) \u2014 only if needed; the second half is small.",
    "id_map": ".refactor/idmap-revision8-successors.json",
    "manifest": ".refactor/family-revision8-successors.json",
-   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_successor_transfer_control_is_load_bearing,test_successor_chain_transfers_ancestry_releases_and_readmits,test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved,test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope,test_persisted_dangling_successor_edge_is_generic_and_nonmutating,test_persisted_successor_cycle_is_generic_and_nonmutating,test_persisted_disjoint_successor_edge_is_generic_and_nonmutating,test_legacy_successor_close_without_valid_judgment_cannot_release_scope,test_mixed_open_and_retired_conflicts_are_byte_sorted,test_concurrent_successor_and_ordinary_admission_serialize_atomically,test_only_a_retired_successor_may_close_and_release_ancestry,test_close_rollback_preserves_effective_ancestral_reservation,test_release_control_disabled_keeps_retired_ancestry_reserved,test_historical_fork_releases_shared_ancestor_only_after_both_branches_close --dest tests/test_revision8_successors.py --shape class --target-class Revision8SuccessorsTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-successors.json --format-imports --manifest .refactor/family-revision8-successors.json"
+   "argv": "TMPDIR=/dev/shm/refactor-s8 python3 $D/move_methods.py --project . --import-root \"$PWD\" --source tests/test_revision8_coordination.py --class Revision8CoordinationTests --methods test_successor_transfer_control_is_load_bearing,test_successor_chain_transfers_ancestry_releases_and_readmits,test_successor_readmission_may_leave_ancestor_scope_but_keeps_it_reserved,test_successor_refusal_literals_for_retired_overlap_and_disjoint_scope,test_persisted_dangling_successor_edge_is_generic_and_nonmutating,test_persisted_successor_cycle_is_generic_and_nonmutating,test_persisted_disjoint_successor_edge_is_generic_and_nonmutating,test_legacy_successor_close_without_valid_judgment_cannot_release_scope,test_mixed_open_and_retired_conflicts_are_byte_sorted,test_concurrent_successor_and_ordinary_admission_serialize_atomically,test_only_a_retired_successor_may_close_and_release_ancestry,test_close_rollback_preserves_effective_ancestral_reservation,test_release_control_disabled_keeps_retired_ancestry_reserved,test_historical_fork_releases_shared_ancestor_only_after_both_branches_close --dest tests/test_revision8_successors.py --shape class --target-class Revision8SuccessorsTests --test-only --test-snapshot <ids-snapshot-at-merged-head> --id-map .refactor/idmap-revision8-successors.json --format-imports --manifest .refactor/family-revision8-successors.json",
+   "gate": "bash $S/verify.sh --pkg tests --snapshot <body-snapshot-at-merged-head> --manifest .refactor/family-revision8-successors.json --strict-bodies --test-snapshot <ids-snapshot-at-merged-head> --test-mode mapping; then python3 scripts/check_file_length.py tests; then env -u PYTHONPATH python3 -m unittest tests.test_revision8_successors and env -u PYTHONPATH python3 -c 'import tests.test_revision8_successors'"
   }
  ],
  "family_order": [
@@ -846,49 +855,66 @@
  ],
  "provisional_baseline": {
   "tests/_revision8_support.py": 539,
-  "tests/test_revision8_append_schema.py": 714,
-  "tests/test_revision8_precedence.py": 601,
-  "tests/test_revision8_rollback.py": 584,
-  "tests/test_revision8_registry_races.py": 616,
-  "tests/test_revision8_interruptions.py": 573,
-  "tests/test_revision8_orphan_identity.py": 802,
-  "tests/test_revision8_successors.py": 525
+  "tests/test_revision8_append_schema.py": 724,
+  "tests/test_revision8_precedence.py": 617,
+  "tests/test_revision8_rollback.py": 593,
+  "tests/test_revision8_registry_races.py": 628,
+  "tests/test_revision8_interruptions.py": 576,
+  "tests/test_revision8_orphan_identity.py": 819,
+  "tests/test_revision8_successors.py": 540
  },
- "provisional_baseline_note": "estimates = method code lines + 20 header; replace with the sizes measured from each family's dry run (count '+' lines of the new-file hunk with check_file_length.code_lines) before committing the baseline; if committed before the dry runs, use estimate+40 as an upper bound (a low entry fails the gate, a high one is inert until finalize)",
+ "provisional_baseline_note": "true method code lines (inventory-revision8-1 spans, check_file_length.code_lines rule) + 20 header = upper bounds; commit these exact values in C2 (a low entry fails the family gate at the file-length step; a high one is inert); finalize replaces them with measured sizes",
  "debt": [
   {
    "item": "tests/_revision8_support.py holds 31 methods (> class_target 30)",
-   "disposition": "accepted: one support mixin per class (brief section 4); follow-up bead to split the record factories from the lifecycle drivers"
+   "disposition": "accepted: one support mixin per class (brief section 4); follow-up bead: to be created at handover (split by role: record factories / lifecycle drivers / registry-lock primers)"
   },
   {
    "item": "tests/_revision8_support.py 539 code lines (> module_target 500)",
-   "disposition": "provisional baseline entry; same follow-up"
+   "disposition": "provisional baseline entry; same follow-up bead"
   },
   {
-   "item": "every family module over module_target 500 (estimates 525..802)",
-   "disposition": "provisional baseline entries; 500..1000 is the brief's band"
+   "item": "every family module over module_target 500 (upper bounds 540..819)",
+   "disposition": "provisional baseline entries; 500..1000 is the brief's band; finalize replaces with measured sizes"
   },
   {
-   "item": "test_postsyscall_baseexception_restores_registry_and_owner_begin_paths 3235..3435 (201 lines, 184 code)",
+   "item": "test_postsyscall_baseexception_restores_registry_and_owner_begin_paths 3233..3433 (201 lines, 185 code)",
    "disposition": "function-length debt, moved verbatim (interruptions)"
   },
   {
-   "item": "test_postsyscall_baseexception_during_rollback_retains_coherent_candidate 3437..3657 (221 lines, 204 code)",
+   "item": "test_postsyscall_baseexception_during_rollback_retains_coherent_candidate 3435..3655 (221 lines, 205 code)",
    "disposition": "function-length debt, moved verbatim (interruptions)"
   },
   {
-   "item": "test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent 3659..3835 (177 lines, 165 code)",
+   "item": "test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent 3657..3833 (177 lines, 166 code)",
    "disposition": "function-length debt, moved verbatim (interruptions)"
   },
   {
    "item": "tests/test_revision8_coordination.py keeps an empty class shell (docstring only) plus __main__",
-   "disposition": "finalize: delete the shell or the file after operator decision; baseline entry 4905 and pyproject line 242 removed at finalize"
+   "disposition": "default keep (see source_shell); .refactor-baseline.json:56 (4905, file now 4903, inert) and pyproject.toml:242 dropped at finalize"
   }
  ],
  "census": {
   "census_complete": false,
   "sites": 0,
-  "external_refs_checked": "grep -rn Revision8CoordinationTests tests scripts docs skills system hooks rules agents .github: only docs/analysis prose (3 files) and pyproject/baseline config lines; no code reference"
+  "reproduced_in_this_worktree": "grep -rln Revision8CoordinationTests . --exclude-dir=.git -> only tests/test_revision8_coordination.py and .refactor/* artifacts: 0 code sites, 0 docs hits; the file name is named only by the config lines pyproject.toml:242 and .refactor-baseline.json:56 (both dropped at finalize) and, as historical prose, by docs/analysis/*.md (3 files) and .forge/history/runs/run-20260826-coordination-hardening.md \u2014 records of past sizes/commands, not references to repoint"
  },
- "expected_refusals": []
+ "expected_refusals": [],
+ "inventory": ".refactor/inventory-revision8-1.json",
+ "inventory_note": "regenerated against the current source after the constants commit 42980e7; the first inventory (.refactor/inventory-revision8.json) was pre-constants and every span was +2/+3 (critique finding 1)",
+ "partition_check": "PARTITION CHECK (inventory-revision8-1.json): inventory tests=81 placed=81 unique=81 duplicates=[] missing=[] extra=[] sum_code_lines=4357",
+ "config_prep": {
+  "commit": "C-config (before C1)",
+  "change": "pyproject.toml [tool.ruff.lint.isort] known-local-folder = [\"codex_orchestrator\", \"commitment_paths\"] (option A''')",
+  "measured_side_effects": "ruff check --select I --config ... scripts tests system/fr223 -> All checks passed! (0 new findings); generated headers put from codex_orchestrator import ... after the tests.* block in both the mixin and the family modules",
+  "status": "OPERATOR DECISION \u2014 the orchestrator ruled a repo-wide isort setting outside the brief's enumerated config prep; the session STOPS before C1 until the operator picks an option",
+  "gated_on": [
+   "verify.sh ruff check tests",
+   "CLAUDE.md finish: ruff check scripts tests system/fr223 && check_file_length && lint-imports"
+  ]
+ },
+ "source_shell": {
+  "default": "keep tests/test_revision8_coordination.py as an empty class shell (docstring, imports, __main__)",
+  "reason": "deleting it re-partitions the Gate 1 shards: shards 2, 3 and 4 then fail the bare-PYTHONPATH import (critique shard table B) unless the isort fix lands; deletion stays an operator call recorded at handover"
+ }
 }
