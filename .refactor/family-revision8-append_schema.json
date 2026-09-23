@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision8_coordination.py": "d9249fe95bbe2adc13ceb72dd5cf125169720acb384dd0d246210f025f933a72",
+    "tests/test_revision8_append_schema.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision8_coordination.py",
+      "dest": "tests/test_revision8_append_schema.py",
+      "class": "Revision8CoordinationTests",
+      "methods": [
+        "test_all_seven_strict_minimum_record_types_append",
+        "test_per_type_first_required_field_diagnostics_are_exact",
+        "test_fr019_common_and_required_string_boundaries",
+        "test_fr019_format_enum_repository_and_scope_boundaries",
+        "test_fr019_all_arrays_and_nested_validation_boundaries",
+        "test_fr019_inheritance_events_handoff_optionals_and_extensions",
+        "test_first_failure_examples_and_envelope_literal_are_exact",
+        "test_array_members_fail_at_the_first_ascending_index",
+        "test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes",
+        "test_sparse_history_reads_unchanged_but_same_new_shape_refuses"
+      ],
+      "shape": "class",
+      "target_class": "Revision8AppendSchemaTests",
+      "alias": "test_revision8_append_schema",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision8_coordination.py": [],
+        "tests/test_revision8_append_schema.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import unittest",
+          "from unittest import mock",
+          "from tests._revision8_constants import RECORDED_AT",
+          "from tests._revision8_support import Revision8Support",
+          "from codex_orchestrator import journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_all_seven_strict_minimum_record_types_append": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_all_seven_strict_minimum_record_types_append",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_array_members_fail_at_the_first_ascending_index": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_array_members_fail_at_the_first_ascending_index",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_first_failure_examples_and_envelope_literal_are_exact": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_first_failure_examples_and_envelope_literal_are_exact",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_fr019_all_arrays_and_nested_validation_boundaries": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_fr019_all_arrays_and_nested_validation_boundaries",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_fr019_common_and_required_string_boundaries": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_fr019_common_and_required_string_boundaries",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_fr019_format_enum_repository_and_scope_boundaries": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_fr019_format_enum_repository_and_scope_boundaries",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_fr019_inheritance_events_handoff_optionals_and_extensions": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_fr019_inheritance_events_handoff_optionals_and_extensions",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_per_type_first_required_field_diagnostics_are_exact": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_per_type_first_required_field_diagnostics_are_exact",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes",
+      "tests/test_revision8_coordination.py::Revision8CoordinationTests::test_sparse_history_reads_unchanged_but_same_new_shape_refuses": "tests/test_revision8_append_schema.py::Revision8AppendSchemaTests::test_sparse_history_reads_unchanged_but_same_new_shape_refuses"
+    },
+    "unittest": {
+      "test_revision8_coordination.Revision8CoordinationTests.test_all_seven_strict_minimum_record_types_append": "test_revision8_append_schema.Revision8AppendSchemaTests.test_all_seven_strict_minimum_record_types_append",
+      "test_revision8_coordination.Revision8CoordinationTests.test_array_members_fail_at_the_first_ascending_index": "test_revision8_append_schema.Revision8AppendSchemaTests.test_array_members_fail_at_the_first_ascending_index",
+      "test_revision8_coordination.Revision8CoordinationTests.test_first_failure_examples_and_envelope_literal_are_exact": "test_revision8_append_schema.Revision8AppendSchemaTests.test_first_failure_examples_and_envelope_literal_are_exact",
+      "test_revision8_coordination.Revision8CoordinationTests.test_fr019_all_arrays_and_nested_validation_boundaries": "test_revision8_append_schema.Revision8AppendSchemaTests.test_fr019_all_arrays_and_nested_validation_boundaries",
+      "test_revision8_coordination.Revision8CoordinationTests.test_fr019_common_and_required_string_boundaries": "test_revision8_append_schema.Revision8AppendSchemaTests.test_fr019_common_and_required_string_boundaries",
+      "test_revision8_coordination.Revision8CoordinationTests.test_fr019_format_enum_repository_and_scope_boundaries": "test_revision8_append_schema.Revision8AppendSchemaTests.test_fr019_format_enum_repository_and_scope_boundaries",
+      "test_revision8_coordination.Revision8CoordinationTests.test_fr019_inheritance_events_handoff_optionals_and_extensions": "test_revision8_append_schema.Revision8AppendSchemaTests.test_fr019_inheritance_events_handoff_optionals_and_extensions",
+      "test_revision8_coordination.Revision8CoordinationTests.test_per_type_first_required_field_diagnostics_are_exact": "test_revision8_append_schema.Revision8AppendSchemaTests.test_per_type_first_required_field_diagnostics_are_exact",
+      "test_revision8_coordination.Revision8CoordinationTests.test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes": "test_revision8_append_schema.Revision8AppendSchemaTests.test_reserved_lifecycle_decisions_require_commands_and_preserve_bytes",
+      "test_revision8_coordination.Revision8CoordinationTests.test_sparse_history_reads_unchanged_but_same_new_shape_refuses": "test_revision8_append_schema.Revision8AppendSchemaTests.test_sparse_history_reads_unchanged_but_same_new_shape_refuses"
+    }
+  },
+  "base_commit": "6099c5a100c8804460538232e930327a4239fe75"
+}
