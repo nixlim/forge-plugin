@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "d1f0878677e298f7e59b46639aa366b9e1259705c4156484acb090acb3cbd32a",
+    "tests/test_revision9_coordination_staging_crashes.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_staging_crashes.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "test_run_open_is_hidden_until_atomic_publication",
+        "test_run_open_prepublication_crashes_leave_no_visible_run",
+        "test_run_open_durable_receipt_survives_registry_failure_and_retry",
+        "test_fr019_failure_phase_order_preserves_earlier_bytes",
+        "test_batch_crashes_recover_stored_bytes_without_duplicate_receipt",
+        "test_prepublication_intent_stage_crashes_retry_without_authority",
+        "test_foreign_request_intent_stage_is_not_deleted",
+        "test_intent_source_name_substitution_never_survives_canonical",
+        "test_intent_quarantine_preserves_a_second_canonical_swap",
+        "test_hostile_transaction_nodes_and_midflight_inode_replacement_freeze"
+      ],
+      "shape": "class",
+      "target_class": "Revision9StagingCrashTests",
+      "alias": "test_revision9_coordination_staging_crashes",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_staging_crashes.py": [
+          "from __future__ import annotations",
+          "import json",
+          "import os",
+          "import unittest",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_crashes_recover_stored_bytes_without_duplicate_receipt": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_batch_crashes_recover_stored_bytes_without_duplicate_receipt",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_foreign_request_intent_stage_is_not_deleted": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_foreign_request_intent_stage_is_not_deleted",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_fr019_failure_phase_order_preserves_earlier_bytes": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_fr019_failure_phase_order_preserves_earlier_bytes",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_hostile_transaction_nodes_and_midflight_inode_replacement_freeze": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_hostile_transaction_nodes_and_midflight_inode_replacement_freeze",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_intent_quarantine_preserves_a_second_canonical_swap": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_intent_quarantine_preserves_a_second_canonical_swap",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_intent_source_name_substitution_never_survives_canonical": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_intent_source_name_substitution_never_survives_canonical",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_prepublication_intent_stage_crashes_retry_without_authority": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_prepublication_intent_stage_crashes_retry_without_authority",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_run_open_durable_receipt_survives_registry_failure_and_retry": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_run_open_durable_receipt_survives_registry_failure_and_retry",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_run_open_is_hidden_until_atomic_publication": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_run_open_is_hidden_until_atomic_publication",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_run_open_prepublication_crashes_leave_no_visible_run": "tests/test_revision9_coordination_staging_crashes.py::Revision9StagingCrashTests::test_run_open_prepublication_crashes_leave_no_visible_run"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_crashes_recover_stored_bytes_without_duplicate_receipt": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_batch_crashes_recover_stored_bytes_without_duplicate_receipt",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_foreign_request_intent_stage_is_not_deleted": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_foreign_request_intent_stage_is_not_deleted",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_fr019_failure_phase_order_preserves_earlier_bytes": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_fr019_failure_phase_order_preserves_earlier_bytes",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_hostile_transaction_nodes_and_midflight_inode_replacement_freeze": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_hostile_transaction_nodes_and_midflight_inode_replacement_freeze",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_intent_quarantine_preserves_a_second_canonical_swap": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_intent_quarantine_preserves_a_second_canonical_swap",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_intent_source_name_substitution_never_survives_canonical": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_intent_source_name_substitution_never_survives_canonical",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_prepublication_intent_stage_crashes_retry_without_authority": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_prepublication_intent_stage_crashes_retry_without_authority",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_run_open_durable_receipt_survives_registry_failure_and_retry": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_run_open_durable_receipt_survives_registry_failure_and_retry",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_run_open_is_hidden_until_atomic_publication": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_run_open_is_hidden_until_atomic_publication",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_run_open_prepublication_crashes_leave_no_visible_run": "test_revision9_coordination_staging_crashes.Revision9StagingCrashTests.test_run_open_prepublication_crashes_leave_no_visible_run"
+    }
+  },
+  "base_commit": "e9cac071d4126461474c278b3fc2b920cc647b64"
+}

@@ -1,0 +1,18 @@
+== c05-staging_crashes start=2026-09-23T11:09:04Z head=e9cac07 load=8.79 8.26 8.71
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2911 bodies across 2889 names -> .refactor/revision9-coord-c05-staging_crashes-before.json
+id map: 10 unittest + 10 pytest -> .refactor/idmap-revision9-coord-staging_crashes.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-staging_crashes.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 239 files within budget (max 1000)
+Ran 10 tests in 1.518s OK (standalone tests.test_revision9_coordination_staging_crashes without PYTHONPATH)
+== c05-staging_crashes record SHA 28de543e78010eba14ad6108ac944a306b75c718 (pre-amend); amending the record and the driver log into it end=2026-09-23T11:09:56Z
