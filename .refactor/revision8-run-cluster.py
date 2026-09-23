@@ -209,6 +209,13 @@ def gate(cluster, p):
                   "import without PYTHONPATH", env=bare)
     if rc or "\nOK" not in out:
         fail(f"{label}: tests.{module} does not pass without PYTHONPATH (see {p['gate']})")
+    # Critique finding 3: the new module must also import STANDALONE (first in a Gate 1 shard)
+    # without PYTHONPATH, i.e. its generated header must not import codex_orchestrator before
+    # the constants module has inserted scripts/ into sys.path.
+    standalone = ["python3", "-c", f"import tests.{cluster['module']}"]
+    rc, out = run(standalone, p["gate"], "standalone import without PYTHONPATH", env=bare)
+    if rc:
+        fail(f"{label}: tests.{cluster['module']} is not importable standalone without PYTHONPATH")
     evidence = [p["manifest"], p["snap"], p["ids"], p["log"], p["gate"]]
     if cluster["shape"] == "class":
         evidence += [p["idmap"], p["dryrun"]]
