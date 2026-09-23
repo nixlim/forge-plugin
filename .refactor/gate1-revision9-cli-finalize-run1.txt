@@ -1,0 +1,116 @@
+head=ea0698bd3f8687bf1745c9a40f9f028d1fc7317f start=2026-09-23T16:21:01Z load=3.48 5.62 7.36 worktree=0 tracked changes
+gate-1 shard 1/4: exit 1 FAILED
+........................................................................................................................E..............................................................................................................................................................................s............................................................................................................................/usr/lib/python3.13/unittest/case.py:606: ResourceWarning: unclosed file <_io.BufferedWriter name=7>
+  if method() is not None:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+......
+======================================================================
+ERROR: test_inactive_authorized_attempt_observes_without_starting_an_epoch (tests.test_cli_merge_integration.MergeIntegrationEpochTests.test_inactive_authorized_attempt_observes_without_starting_an_epoch)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/chain_core/_fenced_child.py", line 181, in _spawn_blocked_fence_child
+    acknowledged_pid, acknowledged_pgid = _read_child_ack(
+                                          ~~~~~~~~~~~~~~~^
+        ack_read, deadline=deadline, clock=clock, sleeper=sleeper
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/chain_core/_fenced_child.py", line 60, in _read_child_ack
+    raise TimeoutError("blocked child did not acknowledge its process group")
+TimeoutError: blocked child did not acknowledge its process group
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/chain_core/_fenced_process.py", line 215, in run_fenced_command
+    child = _spawn_blocked_fence_child(
+        argv,
+    ...<4 lines>...
+        sleeper=lock._sleeper,
+    )
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/chain_core/_fenced_child.py", line 234, in _spawn_blocked_fence_child
+    raise ChildProcessError(
+        "blocked child could not be reaped after acknowledgement failure"
+    ) from spawn_error
+ChildProcessError: blocked child could not be reaped after acknowledgement failure
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/tests/test_cli_merge_integration.py", line 2597, in test_inactive_authorized_attempt_observes_without_starting_an_epoch
+    self.prepare_older_only_attempts(defer_post_observation=False)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/tests/test_cli_merge_integration.py", line 522, in prepare_older_only_attempts
+    moved = engine.finalize()
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/app/_engine_finalize.py", line 124, in finalize
+    current, fetched_tip, unchanged = self._run_epoch_fetch(
+                                      ~~~~~~~~~~~~~~~~~~~~~^
+        current, common_lock, lease, budget
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/app/_engine_epoch_fetch.py", line 250, in _run_epoch_fetch
+    return self._complete_epoch_fetch_locked(state, lock, lease)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/app/_engine_epoch_fetch.py", line 370, in _complete_epoch_fetch_locked
+    state, observation = self._run_candidate_observation_locked(
+                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        state,
+        ^^^^^^
+    ...<5 lines>...
+        classify=True,
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/app/_engine_observation.py", line 228, in _run_candidate_observation_locked
+    result = chain_core.run_fenced_command(
+        lock,
+    ...<9 lines>...
+        verbose=self.ctx.options.verbose,
+    )
+  File "/usr/lib/python3.13/unittest/mock.py", line 1169, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/unittest/mock.py", line 1173, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/unittest/mock.py", line 1234, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/tests/test_cli_merge_integration.py", line 518, in advance_before_first_push
+    return original(lock, **kwargs)
+  File "/home/agents/foundry-of-zero/forge-plugin-refactor-wt/s6/scripts/forge/forge_cli/chain_core/_fenced_process.py", line 224, in run_fenced_command
+    raise CommonLockUnavailable(
+    ...<5 lines>...
+    ) from exc
+forge_cli.chain_core._core.CommonLockUnavailable: forge: common rebase lock unavailable
+
+----------------------------------------------------------------------
+Ran 426 tests in 355.016s
+
+FAILED (errors=1, skipped=1)
+
+gate-1 shard 2/4: exit 0 OK
+...............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+----------------------------------------------------------------------
+Ran 671 tests in 304.946s
+
+OK
+
+gate-1 shard 3/4: exit 0 OK
+..................................................................................................forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating merge chains
+forge: warning — skipped unreadable chain c-2026-08-30T120000Z-a004 while enumerating commit chains
+......................................................................................................................................................................................................................sss......................................................................................s.......
+----------------------------------------------------------------------
+Ran 409 tests in 372.984s
+
+OK (skipped=4)
+
+gate-1 shard 4/4: exit 0 OK
+...........................................................................................................................................................................................................................................................................................................................................................................................................s......
+----------------------------------------------------------------------
+Ran 402 tests in 457.781s
+
+OK (skipped=1)
+
+gate1_rc=1
+end=2026-09-23T16:28:39Z load=4.54 5.88 6.96
