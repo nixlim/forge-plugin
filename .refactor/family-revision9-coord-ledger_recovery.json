@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "7b1597ee214b9319fb00e8fb543147e80d6054e650ab823c1c6f60dd4b59df72",
+    "tests/test_revision9_coordination_ledger_recovery.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_ledger_recovery.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_restore_prefix_wedge_fixture",
+        "test_pre_fix_golden_wedge_recovers_and_continues",
+        "_seed_unactivated_stale_ledger",
+        "test_unactivated_stale_ledger_has_legible_refusal_and_raw_append",
+        "test_unactivated_stale_ledger_retire_then_typed_successor",
+        "test_unactivated_stale_ledger_raw_close_succeeds",
+        "test_unactivated_stale_ledger_eof_guard_is_load_bearing",
+        "test_gh17_shape_recovers_without_reapplication",
+        "test_gh17_shape_refuses_explicit_foreign_gap_run_id",
+        "test_recovery_activation_crash_matrix",
+        "test_writer_activation_controls_are_independently_load_bearing",
+        "test_retired_successor_close_intent_recovers_and_releases_registry",
+        "test_retired_successor_close_recovers_every_stored_suffix_prefix",
+        "test_retired_successor_recovery_rejects_other_run_mutation"
+      ],
+      "shape": "class",
+      "target_class": "Revision9LedgerRecoveryTests",
+      "alias": "test_revision9_coordination_ledger_recovery",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_ledger_recovery.py": [
+          "from __future__ import annotations",
+          "import base64",
+          "import hashlib",
+          "import json",
+          "import os",
+          "import unittest",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import PREFIX_WEDGE_FIXTURE, PREFIX_WEDGE_FIXTURE_SHA256, key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_coordination.py": [
+          "PREFIX_WEDGE_FIXTURE",
+          "PREFIX_WEDGE_FIXTURE_SHA256",
+          "base64"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_gh17_shape_recovers_without_reapplication": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_gh17_shape_recovers_without_reapplication",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_gh17_shape_refuses_explicit_foreign_gap_run_id": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_gh17_shape_refuses_explicit_foreign_gap_run_id",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_pre_fix_golden_wedge_recovers_and_continues": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_pre_fix_golden_wedge_recovers_and_continues",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_recovery_activation_crash_matrix": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_recovery_activation_crash_matrix",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_retired_successor_close_intent_recovers_and_releases_registry": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_retired_successor_close_intent_recovers_and_releases_registry",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_retired_successor_close_recovers_every_stored_suffix_prefix": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_retired_successor_close_recovers_every_stored_suffix_prefix",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_retired_successor_recovery_rejects_other_run_mutation": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_retired_successor_recovery_rejects_other_run_mutation",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_unactivated_stale_ledger_eof_guard_is_load_bearing": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_unactivated_stale_ledger_eof_guard_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_unactivated_stale_ledger_has_legible_refusal_and_raw_append": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_unactivated_stale_ledger_has_legible_refusal_and_raw_append",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_unactivated_stale_ledger_raw_close_succeeds": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_unactivated_stale_ledger_raw_close_succeeds",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_unactivated_stale_ledger_retire_then_typed_successor": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_unactivated_stale_ledger_retire_then_typed_successor",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_writer_activation_controls_are_independently_load_bearing": "tests/test_revision9_coordination_ledger_recovery.py::Revision9LedgerRecoveryTests::test_writer_activation_controls_are_independently_load_bearing"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_gh17_shape_recovers_without_reapplication": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_gh17_shape_recovers_without_reapplication",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_gh17_shape_refuses_explicit_foreign_gap_run_id": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_gh17_shape_refuses_explicit_foreign_gap_run_id",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_pre_fix_golden_wedge_recovers_and_continues": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_pre_fix_golden_wedge_recovers_and_continues",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_recovery_activation_crash_matrix": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_recovery_activation_crash_matrix",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_retired_successor_close_intent_recovers_and_releases_registry": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_retired_successor_close_intent_recovers_and_releases_registry",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_retired_successor_close_recovers_every_stored_suffix_prefix": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_retired_successor_close_recovers_every_stored_suffix_prefix",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_retired_successor_recovery_rejects_other_run_mutation": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_retired_successor_recovery_rejects_other_run_mutation",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_unactivated_stale_ledger_eof_guard_is_load_bearing": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_unactivated_stale_ledger_eof_guard_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_unactivated_stale_ledger_has_legible_refusal_and_raw_append": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_unactivated_stale_ledger_has_legible_refusal_and_raw_append",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_unactivated_stale_ledger_raw_close_succeeds": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_unactivated_stale_ledger_raw_close_succeeds",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_unactivated_stale_ledger_retire_then_typed_successor": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_unactivated_stale_ledger_retire_then_typed_successor",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_writer_activation_controls_are_independently_load_bearing": "test_revision9_coordination_ledger_recovery.Revision9LedgerRecoveryTests.test_writer_activation_controls_are_independently_load_bearing"
+    }
+  },
+  "base_commit": "db63ca70dedff935909a2cff7d10d8207adc2125"
+}

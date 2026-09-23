@@ -1,0 +1,18 @@
+== c12-ledger_recovery start=2026-09-23T11:14:37Z head=db63ca7 load=6.36 7.76 8.41
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2918 bodies across 2896 names -> .refactor/revision9-coord-c12-ledger_recovery-before.json
+id map: 12 unittest + 12 pytest -> .refactor/idmap-revision9-coord-ledger_recovery.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-ledger_recovery.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 246 files within budget (max 1000)
+Ran 12 tests in 1.445s OK (standalone tests.test_revision9_coordination_ledger_recovery without PYTHONPATH)
+== c12-ledger_recovery record SHA 38f731918544b11393322b342ddfeb577139d47b (pre-amend); amending the record and the driver log into it end=2026-09-23T11:15:16Z
