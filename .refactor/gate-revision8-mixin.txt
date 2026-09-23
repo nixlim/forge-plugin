@@ -1,0 +1,32 @@
+== verify.sh (--test-mode identity)
+$ bash /home/agents/foundry-of-zero/refactor-python/skills/split-module/scripts/verify.sh --pkg tests --snapshot .refactor/revision8-mixin-before.json --manifest .refactor/mixin-revision8-mixin.json --strict-bodies --test-snapshot .refactor/tests-revision8-mixin.json --test-mode identity
+== gate results ==
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+[exit 0]
+
+== repository file-length guard
+$ python3 scripts/check_file_length.py tests
+ok: 73 files within budget (max 1000)
+[exit 0]
+
+== import without PYTHONPATH
+$ python3 -m unittest tests.test_revision8_coordination
+.................................................................................
+----------------------------------------------------------------------
+Ran 81 tests in 29.252s
+
+OK
+[exit 0]
+
+== standalone import without PYTHONPATH
+$ python3 -c import tests._revision8_support
+[exit 0]
+

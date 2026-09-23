@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision8_coordination.py": "98c96cf9477f48a6e9aade09b806e04ca6ac85c6e04d3096bd146ecadda1376b",
+    "tests/_revision8_support.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision8_coordination.py",
+      "dest": "tests/_revision8_support.py",
+      "class": "Revision8CoordinationTests",
+      "methods": [
+        "setUp",
+        "runs_root",
+        "registry_path",
+        "run_dir",
+        "journal_path",
+        "write_record",
+        "command",
+        "api_environment",
+        "opening_record",
+        "task_record",
+        "execution_record",
+        "execution_result_record",
+        "verification_record",
+        "decision_record",
+        "closure_record",
+        "create_citation_files",
+        "open_run",
+        "append_record",
+        "readmit",
+        "retire",
+        "close",
+        "coordination_snapshot",
+        "write_registry",
+        "prime_registry_lock",
+        "prime_batch_lock",
+        "assert_absent_registry_node_collision",
+        "valid_candidate",
+        "assert_invalid_candidate",
+        "assert_valid_candidate",
+        "plant_run_state",
+        "proven_dead_pid"
+      ],
+      "shape": "mixin",
+      "target_class": "Revision8Support",
+      "alias": "_revision8_support",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision8_coordination.py": [
+          "from tests._revision8_support import Revision8Support"
+        ],
+        "tests/_revision8_support.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import json",
+          "import os",
+          "import socket",
+          "import stat",
+          "import subprocess",
+          "import sys",
+          "import tempfile",
+          "from contextlib import contextmanager",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision8_constants import RECORDED_AT, TOOLS",
+          "from codex_orchestrator import batch, journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision8_coordination.py": [
+          "batch",
+          "contextmanager",
+          "stat",
+          "tempfile"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "c8a4662087aec8a416328b7404382e10c8ec60ba"
+}
