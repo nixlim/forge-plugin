@@ -48,5 +48,15 @@
   "dest": "tests/test_revision9_coordination_gap_repair.py",
   "target_class": "Revision9GapRepairTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c05-staging_crashes",
+  "commit": "28de543e78010eba14ad6108ac944a306b75c718",
+  "snapshot": ".refactor/revision9-coord-c05-staging_crashes-before.json",
+  "manifest": ".refactor/family-revision9-coord-staging_crashes.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c05-staging_crashes.json",
+  "dest": "tests/test_revision9_coordination_staging_crashes.py",
+  "target_class": "Revision9StagingCrashTests",
+  "shape": "class"
  }
 ]
