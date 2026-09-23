@@ -28,5 +28,15 @@
   "dest": "tests/test_revision9_coordination_batch_builder.py",
   "target_class": "Revision9BatchBuilderTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c03-scope_change",
+  "commit": "ed265c0268a4705ea9412b8474b5e8191934e7d5",
+  "snapshot": ".refactor/revision9-coord-c03-scope_change-before.json",
+  "manifest": ".refactor/family-revision9-coord-scope_change.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c03-scope_change.json",
+  "dest": "tests/test_revision9_coordination_scope_change.py",
+  "target_class": "Revision9ScopeChangeTests",
+  "shape": "class"
  }
 ]
