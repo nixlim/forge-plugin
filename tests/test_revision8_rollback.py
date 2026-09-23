@@ -1,0 +1,631 @@
+from __future__ import annotations
+
+import json
+import os
+import socket
+import unittest
+from unittest import mock
+
+from tests._revision8_constants import RECORDED_AT
+from tests._revision8_support import Revision8Support
+
+from codex_orchestrator import journal
+
+
+class Revision8RollbackTests(Revision8Support, unittest.TestCase):
+
+    def test_ordinary_append_registry_drift_after_fsync_rolls_back_append(self) -> None:
+        opened = self.open_run("run-append-registry-drift", "src/drift/**")
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        journal_path = self.journal_path("run-append-registry-drift")
+        owner_path = self.run_dir("run-append-registry-drift") / "owner"
+        journal_before = journal_path.read_bytes()
+        owner_before = owner_path.read_bytes()
+        drifted_registry = journal._registry_payload(
+            {"run-append-registry-drift": ("src/drift/rebound/**",)}
+        )
+        candidate = self.decision_record(id="append-after-fsync-drift")
+        real_append = journal._append_with_locked_stream
+        appended_before_drift: list[bytes] = []
+
+        def append_then_drift(*args: object, **kwargs: object) -> int:
+            offset = real_append(*args, **kwargs)  # type: ignore[arg-type]
+            appended = journal_path.read_bytes()
+            self.assertGreater(len(appended), len(journal_before))
+            self.assertEqual(json.loads(appended.splitlines()[-1]), candidate)
+            appended_before_drift.append(appended)
+            self.registry_path.write_bytes(drifted_registry)
+            return offset
+
+        with self.api_environment(), mock.patch.object(
+            journal,
+            "_append_with_locked_stream",
+            side_effect=append_then_drift,
+        ):
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                journal.append_run_record(
+                    self.repo, "run-append-registry-drift", candidate
+                )
+
+        self.assertEqual(str(caught.exception), journal.REGISTRY_UNAVAILABLE)
+        self.assertEqual(len(appended_before_drift), 1)
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertEqual(owner_path.read_bytes(), owner_before)
+        self.assertEqual(self.registry_path.read_bytes(), drifted_registry)
+
+    def test_postpublication_fault_restores_every_lifecycle_transaction(self) -> None:
+        for run_id, scope in (
+            ("run-postpublish-readmit", "src/postpublish/readmit/**"),
+            ("run-postpublish-close", "src/postpublish/close/**"),
+            ("run-postpublish-retire", "src/postpublish/retire/**"),
+        ):
+            opened = self.open_run(run_id, scope)
+            self.assertEqual(opened.returncode, 0, opened.stderr)
+            self.prime_batch_lock(run_id)
+
+        operations = (
+            (
+                "open",
+                "run-postpublish-open",
+                lambda: journal.open_run(
+                    self.repo,
+                    "run-postpublish-open",
+                    ["src/postpublish/open/**"],
+                    self.opening_record("run-postpublish-open"),
+                ),
+            ),
+            (
+                "readmit",
+                "run-postpublish-readmit",
+                lambda: journal.readmit_run(
+                    self.repo,
+                    "run-postpublish-readmit",
+                    ["src/postpublish/readmit/new/**"],
+                    replace=True,
+                ),
+            ),
+            (
+                "close",
+                "run-postpublish-close",
+                lambda: journal.close_run(
+                    self.repo,
+                    "run-postpublish-close",
+                    self.closure_record(),
+                ),
+            ),
+            (
+                "retire",
+                "run-postpublish-retire",
+                lambda: journal.retire_run(
+                    self.repo, "run-postpublish-retire"
+                ),
+            ),
+        )
+
+        for operation, run_id, invoke in operations:
+            registry_before = self.registry_path.read_bytes()
+            before = self.coordination_snapshot()
+            published: list[bytes] = []
+
+            def refuse_after_publication(*_args: object, **_kwargs: object) -> None:
+                candidate = self.registry_path.read_bytes()
+                self.assertNotEqual(candidate, registry_before)
+                published.append(candidate)
+                raise journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE)
+
+            with self.subTest(operation=operation), self.api_environment(), mock.patch.object(
+                journal,
+                "_validate_post_registry_publication",
+                side_effect=refuse_after_publication,
+            ):
+                with self.assertRaises(journal.CoordinationRefusal) as caught:
+                    invoke()
+            self.assertEqual(str(caught.exception), journal.REGISTRY_UNAVAILABLE)
+            self.assertEqual(len(published), 1)
+            self.assertEqual(self.registry_path.read_bytes(), registry_before)
+            self.assertEqual(self.coordination_snapshot(), before)
+            if operation == "open":
+                self.assertFalse(self.run_dir(run_id).exists())
+
+    def test_initially_absent_registry_is_removed_after_postpublication_fault(self) -> None:
+        self.runs_root.mkdir(parents=True)
+        self.prime_registry_lock()
+        candidate_id = "run-absent-registry-rollback"
+        before = self.coordination_snapshot()
+        published: list[bytes] = []
+
+        def refuse_after_publication(*_args: object, **_kwargs: object) -> None:
+            candidate = self.registry_path.read_bytes()
+            registry = json.loads(candidate)
+            self.assertEqual(
+                [entry["run_id"] for entry in registry["open_runs"]],
+                [candidate_id],
+            )
+            published.append(candidate)
+            raise journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE)
+
+        with self.api_environment(), mock.patch.object(
+            journal,
+            "_validate_post_registry_publication",
+            side_effect=refuse_after_publication,
+        ):
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                journal.open_run(
+                    self.repo,
+                    candidate_id,
+                    ["src/absent-registry/**"],
+                    self.opening_record(candidate_id),
+                )
+
+        self.assertEqual(str(caught.exception), journal.REGISTRY_UNAVAILABLE)
+        self.assertEqual(len(published), 1)
+        self.assertFalse(self.registry_path.exists())
+        self.assertFalse(self.run_dir(candidate_id).exists())
+        self.assertEqual(self.coordination_snapshot(), before)
+
+    def test_registry_restoration_failure_retains_published_run_and_journal(self) -> None:
+        primed = self.open_run("run-restoration-prime", "src/restoration/prime/**")
+        self.assertEqual(primed.returncode, 0, primed.stderr)
+        candidate_id = "run-restoration-candidate"
+
+        with self.api_environment(), mock.patch.object(
+            journal,
+            "_validate_post_registry_publication",
+            side_effect=journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE),
+        ), mock.patch.object(
+            journal,
+            "_rollback_registry_publication",
+            side_effect=journal.RegistryRestorationRefusal(
+                journal.JOURNAL_ROLLBACK_FAILED
+            ),
+        ):
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                journal.open_run(
+                    self.repo,
+                    candidate_id,
+                    ["src/restoration/candidate/**"],
+                    self.opening_record(candidate_id),
+                )
+
+        self.assertEqual(str(caught.exception), journal.JOURNAL_ROLLBACK_FAILED)
+        registry = json.loads(self.registry_path.read_bytes())
+        self.assertIn(
+            candidate_id,
+            {entry["run_id"] for entry in registry["open_runs"]},
+        )
+        self.assertTrue((self.run_dir(candidate_id) / "owner").is_file())
+        opening = json.loads(self.journal_path(candidate_id).read_bytes())
+        self.assertEqual(opening["type"], "run_started")
+        self.assertEqual(opening["run_id"], candidate_id)
+
+        journal_before = self.journal_path("run-restoration-prime").read_bytes()
+        readmitted_scope = ["src/restoration/prime/readmitted/**"]
+        with self.api_environment(), mock.patch.object(
+            journal,
+            "_validate_post_registry_publication",
+            side_effect=journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE),
+        ), mock.patch.object(
+            journal,
+            "_rollback_registry_publication",
+            side_effect=journal.RegistryRestorationRefusal(
+                journal.JOURNAL_ROLLBACK_FAILED
+            ),
+        ):
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                journal.readmit_run(
+                    self.repo,
+                    "run-restoration-prime",
+                    readmitted_scope,
+                    replace=True,
+                )
+
+        self.assertEqual(str(caught.exception), journal.JOURNAL_ROLLBACK_FAILED)
+        journal_after = self.journal_path("run-restoration-prime").read_bytes()
+        self.assertNotEqual(journal_after, journal_before)
+        readmission = json.loads(journal_after.splitlines()[-1])
+        self.assertEqual(readmission["resolution"], journal.READMISSION_RESOLUTION)
+        self.assertEqual(readmission["scope"], readmitted_scope)
+        registry = json.loads(self.registry_path.read_bytes())
+        scopes = {
+            entry["run_id"]: entry["scope"] for entry in registry["open_runs"]
+        }
+        self.assertEqual(scopes["run-restoration-prime"], readmitted_scope)
+
+    def test_existing_registry_publication_keeps_canonical_name_present(self) -> None:
+        primed = self.open_run("run-canonical-registry", "src/canonical/**")
+        self.assertEqual(primed.returncode, 0, primed.stderr)
+        real_link = journal.os.link
+        real_exchange = journal._exchange_names_at
+        real_unlink = journal.os.unlink
+        backup_links: list[tuple[int, int]] = []
+        exchanges: list[tuple[str, str, int, int]] = []
+        canonical_unlinks: list[str] = []
+
+        def observe_link(
+            source: object,
+            destination: object,
+            *,
+            src_dir_fd: int | None = None,
+            dst_dir_fd: int | None = None,
+            follow_symlinks: bool = True,
+        ) -> None:
+            is_backup = (
+                os.fspath(source) == "run-registry.json"
+                and src_dir_fd is not None
+                and dst_dir_fd is not None
+            )
+            before_inode = None
+            if is_backup:
+                before_inode = os.stat(
+                    "run-registry.json",
+                    dir_fd=src_dir_fd,
+                    follow_symlinks=False,
+                ).st_ino
+            real_link(
+                source,
+                destination,
+                src_dir_fd=src_dir_fd,
+                dst_dir_fd=dst_dir_fd,
+                follow_symlinks=follow_symlinks,
+            )
+            if is_backup:
+                canonical_inode = os.stat(
+                    "run-registry.json",
+                    dir_fd=src_dir_fd,
+                    follow_symlinks=False,
+                ).st_ino
+                backup_inode = os.stat(
+                    destination,
+                    dir_fd=dst_dir_fd,
+                    follow_symlinks=False,
+                ).st_ino
+                self.assertEqual(before_inode, canonical_inode)
+                self.assertEqual(canonical_inode, backup_inode)
+                backup_links.append((canonical_inode, backup_inode))
+
+        def observe_exchange(
+            directory_descriptor: int,
+            first_name: str,
+            second_name: str,
+        ) -> None:
+            involves_canonical = "run-registry.json" in {
+                first_name,
+                second_name,
+            }
+            before_inode = None
+            if involves_canonical:
+                before_inode = os.stat(
+                    "run-registry.json",
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                ).st_ino
+            real_exchange(directory_descriptor, first_name, second_name)
+            if involves_canonical:
+                after_inode = os.stat(
+                    "run-registry.json",
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                ).st_ino
+                self.assertNotEqual(before_inode, after_inode)
+                exchanges.append(
+                    (
+                        first_name,
+                        second_name,
+                        before_inode,  # type: ignore[arg-type]
+                        after_inode,
+                    )
+                )
+
+        def observe_unlink(
+            path: object, *, dir_fd: int | None = None
+        ) -> None:
+            if os.fspath(path) == "run-registry.json":
+                canonical_unlinks.append(os.fspath(path))
+            real_unlink(path, dir_fd=dir_fd)
+
+        with self.api_environment(), mock.patch.object(
+            journal.os, "link", side_effect=observe_link
+        ), mock.patch.object(
+            journal, "_exchange_names_at", side_effect=observe_exchange
+        ), mock.patch.object(
+            journal.os, "unlink", side_effect=observe_unlink
+        ):
+            journal.readmit_run(
+                self.repo,
+                "run-canonical-registry",
+                ["src/canonical/readmitted/**"],
+                replace=True,
+            )
+
+        self.assertEqual(len(backup_links), 1)
+        self.assertEqual(len(exchanges), 1)
+        self.assertTrue(exchanges[0][0].endswith(".candidate"))
+        self.assertEqual(exchanges[0][1], "run-registry.json")
+        self.assertEqual(canonical_unlinks, [])
+        self.assertTrue(self.registry_path.is_file())
+
+    def test_stale_owner_append_failure_restores_owner_and_journal(self) -> None:
+        opened = self.open_run("run-stale-owner-append", "src/stale/append/**")
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        run_dir = self.run_dir("run-stale-owner-append")
+        owner_path = run_dir / "owner"
+        journal_path = run_dir / "journal.jsonl"
+        stale_owner = (
+            f"pid: {self.proven_dead_pid()}\n"
+            f"host: {socket.gethostname()}\n"
+            f"started_at: {RECORDED_AT}\n"
+        ).encode("utf-8")
+        owner_path.write_bytes(stale_owner)
+        owner_before = owner_path.lstat()
+        journal_before = journal_path.read_bytes()
+        registry_before = self.registry_path.read_bytes()
+        drifted_registry = journal._registry_payload(
+            {"run-stale-owner-append": ("src/stale/rebound/**",)}
+        )
+        candidate = self.decision_record(id="stale-owner-append-failure")
+        real_append = journal._append_with_locked_stream
+        takeover_seen: list[bytes] = []
+
+        def append_then_drift(*args: object, **kwargs: object) -> int:
+            offset = real_append(*args, **kwargs)  # type: ignore[arg-type]
+            installed_owner = owner_path.read_bytes()
+            self.assertNotEqual(installed_owner, stale_owner)
+            self.assertTrue(
+                installed_owner.startswith(f"pid: {os.getpid()}\n".encode("utf-8"))
+            )
+            takeover_seen.append(installed_owner)
+            self.registry_path.write_bytes(drifted_registry)
+            return offset
+
+        with self.api_environment(), mock.patch.object(
+            journal,
+            "_append_with_locked_stream",
+            side_effect=append_then_drift,
+        ):
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                journal.append_run_record(
+                    self.repo, "run-stale-owner-append", candidate
+                )
+
+        owner_after = owner_path.lstat()
+        self.assertEqual(str(caught.exception), journal.REGISTRY_UNAVAILABLE)
+        self.assertEqual(len(takeover_seen), 1)
+        self.assertEqual(owner_path.read_bytes(), stale_owner)
+        self.assertEqual(
+            (owner_after.st_dev, owner_after.st_ino, owner_after.st_mode),
+            (owner_before.st_dev, owner_before.st_ino, owner_before.st_mode),
+        )
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertEqual(self.registry_path.read_bytes(), drifted_registry)
+        self.assertNotEqual(self.registry_path.read_bytes(), registry_before)
+        self.assertEqual(list(run_dir.glob(".owner.*")), [])
+
+    def test_stale_owner_lifecycle_failure_restores_all_transaction_bytes(self) -> None:
+        run_id = "run-stale-owner-lifecycle"
+        opened = self.open_run(run_id, "src/stale/lifecycle/**")
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        self.prime_batch_lock(run_id)
+        run_dir = self.run_dir(run_id)
+        owner_path = run_dir / "owner"
+        journal_path = run_dir / "journal.jsonl"
+        stale_owner = (
+            f"pid: {self.proven_dead_pid()}\n"
+            f"host: {socket.gethostname()}\n"
+            f"started_at: {RECORDED_AT}\n"
+        ).encode("utf-8")
+        owner_path.write_bytes(stale_owner)
+        real_post = journal._validate_post_registry_publication
+        operations = (
+            (
+                "readmit",
+                lambda: journal.readmit_run(
+                    self.repo,
+                    run_id,
+                    ["src/stale/lifecycle/readmitted/**"],
+                    replace=True,
+                ),
+            ),
+            (
+                "close",
+                lambda: journal.close_run(
+                    self.repo, run_id, self.closure_record()
+                ),
+            ),
+            ("retire", lambda: journal.retire_run(self.repo, run_id)),
+        )
+
+        for operation, invoke in operations:
+            before = self.coordination_snapshot()
+            owner_before = owner_path.lstat()
+            journal_before = journal_path.read_bytes()
+            registry_before = self.registry_path.read_bytes()
+            registry_stat_before = self.registry_path.lstat()
+            reached: list[bytes] = []
+
+            def validate_then_refuse(*args: object, **kwargs: object) -> None:
+                real_post(*args, **kwargs)  # type: ignore[arg-type]
+                current_owner = owner_path.read_bytes()
+                self.assertNotEqual(current_owner, stale_owner)
+                self.assertNotEqual(self.registry_path.read_bytes(), registry_before)
+                reached.append(current_owner)
+                raise journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE)
+
+            with self.subTest(operation=operation), self.api_environment(), mock.patch.object(
+                journal,
+                "_validate_post_registry_publication",
+                side_effect=validate_then_refuse,
+            ):
+                with self.assertRaises(journal.CoordinationRefusal) as caught:
+                    invoke()
+
+            owner_after = owner_path.lstat()
+            registry_stat_after = self.registry_path.lstat()
+            self.assertEqual(str(caught.exception), journal.REGISTRY_UNAVAILABLE)
+            self.assertEqual(len(reached), 1)
+            self.assertEqual(owner_path.read_bytes(), stale_owner)
+            self.assertEqual(
+                (owner_after.st_dev, owner_after.st_ino, owner_after.st_mode),
+                (owner_before.st_dev, owner_before.st_ino, owner_before.st_mode),
+            )
+            self.assertEqual(journal_path.read_bytes(), journal_before)
+            self.assertEqual(self.registry_path.read_bytes(), registry_before)
+            self.assertEqual(
+                (
+                    registry_stat_after.st_dev,
+                    registry_stat_after.st_ino,
+                    registry_stat_after.st_mode,
+                ),
+                (
+                    registry_stat_before.st_dev,
+                    registry_stat_before.st_ino,
+                    registry_stat_before.st_mode,
+                ),
+            )
+            self.assertEqual(self.coordination_snapshot(), before)
+            self.assertEqual(list(run_dir.glob(".owner.*")), [])
+
+    def test_owner_restoration_identity_conflict_preserves_foreign_owner(self) -> None:
+        run_id = "run-owner-restoration-conflict"
+        opened = self.open_run(run_id, "src/owner/conflict/**")
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        run_dir = self.run_dir(run_id)
+        owner_path = run_dir / "owner"
+        journal_path = run_dir / "journal.jsonl"
+        stale_owner = (
+            f"pid: {self.proven_dead_pid()}\n"
+            f"host: {socket.gethostname()}\n"
+            f"started_at: {RECORDED_AT}\n"
+        ).encode("utf-8")
+        owner_path.write_bytes(stale_owner)
+        journal_before = journal_path.read_bytes()
+        drifted_registry = journal._registry_payload(
+            {run_id: ("src/owner/conflict/rebound/**",)}
+        )
+        foreign_owner = (
+            b"pid: 42\n"
+            b"host: foreign-owner.invalid\n"
+            b"started_at: 2026-08-26T12:00:00Z\n"
+        )
+        displaced_candidate = self.root / "owner-restoration-candidate"
+        real_append = journal._append_with_locked_stream
+        real_rollback_owner = journal._rollback_owner_takeover
+        foreign_observation: list[tuple[int, int, int]] = []
+
+        def append_then_drift(*args: object, **kwargs: object) -> int:
+            offset = real_append(*args, **kwargs)  # type: ignore[arg-type]
+            self.registry_path.write_bytes(drifted_registry)
+            return offset
+
+        def replace_owner_then_rollback(
+            locked: journal.LockedJournal,
+            takeover: journal.OwnerTakeover,
+        ) -> None:
+            self.assertIsNotNone(takeover.candidate_observation)
+            os.replace(owner_path, displaced_candidate)
+            owner_path.write_bytes(foreign_owner)
+            observed = owner_path.lstat()
+            foreign_observation.append(
+                (observed.st_dev, observed.st_ino, observed.st_mode)
+            )
+            real_rollback_owner(locked, takeover)
+
+        with self.api_environment(), mock.patch.object(
+            journal,
+            "_append_with_locked_stream",
+            side_effect=append_then_drift,
+        ), mock.patch.object(
+            journal,
+            "_rollback_owner_takeover",
+            side_effect=replace_owner_then_rollback,
+        ):
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                journal.append_run_record(
+                    self.repo,
+                    run_id,
+                    self.decision_record(id="owner-restoration-conflict"),
+                )
+
+        observed = owner_path.lstat()
+        self.assertIsInstance(caught.exception, journal.OwnerRestorationRefusal)
+        self.assertEqual(str(caught.exception), journal.JOURNAL_ROLLBACK_FAILED)
+        self.assertEqual(journal_path.read_bytes(), journal_before)
+        self.assertEqual(self.registry_path.read_bytes(), drifted_registry)
+        self.assertEqual(owner_path.read_bytes(), foreign_owner)
+        self.assertEqual(
+            (observed.st_dev, observed.st_ino, observed.st_mode),
+            foreign_observation[0],
+        )
+        self.assertTrue(
+            displaced_candidate.read_bytes().startswith(
+                f"pid: {os.getpid()}\n".encode("utf-8")
+            )
+        )
+        prior_backups = list(run_dir.glob(".owner.*.previous"))
+        self.assertEqual(len(prior_backups), 1)
+        self.assertEqual(prior_backups[0].read_bytes(), stale_owner)
+
+    def test_registry_restoration_cleanup_occurs_only_after_final_proof(self) -> None:
+        primed = self.open_run("run-cleanup-proof", "src/cleanup/prime/**")
+        self.assertEqual(primed.returncode, 0, primed.stderr)
+        before = self.coordination_snapshot()
+        real_validate = journal._validate_restored_registry_publication
+        real_unlink = journal._unlink_if_observed
+        proof_started = False
+        proof_complete = False
+        cleaned: list[str] = []
+
+        def validate_then_mark(
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            nonlocal proof_started, proof_complete
+            proof_started = True
+            retained = list(
+                self.registry_path.parent.glob(
+                    ".run-registry.json.*.previous"
+                )
+            )
+            self.assertEqual(len(retained), 1)
+            real_validate(*args, **kwargs)  # type: ignore[arg-type]
+            proof_complete = True
+
+        def require_proof_before_cleanup(
+            directory_descriptor: int,
+            name: str,
+            observation: journal.FileObservation,
+        ) -> None:
+            if name.endswith(".previous"):
+                self.assertTrue(proof_complete)
+                cleaned.append(name)
+            real_unlink(directory_descriptor, name, observation)
+
+        with self.api_environment(), mock.patch.object(
+            journal,
+            "_validate_post_registry_publication",
+            side_effect=journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE),
+        ), mock.patch.object(
+            journal,
+            "_validate_restored_registry_publication",
+            side_effect=validate_then_mark,
+        ), mock.patch.object(
+            journal,
+            "_unlink_if_observed",
+            side_effect=require_proof_before_cleanup,
+        ):
+            with self.assertRaises(journal.CoordinationRefusal) as caught:
+                journal.open_run(
+                    self.repo,
+                    "run-cleanup-candidate",
+                    ["src/cleanup/candidate/**"],
+                    self.opening_record("run-cleanup-candidate"),
+                )
+
+        self.assertEqual(str(caught.exception), journal.REGISTRY_UNAVAILABLE)
+        self.assertTrue(proof_started)
+        self.assertTrue(proof_complete)
+        self.assertEqual(len(cleaned), 1)
+        self.assertEqual(self.coordination_snapshot(), before)
+        self.assertFalse(self.run_dir("run-cleanup-candidate").exists())
+        self.assertEqual(
+            list(self.registry_path.parent.glob(".run-registry.json.*")), []
+        )
