@@ -1,0 +1,18 @@
+== c09-receipted_chain start=2026-09-23T11:12:27Z head=3c47c51 load=8.37 8.34 8.67
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2915 bodies across 2893 names -> .refactor/revision9-coord-c09-receipted_chain-before.json
+id map: 5 unittest + 5 pytest -> .refactor/idmap-revision9-coord-receipted_chain.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-receipted_chain.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 243 files within budget (max 1000)
+Ran 5 tests in 0.565s OK (standalone tests.test_revision9_coordination_receipted_chain without PYTHONPATH)
+== c09-receipted_chain record SHA 39e08fcc30e61a36ee08950ef324761ce3b4b2c1 (pre-amend); amending the record and the driver log into it end=2026-09-23T11:13:10Z

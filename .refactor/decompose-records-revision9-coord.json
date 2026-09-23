@@ -88,5 +88,15 @@
   "dest": "tests/test_revision9_coordination_legacy_activation.py",
   "target_class": "Revision9LegacyActivationTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c09-receipted_chain",
+  "commit": "39e08fcc30e61a36ee08950ef324761ce3b4b2c1",
+  "snapshot": ".refactor/revision9-coord-c09-receipted_chain-before.json",
+  "manifest": ".refactor/family-revision9-coord-receipted_chain.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c09-receipted_chain.json",
+  "dest": "tests/test_revision9_coordination_receipted_chain.py",
+  "target_class": "Revision9ReceiptedChainTests",
+  "shape": "class"
  }
 ]
