@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "7d9ab1f6775ff2ef0bf87b8bc4e819cb7214420629a5ce0363ca12e254275e11",
+    "tests/_revision9_coord_support.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/_revision9_coord_support.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "setUp",
+        "_new_repo",
+        "api_environment",
+        "run_dir",
+        "open_run",
+        "start_task",
+        "_leave_complete_intent",
+        "_write_landed_intent_for_last_receipt",
+        "_write_bound_chain_state",
+        "_chain_drain_authorizer",
+        "_terminal_control_repo",
+        "_open_legacy_run",
+        "_activation_markers",
+        "_run_file_bytes",
+        "_invoke_raw_lifecycle",
+        "_seed_gh17_wedge",
+        "_assert_gh17_recovered",
+        "command"
+      ],
+      "shape": "mixin",
+      "target_class": "Revision9BuilderBatchSupport",
+      "alias": "_revision9_coord_support",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport"
+        ],
+        "tests/_revision9_coord_support.py": [
+          "from __future__ import annotations",
+          "import base64",
+          "import copy",
+          "import io",
+          "import json",
+          "import os",
+          "import subprocess",
+          "import sys",
+          "import tempfile",
+          "from contextlib import contextmanager, redirect_stderr",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import TOOLS, key",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_coordination.py": [
+          "TOOLS"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "2da3f4eec31d2649368e871cc9e55990601e411e"
+}

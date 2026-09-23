@@ -1,0 +1,12 @@
+[
+ {
+  "cluster": "c00-mixin",
+  "commit": "91f32c576e1c81eb063f277b9994eb79bcd1aa59",
+  "snapshot": ".refactor/revision9-coord-c00-mixin-before.json",
+  "manifest": ".refactor/mixin-revision9-coord.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c00-mixin.json",
+  "dest": "tests/_revision9_coord_support.py",
+  "target_class": "Revision9BuilderBatchSupport",
+  "shape": "mixin"
+ }
+]

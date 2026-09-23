@@ -1,0 +1,15 @@
+== c00-mixin start=2026-09-23T10:58:29Z head=2da3f4e load=4.57 7.41 8.86
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2906 bodies across 2884 names -> .refactor/revision9-coord-c00-mixin-before.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/mixin-revision9-coord.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 234 files within budget (max 1000)
