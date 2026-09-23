@@ -1,0 +1,18 @@
+== c08-legacy_activation start=2026-09-23T11:11:39Z head=744293d load=8.13 8.34 8.69
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2914 bodies across 2892 names -> .refactor/revision9-coord-c08-legacy_activation-before.json
+id map: 11 unittest + 11 pytest -> .refactor/idmap-revision9-coord-legacy_activation.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-legacy_activation.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 242 files within budget (max 1000)
+Ran 11 tests in 1.150s OK (standalone tests.test_revision9_coordination_legacy_activation without PYTHONPATH)
+== c08-legacy_activation record SHA 05e12902fc1cafdf46376d1294c889ce9921e44b (pre-amend); amending the record and the driver log into it end=2026-09-23T11:12:26Z
