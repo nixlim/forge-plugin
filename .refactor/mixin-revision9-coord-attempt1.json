@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "7d9ab1f6775ff2ef0bf87b8bc4e819cb7214420629a5ce0363ca12e254275e11",
+    "tests/_revision9_coord_support.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/_revision9_coord_support.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "setUp",
+        "_new_repo",
+        "api_environment",
+        "run_dir",
+        "open_run",
+        "start_task",
+        "_leave_complete_intent",
+        "_leave_base_intent",
+        "_leave_scope_receipt_gap",
+        "_leave_two_record_receipt_gap",
+        "_write_landed_intent_for_last_receipt",
+        "_write_bound_chain_state",
+        "_chain_drain_case",
+        "_chain_drain_authorizer",
+        "_append_test_landing",
+        "_append_test_decision",
+        "_terminal_control_repo",
+        "_abort_bound_chain_fixture",
+        "_self_event_fixture",
+        "_open_legacy_run",
+        "_activation_markers",
+        "_run_file_bytes",
+        "_plant_unreplayable_unrelated_chain",
+        "_pad_valid_json_over_cap",
+        "_guard_activation_artifact_read_budget",
+        "_assert_first_batch_artifact_substitution_refuses",
+        "_activation_outbox_case",
+        "_compete_with_activation_outbox",
+        "_invoke_raw_lifecycle",
+        "_bound_chain_outbox",
+        "_acknowledge_bound_chain",
+        "_legacy_receipted_chain_case",
+        "_rewrite_commit_events",
+        "_restore_prefix_wedge_fixture",
+        "_seed_unactivated_stale_ledger",
+        "_seed_gh17_wedge",
+        "_assert_gh17_recovered",
+        "command"
+      ],
+      "shape": "mixin",
+      "target_class": "Revision9BuilderBatchSupport",
+      "alias": "_revision9_coord_support",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport"
+        ],
+        "tests/_revision9_coord_support.py": [
+          "from __future__ import annotations",
+          "import base64",
+          "import copy",
+          "import hashlib",
+          "import io",
+          "import json",
+          "import os",
+          "import shutil",
+          "import subprocess",
+          "import sys",
+          "import tempfile",
+          "from contextlib import contextmanager, redirect_stderr",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import PREFIX_WEDGE_FIXTURE, PREFIX_WEDGE_FIXTURE_SHA256, TOOLS, UNREPLAYABLE_CHAIN_FIXTURE, UNREPLAYABLE_CHAIN_FIXTURE_SHA256, key",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_coordination.py": [
+          "PREFIX_WEDGE_FIXTURE",
+          "PREFIX_WEDGE_FIXTURE_SHA256",
+          "TOOLS",
+          "UNREPLAYABLE_CHAIN_FIXTURE",
+          "UNREPLAYABLE_CHAIN_FIXTURE_SHA256"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "base_commit": "455e436aa788849d5d819ca21579f82d3978b6c3"
+}
