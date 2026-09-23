@@ -1,132 +1,145 @@
 [
  {
   "cluster": "c00-mixin",
-  "commit": "91f32c576e1c81eb063f277b9994eb79bcd1aa59",
+  "commit": "63dd6b8b98832504f6e67c13edbd0264e83444ae",
   "snapshot": ".refactor/revision9-coord-c00-mixin-before.json",
   "manifest": ".refactor/mixin-revision9-coord.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c00-mixin.json",
   "dest": "tests/_revision9_coord_support.py",
   "target_class": "Revision9BuilderBatchSupport",
-  "shape": "mixin"
+  "shape": "mixin",
+  "pre_amend_commit": "91f32c576e1c81eb063f277b9994eb79bcd1aa59"
  },
  {
   "cluster": "c01-cli_diagnostics",
-  "commit": "c46bb8ccebd18a4abf3576f0daa4500123095190",
+  "commit": "40383f3f499a8c9ad5121d1eeda9df08d56427f1",
   "snapshot": ".refactor/revision9-coord-c01-cli_diagnostics-before.json",
   "manifest": ".refactor/family-revision9-coord-cli_diagnostics.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c01-cli_diagnostics.json",
   "dest": "tests/test_revision9_coordination_cli_diagnostics.py",
   "target_class": "Revision9CliDiagnosticsTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "c46bb8ccebd18a4abf3576f0daa4500123095190"
  },
  {
   "cluster": "c02-batch_builder",
-  "commit": "4bd67364d17b59c9d1efcf649f0f89cb2e0f1845",
+  "commit": "ba4188372fe29e98783e4cda1e3f4775b1d8dfaa",
   "snapshot": ".refactor/revision9-coord-c02-batch_builder-before.json",
   "manifest": ".refactor/family-revision9-coord-batch_builder.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c02-batch_builder.json",
   "dest": "tests/test_revision9_coordination_batch_builder.py",
   "target_class": "Revision9BatchBuilderTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "4bd67364d17b59c9d1efcf649f0f89cb2e0f1845"
  },
  {
   "cluster": "c03-scope_change",
-  "commit": "ed265c0268a4705ea9412b8474b5e8191934e7d5",
+  "commit": "666ab3ba14ec6ef6588393dac1e89b576a85d6b0",
   "snapshot": ".refactor/revision9-coord-c03-scope_change-before.json",
   "manifest": ".refactor/family-revision9-coord-scope_change.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c03-scope_change.json",
   "dest": "tests/test_revision9_coordination_scope_change.py",
   "target_class": "Revision9ScopeChangeTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "ed265c0268a4705ea9412b8474b5e8191934e7d5"
  },
  {
   "cluster": "c04-gap_repair",
-  "commit": "d3d137aa86ed8bb552b7238ccd9cc652cd3b58a8",
+  "commit": "e9cac071d4126461474c278b3fc2b920cc647b64",
   "snapshot": ".refactor/revision9-coord-c04-gap_repair-before.json",
   "manifest": ".refactor/family-revision9-coord-gap_repair.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c04-gap_repair.json",
   "dest": "tests/test_revision9_coordination_gap_repair.py",
   "target_class": "Revision9GapRepairTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "d3d137aa86ed8bb552b7238ccd9cc652cd3b58a8"
  },
  {
   "cluster": "c05-staging_crashes",
-  "commit": "28de543e78010eba14ad6108ac944a306b75c718",
+  "commit": "09c4b74a05fcf22451d88f6ee9bcee8f10bcb7e4",
   "snapshot": ".refactor/revision9-coord-c05-staging_crashes-before.json",
   "manifest": ".refactor/family-revision9-coord-staging_crashes.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c05-staging_crashes.json",
   "dest": "tests/test_revision9_coordination_staging_crashes.py",
   "target_class": "Revision9StagingCrashTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "28de543e78010eba14ad6108ac944a306b75c718"
  },
  {
   "cluster": "c06-chain_drain",
-  "commit": "d8d81113709012bb03ca4cae4b461acb3001b161",
+  "commit": "e01d1013f120172aa44c4131e6261631e5e5e9cb",
   "snapshot": ".refactor/revision9-coord-c06-chain_drain-before.json",
   "manifest": ".refactor/family-revision9-coord-chain_drain.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c06-chain_drain.json",
   "dest": "tests/test_revision9_coordination_chain_drain.py",
   "target_class": "Revision9ChainDrainTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "d8d81113709012bb03ca4cae4b461acb3001b161"
  },
  {
   "cluster": "c07-terminal_builder",
-  "commit": "18c4dfd0efb3fd0449ef5c5980a2bfa1b2854cd0",
+  "commit": "744293d1eccc36565226a148e01a21498f190808",
   "snapshot": ".refactor/revision9-coord-c07-terminal_builder-before.json",
   "manifest": ".refactor/family-revision9-coord-terminal_builder.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c07-terminal_builder.json",
   "dest": "tests/test_revision9_coordination_terminal_builder.py",
   "target_class": "Revision9TerminalBuilderTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "18c4dfd0efb3fd0449ef5c5980a2bfa1b2854cd0"
  },
  {
   "cluster": "c08-legacy_activation",
-  "commit": "05e12902fc1cafdf46376d1294c889ce9921e44b",
+  "commit": "3c47c51d9e0185a1040803525b8359fb46d93ec5",
   "snapshot": ".refactor/revision9-coord-c08-legacy_activation-before.json",
   "manifest": ".refactor/family-revision9-coord-legacy_activation.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c08-legacy_activation.json",
   "dest": "tests/test_revision9_coordination_legacy_activation.py",
   "target_class": "Revision9LegacyActivationTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "05e12902fc1cafdf46376d1294c889ce9921e44b"
  },
  {
   "cluster": "c09-receipted_chain",
-  "commit": "39e08fcc30e61a36ee08950ef324761ce3b4b2c1",
+  "commit": "cbac4a4ad830c1151ac5fb19c2b635910f202d25",
   "snapshot": ".refactor/revision9-coord-c09-receipted_chain-before.json",
   "manifest": ".refactor/family-revision9-coord-receipted_chain.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c09-receipted_chain.json",
   "dest": "tests/test_revision9_coordination_receipted_chain.py",
   "target_class": "Revision9ReceiptedChainTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "39e08fcc30e61a36ee08950ef324761ce3b4b2c1"
  },
  {
   "cluster": "c10-activation_scan",
-  "commit": "74ce1c99b67973ced66ab7e19ff0b094d5059638",
+  "commit": "4d416d1b080f8f819c51125424fc37846f8b089d",
   "snapshot": ".refactor/revision9-coord-c10-activation_scan-before.json",
   "manifest": ".refactor/family-revision9-coord-activation_scan.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c10-activation_scan.json",
   "dest": "tests/test_revision9_coordination_activation_scan.py",
   "target_class": "Revision9ActivationScanTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "74ce1c99b67973ced66ab7e19ff0b094d5059638"
  },
  {
   "cluster": "c11-activation_outbox",
-  "commit": "d4a36fa663207059813660042389e35998bccbbb",
+  "commit": "db63ca70dedff935909a2cff7d10d8207adc2125",
   "snapshot": ".refactor/revision9-coord-c11-activation_outbox-before.json",
   "manifest": ".refactor/family-revision9-coord-activation_outbox.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c11-activation_outbox.json",
   "dest": "tests/test_revision9_coordination_activation_outbox.py",
   "target_class": "Revision9ActivationOutboxTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "d4a36fa663207059813660042389e35998bccbbb"
  },
  {
   "cluster": "c12-ledger_recovery",
-  "commit": "38f731918544b11393322b342ddfeb577139d47b",
+  "commit": "9b7599a5160c53ec919c8a3b8b3ea674ae9657d7",
   "snapshot": ".refactor/revision9-coord-c12-ledger_recovery-before.json",
   "manifest": ".refactor/family-revision9-coord-ledger_recovery.json",
   "test_snapshot": ".refactor/tests-revision9-coord-c12-ledger_recovery.json",
   "dest": "tests/test_revision9_coordination_ledger_recovery.py",
   "target_class": "Revision9LedgerRecoveryTests",
-  "shape": "class"
+  "shape": "class",
+  "pre_amend_commit": "38f731918544b11393322b342ddfeb577139d47b"
  }
 ]
