@@ -17,10 +17,7 @@ MUTATION_HELPER = ROOT / "scripts/forge/run-scoped-mutation.py"
 EMIT_EVENT = ROOT / "scripts/forge/emit-decision-event.py"
 JOURNAL_PATTERNS = ROOT / "scripts/forge/journal-patterns.py"
 NOW = "2026-08-11T12:00:00Z"
-CONFIG_WARNING = (
-    "forge: malformed drift-config — using defaults "
-    "(cadence: 14d, retention: forever, event-retention: 400d)"
-)
+CONFIG_WARNING = "forge: malformed drift-config — using defaults (cadence: 14d, retention: forever, event-retention: 400d)"
 STALE_WARNING = "forge: drift report stale — run /forge:drift"
 REVIEWER_EVAL_TRIGGER_TABLE = """| control | path patterns |
 |---|---|
@@ -85,6 +82,7 @@ class DriftFixture:
         shutil.copy2(MUTATION_HELPER, self.plugin / "scripts/forge/run-scoped-mutation.py")
         shutil.copy2(EMIT_EVENT, self.plugin / "scripts/forge/emit-decision-event.py")
         shutil.copy2(JOURNAL_PATTERNS, self.plugin / "scripts/forge/journal-patterns.py")
+        shutil.copy2(JOURNAL_PATTERNS.with_name("route_vocab.py"), self.plugin / "scripts/forge/route_vocab.py")
         self._script(
             "run-evals.sh",
             """#!/bin/sh

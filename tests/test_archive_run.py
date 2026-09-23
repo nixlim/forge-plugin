@@ -107,7 +107,7 @@ class ArchiveRunTests(unittest.TestCase):
         self.git("symbolic-ref", "HEAD", "refs/heads/main")
         self.git("config", "user.name", "Archive Fixture")
         self.git("config", "user.email", "archive@example.invalid")
-        (self.repo / ".gitignore").write_text(".forge/tmp/\n", encoding="utf-8")
+        (self.repo / ".gitignore").write_text(".forge/tmp/\n__pycache__/\n", encoding="utf-8")
         (self.repo / "tracked.txt").write_text("initial\n", encoding="utf-8")
         self.git("add", ".gitignore", "tracked.txt")
         self.git("commit", "--quiet", "-m", "fixture")
@@ -561,7 +561,7 @@ class ArchiveRunTests(unittest.TestCase):
             Path("agents/review-final.md"),
             Path("docs/specs/forge-plugin-spec.md"),
             Path("system/codex/agents/implementer.toml"),
-            Path("system/codex/agents/review-cheap.toml"),
+            Path("system/codex/agents/review-cheap.toml"), Path("scripts/forge/route_vocab.py"),
             Path("tests/test_repo_conformance.py"),
         )
         for relative in sources:
@@ -570,7 +570,7 @@ class ArchiveRunTests(unittest.TestCase):
             target.write_bytes((ROOT / relative).read_bytes())
         # The conformance walk is fail closed when the governed script root is
         # unavailable. This fixture has no governed executables of its own.
-        (self.repo / "scripts/forge").mkdir(parents=True)
+        (self.repo / "scripts/forge").mkdir(parents=True, exist_ok=True)
         self.git("add", *(relative.as_posix() for relative in sources))
         self.git("commit", "--quiet", "-m", "install routing authority")
         return self.git("rev-parse", "HEAD").stdout.strip()

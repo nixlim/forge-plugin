@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import route_vocab
 import stat
 import subprocess
 import sys
@@ -184,23 +185,20 @@ def parse_yaml_route(text: str) -> tuple[str, str] | None:
 
 def committed_route(repo: Path, execution: dict[str, Any]) -> tuple[str, str] | None:
     head = execution.get("head")
-    provider = execution.get("provider")
-    role = execution.get("role")
+    provider = route_vocab.canonical_provider(execution.get("provider"))
+    role = route_vocab.canonical_role(execution.get("role"), provider or "")
     if not isinstance(head, str) or COMMIT_ID.fullmatch(head) is None:
         return None
 
     candidates: tuple[tuple[str, str], ...]
-    if provider == "codex" and role == "implementation":
-        candidates = (
-            (".codex/agents/implementer.toml", "toml"),
-            ("system/codex/agents/implementer.toml", "toml"),
-        )
-    elif provider == "codex" and role == "review":
+    if provider == "codex" and role == "implementer":
+        candidates = ((".codex/agents/implementer.toml", "toml"), ("system/codex/agents/implementer.toml", "toml"))
+    elif provider == "codex" and role == "review-cheap":
         candidates = (
             (".codex/agents/review-cheap.toml", "toml"),
             ("system/codex/agents/review-cheap.toml", "toml"),
         )
-    elif provider == "claude" and role == "review":
+    elif provider == "claude" and role == "review-final":
         candidates = (("agents/review-final.md", "yaml"),)
     else:
         return None
@@ -418,7 +416,8 @@ def extract(paths: list[Path], repo: Path | str, revision: str) -> dict[str, Any
                         "status": status,
                     }
                 )
-                if task_key is not None and record.get("role") == "review":
+                review_role = record.get("role")
+                if task_key is not None and review_role in {"review", "reviewer", "review-cheap", "review-final"} and route_vocab.is_non_mutating(review_role):
                     review_execution_counts[task_key] += 1
 
             if task_key is not None:

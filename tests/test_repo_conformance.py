@@ -17,15 +17,16 @@ from unittest import mock
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts/forge") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts/forge"))
+import route_vocab  # noqa: E402
+
 POLICY_PATH = Path("forge-project.md")
 SPEC_PATH = Path("docs/specs/forge-plugin-spec.md")
 IMPLEMENTER_PATH = Path("system/codex/agents/implementer.toml")
 REVIEWER_PATH = Path("system/codex/agents/review-cheap.toml")
 FINAL_REVIEWER_PATH = Path("agents/review-final.md")
-ROLE_PATHS = {
-    "implementation": IMPLEMENTER_PATH,
-    "review": REVIEWER_PATH,
-}
+ROLE_PATHS = {"implementation": IMPLEMENTER_PATH, "review": REVIEWER_PATH}
 
 
 class ConformanceError(RuntimeError):
@@ -33,17 +34,13 @@ class ConformanceError(RuntimeError):
 
 
 def git(repo: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ["git", *arguments], cwd=repo, check=False, capture_output=True
-    )
+    return subprocess.run(["git", *arguments], cwd=repo, check=False, capture_output=True)
 
 
 def committed_text(repo: Path, revision: str, path: Path) -> str:
     result = git(repo, "show", f"{revision}:{path.as_posix()}")
     if result.returncode != 0:
-        raise ConformanceError(
-            f"{revision}:{path.as_posix()} is unavailable"
-        )
+        raise ConformanceError(f"{revision}:{path.as_posix()} is unavailable")
     try:
         return result.stdout.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -351,6 +348,39 @@ def check_current(repo: Path) -> list[str]:
     return issues
 
 
+def recorded_authority(repo: Path, head: str, record: dict[str, object], line_number: int):
+    raw_provider, raw_role = record.get("provider"), record.get("role")
+    provider = route_vocab.canonical_provider(raw_provider)
+    role = route_vocab.canonical_role(raw_role, provider or "")
+    prefix = f"journal line {line_number}: "
+    if provider is None:
+        return None, None, prefix + f"execution has unsupported provider {raw_provider!r}", None
+    if role in {"plan", "monitoring"}:
+        return None, None, None, (
+            f"{prefix}agent {record.get('agent')!r} raw role {raw_role!r}: "
+            f"no committed route authority for this role at {head}"
+        )
+    if provider == "codex" and role in {"implementer", "review-cheap"}:
+        legacy_role = "implementation" if role == "implementer" else "review"
+        authority_path = ROLE_PATHS[legacy_role]
+    elif provider == "claude" and role == "review-final":
+        authority_path = FINAL_REVIEWER_PATH
+    else:
+        message = f"unknown {provider.capitalize()} execution role {raw_role!r}"
+        return None, None, prefix + message, None
+    source = f"{head}:{authority_path}"
+    try:
+        text = committed_text(repo, head, authority_path)
+        authority = (
+            parse_toml_route(text, source)[:2]
+            if provider == "codex"
+            else frontmatter_route(text, source)
+        )
+    except ConformanceError as exc:
+        return None, None, prefix + str(exc), None
+    return authority, authority_path, None, None
+
+
 def check_run(repo: Path, run_dir: Path) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     findings: list[str] = []
@@ -384,43 +414,15 @@ def check_run(repo: Path, run_dir: Path) -> tuple[list[str], list[str]]:
         if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{7,64}", head):
             errors.append(f"journal line {line_number}: execution lacks a valid head")
             continue
-        provider = record.get("provider")
-        role = record.get("role")
-        if provider == "codex":
-            if role not in ROLE_PATHS:
-                errors.append(
-                    f"journal line {line_number}: unknown Codex execution role {role!r}"
-                )
-                continue
-            authority_path = ROLE_PATHS[role]
-            try:
-                authority = parse_toml_route(
-                    committed_text(repo, head, authority_path),
-                    f"{head}:{authority_path}",
-                )[:2]
-            except ConformanceError as exc:
-                errors.append(f"journal line {line_number}: {exc}")
-                continue
-        elif provider == "claude":
-            if role != "review":
-                errors.append(
-                    f"journal line {line_number}: unknown Claude execution role {role!r}"
-                )
-                continue
-            authority_path = FINAL_REVIEWER_PATH
-            try:
-                authority = frontmatter_route(
-                    committed_text(repo, head, authority_path),
-                    f"{head}:{authority_path}",
-                )
-            except ConformanceError as exc:
-                errors.append(f"journal line {line_number}: {exc}")
-                continue
-        else:
-            errors.append(
-                f"journal line {line_number}: execution has unsupported provider "
-                f"{provider!r}"
-            )
+        authority, authority_path, route_error, route_finding = recorded_authority(
+            repo, head, record, line_number
+        )
+        if route_finding is not None:
+            findings.append(route_finding)
+        if route_error is not None:
+            errors.append(route_error)
+            continue
+        if authority is None or authority_path is None:
             continue
         recorded = record.get("model"), record.get("effort")
         # CONTROL historical-routing-finding BEGIN

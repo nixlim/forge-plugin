@@ -136,10 +136,8 @@ class RunCoordinationTests(unittest.TestCase):
         mutant_root = Path(self.temporary.name) / name
         shutil.copytree(ROOT / "scripts/codex_orchestrator", mutant_root / "codex_orchestrator")
         (mutant_root / "forge").mkdir()
-        shutil.copy2(
-            ROOT / "scripts/forge/commitment_paths.py",
-            mutant_root / "forge/commitment_paths.py",
-        )
+        for dependency in ("commitment_paths.py", "route_vocab.py"):
+            shutil.copy2(ROOT / "scripts/forge" / dependency, mutant_root / "forge" / dependency)
         shutil.copy2(TOOLS, mutant_root / "codex_orch_tools.py")
         source_path = mutant_root / "codex_orchestrator/journal.py"
         source = source_path.read_text(encoding="utf-8")

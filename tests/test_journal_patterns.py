@@ -12,6 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/forge/journal-patterns.py"
+sys.path.insert(0, str(SCRIPT.parent))
 GATE3_PRODUCERS = (
     ROOT / "docs/orchestration-contract.md",
     ROOT / "skills/commit/SKILL.md",

@@ -130,7 +130,7 @@ class D14JournalConfinementTests(unittest.TestCase):
             source = EXTRACTOR.read_text(encoding="utf-8")
             guard = "safe_path = confined_regular_file(path, repo)"
             self.assertEqual(1, source.count(guard))
-            mutant = fixture.root / "journal-patterns-no-confinement.py"
+            mutant = fixture.plugin / "scripts/forge/journal-patterns-no-confinement.py"
             mutant.write_text(
                 source.replace(guard, "safe_path = path", 1), encoding="utf-8"
             )

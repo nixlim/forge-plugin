@@ -5,18 +5,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .events import (
-    StreamSummary,
-    compatibility,
-    event_text,
-    json_dumps,
-    summarize_stream,
-)
+from .events import StreamSummary, compatibility, event_text, json_dumps, summarize_stream
 from .journal import (
     TERMINAL_EXECUTION_STATUSES,
     execution_key,
     read_journal,
     resolve_run_path,
+    route_vocab,
 )
 
 
@@ -75,7 +70,9 @@ def inflight_targets(
             continue
         if key in completed:
             continue
-        if record.get("event_source") == "claude":
+        raw_event_source = record.get("event_source")
+        event_source = route_vocab.canonical_event_source(raw_event_source)
+        if event_source == "claude":
             continue
         value = record.get("events")
         if not isinstance(value, str) or not value:
@@ -85,7 +82,7 @@ def inflight_targets(
                 )
             )
             continue
-        if record.get("event_source") not in {None, "exec"}:
+        if raw_event_source is not None and event_source != "exec":
             errors.append(
                 error_payload(
                     f"execution {key[0]}/{key[1]} uses unsupported event source; "

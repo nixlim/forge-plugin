@@ -27,11 +27,10 @@ FORGE_SCRIPTS = Path(__file__).resolve().parents[1] / "forge"
 if str(FORGE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(FORGE_SCRIPTS))
 
+import route_vocab  # noqa: E402
 from commitment_paths import (  # noqa: E402
-    iter_record_citations,
-    path_tokens,
-    resolve_contained_path,
-    surface_path_is_contained,
+    iter_record_citations, path_tokens,
+    resolve_contained_path, surface_path_is_contained,
 )
 
 JOURNAL_ENTRY_TYPES = {
@@ -8182,7 +8181,7 @@ def _check_binding_correlation(
     last_landing_lines = _last_landing_line_by_task(records)
     last_mutating_result_by_task: dict[str, int] = {}
     for execution in records:
-        if execution.get("type") != "execution" or execution.get("role") == "review":
+        if execution.get("type") != "execution" or route_vocab.is_non_mutating(execution.get("role")):
             continue
         task = execution.get("task")
         key = execution_key(execution)
@@ -8401,7 +8400,7 @@ def check_gate_profile(
     mutating_executions = [
         record
         for record in records
-        if record.get("type") == "execution" and record.get("role") != "review"
+        if record.get("type") == "execution" and not route_vocab.is_non_mutating(record.get("role"))
     ]
     if authoritative_results is None:
         authoritative_results = _authoritative_execution_results(records)

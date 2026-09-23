@@ -278,13 +278,12 @@ class LearnProposalsTests(unittest.TestCase):
         payload = json.loads(json.dumps(payload))
         if payload.get("input_head") == INPUT_HEAD_SENTINEL:
             payload["input_head"] = self.latest_input_head
-        proposal.write_text(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8"
-        )
+        proposal.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
         return subprocess.run(
             [sys.executable, str(writer), "--repo", str(repo), "--proposal", str(proposal)],
             check=False,
             capture_output=True,
+            env={**os.environ, "PYTHONPATH": str(WRITER.parent)},
         )
 
     def snapshot(self, repo: Path) -> dict[str, tuple[str, bytes]]:
@@ -876,8 +875,9 @@ class LearnProposalsTests(unittest.TestCase):
         self.assertEqual(self.snapshot(repo), before)
 
         guard = (
-            '        if candidate["expected_verdict"] == "FLAG" and '
-            'record.get("role") != "monitoring":\n'
+            '        if (\n' '            candidate["expected_verdict"] == "FLAG"\n'
+            '            and route_vocab.canonical_role(record.get("role"), "") != "monitoring"\n'
+            '        ):\n'
             '            refuse("invalid-verdict")'
         )
         mutant = self.mutated_writer(

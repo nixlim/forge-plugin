@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import route_vocab
 import stat
 import subprocess
 import sys
@@ -39,12 +40,7 @@ FULL_GIT_OID = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 ARCHIVE_KEYS = {"decisions", "executions", "failed_or_inconclusive_verifications"}
 ARCHIVE_DECISION_KEYS = {"id", "task"}
 ARCHIVE_EXECUTION_KEYS = {
-    "agent",
-    "execution",
-    "role",
-    "task",
-    "prompt",
-    "prompt_sha256",
+    "agent", "execution", "role", "task", "prompt", "prompt_sha256",
 }
 ARCHIVE_VERIFICATION_KEYS = {"id", "task", "result", "criterion", "observation"}
 ARCHIVE_BEGIN = b"<!-- BEGIN FORGE LEARNING PROVENANCE v1 -->\n"
@@ -645,7 +641,10 @@ def prepare(repo: Path, payload: dict[str, Any]) -> PreparedProposal:
         _run_dir, _records, record, authority, _task, hydrated_prompt = execution_for(
             run_id, agent, execution
         )
-        if candidate["expected_verdict"] == "FLAG" and record.get("role") != "monitoring":
+        if (
+            candidate["expected_verdict"] == "FLAG"
+            and route_vocab.canonical_role(record.get("role"), "") != "monitoring"
+        ):
             refuse("invalid-verdict")
         candidates.append(
             CandidateWrite(

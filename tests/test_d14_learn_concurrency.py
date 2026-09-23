@@ -223,6 +223,7 @@ class LearnConcurrencyTests(unittest.TestCase):
         tools.mkdir()
         wrapper = tools / WRAPPER.name
         writer = tools / WRITER.name
+        shutil.copy2(WRITER.with_name("route_vocab.py"), tools / "route_vocab.py")
         wrapper.write_text(wrapper_source, encoding="utf-8")
         writer.write_text(writer_source, encoding="utf-8")
         return wrapper
