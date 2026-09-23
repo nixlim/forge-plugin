@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "9c016ab0488897a60cd87b5f8a7954512674f71c8007fc921081191c1ee6d3d2",
+    "tests/test_revision9_coordination_activation_scan.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_activation_scan.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_plant_unreplayable_unrelated_chain",
+        "_pad_valid_json_over_cap",
+        "_guard_activation_artifact_read_budget",
+        "test_activation_scan_tolerates_unreplayable_unrelated_chain",
+        "test_activation_scan_warns_and_continues_on_oversized_unrelated_state",
+        "test_activation_scan_refuses_oversized_state_bound_to_this_run",
+        "test_activation_state_byte_cap_is_load_bearing_in_memory",
+        "test_activation_scan_refuses_oversized_bound_events_at_cap_plus_one",
+        "test_activation_events_byte_cap_is_load_bearing_in_memory",
+        "test_activation_scan_converts_bounded_path_memory_errors",
+        "test_activation_replay_passes_scan_only_state_and_event_caps",
+        "test_activation_scan_unrelated_tolerance_is_load_bearing",
+        "test_activation_scan_ignores_unrelated_chain_created_between_scans",
+        "test_activation_scan_bound_chain_created_between_scans_refuses"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ActivationScanTests",
+      "alias": "test_revision9_coordination_activation_scan",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_activation_scan.py": [
+          "from __future__ import annotations",
+          "import hashlib",
+          "import io",
+          "import os",
+          "import shutil",
+          "import unittest",
+          "from contextlib import contextmanager, nullcontext, redirect_stderr",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._cli_loader import patch_chain_core",
+          "from tests._revision9_coord_constants import UNREPLAYABLE_CHAIN_FIXTURE, UNREPLAYABLE_CHAIN_FIXTURE_SHA256, UNREPLAYABLE_CHAIN_ID, key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import builders, journal"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_coordination.py": [
+          "UNREPLAYABLE_CHAIN_FIXTURE",
+          "UNREPLAYABLE_CHAIN_FIXTURE_SHA256",
+          "UNREPLAYABLE_CHAIN_ID",
+          "io",
+          "nullcontext",
+          "redirect_stderr"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_events_byte_cap_is_load_bearing_in_memory": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_events_byte_cap_is_load_bearing_in_memory",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_replay_passes_scan_only_state_and_event_caps": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_replay_passes_scan_only_state_and_event_caps",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_bound_chain_created_between_scans_refuses": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_bound_chain_created_between_scans_refuses",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_converts_bounded_path_memory_errors": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_converts_bounded_path_memory_errors",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_ignores_unrelated_chain_created_between_scans": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_ignores_unrelated_chain_created_between_scans",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_refuses_oversized_bound_events_at_cap_plus_one": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_refuses_oversized_bound_events_at_cap_plus_one",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_refuses_oversized_state_bound_to_this_run": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_refuses_oversized_state_bound_to_this_run",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_tolerates_unreplayable_unrelated_chain": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_tolerates_unreplayable_unrelated_chain",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_unrelated_tolerance_is_load_bearing": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_unrelated_tolerance_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_warns_and_continues_on_oversized_unrelated_state": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_scan_warns_and_continues_on_oversized_unrelated_state",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_state_byte_cap_is_load_bearing_in_memory": "tests/test_revision9_coordination_activation_scan.py::Revision9ActivationScanTests::test_activation_state_byte_cap_is_load_bearing_in_memory"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_events_byte_cap_is_load_bearing_in_memory": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_events_byte_cap_is_load_bearing_in_memory",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_replay_passes_scan_only_state_and_event_caps": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_replay_passes_scan_only_state_and_event_caps",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_bound_chain_created_between_scans_refuses": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_bound_chain_created_between_scans_refuses",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_converts_bounded_path_memory_errors": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_converts_bounded_path_memory_errors",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_ignores_unrelated_chain_created_between_scans": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_ignores_unrelated_chain_created_between_scans",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_refuses_oversized_bound_events_at_cap_plus_one": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_refuses_oversized_bound_events_at_cap_plus_one",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_refuses_oversized_state_bound_to_this_run": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_refuses_oversized_state_bound_to_this_run",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_tolerates_unreplayable_unrelated_chain": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_tolerates_unreplayable_unrelated_chain",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_unrelated_tolerance_is_load_bearing": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_unrelated_tolerance_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_warns_and_continues_on_oversized_unrelated_state": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_scan_warns_and_continues_on_oversized_unrelated_state",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_state_byte_cap_is_load_bearing_in_memory": "test_revision9_coordination_activation_scan.Revision9ActivationScanTests.test_activation_state_byte_cap_is_load_bearing_in_memory"
+    }
+  },
+  "base_commit": "cbac4a4ad830c1151ac5fb19c2b635910f202d25"
+}
