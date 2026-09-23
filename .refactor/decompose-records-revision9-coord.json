@@ -68,5 +68,15 @@
   "dest": "tests/test_revision9_coordination_chain_drain.py",
   "target_class": "Revision9ChainDrainTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c07-terminal_builder",
+  "commit": "18c4dfd0efb3fd0449ef5c5980a2bfa1b2854cd0",
+  "snapshot": ".refactor/revision9-coord-c07-terminal_builder-before.json",
+  "manifest": ".refactor/family-revision9-coord-terminal_builder.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c07-terminal_builder.json",
+  "dest": "tests/test_revision9_coordination_terminal_builder.py",
+  "target_class": "Revision9TerminalBuilderTests",
+  "shape": "class"
  }
 ]
