@@ -1,0 +1,441 @@
+from __future__ import annotations
+
+import copy
+import json
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from tests._revision9_coord_constants import key
+from tests._revision9_coord_support import Revision9BuilderBatchSupport
+
+from codex_orchestrator import batch, builders, journal
+
+
+class Revision9ChainDrainTests(Revision9BuilderBatchSupport, unittest.TestCase):
+
+    def test_chain_drain_raw_records_without_capability_refuses(self) -> None:
+        repo, _ = self._new_repo("repo-chain-drain-no-capability")
+        run_id = "run-20260828-chain-drain-no-capability"
+        chain_id = "c-2026-08-28T120000Z-abcd"
+        source_digest = key("chain-drain-source-event")
+        with self.api_environment():
+            self.open_run(repo, run_id)
+            run_dir = self.run_dir(repo, run_id)
+            journal_before = (run_dir / "journal.jsonl").read_bytes()
+            receipts_before = (
+                run_dir / journal.BATCH_RECEIPTS_NAME
+            ).read_bytes()
+            binding = {
+                "schema": journal.BINDING_SCHEMA,
+                "source_record": {
+                    "chain_id": chain_id,
+                    "event_digest": source_digest,
+                },
+                "candidate": {
+                    "kind": "staged-diff-sha256",
+                    "value": key("chain-drain-candidate"),
+                },
+                "review": None,
+            }
+            binding["binding_id"] = journal._sha256(
+                journal._canonical_json_bytes(binding)
+            )
+            record = {
+                "type": "decision",
+                "recorded_at": "2026-08-28T12:00:00Z",
+                "run_id": run_id,
+                "id": "decision-01",
+                "task": "task-01",
+                "resolution": "Reject unauthenticated raw records",
+                "outcome": "chain-landing",
+                "basis": [],
+                "binding": binding,
+            }
+            with self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                journal.INVALID_JOURNAL_RECORD,
+            ):
+                batch.drain_chain_batch(
+                    repo,
+                    run_id,
+                    chain_id=chain_id,
+                    source_event_digest=source_digest,
+                    records=[record],
+                )
+        self.assertEqual(
+            (run_dir / "journal.jsonl").read_bytes(), journal_before
+        )
+        self.assertEqual(
+            (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
+            receipts_before,
+        )
+        self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+
+    def _chain_drain_case(
+        self, name: str
+    ) -> tuple[
+        Path,
+        str,
+        str,
+        str,
+        tuple[dict[str, object], ...],
+    ]:
+        repo, run_id, run_binding = self._terminal_control_repo(name)
+        chain_id, _ = self._write_bound_chain_state(
+            repo,
+            run_id,
+            run_binding=run_binding,
+            outbox={"fixture": True},
+        )
+        events = [
+            json.loads(line)
+            for line in (
+                repo / ".forge/chains" / f"{chain_id}.events.jsonl"
+            ).read_text(encoding="utf-8").splitlines()
+        ]
+        carriers = [
+            event["payload"]["details"]
+            for event in events
+            if isinstance(event.get("payload"), dict)
+            and isinstance(event["payload"].get("details"), dict)
+            and isinstance(
+                event["payload"]["details"].get("journal_batch"), dict
+            )
+        ]
+        self.assertEqual(len(carriers), 1)
+        carrier = carriers[0]
+        journal_batch = carrier["journal_batch"]
+        assert isinstance(journal_batch, dict)
+        raw_records = journal_batch["records"]
+        assert isinstance(raw_records, list)
+        records = tuple(copy.deepcopy(raw_records))
+        source_event_digest = str(carrier["source_event_digest"])
+        return repo, run_id, chain_id, source_event_digest, records
+
+    def test_chain_drain_valid_authorizer_new_and_repeated_paths(self) -> None:
+        with self.api_environment():
+            case = self._chain_drain_case("chain-drain-authorized")
+            repo, run_id, chain_id, source_digest, records = case
+            capability, authorizer, calls = self._chain_drain_authorizer(
+                *case
+            )
+            with mock.patch.object(batch, "_CHAIN_BATCH_AUTHORIZER", None):
+                batch._register_chain_batch_authorizer(authorizer)
+                with self.assertRaisesRegex(
+                    journal.CoordinationRefusal,
+                    journal.INVALID_JOURNAL_RECORD,
+                ):
+                    batch._register_chain_batch_authorizer(authorizer)
+                created = batch.drain_chain_batch(
+                    repo,
+                    run_id,
+                    chain_id=chain_id,
+                    source_event_digest=source_digest,
+                    records=records,
+                    capability=capability,
+                )
+                self.assertFalse(created.repeated)
+                self.assertEqual(len(calls), 1)
+                repeated = batch.drain_chain_batch(
+                    repo,
+                    run_id,
+                    chain_id=chain_id,
+                    source_event_digest=source_digest,
+                    records=records,
+                    capability=capability,
+                )
+            self.assertTrue(repeated.repeated)
+            self.assertEqual(repeated.records, records)
+            self.assertEqual(len(calls), 2)
+
+    def test_chain_drain_authorized_pending_and_lost_response_retry(self) -> None:
+        for crash_point in ("pending", "lost-response"):
+            with self.subTest(crash_point=crash_point), self.api_environment():
+                case = self._chain_drain_case(
+                    f"chain-drain-{crash_point}"
+                )
+                repo, run_id, chain_id, source_digest, records = case
+                capability, authorizer, calls = self._chain_drain_authorizer(
+                    *case
+                )
+                original_recover = batch._recover_locked
+
+                def crash_recovery(*args, **kwargs):
+                    if crash_point == "pending":
+                        raise RuntimeError("crash before recovery")
+                    original_recover(*args, **kwargs)
+                    raise RuntimeError("lost response")
+
+                with mock.patch.object(
+                    batch, "_CHAIN_BATCH_AUTHORIZER", authorizer
+                ), mock.patch.object(
+                    batch, "_recover_locked", side_effect=crash_recovery
+                ), self.assertRaises(RuntimeError):
+                    batch.drain_chain_batch(
+                        repo,
+                        run_id,
+                        chain_id=chain_id,
+                        source_event_digest=source_digest,
+                        records=records,
+                        capability=capability,
+                    )
+                intent_path = (
+                    self.run_dir(repo, run_id) / journal.BATCH_INTENT_NAME
+                )
+                self.assertEqual(
+                    intent_path.exists(), crash_point == "pending"
+                )
+                with mock.patch.object(
+                    batch, "_CHAIN_BATCH_AUTHORIZER", authorizer
+                ):
+                    recovered = batch.drain_chain_batch(
+                        repo,
+                        run_id,
+                        chain_id=chain_id,
+                        source_event_digest=source_digest,
+                        records=records,
+                        capability=capability,
+                    )
+                self.assertTrue(recovered.repeated)
+                self.assertEqual(recovered.records, records)
+                self.assertEqual(len(calls), 2)
+                self.assertFalse(intent_path.exists())
+                recorded, issues = journal.read_journal(
+                    self.run_dir(repo, run_id) / "journal.jsonl"
+                )
+                self.assertEqual(issues, [])
+                self.assertEqual(
+                    sum(
+                        record.get("id") == records[0].get("id")
+                        for record in recorded
+                    ),
+                    1,
+                )
+
+    def test_chain_drain_authorization_exact_field_bindings(self) -> None:
+        with self.api_environment():
+            case = self._chain_drain_case("chain-drain-bindings")
+            repo, run_id, chain_id, source_digest, records = case
+            run_dir = self.run_dir(repo, run_id)
+            journal_before = (run_dir / "journal.jsonl").read_bytes()
+            receipts_before = (
+                run_dir / journal.BATCH_RECEIPTS_NAME
+            ).read_bytes()
+            for mismatch in (
+                "repository",
+                "run_id",
+                "task_id",
+                "chain_id",
+                "source_event_digest",
+                "request_sha256",
+                "batch_bytes",
+                "record_count",
+                "journal_exact",
+                "receipts_exact",
+            ):
+                with self.subTest(mismatch=mismatch):
+                    capability, authorizer, calls = (
+                        self._chain_drain_authorizer(
+                            *case, mismatch=mismatch
+                        )
+                    )
+                    with mock.patch.object(
+                        batch, "_CHAIN_BATCH_AUTHORIZER", authorizer
+                    ), self.assertRaises(journal.CoordinationRefusal):
+                        batch.drain_chain_batch(
+                            repo,
+                            run_id,
+                            chain_id=chain_id,
+                            source_event_digest=source_digest,
+                            records=records,
+                            capability=capability,
+                        )
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(
+                        (run_dir / "journal.jsonl").read_bytes(),
+                        journal_before,
+                    )
+                    self.assertEqual(
+                        (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
+                        receipts_before,
+                    )
+                    self.assertFalse(
+                        (run_dir / journal.BATCH_INTENT_NAME).exists()
+                    )
+            capability, authorizer, calls = self._chain_drain_authorizer(
+                *case
+            )
+            with mock.patch.object(
+                batch, "_CHAIN_BATCH_AUTHORIZER", authorizer
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                journal.INVALID_JOURNAL_RECORD,
+            ):
+                batch.drain_chain_batch(
+                    repo,
+                    run_id,
+                    chain_id=chain_id,
+                    source_event_digest=source_digest,
+                    records=records,
+                    capability=object(),
+                )
+            self.assertEqual(len(calls), 1)
+            with mock.patch.object(
+                batch, "_CHAIN_BATCH_AUTHORIZER", authorizer
+            ):
+                accepted = batch.drain_chain_batch(
+                    repo,
+                    run_id,
+                    chain_id=chain_id,
+                    source_event_digest=source_digest,
+                    records=records,
+                    capability=capability,
+                )
+            self.assertFalse(accepted.repeated)
+
+    def test_chain_drain_authorization_controls_are_load_bearing(self) -> None:
+        with self.api_environment():
+            case = self._chain_drain_case("chain-drain-controls")
+            repo, run_id, chain_id, source_digest, records = case
+            capability, authorizer, calls = self._chain_drain_authorizer(
+                *case
+            )
+            run_dir = self.run_dir(repo, run_id)
+            journal_before = (run_dir / "journal.jsonl").read_bytes()
+            receipts_before = (
+                run_dir / journal.BATCH_RECEIPTS_NAME
+            ).read_bytes()
+            for control in batch._CHAIN_BATCH_AUTHORIZATION_REQUIRED:
+                with self.subTest(control=control), mock.patch.object(
+                    batch, "_CHAIN_BATCH_AUTHORIZER", authorizer
+                ), mock.patch.object(
+                    batch,
+                    "CHAIN_BATCH_AUTHORIZATION_CONTROLS",
+                    batch._CHAIN_BATCH_AUTHORIZATION_REQUIRED - {control},
+                ), self.assertRaisesRegex(
+                    journal.CoordinationRefusal,
+                    journal.INVALID_JOURNAL_RECORD,
+                ):
+                    batch.drain_chain_batch(
+                        repo,
+                        run_id,
+                        chain_id=chain_id,
+                        source_event_digest=source_digest,
+                        records=records,
+                        capability=capability,
+                    )
+            self.assertEqual(calls, [])
+            self.assertEqual(
+                (run_dir / "journal.jsonl").read_bytes(), journal_before
+            )
+            self.assertEqual(
+                (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
+                receipts_before,
+            )
+            with mock.patch.object(
+                batch, "_CHAIN_BATCH_AUTHORIZER", authorizer
+            ):
+                accepted = batch.drain_chain_batch(
+                    repo,
+                    run_id,
+                    chain_id=chain_id,
+                    source_event_digest=source_digest,
+                    records=records,
+                    capability=capability,
+                )
+            self.assertFalse(accepted.repeated)
+            self.assertEqual(len(calls), 1)
+
+    def test_ingest_requires_registered_proof_complete_authority(self) -> None:
+        run_id = "run-20260828-ingest-authority"
+        records = (
+            {
+                "type": "task",
+                "recorded_at": "2026-08-28T12:00:00Z",
+                "run_id": run_id,
+                "id": "task-01",
+                "status": "complete",
+                "goal": "Implement the typed transaction",
+                "acceptance": ["The focused behavior passes"],
+                "files": ["src/example.py"],
+            },
+        )
+
+        def ingest() -> batch.BatchOutcome:
+            return builders.ingest_chain_records(
+                self.repo,
+                run_id,
+                idempotency_key=key("ingest-authority"),
+                task="task-01",
+                state_file="external/state.json",
+                events_file="external/events.jsonl",
+                outcome_map="external/outcome-map.json",
+                state_sha256=key("external-state"),
+                events_sha256=key("external-events"),
+                outcome_map_sha256=key("external-outcome-map"),
+                closing_head=self.head,
+                task_status="complete",
+                records=records,
+            )
+
+        with self.api_environment():
+            self.open_run(self.repo, run_id)
+            self.start_task(self.repo, run_id)
+            external = self.repo / "external"
+            external.mkdir()
+            for name in ("state.json", "events.jsonl", "outcome-map.json"):
+                (external / name).write_text("fixture evidence\n", encoding="utf-8")
+            run_dir = self.run_dir(self.repo, run_id)
+            journal_before = (run_dir / "journal.jsonl").read_bytes()
+            receipts_before = (
+                run_dir / journal.BATCH_RECEIPTS_NAME
+            ).read_bytes()
+            with mock.patch.object(
+                builders, "_INGEST_PROOF_VERIFIER", None
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                builders.INGEST_PROOF_INVALID,
+            ):
+                ingest()
+            self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+            self.assertEqual(
+                (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
+                receipts_before,
+            )
+            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+
+            verifier = lambda _repo, _run, _request: (
+                records,
+                builders._INGEST_PROOF_ORDER,
+            )
+            different_records = (dict(records[0], status="failed"),)
+            with mock.patch.object(
+                builders,
+                "_INGEST_PROOF_VERIFIER",
+                lambda _repo, _run, _request: (
+                    different_records,
+                    builders._INGEST_PROOF_ORDER,
+                ),
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal,
+                builders.INGEST_PROOF_INVALID,
+            ):
+                ingest()
+            for control in builders._INGEST_PROOF_ORDER:
+                with self.subTest(control=control), mock.patch.object(
+                    builders, "_INGEST_PROOF_VERIFIER", verifier
+                ), mock.patch.object(
+                    builders,
+                    "INGEST_PROOF_CONTROLS",
+                    builders.INGEST_PROOF_CONTROLS - {control},
+                ), self.assertRaisesRegex(
+                    journal.CoordinationRefusal, builders.INGEST_PROOF_INVALID
+                ):
+                    ingest()
+            self.assertEqual((run_dir / "journal.jsonl").read_bytes(), journal_before)
+            self.assertEqual(
+                (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
+                receipts_before,
+            )
+            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
