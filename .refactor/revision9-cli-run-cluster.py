@@ -95,7 +95,9 @@ def load_cluster(label):
 
 def paths_for(label):
     return {
-        "manifest": f".refactor/{'mixin' if label == 'mixin' else 'family'}-revision9-cli-{label}.json",
+        "manifest": (
+            f".refactor/{'mixin' if label == 'mixin' else 'family'}-revision9-cli-{label}.json"
+        ),
         "snap": f".refactor/revision9-cli-{label}-before.json",
         "ids": f".refactor/tests-revision9-cli-{label}.json",
         "idmap": f".refactor/idmap-revision9-cli-{label}.json",
@@ -245,12 +247,14 @@ def commit(cluster, p, evidence, dest_lines, src_lines):
     label = cluster["label"]
     run(["git", "add", SRC, cluster["dest"], *evidence])
     if cluster["shape"] == "mixin":
-        subject = f"refactor(tests): move the {len(cluster['methods'])} revision9 cli-surfaces helpers into "
+        subject = f"refactor(tests): move the {len(cluster['methods'])} revision9 cli-surfaces "
+        subject += "helpers into "
         subject += "tests/_revision9_cli_support.py (mixin shape, tier 1)"
         what = (
             "Every non-test helper of Revision9BoundCLIIntegrationTests moved verbatim by\n"
             "move_methods.py --shape mixin --import-root \"$PWD\" --format-imports; the class\n"
-            "header becomes (Revision9CliSupport, CLI_FIXTURE_SUPPORT.ForgeCLIFixture). Test IDs identical.\n"
+            "header becomes (Revision9CliSupport, CLI_FIXTURE_SUPPORT.ForgeCLIFixture).\n"
+            "Test IDs identical.\n"
         )
     else:
         subject = (
@@ -258,14 +262,16 @@ def commit(cluster, p, evidence, dest_lines, src_lines):
             f"{cluster['dest']} (class shape, tier 1)"
         )
         what = (
-            f"Family {label} of the revision9 cli-surfaces split moved verbatim by move_methods.py --shape\n"
+            f"Family {label} of the revision9 cli-surfaces split moved verbatim by\n"
+            f"move_methods.py --shape\n"
             f"class --import-root \"$PWD\" --format-imports into {cluster['target_class']};\n"
             f"test IDs mapped 1:1 in both collectors ({p['idmap']}).\n"
         )
     message = (
         f"{subject}\n\n{what}"
         "Manifest oracle --strict-bodies, ruff, file-length, types, lint-imports, the ID compare\n"
-        "the focused revision9 cli-surfaces set and tests.test_cli_loader PASS (evidence under .refactor/). "
+        "the focused revision9 cli-surfaces set and tests.test_cli_loader PASS "
+        "(evidence under .refactor/). "
         f"{cluster['dest']}: {dest_lines} code lines; {SRC}: {src_lines}. "
         "No production file changed.\n\n" + TRAILER
     )
