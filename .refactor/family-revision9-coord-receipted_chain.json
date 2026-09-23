@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "add7a8140576d869d1bf76a8e82b8d96b85d7867fc00f086e434cff428d175fe",
+    "tests/test_revision9_coordination_receipted_chain.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_receipted_chain.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "_bound_chain_outbox",
+        "_acknowledge_bound_chain",
+        "_legacy_receipted_chain_case",
+        "_rewrite_commit_events",
+        "test_commit_sibling_receipt_request_authentication_is_load_bearing",
+        "test_commit_sibling_carried_binding_authentication_is_load_bearing",
+        "test_commit_sibling_receipt_snapshot_recheck_is_load_bearing",
+        "test_activation_scan_skips_external_sibling_chain_and_run_lock",
+        "test_concurrent_legacy_activation_never_cross_acquires_run_locks"
+      ],
+      "shape": "class",
+      "target_class": "Revision9ReceiptedChainTests",
+      "alias": "test_revision9_coordination_receipted_chain",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_receipted_chain.py": [
+          "from __future__ import annotations",
+          "import copy",
+          "import json",
+          "import os",
+          "import subprocess",
+          "import threading",
+          "import unittest",
+          "from contextlib import contextmanager",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal",
+          "from forge_cli import chain_core as CHAIN_CORE"
+        ]
+      },
+      "remove_imports": {
+        "tests/test_revision9_coordination.py": [
+          "CHAIN_CORE",
+          "threading"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activation_scan_skips_external_sibling_chain_and_run_lock": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_activation_scan_skips_external_sibling_chain_and_run_lock",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_commit_sibling_carried_binding_authentication_is_load_bearing": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_commit_sibling_carried_binding_authentication_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_commit_sibling_receipt_request_authentication_is_load_bearing": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_commit_sibling_receipt_request_authentication_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_commit_sibling_receipt_snapshot_recheck_is_load_bearing": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_commit_sibling_receipt_snapshot_recheck_is_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_concurrent_legacy_activation_never_cross_acquires_run_locks": "tests/test_revision9_coordination_receipted_chain.py::Revision9ReceiptedChainTests::test_concurrent_legacy_activation_never_cross_acquires_run_locks"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activation_scan_skips_external_sibling_chain_and_run_lock": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_activation_scan_skips_external_sibling_chain_and_run_lock",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_commit_sibling_carried_binding_authentication_is_load_bearing": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_commit_sibling_carried_binding_authentication_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_commit_sibling_receipt_request_authentication_is_load_bearing": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_commit_sibling_receipt_request_authentication_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_commit_sibling_receipt_snapshot_recheck_is_load_bearing": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_commit_sibling_receipt_snapshot_recheck_is_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_concurrent_legacy_activation_never_cross_acquires_run_locks": "test_revision9_coordination_receipted_chain.Revision9ReceiptedChainTests.test_concurrent_legacy_activation_never_cross_acquires_run_locks"
+    }
+  },
+  "base_commit": "3c47c51d9e0185a1040803525b8359fb46d93ec5"
+}
