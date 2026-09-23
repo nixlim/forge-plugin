@@ -24,10 +24,14 @@ Release dates are the UTC dates of the release commits.
 - File categories: `*.js` now belongs to the `config` category (and the changelog gate's code-suffix list), so a tracked JavaScript file such as the chain_core split's Workflow script `.refactor/split-chain-core.workflow.js` matches a category and `tests.test_repo_conformance` file-category coverage passes (bead forge-plugin-g9i).
 - Review evidence for the chain_core split is tracked under `.refactor/`: the Codex review transcripts (`codex-review.jsonl`, `codex-review-chain_core.jsonl`, thread `01a0a015-b9f3-7072-9abd-4d4a29f96082`) and their verdict summaries (`codex-review.md`, `codex-review-chain_core.md`), cited by the handback on bead forge-plugin-deb. Evidence only; no runtime surface changes.
 
+### Deprecated
+
+- Legacy route vocabulary on NEW journal `execution` records: 0.6.14 will refuse, with an exact diagnostic, `role` values other than `implementer | review-cheap | review-final | plan | monitoring` (legacy `implementation`, `implement`, `review`, `reviewer`), `provider` values other than `codex | claude` (legacy `codex-cli`; `openai` was never a mapped spelling and stays refused), `event_source` values other than `exec | claude` (legacy `codex`, `agent-tool`, and the literal `…/events.jsonl` path form), and `mode` values other than `headless | detached | subagent | teammate` (`orchestrator-inline` was never mapped and stays refused). Existing records are never rewritten and keep reading through the 0.6.13 map.
+
 ### Release notes
 
-- 0.6.13 is the routing plan's vocabulary **readers** release (chain V1): `scripts/forge/route_vocab.py` gives every journal reader one legacy/canonical map for `role`, `provider` and `event_source`; writers are unchanged, so records written by 0.6.12 and by 0.6.13 read identically. 0.6.14 will switch the writers and refuse the legacy spellings (`implementation`, `implement`, `review`/`reviewer`, `codex-cli`, `agent-tool`, `orchestrator-inline`) on new `execution` records — one-release notice.
-- Also ships the refactor campaign's Engine and MergeEngine decompositions and the app package split (no behaviour change).
+- 0.6.13 is the routing plan's vocabulary **readers** release (chain V1): `scripts/forge/route_vocab.py` gives every journal reader one legacy/canonical map for `role`, `provider` and `event_source`; writers are unchanged, so records written by 0.6.12 and by 0.6.13 read identically.
+- Also ships (no behaviour change): the Engine and MergeEngine class decompositions, the app, chain_core and engine package splits, the chain_core split follow-ups and the reviewer-eval fixture repair — each itemised under Changed above.
 
 ## [0.6.12] - 2026-09-13
 
