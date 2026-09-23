@@ -18,5 +18,15 @@
   "dest": "tests/test_revision9_coordination_cli_diagnostics.py",
   "target_class": "Revision9CliDiagnosticsTests",
   "shape": "class"
+ },
+ {
+  "cluster": "c02-batch_builder",
+  "commit": "4bd67364d17b59c9d1efcf649f0f89cb2e0f1845",
+  "snapshot": ".refactor/revision9-coord-c02-batch_builder-before.json",
+  "manifest": ".refactor/family-revision9-coord-batch_builder.json",
+  "test_snapshot": ".refactor/tests-revision9-coord-c02-batch_builder.json",
+  "dest": "tests/test_revision9_coordination_batch_builder.py",
+  "target_class": "Revision9BatchBuilderTests",
+  "shape": "class"
  }
 ]

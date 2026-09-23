@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "tier": 1,
+  "baseline": {
+    "tests/test_revision9_coordination.py": "3d081f441c2471d1739e2bac6a42b113dc747585e63b4b5fc21d4c81afc9fdd7",
+    "tests/test_revision9_coordination_batch_builder.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "operations": [
+    {
+      "kind": "move",
+      "source": "tests/test_revision9_coordination.py",
+      "dest": "tests/test_revision9_coordination_batch_builder.py",
+      "class": "Revision9BuilderBatchTests",
+      "methods": [
+        "test_typed_builder_round_trip_ids_receipts_and_idempotency",
+        "_leave_base_intent",
+        "test_exact_prefix_and_torn_receipt_recovery",
+        "test_pending_reader_refuses_without_mutation_and_absent_lock_is_read_only",
+        "test_torn_intent_never_becomes_authoritative",
+        "test_self_consistent_intent_substitution_after_prepare_is_refused",
+        "test_activated_missing_stable_lock_or_receipt_ledger_diverges",
+        "test_ledger_wide_duplicate_and_unrelated_invalid_receipts_freeze",
+        "test_intent_without_journal_and_reentrant_pending_read_refuse_exactly",
+        "test_midflight_intent_hardlink_fifo_and_foreign_uid_fences",
+        "test_batch_controls_are_load_bearing",
+        "test_builder_validation_controls_are_detected_in_memory",
+        "test_typed_task_scope_refusal_names_offending_pathspec",
+        "test_builder_request_schema_and_digest_are_exact"
+      ],
+      "shape": "class",
+      "target_class": "Revision9BatchBuilderTests",
+      "alias": "test_revision9_coordination_batch_builder",
+      "test_only": true,
+      "imports": {
+        "tests/test_revision9_coordination.py": [],
+        "tests/test_revision9_coordination_batch_builder.py": [
+          "from __future__ import annotations",
+          "import base64",
+          "import copy",
+          "import json",
+          "import os",
+          "import unittest",
+          "from contextlib import nullcontext",
+          "from pathlib import Path",
+          "from unittest import mock",
+          "from tests._revision9_coord_constants import key",
+          "from tests._revision9_coord_support import Revision9BuilderBatchSupport",
+          "from codex_orchestrator import batch, builders, journal"
+        ]
+      },
+      "format_imports": true
+    }
+  ],
+  "test_id_map": {
+    "pytest": {
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_activated_missing_stable_lock_or_receipt_ledger_diverges": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_activated_missing_stable_lock_or_receipt_ledger_diverges",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_batch_controls_are_load_bearing": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_batch_controls_are_load_bearing",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_builder_request_schema_and_digest_are_exact": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_builder_request_schema_and_digest_are_exact",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_builder_validation_controls_are_detected_in_memory": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_builder_validation_controls_are_detected_in_memory",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_exact_prefix_and_torn_receipt_recovery": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_exact_prefix_and_torn_receipt_recovery",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_intent_without_journal_and_reentrant_pending_read_refuse_exactly": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_intent_without_journal_and_reentrant_pending_read_refuse_exactly",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_ledger_wide_duplicate_and_unrelated_invalid_receipts_freeze": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_ledger_wide_duplicate_and_unrelated_invalid_receipts_freeze",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_midflight_intent_hardlink_fifo_and_foreign_uid_fences": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_midflight_intent_hardlink_fifo_and_foreign_uid_fences",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_pending_reader_refuses_without_mutation_and_absent_lock_is_read_only": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_pending_reader_refuses_without_mutation_and_absent_lock_is_read_only",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_self_consistent_intent_substitution_after_prepare_is_refused": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_self_consistent_intent_substitution_after_prepare_is_refused",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_torn_intent_never_becomes_authoritative": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_torn_intent_never_becomes_authoritative",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_typed_builder_round_trip_ids_receipts_and_idempotency": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_typed_builder_round_trip_ids_receipts_and_idempotency",
+      "tests/test_revision9_coordination.py::Revision9BuilderBatchTests::test_typed_task_scope_refusal_names_offending_pathspec": "tests/test_revision9_coordination_batch_builder.py::Revision9BatchBuilderTests::test_typed_task_scope_refusal_names_offending_pathspec"
+    },
+    "unittest": {
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_activated_missing_stable_lock_or_receipt_ledger_diverges": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_activated_missing_stable_lock_or_receipt_ledger_diverges",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_batch_controls_are_load_bearing": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_batch_controls_are_load_bearing",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_builder_request_schema_and_digest_are_exact": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_builder_request_schema_and_digest_are_exact",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_builder_validation_controls_are_detected_in_memory": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_builder_validation_controls_are_detected_in_memory",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_exact_prefix_and_torn_receipt_recovery": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_exact_prefix_and_torn_receipt_recovery",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_intent_without_journal_and_reentrant_pending_read_refuse_exactly": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_intent_without_journal_and_reentrant_pending_read_refuse_exactly",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_ledger_wide_duplicate_and_unrelated_invalid_receipts_freeze": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_ledger_wide_duplicate_and_unrelated_invalid_receipts_freeze",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_midflight_intent_hardlink_fifo_and_foreign_uid_fences": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_midflight_intent_hardlink_fifo_and_foreign_uid_fences",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_pending_reader_refuses_without_mutation_and_absent_lock_is_read_only": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_pending_reader_refuses_without_mutation_and_absent_lock_is_read_only",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_self_consistent_intent_substitution_after_prepare_is_refused": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_self_consistent_intent_substitution_after_prepare_is_refused",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_torn_intent_never_becomes_authoritative": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_torn_intent_never_becomes_authoritative",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_typed_builder_round_trip_ids_receipts_and_idempotency": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_typed_builder_round_trip_ids_receipts_and_idempotency",
+      "test_revision9_coordination.Revision9BuilderBatchTests.test_typed_task_scope_refusal_names_offending_pathspec": "test_revision9_coordination_batch_builder.Revision9BatchBuilderTests.test_typed_task_scope_refusal_names_offending_pathspec"
+    }
+  },
+  "base_commit": "40383f3f499a8c9ad5121d1eeda9df08d56427f1"
+}

@@ -1,0 +1,18 @@
+== c02-batch_builder start=2026-09-23T11:05:58Z head=40383f3 load=5.73 7.61 8.65
+test snapshot: {'unittest': 1908, 'pytest': 1908}
+snapshot: 2908 bodies across 2886 names -> .refactor/revision9-coord-c02-batch_builder-before.json
+id map: 13 unittest + 13 pytest -> .refactor/idmap-revision9-coord-batch_builder.json
+DRY RUN: verified; no files written
+APPLIED tier 1; manifest: .refactor/family-revision9-coord-batch_builder.json
+PASS compile
+PASS ruff-lint
+PASS file-length
+PASS types
+PASS import-contracts
+PASS bodies-unchanged
+PASS test-identities
+PASS tests
+GATE: PASS
+ok: 236 files within budget (max 1000)
+Ran 13 tests in 1.834s OK (standalone tests.test_revision9_coordination_batch_builder without PYTHONPATH)
+== c02-batch_builder record SHA 4bd67364d17b59c9d1efcf649f0f89cb2e0f1845 (pre-amend); amending the record and the driver log into it end=2026-09-23T11:07:03Z
