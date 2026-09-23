@@ -1,0 +1,135 @@
+{
+  "limits": {
+    "module_target": 500,
+    "module_ceiling": 1000,
+    "function_target": 150,
+    "class_target": 30,
+    "max_parameters": 6,
+    "max_outputs": 1,
+    "plain_decorators": [
+      "_serialize_worktree_command"
+    ]
+  },
+  "modules": {
+    "tests/test_revision8_coordination.py": {
+      "code_lines": 10,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "tests/_revision8_constants.py": {
+      "code_lines": 6,
+      "over_ceiling": false,
+      "debt": false,
+      "candidates": [],
+      "tracking": null
+    },
+    "tests/_revision8_support.py": {
+      "code_lines": 539,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "class",
+          "name": "Revision8Support",
+          "line": 20,
+          "size": 31
+        }
+      ],
+      "tracking": {
+        "reason": "one support mixin per class (brief section 4): the 31 helpers of Revision8CoordinationTests, 539 code lines, 31 methods over class_target 30; helper fan-in is high (each family uses 10..18), so a split is by role, not by family",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    },
+    "tests/test_revision8_append_schema.py": {
+      "code_lines": 712,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (10 tests, 712 code lines)",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    },
+    "tests/test_revision8_interruptions.py": {
+      "code_lines": 566,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [
+        {
+          "kind": "function",
+          "name": "test_postsyscall_baseexception_restores_registry_and_owner_begin_paths",
+          "line": 17,
+          "size": 201
+        },
+        {
+          "kind": "function",
+          "name": "test_postsyscall_baseexception_during_rollback_retains_coherent_candidate",
+          "line": 219,
+          "size": 221
+        },
+        {
+          "kind": "function",
+          "name": "test_postrestoration_read_and_lock_failures_keep_registry_journal_coherent",
+          "line": 441,
+          "size": 177
+        }
+      ],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (3 tests of 166..205 code lines each, 566 code lines; no seam under 500 keeps two together)",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    },
+    "tests/test_revision8_orphan_identity.py": {
+      "code_lines": 809,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (17 tests, 809 code lines)",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    },
+    "tests/test_revision8_precedence.py": {
+      "code_lines": 609,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (16 tests, 609 code lines)",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    },
+    "tests/test_revision8_registry_races.py": {
+      "code_lines": 618,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (12 tests, 618 code lines)",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    },
+    "tests/test_revision8_rollback.py": {
+      "code_lines": 583,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (9 tests, 583 code lines)",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    },
+    "tests/test_revision8_successors.py": {
+      "code_lines": 533,
+      "over_ceiling": false,
+      "debt": true,
+      "candidates": [],
+      "tracking": {
+        "reason": "scenario family in the brief's 500..1,000 band (14 tests, 533 code lines)",
+        "follow_up": "forge-plugin-7pzp"
+      }
+    }
+  }
+}

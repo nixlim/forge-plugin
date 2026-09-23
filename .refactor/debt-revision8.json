@@ -1,0 +1,34 @@
+{
+  "tests/_revision8_support.py": {
+    "reason": "one support mixin per class (brief section 4): the 31 helpers of Revision8CoordinationTests, 539 code lines, 31 methods over class_target 30; helper fan-in is high (each family uses 10..18), so a split is by role, not by family",
+    "follow_up": "forge-plugin-7pzp"
+  },
+  "tests/test_revision8_append_schema.py": {
+    "reason": "scenario family in the brief's 500..1,000 band (10 tests, 712 code lines)",
+    "follow_up": "forge-plugin-7pzp"
+  },
+  "tests/test_revision8_precedence.py": {
+    "reason": "scenario family in the brief's 500..1,000 band (16 tests, 609 code lines)",
+    "follow_up": "forge-plugin-7pzp"
+  },
+  "tests/test_revision8_rollback.py": {
+    "reason": "scenario family in the brief's 500..1,000 band (9 tests, 583 code lines)",
+    "follow_up": "forge-plugin-7pzp"
+  },
+  "tests/test_revision8_registry_races.py": {
+    "reason": "scenario family in the brief's 500..1,000 band (12 tests, 618 code lines)",
+    "follow_up": "forge-plugin-7pzp"
+  },
+  "tests/test_revision8_interruptions.py": {
+    "reason": "scenario family in the brief's 500..1,000 band (3 tests of 166..205 code lines each, 566 code lines; no seam under 500 keeps two together)",
+    "follow_up": "forge-plugin-7pzp"
+  },
+  "tests/test_revision8_orphan_identity.py": {
+    "reason": "scenario family in the brief's 500..1,000 band (17 tests, 809 code lines)",
+    "follow_up": "forge-plugin-7pzp"
+  },
+  "tests/test_revision8_successors.py": {
+    "reason": "scenario family in the brief's 500..1,000 band (14 tests, 533 code lines)",
+    "follow_up": "forge-plugin-7pzp"
+  }
+}
