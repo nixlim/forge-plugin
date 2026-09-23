@@ -22,8 +22,8 @@ STALE_WARNING = "forge: drift report stale — run /forge:drift"
 REVIEWER_EVAL_TRIGGER_TABLE = """| control | path patterns |
 |---|---|
 | constitution | rules/** |
-| agent-prompt-template | agents/**, system/codex/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/** |
+| agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
 | model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/** |
 | commit-review-prompt | skills/commit/SKILL.md |"""

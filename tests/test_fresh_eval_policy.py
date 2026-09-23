@@ -252,6 +252,7 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             "agents/fresh.md",
             "docs/specs/forge-plugin-spec.md",
             "rules/fresh.md",
+            "scripts/forge/forge_cli/app/_dispatch.py",
             "scripts/forge/forge_cli/engine/_engine.py",
             "skills/commit/SKILL.md",
             "skills/orchestrate/SKILL.md",
@@ -259,6 +260,8 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             "system/codex/config.toml",
             "system/codex/prompts/fresh.md",
             "system/codex/rules/fresh.rules",
+            "system/claude/prompts/fresh.md",
+            "system/local/routes.toml.seed",
         )
         with FreshEvalRepo() as repository:
             repository.stage_many(paths)
@@ -281,8 +284,18 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
                 "system/codex/prompts/**",
                 "system/codex/prompts/fresh.md",
             ),
+            (
+                "agent-prompt-template",
+                "system/claude/prompts/**",
+                "system/claude/prompts/fresh.md",
+            ),
             ("reviewer-routing", ".codex/agents/**", ".codex/agents/fresh.toml"),
             ("reviewer-routing", ".codex/config.toml", ".codex/config.toml"),
+            (
+                "reviewer-routing",
+                "scripts/forge/forge_cli/app/**",
+                "scripts/forge/forge_cli/app/_dispatch.py",
+            ),
             (
                 "reviewer-routing",
                 "scripts/forge/forge_cli/engine/**",
@@ -302,6 +315,11 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
                 "reviewer-routing",
                 "system/codex/config.toml",
                 "system/codex/config.toml",
+            ),
+            (
+                "reviewer-routing",
+                "system/local/**",
+                "system/local/routes.toml.seed",
             ),
             ("execpolicy", ".codex/rules/**", ".codex/rules/fresh.rules"),
             (

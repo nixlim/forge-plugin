@@ -135,6 +135,8 @@ history, recurring fixes, architecture boundaries, and CI behavior. -->
 
 | Pattern | Required Checks |
 |---|---|
+| `system/claude/**` | STRICT evals and routing conformance |
+| `system/local/**` | STRICT evals and routing conformance |
 | _Not configured_ | _Run `/forge:init`._ |
 <!-- FORGE:REGION project-triggers END -->
 
@@ -231,7 +233,10 @@ event-retention: 400d
 <!-- forge-init: replace this sentinel with mechanically validated positive repository-relative Git
 pathspec globs, one per Path pattern row, or retain the explicit no-trigger statement. -->
 
-No trigger paths configured.
+| Path pattern |
+|---|
+| system/claude/** |
+| system/local/** |
 <!-- FORGE:REGION trigger-paths END -->
 
 ## Reviewer-Facing Eval Triggers
@@ -240,8 +245,8 @@ No trigger paths configured.
 | control | path patterns |
 |---|---|
 | constitution | rules/** |
-| agent-prompt-template | agents/**, system/codex/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/** |
+| agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
 | model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/** |
 | commit-review-prompt | skills/commit/SKILL.md |

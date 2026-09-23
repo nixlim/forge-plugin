@@ -126,7 +126,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         canonical = POLICY.REVIEWER_EVAL_TRIGGER_TABLE.encode("utf-8")
         self.assertEqual(
             hashlib.sha256(canonical).hexdigest(),
-            "9ad0623e2eb7c9d56df44a0c57cb4c7c79e30e4322d9bbc0ea2e50b8817c3ce2",
+            "45e2e69e0067f06f99cb0e3d42f185d3fdc8ee45f6961100eb51f3298c9500c3",
         )
         self.assertEqual(specification_match.group(1), canonical)
         for label, path in (
@@ -141,7 +141,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
                 self.assertEqual(body, canonical)
                 self.assertEqual(
                     hashlib.sha256(body).hexdigest(),
-                    "9ad0623e2eb7c9d56df44a0c57cb4c7c79e30e4322d9bbc0ea2e50b8817c3ce2",
+                    "45e2e69e0067f06f99cb0e3d42f185d3fdc8ee45f6961100eb51f3298c9500c3",
                 )
 
     def test_sixteen_regions_are_complete_and_in_contract_order(self) -> None:
@@ -213,7 +213,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         trigger_paths = re.sub(
             r"<!--.*?-->", "", region_body("trigger-paths"), flags=re.DOTALL
         ).strip()
-        self.assertEqual(trigger_paths, "No trigger paths configured.")
+        self.assertEqual(trigger_paths, "| Path pattern |\n|---|\n| system/claude/** |\n| system/local/** |")
 
     def test_dependency_manifest_block_is_the_exact_fixed_floor(self) -> None:
         body = region_body("risk-tiers")
