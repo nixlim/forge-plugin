@@ -102,14 +102,22 @@ class FreshEvalRepo:
         self.write("forge-project.md", policy_raw)
         for relative in (
             ".codex/agents/review-cheap.toml",
+            ".codex/agents/plan.toml",
             ".codex/config.toml",
             ".forge/history/gotchas.md",
             "rules/review-constitution.md",
             "system/codex/agents/review-cheap.toml",
+            "system/codex/agents/plan.toml",
             "system/codex/config.toml",
             "system/codex/prompts/review-cheap.md",
+            "system/codex/prompts/plan.md",
         ):
-            self.write(relative, (ROOT / relative).read_bytes())
+            installed_sources = {
+                ".codex/agents/plan.toml": "system/codex/agents/plan.toml",
+                ".codex/config.toml": "system/codex/config.toml",
+            }
+            source = installed_sources.get(relative, relative)
+            self.write(relative, (ROOT / source).read_bytes())
 
         for source in sorted(TASK_ROOT.glob("*.md")):
             raw = source.read_bytes()

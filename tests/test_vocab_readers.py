@@ -46,6 +46,10 @@ class VocabularyReaderTests(unittest.TestCase):
             'model = "gpt-review"\nmodel_reasoning_effort = "medium"\nsandbox_mode = "read-only"\n',
             encoding="utf-8",
         )
+        (self.repo / "system/codex/agents/plan.toml").write_text(
+            'model = "gpt-plan"\nmodel_reasoning_effort = "low"\nsandbox_mode = "read-only"\n',
+            encoding="utf-8",
+        )
         (self.repo / "agents/review-final.md").write_text(
             "---\nmodel: fable\neffort: high\n---\n",
             encoding="utf-8",
@@ -253,8 +257,6 @@ class VocabularyReaderTests(unittest.TestCase):
         unavailable = {agent for agent, row in routing.items() if row["status"] == "unavailable"}
         self.assertEqual(
             {
-                "legacy-plan",
-                "canonical-plan",
                 "canonical-monitoring",
                 "cross-provider-claude-implementation",
                 "cross-provider-codex-review-final",
@@ -269,6 +271,8 @@ class VocabularyReaderTests(unittest.TestCase):
             "legacy-reviewer-claude",
             "canonical-review-cheap",
             "canonical-review-final",
+            "legacy-plan",
+            "canonical-plan",
         ):
             with self.subTest(agent=agent):
                 self.assertEqual("matched", routing[agent]["status"])
@@ -276,6 +280,7 @@ class VocabularyReaderTests(unittest.TestCase):
         authoritative_pairs = {
             ("codex", "implementer"),
             ("codex", "review-cheap"),
+            ("codex", "plan"),
             ("claude", "review-final"),
         }
         expected_findings = []
@@ -342,7 +347,6 @@ class VocabularyReaderTests(unittest.TestCase):
             ("claude", "review-cheap"),
             ("claude", "plan"),
             ("codex", "review-final"),
-            ("codex", "plan"),
             ("codex", "monitoring"),
             ("claude", "monitoring"),
         )

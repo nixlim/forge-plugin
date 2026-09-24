@@ -422,7 +422,7 @@ event-retention: 400d""",
         prompt_path = execution_dir / "prompt.md"
         events_path = execution_dir / "events.jsonl"
         handoff_path = execution_dir / "handoff.md"
-        template_name = "implementer.md" if role == "implementation" else "review-cheap.md"
+        template_name = {"implementation": "implementer.md", "plan": "plan.md"}.get(role, "review-cheap.md")
         self.assertEqual(
             self.git_at(execution_cwd, "rev-parse", "HEAD"),
             target_sha,
@@ -939,10 +939,10 @@ event-retention: 400d""",
         without_gotchas_head = self.snapshot_repo("initialized without gotchas")
         self.assertEqual(self.git("rev-parse", "HEAD"), without_gotchas_head)
         without_gotchas = assemble_codex_prompt(
-            execution_worktree=self.repo,
-            template_name="implementer.md",
+            execution_worktree=self.repo, template_name="plan.md",
             task_assignment=task_assignment,
         )
+        self.assertTrue(without_gotchas.startswith((ROOT / "system/codex/prompts/plan.md").read_bytes()))
         self.assertNotIn(b"## Committed forge gotchas", without_gotchas)
 
         region_pattern = re.compile(

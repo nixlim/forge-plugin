@@ -21,6 +21,7 @@ focused phase is complete.
 | Claude main session | Orchestrator/verifier; owns the journal, worktrees, gate chain, and all reintegration | n/a | host session | host session | host session |
 | Fresh Codex implementer | Scoped implementation in its assigned worktree | `implementer` | `gpt-5.6-sol` | `ultra` | `workspace-write` |
 | Fresh Codex first-pass reviewer | Independent, non-editing review of the supplied target | `review-cheap` | `gpt-5.6-sol` | `high` | `read-only` |
+| Fresh Codex planner | Bounded implementation planning for one run task; runs only, never a chain-bound planning pass | `plan` | `gpt-5.6-sol` | `high` | `read-only` |
 | Claude subagent `review-final` | Binding final review | `review-final` | project-configured | project-configured | orchestrator tree |
 
 The `model` and `effort` in every journal `execution` entry are the values actually passed at

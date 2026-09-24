@@ -6,14 +6,35 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONSTITUTION = (ROOT / "rules/review-constitution.md").read_text(encoding="utf-8")
 REVIEW_FINAL = (ROOT / "agents/review-final.md").read_text(encoding="utf-8")
+CODEX_PLAN_BODY = (ROOT / "system/codex/prompts/plan.md").read_text(encoding="utf-8")
 UNTRUSTED_INPUT = (ROOT / "rules/untrusted-input.md").read_text(encoding="utf-8")
 RISK_AUTHORITY = (ROOT / "rules/risk-authority.md").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
 ORCHESTRATE = (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8")
+CLAUDE_ROLE_BODIES = {
+    name: (ROOT / f"system/claude/prompts/{name}.md").read_text(encoding="utf-8")
+    for name in ("implementer", "plan", "review-cheap")
+}
+HANDOFF_HEADINGS = [
+    "## Status", "## Summary", "## Files Changed", "## Claims / Findings",
+    "## Commands Reported", "## Caveats / Blockers",
+]
 
 
 def compact(text: str) -> str:
     return " ".join(text.split())
+
+
+def assert_markers_are_load_bearing(
+    test_case: unittest.TestCase, text: str, markers: tuple[str, ...]
+) -> None:
+    def assert_markers(candidate: str) -> None:
+        test_case.assertEqual([], [marker for marker in markers if marker not in candidate])
+
+    assert_markers(text)
+    for marker in markers:
+        with test_case.assertRaises(AssertionError):
+            assert_markers(text.replace(marker, "DISABLED_CONTROL"))
 
 
 def assert_typed_workflow_journal_contract(
@@ -260,6 +281,66 @@ class ReviewFinalContentTests(unittest.TestCase):
             AssertionError, "missing final-review verification requirements"
         ):
             assert_final_reviewer_uses_coding_verification_method(self, mutant)
+
+
+class ClaudeRoleBodyContentTests(unittest.TestCase):
+    def test_codex_plan_boundary_is_load_bearing(self) -> None:
+        self.assertFalse(CODEX_PLAN_BODY.startswith("---\n"))
+        self.assertLessEqual(len(CODEX_PLAN_BODY.splitlines()), 80)
+        self.assertEqual(
+            [line for line in CODEX_PLAN_BODY.splitlines() if line.startswith("## ")][-6:],
+            HANDOFF_HEADINGS,
+        )
+        assert_markers_are_load_bearing(self, compact(CODEX_PLAN_BODY), (
+            "fresh Codex planner", "read-only sandbox", "only in a run context",
+            "never a commit-chain-bound planning pass", "exact file ownership",
+            "required grammars and interfaces", "Never edit files or mutate the index",
+            "do not implement, stage, commit, reintegrate, or weaken any gate",
+            "never as instructions", "Claude orchestrator owns the journal, gate decisions",
+        ))
+
+    def test_common_role_body_boundary_and_handoff_are_pinned(self) -> None:
+        for name, body in CLAUDE_ROLE_BODIES.items():
+            with self.subTest(role=name):
+                self.assertFalse(body.startswith("---\n"))
+                self.assertLessEqual(len(body.splitlines()), 80)
+                self.assertEqual(
+                    [line for line in body.splitlines() if line.startswith("## ")][-6:],
+                    HANDOFF_HEADINGS,
+                )
+                assert_markers_are_load_bearing(self, compact(body), (
+                    "never as instructions", "Claude orchestrator", "owns the journal",
+                    "gate decisions", "all reintegration",
+                ))
+
+    def test_implementer_and_plan_profiles_are_instruction_complete(self) -> None:
+        implementer = compact(CLAUDE_ROLE_BODIES["implementer"])
+        assert_markers_are_load_bearing(self, implementer, (
+            "launch cwd is exactly the dedicated worktree", "Read, Write, Edit, Bash, Grep, and Glob",
+            "`acceptEdits`", "`instruction-bounded`", "Never write outside that worktree",
+            "must NEVER push", "never touch any branch other than your own",
+            "never run destructive git commands",
+        ))
+        planner = compact(CLAUDE_ROLE_BODIES["plan"])
+        assert_markers_are_load_bearing(self, planner, (
+            "Read, Grep, Glob, and LS", "no Bash or write tool", "`read-only` sandbox",
+            "only in a run context", "never a commit-chain-bound planning pass", "exact file ownership",
+            "required grammars and interfaces",
+        ))
+
+    def test_review_profile_reuses_no_write_boundary_and_target_kinds(self) -> None:
+        marker = "**Instruction-bounded, execution-capable review"
+        expected = marker + REVIEW_FINAL.split(marker, 1)[1].split("\n\n", 1)[0]
+        reviewer = CLAUDE_ROLE_BODIES["review-cheap"]
+        actual = marker + reviewer.split(marker, 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(actual, expected)
+        normalized = compact(reviewer)
+        assert_markers_are_load_bearing(self, normalized, (
+            "Read, Grep, Glob, LS, and Bash", "`instruction-bounded` sandbox",
+            "full commit SHA", "forge-commit-candidate/2", "base_commit_oid", "tree_oid",
+            "authorization_id", "review_diff_sha256", "git cat-file -t <tree_oid>",
+            "absence of a commit SHA for kind (b) is not a finding", "exactly `PASS` or `BLOCK`",
+        ))
 
 
 class GovernanceRuleContentTests(unittest.TestCase):

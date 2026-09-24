@@ -561,7 +561,7 @@ class ArchiveRunTests(unittest.TestCase):
             Path("agents/review-final.md"),
             Path("docs/specs/forge-plugin-spec.md"),
             Path("system/codex/agents/implementer.toml"),
-            Path("system/codex/agents/review-cheap.toml"), Path("scripts/forge/route_vocab.py"),
+            Path("system/codex/agents/plan.toml"), Path("system/codex/agents/review-cheap.toml"), Path("scripts/forge/route_vocab.py"),
             Path("tests/test_repo_conformance.py"),
         )
         for relative in sources:

@@ -198,6 +198,11 @@ def committed_route(repo: Path, execution: dict[str, Any]) -> tuple[str, str] | 
             (".codex/agents/review-cheap.toml", "toml"),
             ("system/codex/agents/review-cheap.toml", "toml"),
         )
+    elif provider == "codex" and role == "plan":
+        candidates = (
+            (".codex/agents/plan.toml", "toml"),
+            ("system/codex/agents/plan.toml", "toml"),
+        )
     elif provider == "claude" and role == "review-final":
         candidates = (("agents/review-final.md", "yaml"),)
     else:

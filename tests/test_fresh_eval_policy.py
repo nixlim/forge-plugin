@@ -247,6 +247,7 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
         paths = (
             ".claude/agents/fresh.md",
             ".codex/agents/fresh.toml",
+            ".codex/agents/plan.toml",
             ".codex/config.toml",
             ".codex/rules/fresh.rules",
             "agents/fresh.md",
@@ -257,8 +258,10 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             "skills/commit/SKILL.md",
             "skills/orchestrate/SKILL.md",
             "system/codex/agents/fresh.toml",
+            "system/codex/agents/plan.toml",
             "system/codex/config.toml",
             "system/codex/prompts/fresh.md",
+            "system/codex/prompts/plan.md",
             "system/codex/rules/fresh.rules",
             "system/claude/prompts/fresh.md",
             "system/local/routes.toml.seed",
@@ -286,10 +289,16 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             ),
             (
                 "agent-prompt-template",
+                "system/codex/prompts/**",
+                "system/codex/prompts/plan.md",
+            ),
+            (
+                "agent-prompt-template",
                 "system/claude/prompts/**",
                 "system/claude/prompts/fresh.md",
             ),
             ("reviewer-routing", ".codex/agents/**", ".codex/agents/fresh.toml"),
+            ("reviewer-routing", ".codex/agents/**", ".codex/agents/plan.toml"),
             ("reviewer-routing", ".codex/config.toml", ".codex/config.toml"),
             (
                 "reviewer-routing",
@@ -313,6 +322,11 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             ),
             (
                 "reviewer-routing",
+                "system/codex/agents/**",
+                "system/codex/agents/plan.toml",
+            ),
+            (
+                "reviewer-routing",
                 "system/codex/config.toml",
                 "system/codex/config.toml",
             ),
@@ -328,6 +342,7 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
                 "system/codex/rules/fresh.rules",
             ),
             ("model-provider-version", ".codex/agents/**", ".codex/agents/fresh.toml"),
+            ("model-provider-version", ".codex/agents/**", ".codex/agents/plan.toml"),
             ("model-provider-version", "agents/**", "agents/fresh.md"),
             (
                 "model-provider-version",
@@ -348,6 +363,11 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
                 "model-provider-version",
                 "system/codex/agents/**",
                 "system/codex/agents/fresh.toml",
+            ),
+            (
+                "model-provider-version",
+                "system/codex/agents/**",
+                "system/codex/agents/plan.toml",
             ),
             (
                 "commit-review-prompt",

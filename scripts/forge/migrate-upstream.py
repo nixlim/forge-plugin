@@ -602,7 +602,7 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
             prepared_codex[relative] = prepared
 
         prepared_agent_tomls: dict[str, Path] = {}
-        for relative in ("implementer.toml", "review-cheap.toml"):
+        for relative in ("implementer.toml", "review-cheap.toml", "plan.toml"):
             payload = plugin_root / "system/codex/agents" / relative
             if not payload.is_file():
                 raise MigrationError(f"missing plugin Codex payload: {payload}")

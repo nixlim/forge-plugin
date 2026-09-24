@@ -14,3 +14,7 @@ config_file = "./agents/implementer.toml"
 [agents."review-cheap"]
 description = "Independent first-pass reviewer — read-only and non-authoritative"
 config_file = "./agents/review-cheap.toml"
+
+[agents."plan"]
+description = "Implementation planner — read-only run-scoped planning"
+config_file = "./agents/plan.toml"

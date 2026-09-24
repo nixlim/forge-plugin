@@ -25,8 +25,9 @@ POLICY_PATH = Path("forge-project.md")
 SPEC_PATH = Path("docs/specs/forge-plugin-spec.md")
 IMPLEMENTER_PATH = Path("system/codex/agents/implementer.toml")
 REVIEWER_PATH = Path("system/codex/agents/review-cheap.toml")
+PLAN_PATH = Path("system/codex/agents/plan.toml")
 FINAL_REVIEWER_PATH = Path("agents/review-final.md")
-ROLE_PATHS = {"implementer": IMPLEMENTER_PATH, "review-cheap": REVIEWER_PATH}
+ROLE_PATHS = {"implementer": IMPLEMENTER_PATH, "review-cheap": REVIEWER_PATH, "plan": PLAN_PATH}
 
 
 class ConformanceError(RuntimeError):
@@ -79,6 +80,7 @@ def spec_codex_routes(spec: str) -> dict[str, tuple[str, str, str]]:
     for role, label in (
         ("implementer", "implementer"),
         ("review-cheap", "first-pass reviewer"),
+        ("plan", "planner"),
     ):
         match = re.search(
             rf"{re.escape(label)} \(`role: \"{role}\"`, model `([^`]+)`, "
@@ -355,7 +357,7 @@ def recorded_authority(repo: Path, head: str, record: dict[str, object], line_nu
     prefix = f"journal line {line_number}: "
     if provider is None:
         return None, None, prefix + f"execution has unsupported provider {raw_provider!r}", None
-    if provider == "codex" and role in {"implementer", "review-cheap"}:
+    if provider == "codex" and role in {"implementer", "review-cheap", "plan"}:
         authority_path = ROLE_PATHS[role]
     elif provider == "claude" and role == "review-final":
         authority_path = FINAL_REVIEWER_PATH

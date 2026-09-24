@@ -335,11 +335,8 @@ class InstallerIntegrationTests(unittest.TestCase):
         self.assertEqual(agents, f"{BEGIN}\n{project}{END}\n")
         self.assertEqual(self.read("CLAUDE.md"), "@forge-project.md\n")
 
-        codex_files = {
-            path.relative_to(self.repo).as_posix()
-            for path in (self.repo / ".codex").rglob("*")
-            if path.is_file()
-        }
+        files = (self.repo / ".codex").rglob("*")
+        codex_files = {path.relative_to(self.repo).as_posix() for path in files if path.is_file()}
         self.assertEqual(
             codex_files,
             {
@@ -347,8 +344,10 @@ class InstallerIntegrationTests(unittest.TestCase):
                 ".codex/hooks.json",
                 ".codex/agents/implementer.toml",
                 ".codex/agents/review-cheap.toml",
+                ".codex/agents/plan.toml",
                 ".codex/prompts/implementer.md",
                 ".codex/prompts/review-cheap.md",
+                ".codex/prompts/plan.md",
                 ".codex/rules/forge.rules",
             },
         )
@@ -1182,29 +1181,30 @@ class InstallerPayloadContractTests(unittest.TestCase):
         self.assertRegex(config, r"(?m)^max_threads\s*=\s*6\s*$")
         self.assertRegex(config, r"(?m)^max_depth\s*=\s*1\s*$")
         registrations = set(re.findall(r'^\[agents\."([^"]+)"\]$', config, re.MULTILINE))
-        self.assertEqual(registrations, {"implementer", "review-cheap"})
+        self.assertEqual(registrations, {"implementer", "review-cheap", "plan"})
 
-        expected = {
+        expected = {"plan": ("gpt-5.6-sol", "high", "read-only"),
             "implementer": ("gpt-5.6-sol", "ultra", "workspace-write"),
             "review-cheap": ("gpt-5.6-sol", "high", "read-only"),
         }
         for name, routing in expected.items():
-            agent = (ROOT / f"system/codex/agents/{name}.toml").read_text(
-                encoding="utf-8"
-            )
+            agent = (ROOT / f"system/codex/agents/{name}.toml").read_text(encoding="utf-8")
             with self.subTest(agent=name):
-                self.assertEqual(
-                    (
-                        toml_string(agent, "model"),
-                        toml_string(agent, "model_reasoning_effort"),
-                        toml_string(agent, "sandbox_mode"),
-                    ),
-                    routing,
+                actual = (
+                    toml_string(agent, "model"),
+                    toml_string(agent, "model_reasoning_effort"),
+                    toml_string(agent, "sandbox_mode"),
                 )
+                self.assertEqual(actual, routing)
         implementer = (ROOT / "system/codex/agents/implementer.toml").read_text()
         self.assertIn("You may commit inside this worktree.", implementer)
         self.assertIn("You must NEVER push", implementer)
         self.assertIn("never touch any branch other than your own", implementer)
+        migration = (ROOT / "scripts/forge/migrate-upstream.py").read_text(encoding="utf-8")
+        needle = 'for relative in ("implementer.toml", "review-cheap.toml", "plan.toml"):'
+        self.assertIn(needle, migration)
+        with self.assertRaises(AssertionError):
+            self.assertIn(needle, migration.replace(needle, "DISABLED_CONTROL", 1))
 
     def test_upstream_rules_baseline_is_committable(self) -> None:
         # Regression guard: this contract used to read `.upstream/`, which is gitignored, so
