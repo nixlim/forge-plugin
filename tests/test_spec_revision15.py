@@ -122,7 +122,7 @@ def assert_trigger_controls(specification: str, policies: dict[str, str]) -> Non
 
 class SpecificationRevision15Tests(unittest.TestCase):
     def test_revision_and_new_authority_are_explicitly_deferred(self) -> None:
-        self.assertIn("**Status**: Draft (Revision 15)", SPEC)
+        self.assertIn("**Status**: Draft (Revision 16)", SPEC)
         intent = next(
             line for line in SPEC.splitlines() if line.startswith("**Intent**:")
         )

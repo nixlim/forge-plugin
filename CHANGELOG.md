@@ -10,6 +10,7 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Run scope and run-bound candidate validation (forge-plugin-dn9e) now admit the DM-007 committed `.forge/evals/` and `.forge/history/` subtrees while continuing to refuse transient roots and every other `.forge` child; the specification carries the Revision-16 FR-192/FR-014 amendment, and FR-230 phase-3 result evidence is re-minted for the changed `candidate.py` subject (five fixtures, manifest result digests, and the manifest byte pin; generation stays 1).
 - Run-bound fresh reviewer evaluations (forge-plugin-4w5o) now keep the outer journal lock visible to worker-thread durability probes: the formerly thread-local active-lock registry is context-propagating and every fresh-evaluation worker runs under its own copied context. Unbound chains and single-threaded paths are unchanged; the FR-230 phase-3 result evidence is re-minted for the changed fresh_evals.py subject (five fixtures, manifest result digests and the manifest byte pin; generation stays 1).
 
 ## [0.6.14] - 2026-09-24

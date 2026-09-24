@@ -176,14 +176,14 @@ class CandidateIdentityTests(unittest.TestCase):
             "./relative",
             "src//file",
             "src/../file",
-            ".forge/history/run.md",
-            ".codex-orchestrator/runs/state",
-            ".worktrees/other/file",
+            ".forge/tmp/x", ".forge",
+            ".codex-orchestrator/runs/state", ".worktrees/other/file",
             "top*/file",
         ):
             with self.subTest(value=value):
                 self.assertFalse(CANDIDATE.valid_scope_path(value))
-        self.assertTrue(CANDIDATE.valid_scope_path("src/ordinary file.txt"))
+        for value in ("src/ordinary file.txt", ".forge/evals/tasks/x.json"):
+            self.assertTrue(CANDIDATE.valid_scope_path(value), value)
 
     def test_run_bound_snapshot_install_rejects_actual_noncanonical_path(self) -> None:
         (self.root / "tracked.txt").write_text("candidate\n", encoding="utf-8")

@@ -34,6 +34,7 @@ _OBJECT_FORMAT_LENGTHS = {"sha1": 40, "sha256": 64}
 _DISCOVERY_MAX_BYTES = 4096
 _SCOPE_MAGIC_CHARS = "*?["
 _TRANSIENT_SCOPE_ROOTS = (".forge", ".codex-orchestrator", ".worktrees")
+_COMMITTED_FORGE_SUBTREES = ("evals", "history")
 _SANITIZED_EXACT = {
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -964,6 +965,12 @@ def marker_timestamp_for_cleanup(raw: bytes) -> datetime | None:
         return None
 
 
+def _scope_root_admitted(parts: list[str]) -> bool:
+    first = parts[0]
+    committed_forge = first == ".forge" and len(parts) >= 3 and parts[1] in _COMMITTED_FORGE_SUBTREES and not any(character in parts[1] for character in _SCOPE_MAGIC_CHARS)
+    return not any(character in first for character in _SCOPE_MAGIC_CHARS) and (first not in _TRANSIENT_SCOPE_ROOTS or committed_forge)
+
+
 def valid_scope_path(value: object) -> bool:
     """Mirror the committed run-journal contract for one concrete Git path.
 
@@ -973,19 +980,10 @@ def valid_scope_path(value: object) -> bool:
     retain their separate path authority.
     """
 
-    if not isinstance(value, str) or not value or value != value.strip():
-        return False
-    if value.startswith(("/", "!", "^", "-", ":", "./")):
-        return False
-    if "\\" in value or "\0" in value:
+    if not isinstance(value, str) or not value or value != value.strip() or value.startswith(("/", "!", "^", "-", ":", "./")) or "\\" in value or "\0" in value:
         return False
     parts = value.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        return False
-    first = parts[0]
-    if first in _TRANSIENT_SCOPE_ROOTS or any(
-        character in first for character in _SCOPE_MAGIC_CHARS
-    ):
+    if any(part in {"", ".", ".."} for part in parts) or not _scope_root_admitted(parts):
         return False
     try:
         value.encode("utf-8")

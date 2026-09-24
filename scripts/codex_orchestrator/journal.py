@@ -267,6 +267,7 @@ OWNER_PATTERN = re.compile(
 UTC_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z")
 MAGIC_CHARS = "*?["
 TRANSIENT_SCOPE_ROOTS = (".forge", ".codex-orchestrator", ".worktrees")
+COMMITTED_FORGE_SUBTREES = ("evals", "history")
 CITATION_CORRECTION_TOKEN = "citation-correction:"
 CITATION_DECISION_CORRECTION = re.compile(
     r"^(?P<id>\S+) basis\[(?P<index>[0-9]+)\]: (?P<path>.+)$"
@@ -1550,18 +1551,19 @@ def _valid_run_id(run_id: object) -> bool:
     return True
 
 
+def _scope_root_admitted(parts: list[str]) -> bool:
+    first = parts[0]
+    committed_forge = first == ".forge" and len(parts) >= 3 and parts[1] in COMMITTED_FORGE_SUBTREES and not any(character in parts[1] for character in MAGIC_CHARS)
+    return not any(character in first for character in MAGIC_CHARS) and (first not in TRANSIENT_SCOPE_ROOTS or committed_forge)
+
+
 def _valid_scope_item(value: object) -> bool:
-    if not isinstance(value, str) or not value or value != value.strip():
-        return False
-    if value.startswith(("/", "!", "^", "-", ":", "./")) or "\\" in value or "\x00" in value:
+    if not isinstance(value, str) or not value or value != value.strip() or value.startswith(("/", "!", "^", "-", ":", "./")) or "\\" in value or "\x00" in value:
         return False
     parts = value.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        return False
-    first = parts[0]
-    # A magical top-level segment can select transient coordination state, so
-    # it cannot prove the FR-192 exclusion and must fail conservatively.
-    if first in TRANSIENT_SCOPE_ROOTS or any(character in first for character in MAGIC_CHARS):
+    # Magical roots and transient state fail conservatively; DM-007's literal
+    # committed .forge subtrees require at least one path segment beneath them.
+    if any(part in {"", ".", ".."} for part in parts) or not _scope_root_admitted(parts):
         return False
     try:
         value.encode("utf-8")
