@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
+import contextvars
 import dataclasses
 import datetime as dt
 import hashlib
@@ -3081,9 +3082,7 @@ def collect(
             bootstrap=evaluation.bootstrap,
         ) as materialized:
             applicable = [
-                fixture
-                for fixture in suite.fixtures
-                if fixture.disposition == "fresh-review"
+                fixture for fixture in suite.fixtures if fixture.disposition == "fresh-review"
             ]
             results: list[dict[str, object]] = []
             for wave_start in range(0, len(applicable), MAX_CONCURRENCY):
@@ -3095,6 +3094,7 @@ def collect(
                         evaluation.halt_checker()
                         futures.append(
                             pool.submit(
+                                contextvars.copy_context().run,
                                 _launch_one,
                                 evaluation,
                                 materialized,

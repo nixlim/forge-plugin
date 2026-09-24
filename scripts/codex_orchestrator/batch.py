@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextvars
 import fcntl
 import json
 import os
@@ -82,7 +83,9 @@ ExistingBatchValidator = Callable[
     [Sequence[dict[str, object]]], None
 ]
 ChainBatchAuthorizer = Callable[..., object]
-_ACTIVE_LOCKS = threading.local()
+_ACTIVE_LOCKS: contextvars.ContextVar[dict[str, BatchLock] | None] = contextvars.ContextVar(
+    "_ACTIVE_LOCKS", default=None
+)
 _UNSET_SIDECAR = object()
 _INTENT_TEMP_PREFIXES = (
     f"{journal.BATCH_INTENT_NAME}.",
@@ -125,9 +128,7 @@ _WRITER_ACTIVATION_RECOVERY_SCHEMA = (
 )
 
 
-def _register_chain_batch_authorizer(
-    callback: ChainBatchAuthorizer,
-) -> None:
+def _register_chain_batch_authorizer(callback: ChainBatchAuthorizer) -> None:
     """Register the sole task-04 capability verifier for this process."""
 
     global _CHAIN_BATCH_AUTHORIZER
@@ -142,10 +143,9 @@ def _register_chain_batch_authorizer(
 
 
 def _active_locks() -> dict[str, BatchLock]:
-    active = getattr(_ACTIVE_LOCKS, "values", None)
-    if active is None:
+    if (active := _ACTIVE_LOCKS.get()) is None:
         active = {}
-        _ACTIVE_LOCKS.values = active
+        _ACTIVE_LOCKS.set(active)
     return active
 
 

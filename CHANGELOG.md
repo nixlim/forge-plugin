@@ -8,6 +8,10 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Fixed
+
+- Run-bound fresh reviewer evaluations (forge-plugin-4w5o) now keep the outer journal lock visible to worker-thread durability probes: the formerly thread-local active-lock registry is context-propagating and every fresh-evaluation worker runs under its own copied context. Unbound chains and single-threaded paths are unchanged; the FR-230 phase-3 result evidence is re-minted for the changed fresh_evals.py subject (five fixtures, manifest result digests and the manifest byte pin; generation stays 1).
+
 ## [0.6.14] - 2026-09-24
 
 ### Changed
