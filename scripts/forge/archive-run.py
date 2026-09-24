@@ -4602,7 +4602,7 @@ def legacy_closing_mode(
                         run_id=recovery_run_id,
                         repo_root=repo,
                         scope=tuple(start_scope),
-                        prior_records=canonical_records[:index],
+                        prior_records=canonical_records[:index], _historical_replay=journal_engine._HISTORICAL_REPLAY,
                     )
             except (journal_engine.CoordinationRefusal, KeyError, TypeError, ValueError):
                 valid = False

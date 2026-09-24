@@ -19,13 +19,13 @@ focused phase is complete.
 | Actor | Responsibility | Journal role | Model | Effort | Sandbox |
 |---|---|---|---|---|---|
 | Claude main session | Orchestrator/verifier; owns the journal, worktrees, gate chain, and all reintegration | n/a | host session | host session | host session |
-| Fresh Codex implementer | Scoped implementation in its assigned worktree | `implementation` | `gpt-5.6-sol` | `ultra` | `workspace-write` |
-| Fresh Codex first-pass reviewer | Independent, non-editing review of the supplied target | `review` | `gpt-5.6-sol` | `high` | `read-only` |
-| Claude subagent `review-final` | Binding final review | n/a | project-configured | project-configured | orchestrator tree |
+| Fresh Codex implementer | Scoped implementation in its assigned worktree | `implementer` | `gpt-5.6-sol` | `ultra` | `workspace-write` |
+| Fresh Codex first-pass reviewer | Independent, non-editing review of the supplied target | `review-cheap` | `gpt-5.6-sol` | `high` | `read-only` |
+| Claude subagent `review-final` | Binding final review | `review-final` | project-configured | project-configured | orchestrator tree |
 
 The `model` and `effort` in every journal `execution` entry are the values actually passed at
-launch. Changing any model, effort, or sandbox value is a control-class change; do not silently
-substitute a cheaper model, lower effort, or broader sandbox.
+launch. Changing any committed model, effort, or sandbox default or provider-profile value is a
+control-class change; do not silently substitute a cheaper model, lower effort, or broader sandbox.
 
 ## Forge Isolation And Prompt Construction
 

@@ -417,7 +417,11 @@ def extract(paths: list[Path], repo: Path | str, revision: str) -> dict[str, Any
                     }
                 )
                 review_role = record.get("role")
-                if task_key is not None and review_role in {"review", "reviewer", "review-cheap", "review-final"} and route_vocab.is_non_mutating(review_role):
+                if task_key is not None and review_role in {
+                    "review",
+                    "reviewer",
+                    *route_vocab.REVIEW_ROLE_IDS,
+                }:
                     review_execution_counts[task_key] += 1
 
             if task_key is not None:

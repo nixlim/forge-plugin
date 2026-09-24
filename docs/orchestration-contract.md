@@ -78,7 +78,7 @@ contract. Record the provider, role, and mode. Use `event_source: "exec"` for a 
 and `session_id` when known; an execution result may supply the session id later.
 
 ```jsonl
-{"type":"execution","agent":"codex-impl-01","execution":"execution-01","task":"task-01","provider":"codex","role":"implementation","mode":"headless","event_source":"exec","model":"gpt-5.6-sol","effort":"ultra","worktree":"/work/project-codex-impl-01","head":"0123456789abcdef0123456789abcdef01234567","branch":"codex-impl-01","prompt":"codex-impl-01/execution-01/prompt.md","events":"codex-impl-01/execution-01/events.jsonl","handoff":"codex-impl-01/execution-01/handoff.md","recorded_at":"2026-07-10T12:02:00Z"}
+{"type":"execution","agent":"codex-impl-01","execution":"execution-01","task":"task-01","provider":"codex","role":"implementer","mode":"headless","event_source":"exec","model":"gpt-5.6-sol","effort":"ultra","worktree":"/work/project-codex-impl-01","head":"0123456789abcdef0123456789abcdef01234567","branch":"codex-impl-01","prompt":"codex-impl-01/execution-01/prompt.md","events":"codex-impl-01/execution-01/events.jsonl","handoff":"codex-impl-01/execution-01/handoff.md","recorded_at":"2026-07-10T12:02:00Z"}
 ```
 
 ### `execution_result`

@@ -25,6 +25,9 @@ class RouteVocabularyConstantTests(unittest.TestCase):
             ),
             route_vocab.ROLE_IDS,
         )
+        self.assertEqual(
+            ("review-cheap", "review-final"), route_vocab.REVIEW_ROLE_IDS
+        )
         self.assertEqual(("codex", "claude"), route_vocab.PROVIDER_IDS)
         self.assertEqual(("exec", "claude"), route_vocab.EVENT_SOURCE_IDS)
         self.assertEqual(
@@ -38,6 +41,86 @@ class RouteVocabularyConstantTests(unittest.TestCase):
 
 
 class RouteVocabularyCanonicalizationTests(unittest.TestCase):
+    def test_new_write_validation_accepts_canonical_vocabulary(self) -> None:
+        for role in route_vocab.ROLE_IDS:
+            for provider in route_vocab.PROVIDER_IDS:
+                with self.subTest(role=role, provider=provider):
+                    self.assertIsNone(
+                        route_vocab.validate_new_write(
+                            role=role,
+                            provider=provider,
+                            mode="headless",
+                            event_source="exec",
+                        )
+                    )
+
+    def test_new_write_validation_gives_canonical_legacy_target(self) -> None:
+        cases = (
+            (
+                "implementation",
+                "codex",
+                "headless",
+                "exec",
+                "role",
+                "implementation",
+                "implementer",
+            ),
+            (
+                "review",
+                "claude",
+                "headless",
+                "exec",
+                "role",
+                "review",
+                "review-final",
+            ),
+            (
+                "implementer",
+                "codex-cli",
+                "headless",
+                "exec",
+                "provider",
+                "codex-cli",
+                "codex",
+            ),
+            (
+                "implementer",
+                "codex",
+                "headless",
+                "agent-tool",
+                "event_source",
+                "agent-tool",
+                "claude",
+            ),
+        )
+        for role, provider, mode, source, field, raw, target in cases:
+            with self.subTest(field=field, target=target):
+                expected = (
+                    f"execution {field} {raw!r} is not canonical; use {target}"
+                )
+                with self.assertRaisesRegex(
+                    route_vocab.NewWriteRefusal, rf"^{re.escape(expected)}$"
+                ):
+                    route_vocab.validate_new_write(
+                        role=role,
+                        provider=provider,
+                        mode=mode,
+                        event_source=source,
+                    )
+
+    def test_new_write_validation_lists_ids_without_a_legacy_target(self) -> None:
+        with self.assertRaisesRegex(
+            route_vocab.NewWriteRefusal,
+            "^execution mode 'orchestrator-inline' "
+            "is not canonical; use one of headless, detached, subagent, teammate$",
+        ):
+            route_vocab.validate_new_write(
+                role="implementer",
+                provider="claude",
+                mode="orchestrator-inline",
+                event_source="claude",
+            )
+
     def test_implementation_aliases_and_canonical_roles(self) -> None:
         for raw_role in ("implementation", "implementer", "implement"):
             for provider in ("codex", "claude", "codex-cli", "unknown"):

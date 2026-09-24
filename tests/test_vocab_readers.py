@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,7 @@ sys.path.insert(0, str(ROOT / "scripts/forge"))
 
 import route_vocab  # noqa: E402
 
-from tests.test_repo_conformance import check_run  # noqa: E402
+from tests.test_repo_conformance import check_run, recorded_authority  # noqa: E402
 
 from codex_orchestrator import journal, monitor  # noqa: E402
 
@@ -162,6 +163,33 @@ class VocabularyReaderTests(unittest.TestCase):
                 "gpt-plan",
                 "low",
             ),
+            (
+                "canonical-monitoring",
+                "codex",
+                "monitoring",
+                "exec",
+                "detached",
+                "gpt-monitoring",
+                "low",
+            ),
+            (
+                "cross-provider-claude-implementation",
+                "claude",
+                "implementation",
+                "claude",
+                "subagent",
+                "gpt-implementer",
+                "high",
+            ),
+            (
+                "cross-provider-codex-review-final",
+                "codex",
+                "review-final",
+                "exec",
+                "read-only",
+                "gpt-review",
+                "medium",
+            ),
         )
         records: list[dict[str, object]] = [{"type": "run_started", "run_id": RUN_ID}]
         for index, values in enumerate(spellings, 1):
@@ -223,7 +251,16 @@ class VocabularyReaderTests(unittest.TestCase):
         extracted = self.patterns()
         routing = {row["agent"]: row for row in extracted["routing"]}
         unavailable = {agent for agent, row in routing.items() if row["status"] == "unavailable"}
-        self.assertEqual({"legacy-plan", "canonical-plan"}, unavailable)
+        self.assertEqual(
+            {
+                "legacy-plan",
+                "canonical-plan",
+                "canonical-monitoring",
+                "cross-provider-claude-implementation",
+                "cross-provider-codex-review-final",
+            },
+            unavailable,
+        )
         for agent in (
             "legacy-reviewer-codex",
             "legacy-review-codex",
@@ -235,13 +272,26 @@ class VocabularyReaderTests(unittest.TestCase):
         ):
             with self.subTest(agent=agent):
                 self.assertEqual("matched", routing[agent]["status"])
-        self.assertEqual(7, extracted["tasks"][0]["iterations"])
-        expected_findings = [
-            f"journal line {line}: agent {record['agent']!r} raw role {record['role']!r}: "
-            f"no committed route authority for this role at {self.head}"
-            for line, record in enumerate(self.records, 1)
-            if record.get("role") == "plan"
-        ]
+        self.assertEqual(8, extracted["tasks"][0]["iterations"])
+        authoritative_pairs = {
+            ("codex", "implementer"),
+            ("codex", "review-cheap"),
+            ("claude", "review-final"),
+        }
+        expected_findings = []
+        for line, record in enumerate(self.records, 1):
+            provider = route_vocab.canonical_provider(record.get("provider"))
+            role = route_vocab.canonical_role(record.get("role"), provider or "")
+            if (
+                provider in route_vocab.PROVIDER_IDS
+                and role in route_vocab.ROLE_IDS
+                and (provider, role) not in authoritative_pairs
+            ):
+                expected_findings.append(
+                    f"journal line {line}: agent {record['agent']!r} "
+                    f"raw role {record['role']!r}: no committed route authority "
+                    f"for ({provider}, {role}) at {self.head}"
+                )
         errors, findings = check_run(self.repo, self.run_dir)
         self.assertEqual([], errors)
         self.assertEqual(expected_findings, findings)
@@ -260,6 +310,76 @@ class VocabularyReaderTests(unittest.TestCase):
             mutant_errors,
         )
         self.assertEqual(expected_findings, mutant_findings)
+
+    def test_roles_without_authority_are_soft_and_unknown_role_is_hard(self) -> None:
+        extracted = self.patterns()
+        routing = {row["agent"]: row for row in extracted["routing"]}
+        committed_route = runpy.run_path(str(PATTERNS))["committed_route"]
+        negative_rows = [
+            (line, record)
+            for line, record in enumerate(self.records, 1)
+            if str(record.get("agent", "")).startswith("cross-provider-")
+        ]
+        for line, record in negative_rows:
+            provider = route_vocab.canonical_provider(record["provider"])
+            role = route_vocab.canonical_role(record["role"], provider or "")
+            with self.subTest(provider=provider, role=record["role"]):
+                self.assertEqual("unavailable", routing[record["agent"]]["status"])
+                self.assertIsNone(committed_route(self.repo, record))
+                _authority, _path, error, finding = recorded_authority(
+                    self.repo, self.head, record, line
+                )
+                self.assertIsNone(error)
+                self.assertEqual(
+                    f"journal line {line}: agent {record['agent']!r} "
+                    f"raw role {record['role']!r}: no committed route authority "
+                    f"for ({provider}, {role}) at {self.head}",
+                    finding,
+                )
+
+        missing_pairs = (
+            ("claude", "implementer"),
+            ("claude", "review-cheap"),
+            ("claude", "plan"),
+            ("codex", "review-final"),
+            ("codex", "plan"),
+            ("codex", "monitoring"),
+            ("claude", "monitoring"),
+        )
+        for offset, (provider, role) in enumerate(missing_pairs, 1):
+            line = 900 + offset
+            record = {
+                "agent": f"unrouted-{provider}-{role}",
+                "provider": provider,
+                "role": role,
+                "head": self.head,
+            }
+            with self.subTest(provider=provider, role=role):
+                self.assertIsNone(committed_route(self.repo, record))
+                _authority, _path, error, finding = recorded_authority(
+                    self.repo, self.head, record, line
+                )
+                self.assertIsNone(error)
+                self.assertEqual(
+                    f"journal line {line}: agent {record['agent']!r} raw role {role!r}: "
+                    f"no committed route authority for ({provider}, {role}) at {self.head}",
+                    finding,
+                )
+
+        unknown = {
+            "agent": "unknown-role",
+            "provider": "codex",
+            "role": "navigator",
+            "head": self.head,
+        }
+        self.assertIsNone(committed_route(self.repo, unknown))
+        _authority, _path, error, finding = recorded_authority(
+            self.repo, self.head, unknown, 999
+        )
+        self.assertEqual(
+            "journal line 999: unknown Codex execution role 'navigator'", error
+        )
+        self.assertIsNone(finding)
 
     def test_monitor_accepts_legacy_sources_but_still_rejects_unknowns(self) -> None:
         targets, errors = monitor.inflight_targets(self.run_dir)

@@ -107,7 +107,7 @@ _WRITER_ACTIVATION_REQUIRED = frozenset(
     }
 )
 WRITER_ACTIVATION_CONTROLS = _WRITER_ACTIVATION_REQUIRED
-_WRITER_ACTIVATION_BUILDER_AUTHORITY = object()
+_WRITER_ACTIVATION_BUILDER_AUTHORITY, _HISTORICAL_REPLAY = object(), object()
 BINDING_SCHEMA = "forge-gate-binding/1"
 BINDING_CANDIDATE_KINDS = frozenset(
     {
@@ -1850,9 +1850,9 @@ def _validate_proposed_record(
     scope: tuple[str, ...],
     prior_records: tuple[dict[str, object], ...] = (),
     _defer_binding: bool = False,
-    _activation_authority: object | None = None,
+    _activation_authority: object | None = None, _historical_replay: object | None = None,
 ) -> dict[str, object]:
-    """Validate one FR-019 new-write candidate without mutating coordination state."""
+    """Validate FR-019 grammar, with one identity-gated historical enum seam."""
 
     candidate = _validate_record_envelope(record)
     if "schema" not in NEW_WRITE_VALIDATION_CONTROLS:
@@ -1975,23 +1975,24 @@ def _validate_proposed_record(
     if kind == "execution":
         for field in ("agent", "task", "provider", "role", "mode", "model", "effort"):
             _required_string(candidate, kind, field)
-        execution = _required_string(candidate, kind, "execution", nonempty=False)
-        if EXECUTION_ID_PATTERN.fullmatch(execution) is None:
-            _invalid_record_field(kind, "execution", "must match execution-NN")
-        worktree = _required_string(candidate, kind, "worktree", nonempty=False)
-        if not Path(worktree).is_absolute():
-            _invalid_record_field(kind, "worktree", "must be an absolute path")
-        head = _required_string(candidate, kind, "head", nonempty=False)
-        if GIT_OBJECT_ID_PATTERN.fullmatch(head) is None:
-            _invalid_record_field(kind, "head", "must be a full Git object ID")
+        for field, valid, requirement in (("execution", EXECUTION_ID_PATTERN.fullmatch, "must match execution-NN"), ("worktree", lambda value: Path(value).is_absolute(), "must be an absolute path"), ("head", GIT_OBJECT_ID_PATTERN.fullmatch, "must be a full Git object ID")):
+            if not valid(_required_string(candidate, kind, field, nonempty=False)):
+                _invalid_record_field(kind, field, requirement)
         for field in ("prompt", "handoff", "event_source"):
             _required_string(candidate, kind, field)
+        # FR-019 readers do not reinterpret persisted route vocabulary.  Only
+        # archive recovery holds this identity; every writer takes the branch.
+        if _historical_replay is not _HISTORICAL_REPLAY:
+            try:
+                route_vocab.validate_new_write(role=candidate["role"], provider=candidate["provider"], mode=candidate["mode"], event_source=candidate["event_source"])
+            except route_vocab.NewWriteRefusal as exc:
+                raise CoordinationRefusal("forge: journal append refused — invalid journal record: " + str(exc)) from None
+        if "sandbox" in candidate:
+            sandbox = _required_string(candidate, kind, "sandbox")
+            if _historical_replay is not _HISTORICAL_REPLAY and sandbox not in route_vocab.SANDBOX_IDS:
+                _invalid_record_field(kind, "sandbox", "must be one of " + ", ".join(route_vocab.SANDBOX_IDS))
         if "events" in candidate:
-            events = candidate.get("events")
-            if not isinstance(events, str):
-                _invalid_record_field(kind, "events", "must be a string")
-            if candidate.get("event_source") == "exec" and not events:
-                _invalid_record_field(kind, "events", "must be nonempty")
+            _required_string(candidate, kind, "events", nonempty=candidate.get("event_source") == "exec")
         elif candidate.get("event_source") == "exec":
             _invalid_record_field(kind, "events", "is required")
         return candidate

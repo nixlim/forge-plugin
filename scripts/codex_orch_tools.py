@@ -64,6 +64,7 @@ TYPED_SINGLETON_OPTIONS = frozenset(
         "--provider",
         "--role",
         "--mode",
+        "--sandbox",
         "--model",
         "--effort",
         "--worktree",
@@ -219,6 +220,7 @@ def _typed_parser() -> argparse.ArgumentParser:
     ):
         execution_started.add_argument(f"--{name}", required=True)
     execution_started.add_argument("--events")
+    execution_started.add_argument("--sandbox")
 
     execution_finished = journal_subparsers.add_parser("execution-result")
     _typed_identity(execution_finished)
@@ -353,6 +355,7 @@ def _typed_main(argv: list[str]) -> int:
                 handoff=args.handoff,
                 event_source=args.event_source,
                 events=args.events,
+                sandbox=args.sandbox,
             )
         elif args.journal_command == "execution-result":
             outcome = builders.execution_result(

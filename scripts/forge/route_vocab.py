@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 ROLE_IDS = ("implementer", "review-cheap", "review-final", "plan", "monitoring")
+REVIEW_ROLE_IDS = ("review-cheap", "review-final")
 PROVIDER_IDS = ("codex", "claude")
 EVENT_SOURCE_IDS = ("exec", "claude")
 MODE_IDS = ("headless", "detached", "subagent", "teammate")
@@ -18,6 +19,35 @@ _NON_MUTATING_IDS = frozenset(
 )
 _MODEL_FAMILIES = ("fable", "opus", "sonnet", "haiku")
 _MODEL_TOKEN_RE = re.compile(r"[._:/@+\-]+")
+
+
+class NewWriteRefusal(ValueError):
+    """A noncanonical execution vocabulary value proposed for a new write."""
+
+
+def validate_new_write(
+    *, role: str, provider: str, mode: str, event_source: str
+) -> None:
+    """Refuse noncanonical vocabulary on a newly proposed execution record."""
+
+    fields = (
+        ("role", role, ROLE_IDS, canonical_role(role, provider)),
+        ("provider", provider, PROVIDER_IDS, canonical_provider(provider)),
+        ("mode", mode, MODE_IDS, canonical_mode(mode)[0]),
+        (
+            "event_source",
+            event_source,
+            EVENT_SOURCE_IDS,
+            canonical_event_source(event_source),
+        ),
+    )
+    for field, raw, identifiers, canonical in fields:
+        if raw in identifiers:
+            continue
+        suggestion = canonical or f"one of {', '.join(identifiers)}"
+        raise NewWriteRefusal(
+            f"execution {field} {raw!r} is not canonical; use {suggestion}"
+        )
 
 
 def canonical_role(raw_role: str, provider: str) -> str | None:

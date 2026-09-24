@@ -18,6 +18,8 @@ from typing import Callable, Iterable, Iterator, Sequence
 from . import batch, journal
 from .chain_paths import chain_storage_root
 
+route_vocab = journal.route_vocab
+
 # ``journal`` installs the sibling ``scripts/forge`` directory before this
 # import, including dynamic archive/CLI load orders used by installed surfaces.
 from commitment_paths import (  # noqa: E402
@@ -9157,6 +9159,7 @@ def execution_start(
     handoff: str,
     event_source: str,
     events: str | None,
+    sandbox: str | None = None,
 ) -> batch.BatchOutcome:
     inputs = {
         "agent": agent,
@@ -9173,22 +9176,28 @@ def execution_start(
         "event_source": event_source,
         "events": events,
     }
+    if sandbox is not None:
+        inputs["sandbox"] = sandbox
 
     def validate() -> None:
-        for field, value in (
-            ("agent", agent),
-            ("task", task),
-            ("provider", provider),
-            ("role", role),
-            ("mode", mode),
-            ("model", model),
-            ("effort", effort),
-            ("worktree", worktree),
-            ("prompt", prompt),
-            ("handoff", handoff),
-            ("event_source", event_source),
+        for field in (
+            "agent", "task", "provider", "role", "mode", "model", "effort",
+            "worktree", "prompt", "handoff", "event_source",
         ):
-            _caller_text("execution", field, value)
+            _caller_text("execution", field, inputs[field])
+        route_fields_are_canonical = (
+            route_vocab.canonical_role(role, provider) == role
+            and route_vocab.canonical_provider(provider) == provider
+            and route_vocab.canonical_mode(mode)[0] == mode
+            and route_vocab.canonical_event_source(event_source) == event_source
+        )
+        if sandbox is not None and route_fields_are_canonical:
+            _caller_text("execution", "sandbox", sandbox)
+            if sandbox not in route_vocab.SANDBOX_IDS:
+                journal._invalid_record_field(
+                    "execution", "sandbox", "must be one of "
+                    + ", ".join(route_vocab.SANDBOX_IDS)
+                )
         if events is not None:
             _caller_text("execution", "events", events)
         elif event_source == "exec":
@@ -9238,23 +9247,11 @@ def execution_start(
                 "forge: journal builder refused — execution worktree or HEAD mismatch"
             )
         record: dict[str, object] = {
-            "type": "execution",
-            "execution": _allocate_id(state.records, "execution"),
-            "agent": agent,
-            "task": task,
-            "provider": provider,
-            "role": role,
-            "mode": mode,
-            "model": model,
-            "effort": effort,
-            "worktree": str(resolved_worktree),
-            "head": head,
-            "prompt": prompt,
-            "handoff": handoff,
-            "event_source": event_source,
+            "type": "execution", "execution": _allocate_id(state.records, "execution"),
+            **inputs, "worktree": str(resolved_worktree),
         }
-        if events is not None:
-            record["events"] = events
+        if record["events"] is None:
+            del record["events"]
         return (_with_derived(record, run_id),)
 
     return batch.execute_existing_batch(

@@ -558,7 +558,7 @@ class Revision8AppendSchemaTests(Revision8Support, unittest.TestCase):
         self.assert_invalid_candidate(execution, "execution.events must be a string")
         for events in (None, ""):
             execution = self.valid_candidate("execution")
-            execution["event_source"] = "manual"
+            execution["event_source"] = "claude"
             if events is None:
                 execution.pop("events")
             else:

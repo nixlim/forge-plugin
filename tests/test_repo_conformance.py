@@ -26,7 +26,7 @@ SPEC_PATH = Path("docs/specs/forge-plugin-spec.md")
 IMPLEMENTER_PATH = Path("system/codex/agents/implementer.toml")
 REVIEWER_PATH = Path("system/codex/agents/review-cheap.toml")
 FINAL_REVIEWER_PATH = Path("agents/review-final.md")
-ROLE_PATHS = {"implementation": IMPLEMENTER_PATH, "review": REVIEWER_PATH}
+ROLE_PATHS = {"implementer": IMPLEMENTER_PATH, "review-cheap": REVIEWER_PATH}
 
 
 class ConformanceError(RuntimeError):
@@ -77,8 +77,8 @@ def spec_codex_routes(spec: str) -> dict[str, tuple[str, str, str]]:
     line = requirement(spec, "FR-030")
     routes: dict[str, tuple[str, str, str]] = {}
     for role, label in (
-        ("implementation", "implementer"),
-        ("review", "first-pass reviewer"),
+        ("implementer", "implementer"),
+        ("review-cheap", "first-pass reviewer"),
     ):
         match = re.search(
             rf"{re.escape(label)} \(`role: \"{role}\"`, model `([^`]+)`, "
@@ -355,16 +355,15 @@ def recorded_authority(repo: Path, head: str, record: dict[str, object], line_nu
     prefix = f"journal line {line_number}: "
     if provider is None:
         return None, None, prefix + f"execution has unsupported provider {raw_provider!r}", None
-    if role in {"plan", "monitoring"}:
-        return None, None, None, (
-            f"{prefix}agent {record.get('agent')!r} raw role {raw_role!r}: "
-            f"no committed route authority for this role at {head}"
-        )
     if provider == "codex" and role in {"implementer", "review-cheap"}:
-        legacy_role = "implementation" if role == "implementer" else "review"
-        authority_path = ROLE_PATHS[legacy_role]
+        authority_path = ROLE_PATHS[role]
     elif provider == "claude" and role == "review-final":
         authority_path = FINAL_REVIEWER_PATH
+    elif provider in route_vocab.PROVIDER_IDS and role in route_vocab.ROLE_IDS:
+        return None, None, None, (
+            f"{prefix}agent {record.get('agent')!r} raw role {raw_role!r}: "
+            f"no committed route authority for ({provider}, {role}) at {head}"
+        )
     else:
         message = f"unknown {provider.capitalize()} execution role {raw_role!r}"
         return None, None, prefix + message, None
