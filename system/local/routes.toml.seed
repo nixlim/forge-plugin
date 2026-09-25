@@ -1,0 +1,22 @@
+# <common-root>/.forge/local/routes.toml   — one per clone, never committed, owner-only
+schema = "forge-routes/1"
+
+# [implementer]
+# provider = "codex"          # codex | claude
+# model    = "gpt-5.6-sol"
+# effort   = "ultra"
+
+# [review-cheap]
+# provider = "codex"
+# model    = "gpt-5.6-sol"
+# effort   = "high"
+
+# [review-final]
+# provider = "claude"
+# model    = "fable"
+# effort   = "high"
+
+# [plan]
+# provider = "codex"
+# model    = "gpt-5.6-sol"
+# effort   = "high"

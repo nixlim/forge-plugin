@@ -10,6 +10,7 @@ Release dates are the UTC dates of the release commits.
 
 ### Added
 
+- Routing chain L (forge-plugin-4g68.9) adds the stdlib-only `scripts/forge/route_config.py` leaf CLI with `init`, `show`, `check`, `resolve`, and `probe` verbs plus `system/local/routes.toml.seed`, and removes FR-244's implementation-deferral marker; its iteration-1 review fixes reject misplaced copies from the linked-worktree top level, use the new non-executable stdlib helper `scripts/forge/route_config_git.py` for bounded and ambient-Git-scrubbed calls, append the Git exclude line before the create-once refusal, and record both the probe contract and the review-final committed-default rule in FR-244; runs and launches do not read the developer-local file until routing chains J and I land.
 - Routing chain B (forge-plugin-4g68.8) adds the Codex planner body and Claude implementer, planner, and first-pass-reviewer bodies, registers the read-only `gpt-5.6-sol`/`high` Codex plan agent, rewords review-cheap target identity to admit either a full commit SHA or an immutable staged-tree snapshot identified by tree OID, authorization ID, and review-diff digest (GH#34 / forge-plugin-o8uh), and pins the new surfaces in installer and repository-conformance coverage.
 
 ### Fixed

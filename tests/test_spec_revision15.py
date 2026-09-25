@@ -13,12 +13,12 @@ POLICIES = {
     ),
 }
 DEFERRED_TO = {
-    "FR-244": "L",
     "FR-245": "E/I/B",
     "FR-246": "E",
     "FR-247": "J",
     "DM-018": "J/E",
 }
+IMPLEMENTED = ("FR-244",)
 NEW_CONTROL_PATHS = ("system/claude/**", "system/local/**")
 REVIEWER_PATTERNS = (
     ("agent-prompt-template", "system/claude/prompts/**"),
@@ -77,6 +77,16 @@ def canonical_reviewer_table(specification: str) -> str:
 
 
 def assert_deferred_authority(specification: str) -> None:
+    for requirement_id in IMPLEMENTED:
+        block = requirement_block(specification, requirement_id)
+        markers = re.findall(
+            r"\(Revision 15 authority; implementation deferred to chain [^)]+\)",
+            block,
+        )
+        if markers:
+            raise AssertionError(
+                f"{requirement_id} retains deferral markers {markers!r}"
+            )
     for requirement_id, destination in DEFERRED_TO.items():
         block = requirement_block(specification, requirement_id)
         expected = (
@@ -121,13 +131,87 @@ def assert_trigger_controls(specification: str, policies: dict[str, str]) -> Non
 
 
 class SpecificationRevision15Tests(unittest.TestCase):
-    def test_revision_and_new_authority_are_explicitly_deferred(self) -> None:
+    def test_revision_and_deferral_state_are_explicit(self) -> None:
         self.assertIn("**Status**: Draft (Revision 16)", SPEC)
         intent = next(
             line for line in SPEC.splitlines() if line.startswith("**Intent**:")
         )
         self.assertIn("Revision 15", intent)
         assert_deferred_authority(SPEC)
+
+    def test_fr244_deferral_assertion_detects_its_reinsertion(self) -> None:
+        block = requirement_block(SPEC, "FR-244")
+        self.assertNotIn("implementation deferred to chain L", block)
+        mutant = SPEC.replace(
+            "**FR-244** (MUST): Routes file.",
+            "**FR-244** (MUST): Routes file "
+            "(Revision 15 authority; implementation deferred to chain L).",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "FR-244"):
+            assert_deferred_authority(mutant)
+
+    def test_fr244_amendments_pin_probe_and_review_final_defaults(self) -> None:
+        block = requirement_block(SPEC, "FR-244")
+        labels = (
+            "Revision-16 route-probe amendment to **FR-244**:",
+            "Revision-16 review-final default amendment to **FR-244**:",
+        )
+        for label in labels:
+            self.assertEqual(block.count(label), 1)
+        review_final_chain = (
+            "`.codex/agents/review-final.toml` when present at the launch HEAD, "
+            "otherwise `system/codex/agents/review-final.toml`, otherwise the "
+            "`model:` and `effort:` frontmatter of `agents/review-final.md` read "
+            "as provider `claude` (FR-111's committed-default compatibility "
+            "metadata), otherwise the plugin default; every step in that chain "
+            "reports `route_source: committed-default` except the plugin default"
+        )
+        self.assertIn(review_final_chain, block)
+        probe_contract = (
+            "one bounded launch per distinct resolved "
+            "`(provider, model, effort)` tuple",
+            "codex exec --json --output-last-message "
+            "<scratch>/last-message.txt -s read-only",
+            "claude -p --safe-mode --strict-mcp-config --output-format "
+            "stream-json --verbose",
+            "Confirm that this model route is available and reply briefly.\\n",
+            "only the FR-245 allowlisted environment",
+            "<common-root>/.forge/tmp/route-probe/",
+            "`start_new_session`",
+            "probe timeout at 120 seconds independently of FR-245's launch timeouts",
+            "caps stdout at 16 MiB and stderr at 1 MiB",
+            "waits at most 5 seconds",
+            "exits 1 when any tuple fails",
+            "never writes repository or working-tree content",
+        )
+        for clause in probe_contract:
+            self.assertIn(clause, block)
+        refusal_literals = (
+            "forge: codex launch refused — codex CLI is not logged in; "
+            "run codex login manually and retry",
+            "forge: claude launch refused — claude CLI is not logged in; "
+            "run interactive /login manually and retry",
+            "forge: <provider> launch refused — route probe timed out",
+            "forge: <provider> launch refused — route probe "
+            "<stdout|stderr> exceeded limit",
+            "forge: <provider> launch refused — route probe failed",
+            "forge: <provider> launch refused — <provider> CLI could not be started",
+            "forge: route probe refused — unsafe scratch directory",
+        )
+        for literal in refusal_literals:
+            self.assertIn(literal, block)
+        report_fields = (
+            "`provider`, `model`, `effort`, `roles`, `ok`, `returncode`, "
+            "`timed_out`, `output_limit`, `observed_model`, "
+            "`permission_denials`, and `environment_names`"
+        )
+        self.assertIn(report_fields, block)
+        self.assertIn(
+            "`scripts/forge/route_config_git.py` is the non-executable stdlib "
+            "Git-boundary helper",
+            SPEC,
+        )
 
     def test_each_deferral_assertion_detects_its_removal(self) -> None:
         for requirement_id, destination in DEFERRED_TO.items():
