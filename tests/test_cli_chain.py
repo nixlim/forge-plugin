@@ -216,7 +216,8 @@ for path in paths:
     if rank[tier] > rank[derived]:
         derived = tier
     path_records.append(
-        {"path": path, "categories": categories, "control_floor": control, "tier": tier}
+        {"path": path, "categories": categories, "control_floor": control, "tier": tier,
+         "trigger_matches": []}
     )
 effective = derived
 if args.declared_tier and rank[args.declared_tier] > rank[effective]:
@@ -1154,9 +1155,9 @@ class ForgeCLIChainTests(ForgeCLIFixture):
             FORGE_TEST_FAIL_ONCE="stack:python",
         )
         self.assertEqual(failed["reason_code"], "evidence-incomplete")
-        self.assertEqual(self.gate_lines(), ["gate-1", "gate-1", "stack:python"])
+        self.assertEqual(self.gate_lines(), ["gate-1", "stack:python"])
         failed_state = self.state(chain_id)
-        self.assertEqual(len(failed_state["steps"]["gate-1"]), 2)
+        self.assertEqual(len(failed_state["steps"]["gate-1"]), 1)
         self.assertEqual(failed_state["steps"]["stack:python"][-1]["result"], "failed")
 
         _result, resumed = self.cli(
@@ -1171,14 +1172,13 @@ class ForgeCLIChainTests(ForgeCLIFixture):
             self.gate_lines(),
             [
                 "gate-1",
-                "gate-1",
                 "stack:python",
                 "stack:python",
                 "invariant:1",
             ],
         )
         resumed_state = self.state(chain_id)
-        self.assertEqual(len(resumed_state["steps"]["gate-1"]), 2)
+        self.assertEqual(len(resumed_state["steps"]["gate-1"]), 1)
         self.assertEqual(len(resumed_state["steps"]["stack:python"]), 2)
         # No staged test file: the sensor step completes as not applicable
         # without executing the tool, whose empty-path invocation is exit 2.
@@ -1194,7 +1194,6 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         started = self.start("src/app.py")
         chain_id = str(started["chain_id"])
         for gate_id in (
-            "gate-1",
             "gate-1",
             "stack:python",
             "assertion-sensor",
@@ -1361,7 +1360,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.assertTrue(state["tier"]["control"])
         self.assertEqual(state["tier"]["effective"], "hard")
         candidate = state["candidate"]["sha256"]
-        self.assertEqual(len(state["steps"]["gate-1"]), 2)
+        self.assertEqual(len(state["steps"]["gate-1"]), 1)
         self.assertTrue(
             all(
                 record["result"] == "passed" and record["candidate"] == candidate
@@ -1380,7 +1379,6 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.assertEqual(
             self.gate_lines(),
             [
-                "gate-1",
                 "gate-1",
                 "stack:python",
                 "invariant:1",
@@ -2077,7 +2075,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.assertEqual(reverified["state"], "authorized")
         self.assertEqual(reverified["review"]["verdict"], retained_verdict)
         self.assertEqual(reverified["steps"]["secret-scan"], retained_secret)
-        self.assertEqual(len(reverified["steps"]["gate-1"]), 2)
+        self.assertEqual(len(reverified["steps"]["gate-1"]), 1)
         self.assertTrue(
             all(
                 record["repo_head"] == moved_head
@@ -2281,38 +2279,6 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.assertNotIn("gate-1", self.gate_lines())
         self.assertNotIn("invariant:1", self.gate_lines())
 
-    def test_mismatched_gate_one_fingerprints_void_pair_and_require_two_fresh_runs(self) -> None:
-        self.change("src/app.py", "VALUE = 2\n")
-        chain_id = str(self.start("src/app.py")["chain_id"])
-        self.cli("gate", "run", "gate-1", "--chain-id", chain_id, expected=0)
-        self.cli("gate", "run", "gate-1", "--chain-id", chain_id, expected=0)
-
-        def corrupt_second_fingerprint(state: dict[str, object]) -> None:
-            runs = state["steps"]["gate-1"]
-            first = str(runs[0]["env_fingerprint"])
-            runs[1]["env_fingerprint"] = (
-                ("0" if first[0] != "0" else "1") + first[1:]
-            )
-
-        self.force_state(chain_id, "verifying", corrupt_second_fingerprint)
-        self.cli("verify", "--chain-id", chain_id, expected=0)
-        state = self.state(chain_id)
-        runs = state["steps"]["gate-1"]
-        self.assertEqual(len(runs), 5)
-        self.assertTrue(runs[0]["pair_voided"])
-        self.assertTrue(runs[1]["pair_voided"])
-        self.assertTrue(runs[2]["pair_voided"])
-        self.assertNotIn("pair_voided", runs[3])
-        self.assertNotIn("pair_voided", runs[4])
-        self.assertEqual(runs[3]["env_fingerprint"], runs[4]["env_fingerprint"])
-        self.assertEqual(
-            self.gate_lines().count("gate-1"), 5
-        )
-        self.assertIn(
-            "gate_1_pair_voided",
-            [event["payload"]["event"] for event in self.events(chain_id)],
-        )
-
     def test_fast_tier_runs_every_mechanical_step_before_authorization(self) -> None:
         self.change("docs/guide.md", "# Fast candidate\n")
         chain_id = str(self.start("docs/guide.md")["chain_id"])
@@ -2322,7 +2288,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
         self.assertEqual(state["tier"]["effective"], "fast")
         self.assertFalse(state["tier"]["control"])
         self.assertEqual(state["state"], "authorized")
-        self.assertEqual(len(state["steps"]["gate-1"]), 2)
+        self.assertEqual(state["steps"]["gate-1"][-1]["result"], "skipped")
         for required in (
             "classification",
             "stack:docs",

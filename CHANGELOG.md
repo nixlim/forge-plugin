@@ -18,6 +18,26 @@ Release dates are the UTC dates of the release commits.
 - Run scope and run-bound candidate validation (forge-plugin-dn9e) now admit the DM-007 committed `.forge/evals/` and `.forge/history/` subtrees while continuing to refuse transient roots and every other `.forge` child; the specification carries the Revision-16 FR-192/FR-014 amendment, and FR-230 phase-3 result evidence is re-minted for the changed `candidate.py` subject (five fixtures, manifest result digests, and the manifest byte pin; generation stays 1).
 - Run-bound fresh reviewer evaluations (forge-plugin-4w5o) now keep the outer journal lock visible to worker-thread durability probes: the formerly thread-local active-lock registry is context-propagating and every fresh-evaluation worker runs under its own copied context. Unbound chains and single-threaded paths are unchanged; the FR-230 phase-3 result evidence is re-minted for the changed fresh_evals.py subject (five fixtures, manifest result digests and the manifest byte pin; generation stays 1).
 
+### Changed
+
+- Governance (Revision 17): Gate 1 runs once per candidate and not for docs-class candidates, whose skip is
+  recorded under the `gate-1` ID with reason `docs-class candidate` (FR-214/FR-215/DM-013; the pair-voiding rule
+  and `_void_mismatched_gate_one_pair` are retired); the Gate 1 cell is a duration-balanced work queue over
+  `min(8, cpu)` workers that takes the host gate slot and waits out CPU pressure (bead forge-plugin-pwy, revised);
+  a review PASS is bound to the candidate, not to a 30-minute clock (bead forge-plugin-er3, GH#21); mypy runs as
+  a python stack validation against the tracked `.refactor/type-baseline.json`, re-minted at 640b5dd with the
+  cell's exact invocation (keys normalize embedded line references and counts ratchet per key); a
+  docs-contract stack validation runs the prose-contract modules for any candidate touching a docs-class
+  path, so the docs-class skip never lands untested prose; `CHANGELOG.md` joins the fast tier; the host concurrency cap is recorded in
+  `agent-project-context`; the gate-evidence predicates move from `chain_core/_commit_chain.py` to
+  `chain_core/_gate_evidence.py`; the journal builders' replay copy of the Gate-1 rule follows the same
+  single-observation semantics; the FR-230 phase-3 result evidence is re-minted for the changed engine and
+  chain_core subjects and the new `_gate_evidence.py` subject (five fixtures, manifest result digests, and
+  the manifest byte pin; generation stays 1). Riding along because the new Gate 1 cell exposes it on every
+  run (bead forge-plugin-hwbt): `route_config_probe._write_brief` tolerates a broken pipe on close and
+  `route_config_git.run_git` closes its pipes through a `with` block; both hunks are verbatim from routing
+  chain J's staged candidate so its lift stays conflict-free.
+
 ## [0.6.14] - 2026-09-24
 
 ### Changed

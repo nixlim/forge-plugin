@@ -79,6 +79,10 @@ def _ingest_step_is_current(
         != final_state.get("candidate", {}).get("sha256")
     ):
         return False
+    if final_runs[index].get("result") == "skipped":
+        # A recorded skip (the docs-class Gate-1 skip) launched no process
+        # and projects no verification; it is chain evidence, not gate proof.
+        return False
     current = [
         position
         for position, fact in enumerate(final_runs)
@@ -88,7 +92,8 @@ def _ingest_step_is_current(
     if not current:
         return False
     if step_id == "gate-1":
-        active = set(current[-2:])
+        # Gate 1 is required once; the newest current run is its sole proof.
+        active = {current[-1]}
     elif step_id.startswith("stack:"):
         latest = final_runs[current[-1]]
         batch_id = latest.get("batch_id") if isinstance(latest, dict) else None

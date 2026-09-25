@@ -24,12 +24,15 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Gate 1 — committed gate-1 policy cell (sharded full discovery)
+      - name: Install gate tooling (mypy, pinned to the tracked type baseline's checker)
+        run: python3 -m pip install --quiet mypy==2.3.1
+
+      - name: Gate 1 — committed gate-1 policy cell (work-queue full discovery)
         run: |
           # Run the exact committed gate1-test-command cell through the repository's own
           # FR-149 runner (forge_cli.runtime.run_bounded: isolated process group, kill on
           # timeout, 65,536-byte output cap, fixed 1200 s bound) with `forge` as $0, so CI
-          # exercises the same sharded discovery the commit, merge, and drift gates run.
+          # exercises the same work-queue discovery the commit, merge, and drift gates run.
           python3 - <<'PY'
           import subprocess
           import sys
@@ -54,8 +57,30 @@ jobs:
           raise SystemExit(result.returncode)
           PY
 
-      - name: Routing and executable-inventory conformance
-        run: python3 -m unittest tests.test_repo_conformance
+      - name: Stack validations — every committed cell, python category (conformance and type baseline)
+        run: |
+          # Run each committed stack-validations cell exactly as the commit and merge gates
+          # do (one cell per `bash -c` argv element, `forge` as $0, a python path as the
+          # category witness) so the mypy type-baseline ratchet is enforced in CI too.
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts/forge")
+          from forge_cli.policy import parse_policy
+          from forge_cli.runtime import run_bounded
+
+          head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+          raw = subprocess.run(["git", "show", f"{head}:forge-project.md"], capture_output=True, check=True).stdout
+          for index, cell in enumerate(parse_policy(head, raw).stack_commands, 1):
+              result = run_bounded(["bash", "-c", cell, "forge", "scripts/forge/cli.py"], cwd=Path.cwd(), timeout=1200)
+              sys.stdout.buffer.write(result.output)
+              sys.stdout.flush()
+              if result.timed_out or result.output_limit or result.returncode != 0:
+                  print(f"stack validation cell {index} failed: exit {result.returncode} timeout={result.timed_out} cap={result.output_limit}", file=sys.stderr)
+                  raise SystemExit(2)
+          PY
 
       - name: STRICT evals
         run: STRICT=1 bash scripts/forge/run-evals.sh

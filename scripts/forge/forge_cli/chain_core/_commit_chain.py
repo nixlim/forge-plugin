@@ -12,6 +12,7 @@ from forge_cli.chain_core._controls import COMMON_LOCK_OWNER_KINDS as COMMON_LOC
 from forge_cli.chain_core._core import canonical_bytes as canonical_bytes, _chain_storage_root as _chain_storage_root, _validated_commitment_path as _validated_commitment_path, _parsed_run_captured_path as _parsed_run_captured_path, _require_ingest_proof as _require_ingest_proof, iso_z as iso_z, parse_time as parse_time, _require_merge_store_control as _require_merge_store_control, _require_merge_adapter_control as _require_merge_adapter_control, _require_merge_integration_control as _require_merge_integration_control, _require_common_lock_control as _require_common_lock_control, CommonLockBoundaryCrash as CommonLockBoundaryCrash, PublishedLockRecord as PublishedLockRecord, CommonLockInspection as CommonLockInspection, CommonLockUnavailable as CommonLockUnavailable, CommonLockReleaseFailure as CommonLockReleaseFailure, ChainLeaseUnavailable as ChainLeaseUnavailable, FencedChildSurvived as FencedChildSurvived, _valid_utc_second as _valid_utc_second, _valid_positive_int as _valid_positive_int, _valid_nonnegative_int as _valid_nonnegative_int, _valid_host as _valid_host, _valid_nonce as _valid_nonce, _valid_nullable_chain as _valid_nullable_chain, _write_all as _write_all, _PublicationCleanupFailure as _PublicationCleanupFailure, _process_probe as _process_probe, _group_probe as _group_probe, _sleep_with_deadline as _sleep_with_deadline, _require_deadline_open as _require_deadline_open, FencedProcessResult as FencedProcessResult, merge_gate_intent_digest as merge_gate_intent_digest, _forge_command as _forge_command, MergeRunTaskSnapshot as MergeRunTaskSnapshot, _merge_refusal as _merge_refusal, _valid_sorted_unique_strings as _valid_sorted_unique_strings
 from forge_cli.chain_core._fenced_child import _BlockedFenceChild as _BlockedFenceChild, _pipe_cloexec as _pipe_cloexec, _read_child_ack as _read_child_ack, _waitpid_nohang as _waitpid_nohang, _wait_for_child_exit as _wait_for_child_exit, _spawn_blocked_fence_child as _spawn_blocked_fence_child, _terminate_fenced_group as _terminate_fenced_group, _stop_unstarted_child as _stop_unstarted_child, _collect_fenced_child as _collect_fenced_child
 from forge_cli.chain_core._ingest_capture import _read_ingest_input as _read_ingest_input, _capture_ingest_blob as _capture_ingest_blob, _capture_run_evidence as _capture_run_evidence, _capture_ingest_record_evidence as _capture_ingest_record_evidence
+from forge_cli.chain_core._gate_evidence import _user_skip as _user_skip, DOCS_CLASS_SKIP_REASON as DOCS_CLASS_SKIP_REASON, _docs_class_candidate as _docs_class_candidate, _gate_one_complete as _gate_one_complete, _latest_current_pass as _latest_current_pass, _gate_satisfied as _gate_satisfied
 from forge_cli.chain_core._ingest_currency import _ingest_captured_paths as _ingest_captured_paths, _ingest_step_is_current as _ingest_step_is_current, _ingest_secret_scan_is_current as _ingest_secret_scan_is_current, _prove_ingest_live_chain as _prove_ingest_live_chain
 from forge_cli.chain_core._ingest_merge import _merge_ingest_binding as _merge_ingest_binding, _merge_gate_event_fact as _merge_gate_event_fact, _merge_current_gate_facts as _merge_current_gate_facts, _merge_ingest_record_templates as _merge_ingest_record_templates, _verify_and_build_merge_ingest_records as _verify_and_build_merge_ingest_records, _ingest_allocation_records as _ingest_allocation_records
 from forge_cli.chain_core._lock_record_io import _read_owned_record_at as _read_owned_record_at, _same_published_record as _same_published_record, _open_lock_directory as _open_lock_directory, _opaque_path_evidence_at as _opaque_path_evidence_at, _inspect_common_lock_fd as _inspect_common_lock_fd, _create_private_record_at as _create_private_record_at, _publish_no_replace_link as _publish_no_replace_link, _revalidate_record_at as _revalidate_record_at, _unlink_revalidated_record_at as _unlink_revalidated_record_at, _record_at_if_present as _record_at_if_present
@@ -182,85 +183,6 @@ def _validate_bound_chain_state(state: Mapping[str, Any]) -> None:
             remediation=_forge_command(state, "status"),
             chain=state,
         ) from exc
-
-
-def _user_skip(state: Mapping[str, Any], gate_id: str) -> dict[str, Any] | None:
-    value = state["steps"].get("user_skips", {})
-    if not isinstance(value, dict):
-        return None
-    record = value.get(gate_id)
-    return record if isinstance(record, dict) else None
-
-
-def _gate_one_complete(state: Mapping[str, Any]) -> bool:
-    runs = state["steps"].get("gate-1")
-    if _user_skip(state, "gate-1") is not None:
-        return True
-    if not isinstance(runs, list) or len(runs) < 2:
-        return False
-    candidate = state["candidate"].get("sha256")
-    current_runs = [
-        record
-        for record in runs
-        if isinstance(record, dict) and record.get("candidate") == candidate
-    ]
-    if len(current_runs) < 2:
-        return False
-    last_two = current_runs[-2:]
-    return all(
-        record.get("result") == "passed" and not record.get("pair_voided")
-        for record in last_two
-    ) and last_two[0].get("env_fingerprint") == last_two[1].get("env_fingerprint")
-
-
-def _latest_current_pass(state: Mapping[str, Any], step_id: str) -> bool:
-    value = state["steps"].get(step_id)
-    candidate = state["candidate"].get("sha256")
-    if isinstance(value, list) and value:
-        record = value[-1]
-        return record.get("candidate") == candidate and record.get("result") == "passed"
-    return False
-
-
-def _gate_satisfied(state: Mapping[str, Any], gate_id: str) -> bool:
-    # Recorded-baseline integrity is mandatory for control candidates.  Keep
-    # the legacy generic skip behavior only where this gate is not a binding
-    # control-class requirement.
-    if gate_id == "strict-evals" and bool(state.get("tier", {}).get("control")):
-        return _latest_current_pass(state, gate_id)
-    if _user_skip(state, gate_id) is not None:
-        return True
-    # Without an explicit operator skip, the fresh-reviewer gate retains its
-    # stronger candidate/request/manifest validation instead of falling back
-    # to the generic latest-process-result predicate.
-    if gate_id == FRESH_REVIEWER_EVALS_GATE:
-        try:
-            return fresh_eval_module.current_step_satisfied(
-                state,
-                expected_candidate=str(state["candidate"].get("sha256") or ""),
-            )
-        except (KeyError, TypeError, fresh_eval_module.FreshEvalError):
-            return False
-    if gate_id.startswith("stack:"):
-        runs = state["steps"].get(gate_id)
-        if not isinstance(runs, list) or not runs:
-            return False
-        latest = runs[-1]
-        batch_id = latest.get("batch_id")
-        count = latest.get("cell_count")
-        if not isinstance(batch_id, str) or not isinstance(count, int) or count < 1:
-            return False
-        batch = [record for record in runs if record.get("batch_id") == batch_id]
-        return (
-            len(batch) == count
-            and {record.get("cell_index") for record in batch} == set(range(1, count + 1))
-            and all(
-                record.get("candidate") == state["candidate"].get("sha256")
-                and record.get("result") == "passed"
-                for record in batch
-            )
-        )
-    return _latest_current_pass(state, gate_id)
 
 
 def _verify_and_build_ingest_records(
@@ -1964,7 +1886,7 @@ def _required_steps(ctx: CommandContext, state: Mapping[str, Any]) -> list[str]:
     result: list[str] = []
     if policy.changelog is not None:
         result.append("changelog")
-    result.extend(["gate-1", "gate-1"])
+    result.append("gate-1")
     categories = [str(value) for value in state["tier"].get("categories", [])]
     for category in sorted(set(categories)):
         result.append(f"stack:{category}")

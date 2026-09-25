@@ -2192,11 +2192,12 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             self.assertIn("operator_skip", selected_identities)
             self.assertNotIn("assertion-sensor", selected_identities)
         elif not multicell_stack:
+            # docs-class candidate: gate-1 skip recorded, no process, no verification
+            gate_one = [record.get("result") for record in materialized["steps"]["gate-1"]]
+            self.assertEqual(gate_one, ["skipped"])
             self.assertEqual(
                 selected_identities,
                 (
-                    "gate-1",
-                    "gate-1",
                     "stack:docs",
                     "assertion-sensor",
                     "invariant:1",
@@ -2346,7 +2347,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             normalized_after[: len(normalized_before)], normalized_before
         )
         appended = normalized_after[len(normalized_before) :]
-        self.assertEqual(len(appended), 9)
+        self.assertEqual(len(appended), 7)
         terminal = appended[-1]
         self.assertEqual(
             {name: terminal[name] for name in ("type", "id", "status")},
@@ -2365,7 +2366,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertTrue(
             all(record["result"] == "passed" for record in verifications)
         )
-        self.assertEqual(len(verifications), 7)
+        self.assertEqual(len(verifications), 5)
         self.assertEqual(
             sum(
                 record.get("criterion")
@@ -2468,7 +2469,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(len(stack_records), 2)
 
         expected_records = []
-        expected_ids = ("check-03", "check-04")
+        expected_ids = ("check-02", "check-03")
         candidate = prepared.materialized["candidate"]
         for event, check_id in zip(stack_events, expected_ids, strict=True):
             payload = event["payload"]

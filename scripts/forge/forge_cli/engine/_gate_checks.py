@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 from forge_cli import chain_core, fresh_evals as fresh_eval_module
+from forge_cli.engine._core import _evidence_record as _evidence_record
 from forge_cli.engine._core import _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal
+from forge_cli.engine._core import _write_artifact as _write_artifact
 from forge_cli.engine._fresh_eval import _validated_fresh_reviewer_manifest as _validated_fresh_reviewer_manifest
 from forge_cli.engine._state import SECRET_RULES as SECRET_RULES, PLACEHOLDER_RE as PLACEHOLDER_RE
-import copy
-from forge_cli.envelope import Refusal
+from forge_cli.envelope import ReasonCode, Refusal
 import dataclasses
+import hashlib
 import re
 
 
@@ -30,50 +32,62 @@ def _current_test_paths(
     return result
 
 
-def _void_mismatched_gate_one_pair(
+def _record_docs_class_gate_one_skip(
     ctx: chain_core.CommandContext, state: MutableMapping[str, Any]
-) -> bool:
-    """Void both observations when the newest Gate-1 pair changes context."""
+) -> dict[str, Any]:
+    """Record the docs-class Gate-1 skip as durable step evidence.
+
+    The record sits in the ``gate-1`` step list under the same ID as a run,
+    with ``result`` ``skipped`` and the fixed reason, so replay, ingest, and
+    archives see why no test process was launched.  It is admitted only after
+    the classifier's per-path evidence proved every staged path docs-class.
+    """
+
+    if not chain_core._docs_class_candidate(state):
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            "gate-1 docs-class skip refused: candidate is not docs-class",
+            expected="every classified path carries only the docs category",
+            observed=", ".join(str(path) for path in state.get("paths", [])),
+            remediation=chain_core._forge_command(state, "gate run gate-1"),
+            chain=state,
+        )
     runs = state["steps"].get("gate-1")
-    if not isinstance(runs, list) or len(runs) < 2:
-        return False
-    candidate = state["candidate"].get("sha256")
-    current = [
-        record
-        for record in runs
-        if isinstance(record, dict) and record.get("candidate") == candidate
-    ]
-    if len(current) < 2:
-        return False
-    previous, newest = current[-2:]
-    if (
-        previous.get("result") != "passed"
-        or newest.get("result") != "passed"
-        or previous.get("pair_voided")
-        or newest.get("pair_voided")
-        or previous.get("env_fingerprint") == newest.get("env_fingerprint")
-    ):
-        return False
-    marker = {
-        "at": chain_core.iso_z(),
-        "reason": "DM-013 env_fingerprint mismatch voided the Gate-1 pair",
-        "fingerprints": [
-            str(previous.get("env_fingerprint")),
-            str(newest.get("env_fingerprint")),
-        ],
-    }
-    # Once a later observation invalidates the context sequence, no earlier
-    # unvoided run may be paired across that boundary.  Two fresh observations
-    # are required after the mismatch.
-    for record in current:
-        if record.get("result") == "passed" and not record.get("pair_voided"):
-            record["pair_voided"] = copy.deepcopy(marker)
+    run_number = len(runs) + 1 if isinstance(runs, list) else 1
+    output = (
+        "forge: gate-1 skipped — docs-class candidate; no test process launched\n"
+        + "".join(f"path: {path}\n" for path in state.get("paths", []))
+    ).encode("utf-8")
+    transcript = _write_artifact(
+        ctx, state, f"evidence/gate-1-{run_number:02d}.log", output
+    )
+    record = _evidence_record(
+        ctx,
+        state,
+        [],
+        result="skipped",
+        exit_code=0,
+        duration_seconds=0.0,
+        output_digest=hashlib.sha256(output).hexdigest(),
+        transcript=transcript,
+        details={
+            "kind": "gate-1",
+            "skipped": True,
+            "reason": chain_core.DOCS_CLASS_SKIP_REASON,
+            "timed_out": False,
+            "output_limit": False,
+        },
+    )
+    if not isinstance(runs, list):
+        runs = []
+        state["steps"]["gate-1"] = runs
+    runs.append(record)
     ctx.store.persist(
         state,
-        "gate_1_pair_voided",
-        {"reason": marker["reason"], "fingerprints": marker["fingerprints"]},
+        "step_recorded",
+        {"step_id": "gate-1", "result": "skipped", "run": run_number},
     )
-    return True
+    return record
 
 
 def _fresh_reviewer_pass_claimed(state: Mapping[str, Any]) -> bool:
@@ -121,12 +135,8 @@ def _fresh_reviewer_block_claimed(state: Mapping[str, Any]) -> bool:
 
 def _mechanical_complete(ctx: chain_core.CommandContext, state: Mapping[str, Any]) -> bool:
     needed = chain_core._required_steps(ctx, state)
-    gate_one_seen = False
     for step_id in needed:
         if step_id == "gate-1":
-            if gate_one_seen:
-                continue
-            gate_one_seen = True
             if not chain_core._gate_one_complete(state):
                 return False
         elif step_id == chain_core.FRESH_REVIEWER_EVALS_GATE:
@@ -150,26 +160,8 @@ def _mechanical_complete(ctx: chain_core.CommandContext, state: Mapping[str, Any
 
 
 def _next_incomplete(ctx: chain_core.CommandContext, state: Mapping[str, Any]) -> str | None:
-    gate_one_counted = 0
-    candidate = state["candidate"].get("sha256")
-    runs = state["steps"].get("gate-1", [])
-    current_gate_runs = [
-        record
-        for record in runs
-        if isinstance(record, dict)
-        and record.get("candidate") == candidate
-        and record.get("result") == "passed"
-        and not record.get("pair_voided")
-    ] if isinstance(runs, list) else []
     for step_id in chain_core._required_steps(ctx, state):
         if step_id == "gate-1":
-            gate_one_counted += 1
-            if chain_core._user_skip(state, "gate-1") is not None:
-                continue
-            if gate_one_counted == 1:
-                if not current_gate_runs:
-                    return "gate-1"
-                continue
             if not chain_core._gate_one_complete(state):
                 return "gate-1"
             continue

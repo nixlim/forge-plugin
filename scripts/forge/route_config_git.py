@@ -62,20 +62,20 @@ def run_git(
     """Run Git for ``repo`` with fixed bounds and no ambient repository selectors."""
 
     command = ["git", "-C", str(repo), *arguments]
-    process = subprocess.Popen(
+    with subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         env=_git_environment(),
         start_new_session=True,
-    )
-    try:
-        stdout, _stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        _stop_group(process, timeout)
-        subject = "route resolution" if resolution else "routes file"
-        raise RouteRefusal(f"forge: {subject} refused — git timed out") from exc
-    return subprocess.CompletedProcess(command, process.returncode, stdout, None)
+    ) as process:
+        try:
+            stdout, _stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            _stop_group(process, timeout)
+            subject = "route resolution" if resolution else "routes file"
+            raise RouteRefusal(f"forge: {subject} refused — git timed out") from exc
+        return subprocess.CompletedProcess(command, process.returncode, stdout, None)
 
 
 def git_path(repo: Path, argument: str, *, timeout: float) -> Path:

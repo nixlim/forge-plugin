@@ -1340,18 +1340,13 @@ class Revision9BindingTests(unittest.TestCase):
             (source_event, None, source_state, (), None),
             (second_event, source_state, valid_pair, (), None),
         )
-        self.assertTrue(
-            builders._binding_is_current(
-                valid_pair,
-                binding,
-                record,
-                source_event,
-                None,
-                source_state,
-                valid_pair_replay,
-                chain_family="commit",
-            )
-        )
+        # Revision 17: only the newest current Gate-1 run is evidence, so the
+        # first pass is superseded once the second pass is recorded.
+        current = builders._binding_is_current
+        self.assertFalse(current(valid_pair, binding, record, source_event, None,
+                                 source_state, valid_pair_replay, chain_family="commit"))
+        self.assertTrue(current(valid_pair, binding, record, second_event, source_state,
+                                valid_pair, valid_pair_replay, chain_family="commit"))
 
         later_block = copy.deepcopy(valid_pair)
         later_block["steps"]["gate-1"].append(

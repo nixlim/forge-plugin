@@ -272,8 +272,10 @@ def _write_brief(process: subprocess.Popen[bytes]) -> None:
         process.stdin.flush()
     except BrokenPipeError:
         pass
-    finally:
+    try:
         process.stdin.close()
+    except BrokenPipeError:
+        pass
 
 
 def _json_object(raw_line: bytes) -> dict[str, object] | None:

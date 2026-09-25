@@ -200,9 +200,9 @@ def _build_chain_journal_records(
             or not isinstance(runs[run_number - 1], Mapping)
         ):
             return ()
-        # Retrospective ingest may select both members of a counted Gate-1
-        # pair or several rows in one stack batch.  Bind the exact fact first
-        # made durable by this event, never the current list tail.
+        # Retrospective ingest may select a failed Gate-1 run and its passing
+        # recheck, or several rows in one stack batch.  Bind the exact fact
+        # first made durable by this event, never the current list tail.
         fact = runs[run_number - 1]
         result = fact.get("result")
         if result not in {"passed", "failed"} or details.get("result") != result:

@@ -93,6 +93,96 @@ test gate. Installed repository surfaces are rendered from `system/`, `skills/`,
 ```bash
 python3 -m unittest tests.test_repo_conformance
 ```
+```bash
+python3 - "$@" <<'PY'
+# Type check for the python category (velocity report item 7, first half): mypy
+# over the forge CLI package, each error keyed as (error code, message) with any
+# "line N" reference inside the message normalized so an edit elsewhere in a file
+# cannot re-key an unchanged error, and the per-key counts compared with the
+# tracked baseline .refactor/type-baseline.json: a key absent from the baseline,
+# or more occurrences of a key than the baseline records, fails the cell, so the
+# grandfathered errors ratchet down and never up. The cell binds itself to the
+# python category mechanically: with no argv path ending in .py it exits 0 without
+# launching mypy. A missing or broken mypy fails closed.
+import collections
+import json
+import os
+import re
+import subprocess
+import sys
+
+if not any(path.endswith(".py") for path in sys.argv[1:]):
+    print("type check: no python path in the candidate; not applicable")
+    raise SystemExit(0)
+baseline_path = ".refactor/type-baseline.json"
+try:
+    with open(baseline_path, encoding="utf-8") as handle:
+        baseline = json.load(handle)
+    allowed = collections.Counter(baseline["errors"])
+    if not all(isinstance(key, str) and type(count) is int for key, count in allowed.items()):
+        raise TypeError("errors is not a mapping of key to count")
+except (OSError, ValueError, KeyError, TypeError) as exc:
+    print(f"type check: baseline {baseline_path} unreadable: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+environment = dict(os.environ, MYPYPATH="scripts:scripts/forge")
+process = subprocess.run(
+    [sys.executable, "-m", "mypy", "--no-error-summary", "--no-color-output",
+     "--show-error-codes", "--hide-error-context", "scripts/forge/forge_cli"],
+    capture_output=True, text=True, env=environment,
+)
+pattern = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+)(?::\d+)?: error: (?P<msg>.*?)(?:\s+\[(?P<code>[\w-]+)\])?$")
+errors = []
+for line in process.stdout.splitlines():
+    match = pattern.match(line)
+    if match:
+        message = re.sub(r"\bline \d+\b", "line N", re.sub(r"\s+", " ", match.group("msg").strip()))
+        errors.append((match.group("code") or "mypy", message, f"{match.group('file')}:{match.group('line')}"))
+if process.returncode not in (0, 1) or (process.returncode == 1 and not errors):
+    print("type check: mypy did not run cleanly", file=sys.stderr)
+    print((process.stderr or process.stdout)[-2000:], file=sys.stderr)
+    raise SystemExit(1)
+current = collections.Counter(f"{code}::{message}" for code, message, _where in errors)
+excess = current - allowed
+new = [(code, message, where) for code, message, where in errors if f"{code}::{message}" in excess]
+print(f"type check: {len(errors)} errors, {len(current)} keys, {sum(excess.values())} new versus baseline {str(baseline.get('ref', ''))[:12]}")
+for code, message, where in new:
+    print(f"  NEW {where} [{code}] {message}")
+raise SystemExit(1 if excess else 0)
+PY
+```
+```bash
+python3 - "$@" <<'PY'
+# Docs-path contract tests (Revision 17 companion to the docs-class Gate-1 skip):
+# the skip launches no test process, but these modules assert on repository prose
+# (README.md, OPERATIONS.md, UPSTREAM, docs/** outside docs/specs, skills and
+# CHANGELOG wording), so a candidate that touches any docs-class path still runs
+# them here as a stack validation, in one unittest process. A candidate with no
+# such path exits 0 without launching a process. tests/test_gate_one_once.py pins
+# that every test module reading repository prose is listed.
+import subprocess
+import sys
+
+paths = sys.argv[1:]
+if not any(
+    path.endswith((".md", ".txt")) or path.startswith("docs/") or path in ("UPSTREAM", "LICENSE")
+    for path in paths
+):
+    print("docs contracts: no docs-class path in the candidate; not applicable")
+    raise SystemExit(0)
+MODULES = [
+    "tests.test_commit_and_region_template",
+    "tests.test_docs_contract",
+    "tests.test_governance_content",
+    "tests.test_journal_patterns",
+    "tests.test_learn_skill",
+    "tests.test_route_config_support",
+    "tests.test_route_vocab",
+    "tests.test_spec_revision15",
+    "tests.test_worktree_merge_skill",
+]
+raise SystemExit(subprocess.call([sys.executable, "-m", "unittest", *MODULES]))
+PY
+```
 <!-- FORGE:REGION stack-validations END -->
 
 ## Gate 1 Test Command
@@ -100,44 +190,123 @@ python3 -m unittest tests.test_repo_conformance
 <!-- FORGE:REGION gate1-test-command BEGIN -->
 ```bash
 python3 - <<'PY'
-# Full unittest discovery, fanned out across shards inside this one cell (bead
-# forge-plugin-pwy): the same modules `python3 -m unittest discover -s tests`
-# would collect, partitioned round-robin over min(4, cpu) workers that share the
-# cell's process group and timeout. Fail-closed: any shard exit other than zero,
-# any shard without a final unittest summary, or an empty module set fails the
-# cell; each shard prints at most its last 8 KiB of bytes (sliced before decoding)
-# so the combined output stays within the 65,536-byte cap.
+# Full unittest discovery, run as a work queue inside this one cell (bead
+# forge-plugin-pwy, revised 2026-09-25): the same modules
+# `python3 -m unittest discover -s tests` would collect, each executed as its own
+# unittest process, pulled longest-first (by test-file line count) by min(8, cpu)
+# workers that share the cell's process group and timeout. Dynamic pulling
+# balances the shards by their real runtime, so the wall clock approaches
+# total-work / workers instead of the slowest static shard. Before launching,
+# the cell takes the host-wide gate slot (/dev/shm/agents-sem/gate/slot-0.lock,
+# shared with every other gate on this host) and waits while CPU pressure
+# (/proc/pressure/cpu, some avg10) is at or above 10 percent, up to 300 seconds
+# so the wait plus the run stays inside the 1200-second fail-closed timeout.
+# Both guards are no-ops where those paths do not exist (CI) and inside a
+# running gate cell: FORGE_GATE1_NESTED=1 is exported to every module process,
+# so a test that exercises this cell never re-takes the slot it already holds.
+# Fail-closed: any module process exiting other than 0, or exiting 5 (no tests
+# ran) without a "Ran 0 tests" summary, or any module without a final unittest
+# summary, or an empty module set fails the cell. A module that legitimately
+# holds no tests (a retained shell after a test split) reports "Ran 0 tests"
+# and passes. Output: one line per module plus the last 4 KiB of each failing
+# module (sliced in bytes before decoding) under a 40 KiB total tail budget, so
+# the combined output stays within the 65,536-byte cap. The summary line names
+# the slot outcome (slot held, slot unavailable, nested) beside the pressure wait.
+import fcntl
 import glob
 import os
 import pathlib
 import re
 import subprocess
 import sys
+import threading
+import time
 
-modules = sorted(pathlib.Path(path).stem for path in glob.glob("tests/test_*.py"))
-if not modules:
+paths = sorted(glob.glob("tests/test_*.py"))
+if not paths:
     print("gate-1: no test modules under tests/", file=sys.stderr)
     raise SystemExit(1)
-shards = max(1, min(4, os.cpu_count() or 1))
-groups = [[f"tests.{name}" for index, name in enumerate(modules) if index % shards == i] for i in range(shards)]
-processes = [
-    subprocess.Popen(
-        [sys.executable, "-m", "unittest", *group],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    for group in groups
-    if group
-]
+weights = {pathlib.Path(p).stem: sum(1 for _ in open(p, "rb")) for p in paths}
+queue = sorted(weights, key=lambda name: (-weights[name], name))
+workers = max(1, min(8, os.cpu_count() or 1))
+nested = os.environ.get("FORGE_GATE1_NESTED") == "1"
+
+
+def wait_for_host() -> float:
+    started = time.monotonic()
+    deadline = started + 300
+    pressure = pathlib.Path("/proc/pressure/cpu")
+    while not nested and pressure.exists() and time.monotonic() < deadline:
+        match = re.search(r"^some .*?avg10=([0-9.]+)", pressure.read_text(), flags=re.MULTILINE)
+        if not match or float(match.group(1)) < 10.0:
+            break
+        time.sleep(10)
+    return time.monotonic() - started
+
+
+gate_lock = None  # held (open descriptor) until this interpreter exits
+slot = "nested" if nested else "slot unavailable"
+if not nested:
+    try:
+        lock_dir = pathlib.Path("/dev/shm/agents-sem/gate")
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        gate_lock = open(lock_dir / "slot-0.lock", "w")
+        fcntl.flock(gate_lock, fcntl.LOCK_EX)
+        slot = "slot held"
+    except OSError:
+        gate_lock = None
+waited_pressure = wait_for_host()
+started_at = time.monotonic()
+environment = dict(os.environ, FORGE_GATE1_NESTED="1")
+
+results: dict[str, tuple[int, bytes]] = {}
+lock = threading.Lock()
+
+
+def worker() -> None:
+    while True:
+        with lock:
+            if not queue:
+                return
+            name = queue.pop(0)
+        process = subprocess.run(
+            [sys.executable, "-m", "unittest", f"tests.{name}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=environment,
+        )
+        with lock:
+            results[name] = (process.returncode, process.stdout)
+
+
+threads = [threading.Thread(target=worker) for _ in range(workers)]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+
 failed = False
-for index, process in enumerate(processes):
-    output, _ = process.communicate()
-    summary = re.search(rb"^Ran (\d+) tests? in", output, flags=re.MULTILINE)
-    verdict = "OK" if process.returncode == 0 and summary else "FAILED"
-    if verdict == "FAILED":
+total_tests = 0
+tail_budget = 40 * 1024
+for name in sorted(results):
+    code, output = results[name]
+    summary = re.search(rb"^Ran (\d+) tests? in ([0-9.]+)s", output, flags=re.MULTILINE)
+    ran = int(summary.group(1)) if summary else -1
+    ok = summary is not None and (code == 0 or (code == 5 and ran == 0))
+    if not ok:
         failed = True
-    print(f"gate-1 shard {index + 1}/{len(processes)}: exit {process.returncode} {verdict}")
-    print(output[-8192:].decode("utf-8", "replace"))
+    total_tests += max(ran, 0)
+    seconds = summary.group(2).decode() if summary else "?"
+    print(f"gate-1 {name}: exit {code} ran {ran} in {seconds}s {'OK' if ok else 'FAILED'}")
+    if not ok and tail_budget > 0:
+        tail = output[-4096:]
+        tail_budget -= len(tail)
+        print(tail.decode("utf-8", "replace"))
+    elif not ok:
+        print("gate-1: further failing-module output omitted (tail budget exhausted)")
+print(f"gate-1: {len(results)} modules, {total_tests} tests, {workers} workers, {slot}, "
+      f"{time.monotonic() - started_at:.0f}s running, {waited_pressure:.0f}s waiting for host pressure, "
+      f"{'FAILED' if failed else 'OK'}")
 raise SystemExit(1 if failed else 0)
 PY
 ```
@@ -255,7 +424,7 @@ Output path: `CHANGELOG.md`
 <!-- FORGE:REGION completeness-project-items BEGIN -->
 - [ ] Every changed control has a focused test that fails when the control is disabled in memory.
 - [ ] Agent routing and the executable-script inventory match committed specification authority.
-- [ ] Full unittest discovery passes twice consecutively after the last defect fix.
+- [ ] Full unittest discovery passes on the final candidate and again inside the merge lock.
 - [ ] STRICT evals pass for every applicable control-class change.
 <!-- FORGE:REGION completeness-project-items END -->
 
@@ -267,6 +436,9 @@ shell hooks must remain portable across macOS and Linux. Treat `docs/specs/forge
 as committed control authority. Preserve exact diagnostics, committed-policy sourcing, one-cell
 `bash -c` argv discipline, process isolation, bounded output, and fail-closed timeouts. Do not
 stage, commit, push, or weaken a gate without the authority required by the active task.
+This host is shared with omnipus-ai. At most 4 implementer executions run concurrently across both
+repositories; Gate 1 cells take the host gate slot (`/dev/shm/agents-sem/gate`) and are never launched
+by hand while another is running; builds and test sweeps outside a gate go through `sem-run`.
 <!-- FORGE:REGION agent-project-context END -->
 
 ## Mutation Testing
@@ -291,7 +463,7 @@ No mutation tool available for bash — assertion-quality fallback only.
 <!-- FORGE:REGION risk-tiers BEGIN -->
 | tier | path patterns |
 |---|---|
-| fast | docs/**, .forge/history/**, .forge/evals/candidates/**, @formatting-only |
+| fast | docs/**, .forge/history/**, .forge/evals/candidates/**, CHANGELOG.md, @formatting-only |
 
 | formatting-only category |
 |---|

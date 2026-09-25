@@ -268,16 +268,20 @@ python3 -m unittest discover -s tests
 ```
 
 The plain command above is the sequential developer form. The committed gate-1
-cell in `forge-project.md` discovers the same modules and partitions them round-robin
-across `max(1, min(4, os.cpu_count() or 1))` shards inside one cell. The previously
-observed roughly-one-third sequential wall time was measured on an eight-core host
-while the cell used four shards; it is not a four-core benchmark or a promised
-speedup.
+cell in `forge-project.md` discovers the same modules and runs them as a work queue
+inside one cell: each module is its own unittest process, pulled longest-first by
+`max(1, min(8, os.cpu_count() or 1))` workers, after taking the host gate slot
+(`/dev/shm/agents-sem/gate/slot-0.lock`) and waiting out CPU pressure for at most
+300 seconds; both guards are no-ops where those paths do not exist. Measured on the
+shared twelve-core host at load 3 to 5: 102 modules, 2,031 tests, 335 to 350 seconds
+wall; it is not a promised speedup. A candidate whose every classified path is
+docs-class records a `gate-1` skip instead of running the cell (Revision 17); the
+docs-contract stack validation still runs the prose-contract modules for it.
 
 The Python entry point `scripts/forge/cli.py` is a compatibility shim over the
 implementation modules under `scripts/forge/forge_cli/`.
 
-The suite is stdlib only; the current four-shard discovery finds 1,554 tests. Its
+The suite is stdlib only; the work-queue discovery finds 2,031 tests. Its
 prose-contract tests are instruction-presence and textual-consistency checks: they
 verify that required instructions exist, not that a model follows them. The release
 end-to-end test checks plumbing with scripted verdicts, including a literal `PASS`;

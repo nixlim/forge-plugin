@@ -321,7 +321,7 @@ from ._chain_batch_authorize import (
     _authorize_chain_batch as _authorize_chain_batch,
 )
 from ._common_lock import _acquire_secondary_flock as _acquire_secondary_flock, acquire_common_lock as acquire_common_lock, hold_common_lock as hold_common_lock
-from ._commit_chain import CLIOptions as CLIOptions, register_activation_reservation_seam as register_activation_reservation_seam, _validate_bound_chain_state as _validate_bound_chain_state, _user_skip as _user_skip, _gate_one_complete as _gate_one_complete, _latest_current_pass as _latest_current_pass, _gate_satisfied as _gate_satisfied, _verify_and_build_ingest_records as _verify_and_build_ingest_records, _ingest_proof_verifier as _ingest_proof_verifier, register_coordination_seams as register_coordination_seams, ChainStore as ChainStore, CommandContext as CommandContext, _policy_for_state as _policy_for_state, _fresh_reviewer_evals_required as _fresh_reviewer_evals_required, _required_steps as _required_steps, _chain_batch_lock as _chain_batch_lock
+from ._commit_chain import CLIOptions as CLIOptions, register_activation_reservation_seam as register_activation_reservation_seam, _validate_bound_chain_state as _validate_bound_chain_state, _user_skip as _user_skip, _gate_one_complete as _gate_one_complete, _docs_class_candidate as _docs_class_candidate, DOCS_CLASS_SKIP_REASON as DOCS_CLASS_SKIP_REASON, _latest_current_pass as _latest_current_pass, _gate_satisfied as _gate_satisfied, _verify_and_build_ingest_records as _verify_and_build_ingest_records, _ingest_proof_verifier as _ingest_proof_verifier, register_coordination_seams as register_coordination_seams, ChainStore as ChainStore, CommandContext as CommandContext, _policy_for_state as _policy_for_state, _fresh_reviewer_evals_required as _fresh_reviewer_evals_required, _required_steps as _required_steps, _chain_batch_lock as _chain_batch_lock
 from ._lock_reservation import (
     _open_owned_directory as _open_owned_directory,
     RecoveryReservation as RecoveryReservation,
@@ -495,7 +495,7 @@ __all__ = [
     '_fence_matches_owner',
     '_forge_command',
     '_fresh_reviewer_evals_required',
-    '_gate_one_complete',
+    '_gate_one_complete', '_docs_class_candidate', 'DOCS_CLASS_SKIP_REASON',
     '_gate_satisfied',
     '_group_probe',
     '_ingest_captured_paths',

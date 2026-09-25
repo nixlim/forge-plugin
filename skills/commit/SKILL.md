@@ -91,6 +91,11 @@ derived repository-relative test path or scope as a separate subsequent argv ele
 `"$@"`. Never concatenate or interpolate target paths into the command. Use an isolated process
 group, a 65,536-byte combined stdout/stderr cap, and the fixed 1200-second timeout. A nonzero exit,
 launch failure, output-limit breach, timeout, missing command, or malformed command blocks Step 2.
+Gate 1 runs once per candidate. When the classifier's recorded per-path evidence for the current
+candidate shows every staged path with exactly the `docs` category, no control floor, and no
+trigger-path match, record a `gate-1` skip with reason `docs-class candidate` under the same gate ID
+instead of launching the cell; the docs-contract stack validation still runs for that candidate, and
+the merge chain's in-lock Gate 1 remains its own run on the reintegrated tree.
 
 Run every executable command in the committed `stack-validations` region for every category
 touched by the target paths. Run all applicable commands when categories overlap. Prefer execution
@@ -560,9 +565,10 @@ For a control-class commit, present the immutable review artifact, PASS verdict,
 approval naming that authorization ID. Keep the marker absent while waiting; review evidence is not
 authorization and a PASS alone does not authorize a control commit. After approval, re-observe the
 index with the shared helper and require the same object format, tree OID, and authorization ID. If
-the tree changed or the captured PASS time is now older than 30 minutes, keep the marker absent and
-restart Step 4. A refusal or anything other than explicit candidate-bound approval leaves the
-marker absent and stops the chain. Do not enter Step 5 autonomously.
+the tree changed, keep the marker absent and restart Step 4. A PASS remains valid for the exact
+candidate it names for as long as the chain stays in its post-review, pre-commit state; approval
+re-observes the index tree, not the clock. A refusal or anything other than explicit candidate-bound
+approval leaves the marker absent and stops the chain. Do not enter Step 5 autonomously.
 
 Immediately before writing either authorization-marker shape, validate the stable live
 `FORGE_SESSION_PID` inherited from the long-lived harness exactly as DM-010 requires. It must be a
@@ -1149,8 +1155,9 @@ For a control-class candidate, present the immutable review artifact, skip warni
 ID, object format, tree OID, and review digest while the marker remains absent. Wait for explicit
 user approval naming that authorization ID before Step 5. A skip directive never supplies that
 approval, and control-class commits are never autonomous. After approval, use the shared helper to
-require the same live tree identity. If the tree changed, approval was refused, or the captured skip
-time is now older than 30 minutes, keep the marker absent and stop or restart Step 4 as applicable.
+require the same live tree identity. If the tree changed or approval was refused, keep the marker
+absent and stop or restart Step 4 as applicable; a recorded skip, like a PASS, stays bound to the
+candidate rather than to the clock.
 
 Only after that control approval when required, resolve the common main-checkout root as above,
 validate the same stable live harness-injected `FORGE_SESSION_PID` under DM-010 before marker

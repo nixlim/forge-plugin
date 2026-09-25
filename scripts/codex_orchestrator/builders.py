@@ -2406,14 +2406,12 @@ def _commit_gate_pass_or_skip(
         if isinstance(fact, dict) and fact.get("candidate") == authorization_id
     ]
     if gate_id == "gate-1":
+        # Revision 17: one current run, or the recorded docs-class skip.
+        latest = current[-1] if current else {}
+        docs_skip = latest.get("reason") == "docs-class candidate"
         return bool(
-            len(current) >= 2
-            and all(
-                fact.get("result") == "passed" and not fact.get("pair_voided")
-                for fact in current[-2:]
-            )
-            and current[-2].get("env_fingerprint")
-            == current[-1].get("env_fingerprint")
+            latest.get("result") == "passed"
+            or (latest.get("result") == "skipped" and docs_skip)
         )
     return bool(current and current[-1].get("result") == "passed")
 
@@ -7412,27 +7410,8 @@ def _commit_gate_fact_is_current(
 
     active_indexes: set[int]
     if step_id == "gate-1":
-        latest_index, latest = current_candidate_runs[-1]
-        if latest.get("result") != "passed":
-            active_indexes = {latest_index}
-        elif len(current_candidate_runs) >= 2:
-            previous_index, previous = current_candidate_runs[-2]
-            if (
-                previous.get("result") == "passed"
-                and not previous.get("pair_voided")
-                and not latest.get("pair_voided")
-                and previous.get("env_fingerprint")
-                == latest.get("env_fingerprint")
-            ):
-                active_indexes = {previous_index, latest_index}
-            elif not latest.get("pair_voided"):
-                active_indexes = {latest_index}
-            else:
-                active_indexes = set()
-        elif not latest.get("pair_voided"):
-            active_indexes = {latest_index}
-        else:
-            active_indexes = set()
+        # Revision 17: the newest current run is the sole Gate-1 evidence.
+        active_indexes = {current_candidate_runs[-1][0]}
     elif step_id.startswith("stack:"):
         _latest_index, latest = current_candidate_runs[-1]
         batch_id = latest.get("batch_id")

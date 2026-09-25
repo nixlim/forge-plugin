@@ -29,7 +29,7 @@ from forge_cli.engine._core import _record_process_step as _record_process_step
 from forge_cli.engine._core import _transition_state as _transition_state
 from forge_cli.engine._gate_checks import _current_test_paths as _current_test_paths
 from forge_cli.engine._gate_checks import (
-    _void_mismatched_gate_one_pair as _void_mismatched_gate_one_pair,
+    _record_docs_class_gate_one_skip as _record_docs_class_gate_one_skip,
 )
 from forge_cli.engine._gate_checks import scan_added_secrets as scan_added_secrets
 from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal, V2ReasonCode
@@ -196,6 +196,17 @@ def gate_run(self, gate_id: str) -> Outcome:
         return self.scan_secrets(state=state, preflight=False)
     if gate_id == chain_core.FRESH_REVIEWER_EVALS_GATE:
         return self._run_fresh_reviewer_evals(state)
+    if gate_id == "gate-1" and chain_core._docs_class_candidate(state):
+        # A candidate whose every classified path is docs-class (the same
+        # test the changelog gate applies) runs no test process; the skip is
+        # recorded under the gate-1 ID so the chain evidence stays complete.
+        record = _record_docs_class_gate_one_skip(self.ctx, state)
+        return _success(
+            state,
+            f"gate {gate_id} skipped: {chain_core.DOCS_CLASS_SKIP_REASON}",
+            chain_core._forge_command(state, "verify"),
+            evidence_refs=[record["transcript"]],
+        )
     argv, remaining_cells, details = self._resolve_gate(state, gate_id)
     if gate_id.startswith("stack:"):
         details = {
@@ -329,8 +340,6 @@ def gate_run(self, gate_id: str) -> Outcome:
     record = _record_process_step(
         self.ctx, state, gate_id, argv, process, details=details
     )
-    if gate_id == "gate-1" and record["result"] == "passed":
-        _void_mismatched_gate_one_pair(self.ctx, state)
     if gate_id == "assertion-sensor":
         for line in process.output.decode("utf-8", "replace").splitlines():
             if line.startswith("forge: assertion-free test detected:"):
