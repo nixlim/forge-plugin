@@ -15,10 +15,9 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from route_config_git import RouteRefusal, git_path, run_git
-from route_config_probe import ProbeSpec, UnsafeDirectoryError, probe_routes, secure_directory
 
 ROLES = ("implementer", "review-cheap", "review-final", "plan")
 PROVIDERS = frozenset({"codex", "claude"})
@@ -109,12 +108,14 @@ def _routes_refusal(cause: str) -> NoReturn:
     raise RouteRefusal(f"forge: routes file refused — {cause}")
 
 
+def _probe_support() -> Any:
+    return __import__("route_config_probe")
+
+
 def _git(
     repo: Path, *arguments: str, resolution: bool = False
 ) -> subprocess.CompletedProcess[bytes]:
-    return run_git(
-        repo, *arguments, timeout=GIT_TIMEOUT_SECONDS, resolution=resolution
-    )
+    return run_git(repo, *arguments, timeout=GIT_TIMEOUT_SECONDS, resolution=resolution)
 
 
 def _git_common_dir(repo: Path) -> Path:
@@ -450,8 +451,9 @@ def _replace_exclude(directory: int, data: bytes, mode: int) -> None:
 
 
 def _update_exclude(repo: Path, *, dedupe: bool) -> None:
+    support = _probe_support()
     try:
-        context = secure_directory(_git_common_dir(repo), ("info",), final_mode=None)
+        context = support.secure_directory(_git_common_dir(repo), ("info",), final_mode=None)
         with context as (_path, directory):
             original, mode = _read_exclude(directory)
             updated, changed = _dedupe_exclude(original) if dedupe else (original, False)
@@ -461,7 +463,7 @@ def _update_exclude(repo: Path, *, dedupe: bool) -> None:
                 changed = True
             if changed:
                 _replace_exclude(directory, updated, mode)
-    except UnsafeDirectoryError as exc:
+    except support.UnsafeDirectoryError as exc:
         raise RouteRefusal("forge: route init refused — unsafe info/exclude") from exc
 
 
@@ -496,15 +498,14 @@ def _create_route(directory: int, seed: bytes) -> os.stat_result | None:
 
 def init_routes(repo: Path, *, dedupe: bool = False) -> Path:
     """Create the owner-only seed exactly once and update Git's local exclude."""
-    repo = Path(repo)
-    root = common_root(repo)
-    destination = root / ROUTES_RELATIVE
+    support = _probe_support()
+    destination = (root := common_root(repo)) / ROUTES_RELATIVE
     try:
         seed = SEED_PATH.read_bytes()
     except OSError as exc:
         raise RouteRefusal("forge: route init refused — seed unavailable") from exc
     try:
-        with secure_directory(root, (".forge", "local")) as (_path, directory):
+        with support.secure_directory(root, (".forge", "local")) as (_path, directory):
             created = _create_route(directory, seed)
             if created is None:
                 _update_exclude(repo, dedupe=dedupe)
@@ -514,8 +515,10 @@ def init_routes(repo: Path, *, dedupe: bool = False) -> Path:
             except (OSError, RouteRefusal):
                 _rollback_route(directory, created)
                 raise
-    except UnsafeDirectoryError as exc:
+    except support.UnsafeDirectoryError as exc:
         raise RouteRefusal("forge: route init refused — unsafe local directory") from exc
+    except OSError as exc:
+        raise RouteRefusal("forge: route init refused — unreadable") from exc
     return destination
 
 
@@ -524,8 +527,7 @@ def check(repo: Path) -> bool:
 
 
 def _absolute_repo(value: str) -> Path:
-    path = Path(value)
-    if not path.is_absolute():
+    if not (path := Path(value)).is_absolute():
         raise argparse.ArgumentTypeError("must be an absolute path")
     return path
 
@@ -556,8 +558,8 @@ def _probe(repo: Path, role: str | None) -> tuple[list[dict[str, object]], list[
     grouped: dict[tuple[str, str, str], list[str]] = {}
     for route in selected:
         grouped.setdefault((route.provider, route.model, route.effort), []).append(route.role)
-    specs = [ProbeSpec(*key, tuple(roles)) for key, roles in grouped.items()]
-    outcomes = probe_routes(common_root(repo), PLUGIN_ROOT, specs)
+    specs = [_probe_support().ProbeSpec(*key, tuple(roles)) for key, roles in grouped.items()]
+    outcomes = _probe_support().probe_routes(common_root(repo), PLUGIN_ROOT, specs)
     return [outcome.report for outcome in outcomes], [
         outcome.diagnostic for outcome in outcomes if outcome.diagnostic is not None
     ]

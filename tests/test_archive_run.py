@@ -561,13 +561,13 @@ class ArchiveRunTests(unittest.TestCase):
             Path("agents/review-final.md"),
             Path("docs/specs/forge-plugin-spec.md"),
             Path("system/codex/agents/implementer.toml"),
-            Path("system/codex/agents/plan.toml"), Path("system/codex/agents/review-cheap.toml"), Path("scripts/forge/route_vocab.py"),
+            Path("system/codex/agents/plan.toml"), Path("system/codex/agents/review-cheap.toml"), Path("scripts/forge/route_config.py"), Path("scripts/forge/route_config_git.py"), Path("scripts/forge/route_config_probe.py"), Path("scripts/forge/route_evidence.py"), Path("scripts/forge/route_provenance.py"), Path("scripts/forge/route_vocab.py"),
             Path("tests/test_repo_conformance.py"),
         )
         for relative in sources:
             target = self.repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((ROOT / relative).read_bytes())
+            shutil.copy2(ROOT / relative, target)
         # The conformance walk is fail closed when the governed script root is
         # unavailable. This fixture has no governed executables of its own.
         (self.repo / "scripts/forge").mkdir(parents=True, exist_ok=True)

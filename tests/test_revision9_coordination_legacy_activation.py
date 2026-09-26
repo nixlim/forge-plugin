@@ -641,12 +641,36 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
                         self._run_file_bytes(run_dir), before_raw
                     )
 
-    def test_typed_opened_run_bytes_are_unchanged(self) -> None:
-        run_id = "run-20260910-typed-open-byte-golden"
-        fixed_time = "2026-09-10T01:00:00Z"
+    def test_typed_opened_run_bytes_include_route_evidence(self) -> None:
+        run_id, fixed_time = (
+            "run-20260910-typed-open-byte-golden",
+            "2026-09-10T01:00:00Z",
+        )
         repository = self.repo.resolve()
-        open_key = key(f"{run_id}-open")
-        task_key = key(f"{run_id}-task")
+        self.env.pop("CLAUDE_CODE_SESSION_ID", None)
+        open_key, task_key = key(f"{run_id}-open"), key(f"{run_id}-task")
+        route = {
+            "implementer": {
+                "provider": "codex", "model": "gpt-5.6-sol",
+                "effort": "ultra", "route_source": "plugin-default",
+                "route_sha256": "bc4691e169b75ef2d65be1eaea54158fd28a3169fb9beadb003d0263315a8a01",
+            },
+            "plan": {
+                "provider": "codex", "model": "gpt-5.6-sol",
+                "effort": "high", "route_source": "plugin-default",
+                "route_sha256": "81288062bcf5fe61fa1cb9fe852437a55859f89b0230ea7db4c109294a39884f",
+            },
+            "review-cheap": {
+                "provider": "codex", "model": "gpt-5.6-sol",
+                "effort": "high", "route_source": "plugin-default",
+                "route_sha256": "0d902ac5154c8e94736fed9e09276391b1404046a3934b85c9615d0b48ca666f",
+            },
+            "review-final": {
+                "provider": "claude", "model": "fable",
+                "effort": "high", "route_source": "plugin-default",
+                "route_sha256": "19317ae26de78299c2011e99392ec43943c50c68aea9e60f29ee74fdd5ac51a8",
+            },
+        }
         opening = {
             "type": "run_started",
             "goal": "Exercise Revision 9",
@@ -656,6 +680,8 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
             "plugin_ref": "forge-test-revision-9",
             "scope": ["src/**"],
             "writer_contract": journal.WRITER_CONTRACT,
+            "route": route,
+            "orchestrator_model": {"observed": None, "reason": "var-unset"},
             "run_id": run_id,
             "recorded_at": fixed_time,
         }
@@ -673,9 +699,7 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
             "run_id": run_id,
             "inputs": open_inputs,
         }
-        open_request_sha256 = journal._sha256(
-            journal._canonical_json_bytes(open_request)
-        )
+        open_request_sha256 = journal._sha256(journal._canonical_json_bytes(open_request))
         open_receipt = {
             "schema": journal.BATCH_RECEIPT_SCHEMA,
             "idempotency_key": open_key,
@@ -701,9 +725,7 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
             "receipt_base_sha256": journal._sha256(b""),
             "receipt_bytes": batch._encode_base64url(open_receipt_bytes),
         }
-        expected_open_intent = (
-            journal._canonical_json_bytes(open_intent) + b"\n"
-        )
+        expected_open_intent = journal._canonical_json_bytes(open_intent) + b"\n"
         captured_open: dict[str, bytes] = {}
         original_open = journal.open_run
 
@@ -720,14 +742,9 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
             opened = self.open_run(self.repo, run_id)
         self.assertEqual(captured_open["intent"], expected_open_intent)
         self.assertEqual(captured_open["receipt"], open_receipt_bytes)
-        self.assertEqual(
-            opened.payload(),
-            {
-                "receipt": open_receipt,
-                "records": [opening],
-                "repeated": False,
-            },
-        )
+        self.assertEqual(opened.payload(), {
+            "receipt": open_receipt, "records": [opening], "repeated": False,
+        })
 
         task = {
             "type": "task",
@@ -753,9 +770,7 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
             "run_id": run_id,
             "inputs": task_inputs,
         }
-        task_request_sha256 = journal._sha256(
-            journal._canonical_json_bytes(task_request)
-        )
+        task_request_sha256 = journal._sha256(journal._canonical_json_bytes(task_request))
         task_receipt = {
             "schema": journal.BATCH_RECEIPT_SCHEMA,
             "idempotency_key": task_key,
@@ -781,18 +796,14 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
             "receipt_base_sha256": journal._sha256(open_receipt_bytes),
             "receipt_bytes": batch._encode_base64url(task_receipt_bytes),
         }
-        expected_task_intent = (
-            journal._canonical_json_bytes(task_intent) + b"\n"
-        )
+        expected_task_intent = journal._canonical_json_bytes(task_intent) + b"\n"
         captured_task: dict[str, bytes] = {}
         original_write_intent = batch._write_intent
 
         def capture_task_intent(
             locked: batch.BatchLock, intent: dict[str, object]
         ) -> journal.ExactFile:
-            captured_task["intent"] = (
-                journal._canonical_json_bytes(intent) + b"\n"
-            )
+            captured_task["intent"] = journal._canonical_json_bytes(intent) + b"\n"
             return original_write_intent(locked, intent)
 
         with self.api_environment(), mock.patch.object(
@@ -804,29 +815,18 @@ class Revision9LegacyActivationTests(Revision9BuilderBatchSupport, unittest.Test
 
         run_dir = self.run_dir(self.repo, run_id)
         self.assertEqual(captured_task["intent"], expected_task_intent)
-        self.assertEqual(
-            (run_dir / "journal.jsonl").read_bytes(),
-            opening_bytes + task_bytes,
-        )
+        self.assertEqual((run_dir / "journal.jsonl").read_bytes(), opening_bytes + task_bytes)
         self.assertEqual(
             (run_dir / journal.BATCH_RECEIPTS_NAME).read_bytes(),
             open_receipt_bytes + task_receipt_bytes,
         )
-        self.assertEqual(
-            started.payload(),
-            {
-                "receipt": task_receipt,
-                "records": [task],
-                "repeated": False,
-            },
-        )
+        self.assertEqual(started.payload(), {
+            "receipt": task_receipt, "records": [task], "repeated": False,
+        })
         self.assertEqual(started.records, (task,))
-        self.assertFalse(
-            any(
-                journal._writer_activation_candidate(record)
-                for record in started.records
-            )
-        )
+        self.assertFalse(any(
+            journal._writer_activation_candidate(record) for record in started.records
+        ))
 
         before_retry = self._run_file_bytes(run_dir)
         with self.api_environment(), mock.patch.object(

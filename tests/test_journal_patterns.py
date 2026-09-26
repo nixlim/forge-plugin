@@ -8,11 +8,16 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/forge/journal-patterns.py"
 sys.path.insert(0, str(SCRIPT.parent))
+import route_evidence  # noqa: E402
+import route_provenance  # noqa: E402
+import route_vocab  # noqa: E402
+from tests.test_repo_conformance import check_run  # noqa: E402
 GATE3_PRODUCERS = (
     ROOT / "docs/orchestration-contract.md",
     ROOT / "skills/commit/SKILL.md",
@@ -51,7 +56,7 @@ class JournalPatternsTests(unittest.TestCase):
             'model = "review-recorded"\nmodel_reasoning_effort = "medium"\n'
         )
         (self.root / "agents/review-final.md").write_text(
-            "---\nmodel: claude-recorded\neffort: high\n---\n"
+            "---\nmodel: fable\neffort: high\n---\n"
         )
         run("git", "add", ".", cwd=self.root)
         run("git", "commit", "-qm", "recorded routes", cwd=self.root)
@@ -72,6 +77,63 @@ class JournalPatternsTests(unittest.TestCase):
         path = self.inputs / name
         path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
         return path
+
+    def reader_run(self, records: list[dict]) -> Path:
+        run_dir = self.root / "reader-run"
+        run_dir.mkdir(exist_ok=True)
+        (run_dir / "journal.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
+        )
+        return run_dir
+
+    def reader_records(self) -> list[dict]:
+        return [
+            {
+                "type": "run_started",
+                "route": {},
+                "orchestrator_model": {"observed": "claude-fable-5-20250929"},
+            },
+            {
+                "type": "execution",
+                "agent": "claude-impl",
+                "provider": "claude",
+                "role": "implementer",
+                "head": self.current_head,
+                "model": "sonnet",
+                "effort": "high",
+                "sandbox": "instruction-bounded",
+                "route_source": "local",
+                "route_sha256": "a" * 64,
+            },
+            {
+                "type": "execution",
+                "agent": "claude-review-final",
+                "provider": "claude",
+                "role": "review-final",
+                "head": self.current_head,
+                "model": "fable",
+                "effort": "high",
+                "sandbox": "instruction-bounded",
+            },
+            {"type": "task", "id": "task-owned", "status": "complete"},
+            {
+                "type": "decision",
+                "task": "task-owned",
+                "resolution": "orchestrator-owned: docs-only",
+                "basis": ["operator assignment"],
+            },
+            {
+                "type": "decision",
+                "task": "task-incomplete",
+                "resolution": "orchestrator-owned: no implementation needed",
+                "basis": ["scope"],
+            },
+        ]
+
+    def reader_findings(self) -> list[str]:
+        errors, findings = check_run(self.root, self.reader_run(self.reader_records()))
+        self.assertEqual([], errors)
+        return findings
 
     def invoke(self, *journals: Path, script: Path = SCRIPT) -> subprocess.CompletedProcess[bytes]:
         return run(
@@ -95,10 +157,11 @@ class JournalPatternsTests(unittest.TestCase):
             self.assertGreater(item["count"], 0)
         for item in value["routing"]:
             self.assertEqual(
-                {"agent", "committed_effort", "committed_model", "execution", "recorded_effort", "recorded_model", "run_id", "status"},
+                {"agent", "committed_effort", "committed_model", "execution", "recorded_effort", "recorded_model", "route_source", "run_id", "status"},
                 set(item),
             )
-            self.assertIn(item["status"], {"matched", "mismatched", "unavailable"})
+            self.assertIn(item["route_source"], route_evidence.EXECUTION_ROUTE_SOURCES)
+            self.assertIn(item["status"], {"local", "matched", "mismatched", "unavailable"})
         for item in value["tasks"]:
             self.assertEqual(
                 {"block_to_pass_latency_ms", "iterations", "results", "run_id", "task"},
@@ -112,8 +175,8 @@ class JournalPatternsTests(unittest.TestCase):
             {"type": "run_started", "run_id": "run-rich"},
             {"type": "decision", "outcome": "accepted", "diagnostic": " exact  diagnostic "},
             {"type": "decision", "outcome": "rejected"},
-            {"type": "execution", "run_id": "run-rich", "task": "task-main", "execution": "execution-02", "agent": "impl", "provider": "codex", "role": "implementation", "head": self.recorded_head, "model": "wrong", "effort": "high"},
-            {"type": "execution", "run_id": "run-rich", "task": "task-main", "execution": "execution-01", "agent": "impl", "provider": "codex", "role": "implementation", "head": self.recorded_head, "model": "gpt-recorded", "effort": "high"},
+            {"type": "execution", "run_id": "run-rich", "task": "task-main", "execution": "execution-02", "agent": "impl", "provider": "codex", "role": "implementation", "head": self.recorded_head, "model": "wrong", "effort": "high", "route_source": "local"},
+            {"type": "execution", "run_id": "run-rich", "task": "task-main", "execution": "execution-01", "agent": "impl", "provider": "codex", "role": "implementation", "head": self.recorded_head, "model": "gpt-recorded", "effort": "high", "route_source": "local"},
             {"type": "execution", "run_id": "run-rich", "task": "task-main", "execution": "execution-03", "agent": "review-final-like", "role": "review", "head": self.recorded_head, "model": "claude-recorded", "effort": "high"},
             {"type": "execution", "run_id": "run-rich", "task": "task-main", "execution": "review-01", "agent": "review-cheap", "provider": "codex", "role": "review", "head": self.recorded_head, "model": "review-recorded", "effort": "medium"},
             {"type": "execution", "run_id": "run-rich", "task": "task-main", "execution": "review-02", "agent": "review-cheap", "provider": "codex", "role": "review", "head": self.recorded_head, "model": "review-recorded", "effort": "medium"},
@@ -137,11 +200,11 @@ class JournalPatternsTests(unittest.TestCase):
                 "by_severity": {"CRITICAL": 1, "MAJOR": 1, "MINOR": 1},
             },
             "routing": [
-                {"agent": "impl", "committed_effort": "high", "committed_model": "gpt-recorded", "execution": "execution-01", "recorded_effort": "high", "recorded_model": "gpt-recorded", "run_id": "run-rich", "status": "matched"},
-                {"agent": "impl", "committed_effort": "high", "committed_model": "gpt-recorded", "execution": "execution-02", "recorded_effort": "high", "recorded_model": "wrong", "run_id": "run-rich", "status": "mismatched"},
-                {"agent": "review-final-like", "committed_effort": "", "committed_model": "", "execution": "execution-03", "recorded_effort": "high", "recorded_model": "claude-recorded", "run_id": "run-rich", "status": "unavailable"},
-                {"agent": "review-cheap", "committed_effort": "medium", "committed_model": "review-recorded", "execution": "review-01", "recorded_effort": "medium", "recorded_model": "review-recorded", "run_id": "run-rich", "status": "matched"},
-                {"agent": "review-cheap", "committed_effort": "medium", "committed_model": "review-recorded", "execution": "review-02", "recorded_effort": "medium", "recorded_model": "review-recorded", "run_id": "run-rich", "status": "matched"},
+                {"agent": "impl", "committed_effort": "high", "committed_model": "gpt-recorded", "execution": "execution-01", "recorded_effort": "high", "recorded_model": "gpt-recorded", "route_source": "local", "run_id": "run-rich", "status": "matched"},
+                {"agent": "impl", "committed_effort": "high", "committed_model": "gpt-recorded", "execution": "execution-02", "recorded_effort": "high", "recorded_model": "wrong", "route_source": "local", "run_id": "run-rich", "status": "local"},
+                {"agent": "review-final-like", "committed_effort": "", "committed_model": "", "execution": "execution-03", "recorded_effort": "high", "recorded_model": "claude-recorded", "route_source": "unrecorded", "run_id": "run-rich", "status": "unavailable"},
+                {"agent": "review-cheap", "committed_effort": "medium", "committed_model": "review-recorded", "execution": "review-01", "recorded_effort": "medium", "recorded_model": "review-recorded", "route_source": "unrecorded", "run_id": "run-rich", "status": "matched"},
+                {"agent": "review-cheap", "committed_effort": "medium", "committed_model": "review-recorded", "execution": "review-02", "recorded_effort": "medium", "recorded_model": "review-recorded", "route_source": "unrecorded", "run_id": "run-rich", "status": "matched"},
             ],
             "tasks": [{"block_to_pass_latency_ms": 41125, "iterations": 3, "results": ["failed", "failed", "passed"], "run_id": "run-rich", "task": "task-main"}],
         }
@@ -176,8 +239,74 @@ class JournalPatternsTests(unittest.TestCase):
         result = self.invoke(path)
         self.assertEqual(0, result.returncode)
         rows = json.loads(result.stdout)["routing"]
-        self.assertEqual(["matched", "mismatched", "unavailable", "matched", "matched"], [row["status"] for row in rows])
+        self.assertEqual(["matched", "local", "unavailable", "matched", "matched"], [row["status"] for row in rows])
         self.assertTrue(all(row["committed_model"] != "gpt-current" for row in rows))
+
+    def test_unknown_route_source_projects_to_schema_valid_unrecorded(self) -> None:
+        path = self.write_journal(
+            "unknown-route-source.jsonl",
+            [
+                {"type": "run_started", "run_id": "run-unknown-source"},
+                {
+                    "type": "execution",
+                    "run_id": "run-unknown-source",
+                    "execution": "execution-01",
+                    "agent": "impl",
+                    "provider": "codex",
+                    "role": "implementation",
+                    "head": self.recorded_head,
+                    "model": "gpt-recorded",
+                    "effort": "high",
+                    "route_source": "bogus",
+                },
+            ],
+        )
+        result = self.invoke(path)
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        patterns = json.loads(result.stdout)
+        self.assert_shape(patterns)
+        self.assertEqual("unrecorded", patterns["routing"][0]["route_source"])
+
+        def old_projection(record: dict[str, object]) -> str:
+            source = record.get("route_source")
+            return source if isinstance(source, str) else "unrecorded"
+
+        namespace = self.load_namespace(SCRIPT.read_text())
+        with mock.patch.object(
+            route_evidence, "projected_route_source", side_effect=old_projection
+        ):
+            disabled = namespace["extract"]([path], self.root, self.current_head)
+        with self.assertRaises(AssertionError):
+            self.assert_shape(disabled)
+
+    def test_route_aware_reader_findings_are_exact_and_task_bounded(self) -> None:
+        expected = [
+            "journal line 2: agent 'claude-impl'; developer-local selection "
+            f"(route_sha256 {'a' * 64})",
+            "journal line 2: agent 'claude-impl'; implementer ran instruction-bounded",
+            "journal line 3: agent 'claude-review-final'; same-model binding review",
+            "task 'task-owned': orchestrator-owned completion",
+        ]
+        self.assertEqual(expected, self.reader_findings())
+
+    def test_route_aware_reader_finding_controls_are_discriminating(self) -> None:
+        expected = self.reader_findings()
+        canonical_role = route_vocab.canonical_role
+        controls = (
+            mock.patch.object(route_evidence, "projected_route_source", return_value="unrecorded"),
+            mock.patch.object(
+                route_vocab,
+                "canonical_role",
+                side_effect=lambda raw, provider: (
+                    "plan" if canonical_role(raw, provider) == "implementer" else canonical_role(raw, provider)
+                ),
+            ),
+            mock.patch.object(route_vocab, "model_family", return_value=None),
+            mock.patch.object(route_provenance, "completion_provenance", return_value=None),
+        )
+        for control in controls:
+            with self.subTest(control=control.attribute), control:
+                self.assertNotEqual(expected, self.reader_findings())
 
     def test_legacy_run_started_id_and_stable_malformed_failure(self) -> None:
         legacy = self.write_journal("legacy.jsonl", [
@@ -242,6 +371,8 @@ class JournalPatternsTests(unittest.TestCase):
                 "",
             ),
             ("committed_model == recorded_model", "False and committed_model == recorded_model"),
+            ('route_source = route_evidence.projected_route_source(record)', 'route_source = "unrecorded"'),
+            ('status = "local"', 'status = "mismatched"'),
         ]
         for needle, replacement in mutations:
             with self.subTest(needle=needle):

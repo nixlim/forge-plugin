@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import route_evidence
 import route_vocab
 import stat
 import subprocess
@@ -397,6 +398,7 @@ def extract(paths: list[Path], repo: Path | str, revision: str) -> dict[str, Any
                 agent = record.get("agent")
                 recorded_model = record.get("model")
                 recorded_effort = record.get("effort")
+                route_source = route_evidence.projected_route_source(record)
                 route = committed_route(repo, record)
                 committed_model, committed_effort = route or ("", "")
                 strings = (agent, recorded_model, recorded_effort)
@@ -407,6 +409,8 @@ def extract(paths: list[Path], repo: Path | str, revision: str) -> dict[str, Any
                     and committed_effort == recorded_effort
                 ):
                     status = "matched"
+                elif route_source == "local":
+                    status = "local"
                 else:
                     status = "mismatched"
                 routing.append(
@@ -417,6 +421,7 @@ def extract(paths: list[Path], repo: Path | str, revision: str) -> dict[str, Any
                         "execution": execution,
                         "recorded_effort": recorded_effort if isinstance(recorded_effort, str) else "",
                         "recorded_model": recorded_model if isinstance(recorded_model, str) else "",
+                        "route_source": route_source,
                         "run_id": run_id,
                         "status": status,
                     }

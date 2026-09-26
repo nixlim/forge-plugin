@@ -115,11 +115,7 @@ class ArchiveReplayVocabularyTests(unittest.TestCase):
             (self.recovery / name).write_text("fixture\n", encoding="utf-8")
 
         route_vocab = archive.journal_engine.route_vocab
-        historical_sandboxes = (*route_vocab.SANDBOX_IDS, "danger-full-access")
-        with (
-            mock.patch.object(route_vocab, "validate_new_write", return_value=None),
-            mock.patch.object(route_vocab, "SANDBOX_IDS", historical_sandboxes),
-        ):
+        with mock.patch.object(route_vocab, "validate_new_write", return_value=None):
             builders.execution_start(
                 self.repo,
                 RECOVERY_RUN_ID,
@@ -142,7 +138,6 @@ class ArchiveReplayVocabularyTests(unittest.TestCase):
                     role="reviewer",
                     mode="read-only",
                     event_source="agent-tool",
-                    sandbox="danger-full-access",
                 ),
             )
 
@@ -164,6 +159,35 @@ class ArchiveReplayVocabularyTests(unittest.TestCase):
             binding_id=None,
         )
         self.approval = f"{RECOVERY_RUN_ID}:{decision.records[0]['id']}"
+        self._install_historical_lone_sandbox()
+
+    def _install_historical_lone_sandbox(self) -> None:
+        # Model pre-DM-018 persisted data while retaining stable-read receipt
+        # coverage for the rewritten canonical journal bytes.
+        journal = self.recovery / "journal.jsonl"
+        ledger = self.recovery / archive.journal_engine.BATCH_RECEIPTS_NAME
+        records = [json.loads(line) for line in journal.read_bytes().splitlines()]
+        receipts = [json.loads(line) for line in ledger.read_bytes().splitlines()]
+        reviewer = next(
+            record for record in records if record.get("agent") == "legacy-reviewer"
+        )
+        reviewer["sandbox"] = "danger-full-access"
+        batches = [archive.journal_engine._journal_line(record) for record in records]
+        self.assertEqual(len(batches), len(receipts))
+        journal_raw = b""
+        for receipt, batch_bytes in zip(receipts, batches, strict=True):
+            receipt["base_size"] = len(journal_raw)
+            receipt["batch_sha256"] = hashlib.sha256(batch_bytes).hexdigest()
+            journal_raw += batch_bytes
+            receipt["journal_size"] = len(journal_raw)
+            receipt["journal_sha256"] = hashlib.sha256(journal_raw).hexdigest()
+        journal.write_bytes(journal_raw)
+        ledger.write_bytes(
+            b"".join(
+                archive.journal_engine._canonical_json_bytes(receipt) + b"\n"
+                for receipt in receipts
+            )
+        )
 
     def execution_arguments(self, label: str, **updates: object) -> dict[str, object]:
         arguments: dict[str, object] = {
@@ -241,10 +265,26 @@ class ArchiveReplayVocabularyTests(unittest.TestCase):
             [row["event_source"] for row in executions],
         )
         self.assertEqual(["read-only", "read-only"], [row["mode"] for row in executions])
-        self.assertEqual("danger-full-access", executions[1]["sandbox"])
         self.assertEqual(
             archive.ClosingMode(self.head, self.approval), self.closing_mode()
         )
+
+    def test_legacy_lone_sandbox_archives_without_route_trio_revalidation(self) -> None:
+        records, _raw = archive.stable_journal_snapshot(self.recovery)
+        reviewer = next(
+            record for record in records if record.get("agent") == "legacy-reviewer"
+        )
+        self.assertEqual("danger-full-access", reviewer["sandbox"])
+        self.assertNotIn("route_source", reviewer)
+        self.assertNotIn("route_sha256", reviewer)
+        with mock.patch.object(
+            archive.journal_engine.route_evidence,
+            "validate_execution",
+            side_effect=AssertionError("historical route controls were invoked"),
+        ):
+            self.assertEqual(
+                archive.ClosingMode(self.head, self.approval), self.closing_mode()
+            )
 
     def test_dropping_replay_capability_refuses_legacy_rows(self) -> None:
         validator = archive.journal_engine._validate_proposed_record

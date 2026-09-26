@@ -65,6 +65,8 @@ TYPED_SINGLETON_OPTIONS = frozenset(
         "--role",
         "--mode",
         "--sandbox",
+        "--route-source",
+        "--route-sha256",
         "--model",
         "--effort",
         "--worktree",
@@ -221,6 +223,8 @@ def _typed_parser() -> argparse.ArgumentParser:
         execution_started.add_argument(f"--{name}", required=True)
     execution_started.add_argument("--events")
     execution_started.add_argument("--sandbox")
+    execution_started.add_argument("--route-source")
+    execution_started.add_argument("--route-sha256")
 
     execution_finished = journal_subparsers.add_parser("execution-result")
     _typed_identity(execution_finished)
@@ -356,6 +360,8 @@ def _typed_main(argv: list[str]) -> int:
                 event_source=args.event_source,
                 events=args.events,
                 sandbox=args.sandbox,
+                route_source=args.route_source,
+                route_sha256=args.route_sha256,
             )
         elif args.journal_command == "execution-result":
             outcome = builders.execution_result(

@@ -91,6 +91,9 @@ class VocabularyWriterTests(unittest.TestCase):
         run_dir = self.repo / ".codex-orchestrator/runs" / RUN_ID
         for relative in ("prompt.md", "events.jsonl", "handoff.md"):
             (run_dir / relative).write_text("evidence\n", encoding="utf-8")
+        records, issues = journal.read_journal(run_dir / "journal.jsonl")
+        self.assertEqual(issues, [])
+        self.snapshot = records[0]["route"]["implementer"]
         self.execution_number = 0
 
     def git(self, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -145,6 +148,16 @@ class VocabularyWriterTests(unittest.TestCase):
         }
         record.update(updates)
         return record
+
+    def route_fields(self, sandbox: object = "workspace-write") -> dict[str, object]:
+        return {
+            "provider": self.snapshot["provider"],
+            "model": self.snapshot["model"],
+            "effort": self.snapshot["effort"],
+            "sandbox": sandbox,
+            "route_source": self.snapshot["route_source"],
+            "route_sha256": self.snapshot["route_sha256"],
+        }
 
     def legacy_cases(self) -> tuple[tuple[str, str, str, dict[str, str]], ...]:
         mode_ids = "one of " + ", ".join(route_vocab.MODE_IDS)
@@ -253,25 +266,42 @@ class VocabularyWriterTests(unittest.TestCase):
                     tuple(record[field] for field in ("provider", "role", "mode", "event_source")),
                 )
 
-    def test_sandbox_is_optional_and_accepts_only_known_values(self) -> None:
+    def test_sandbox_is_optional_but_route_trio_is_all_or_none(self) -> None:
         without_sandbox = builders.execution_start(
             self.repo, RUN_ID, **self.execution_arguments()
         ).records[0]
         self.assertNotIn("sandbox", without_sandbox)
+        partial = (
+            "forge: journal append refused — invalid journal record: execution route "
+            "fields must be given together (sandbox, route_source, route_sha256)"
+        )
         for sandbox in route_vocab.SANDBOX_IDS:
             with self.subTest(sandbox=sandbox):
-                outcome = builders.execution_start(
-                    self.repo,
-                    RUN_ID,
-                    **self.execution_arguments(sandbox=sandbox),
-                )
-                self.assertEqual(sandbox, outcome.records[0]["sandbox"])
+                with self.assertRaisesRegex(
+                    journal.CoordinationRefusal, re.escape(partial)
+                ):
+                    builders.execution_start(
+                        self.repo,
+                        RUN_ID,
+                        **self.execution_arguments(sandbox=sandbox),
+                    )
                 journal._validate_proposed_record(
-                    self.execution_record(sandbox=sandbox),
+                    self.execution_record(
+                        sandbox=sandbox,
+                        route_source="unrecorded",
+                        route_sha256="a" * 64,
+                    ),
                     run_id=RUN_ID,
                     repo_root=self.repo.resolve(),
                     scope=("src/**",),
                 )
+
+        matching = builders.execution_start(
+            self.repo,
+            RUN_ID,
+            **self.execution_arguments(**self.route_fields()),
+        ).records[0]
+        self.assertEqual("workspace-write", matching["sandbox"])
 
         diagnostic = (
             f"{journal.INVALID_JOURNAL_RECORD}: execution.sandbox must be one of "
@@ -284,11 +314,17 @@ class VocabularyWriterTests(unittest.TestCase):
                         builders.execution_start(
                             self.repo,
                             RUN_ID,
-                            **self.execution_arguments(sandbox="unconfined"),
+                            **self.execution_arguments(
+                                **self.route_fields(sandbox="unconfined")
+                            ),
                         )
                     else:
                         journal._validate_proposed_record(
-                            self.execution_record(sandbox="unconfined"),
+                            self.execution_record(
+                                sandbox="unconfined",
+                                route_source="unrecorded",
+                                route_sha256="a" * 64,
+                            ),
                             run_id=RUN_ID,
                             repo_root=self.repo.resolve(),
                             scope=("src/**",),
@@ -332,13 +368,20 @@ class VocabularyWriterTests(unittest.TestCase):
             "--events",
             "events.jsonl",
         ]
-        self.assertIsNone(codex_orch_tools._typed_parser().parse_args(arguments).sandbox)
+        empty = codex_orch_tools._typed_parser().parse_args(arguments)
+        self.assertIsNone(empty.sandbox)
+        self.assertIsNone(empty.route_source)
+        self.assertIsNone(empty.route_sha256)
         for sandbox in route_vocab.SANDBOX_IDS:
             with self.subTest(sandbox=sandbox):
                 parsed = codex_orch_tools._typed_parser().parse_args(
                     [*arguments, "--sandbox", sandbox]
                 )
                 self.assertEqual(sandbox, parsed.sandbox)
+        parsed = codex_orch_tools._typed_parser().parse_args(
+            [*arguments, "--route-source", "local", "--route-sha256", "a" * 64]
+        )
+        self.assertEqual((parsed.route_source, parsed.route_sha256), ("local", "a" * 64))
 
         legacy = list(arguments)
         legacy[legacy.index("implementer")] = "implementation"
@@ -380,10 +423,15 @@ class VocabularyWriterTests(unittest.TestCase):
             ),
         }
         self.assertNotIn("route_vocab.validate_new_write(", sources["builder"])
-        self.assertIn("route_vocab.validate_new_write(", sources["append"])
+        self.assertIn("route_evidence.validate_execution(", sources["append"])
+        self.assertIn(
+            "route_vocab.validate_new_write(",
+            (ROOT / "scripts/forge/route_evidence.py").read_text(encoding="utf-8"),
+        )
         for surface, source in sources.items():
             with self.subTest(surface=surface):
-                self.assertIn("sandbox", source)
+                if surface != "append":
+                    self.assertIn("sandbox", source)
                 for literal in (
                     '"implementation"',
                     '"implement"',

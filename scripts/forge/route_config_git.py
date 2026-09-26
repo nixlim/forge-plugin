@@ -18,6 +18,13 @@ SCRUBBED_GIT_ENVIRONMENT = frozenset(
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
         "GIT_CEILING_DIRECTORIES",
         "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+        "GIT_ATTR_NOSYSTEM",
+        "GIT_ATTR_SOURCE",
     }
 )
 
@@ -28,8 +35,10 @@ class RouteRefusal(RuntimeError):
 
 def _git_environment() -> dict[str, str]:
     environment = dict(os.environ)
-    for name in SCRUBBED_GIT_ENVIRONMENT:
-        environment.pop(name, None)
+    for name in tuple(environment):
+        if name in SCRUBBED_GIT_ENVIRONMENT or name.startswith("GIT_CONFIG_"):
+            environment.pop(name)
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     return environment
 
 

@@ -762,13 +762,21 @@ def valid_journal_patterns(value: Any) -> bool:
             "execution",
             "recorded_effort",
             "recorded_model",
+            "route_source",
             "run_id",
             "status",
         }:
             return False
         if not all(isinstance(item[key], str) for key in item):
             return False
-        if item["status"] not in {"matched", "mismatched", "unavailable"}:
+        if item["route_source"] not in {
+            "local",
+            "committed-default",
+            "plugin-default",
+            "unrecorded",
+        }:
+            return False
+        if item["status"] not in {"local", "matched", "mismatched", "unavailable"}:
             return False
     if routing != sorted(
         routing,

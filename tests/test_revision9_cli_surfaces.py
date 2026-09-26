@@ -1288,6 +1288,16 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(set(envelope), ENVELOPE_KEYS)
         return exit_code, envelope
 
+    def _record_orchestrator_provenance(self, run_id: str, reason: str) -> None:
+        _batch, builders, _journal = CLI._coordination_modules()
+        with self.cli_process_context():
+            outcome = builders.decision_add(
+                self.repo, run_id, idempotency_key=key(f"{run_id}-orchestrator-provenance"),
+                task="task-01", resolution=f"orchestrator-owned: {reason}", finding=None,
+                outcome=None, risk=None, basis=["terminal-disposition test setup"],
+                binding_chain=None, binding_id=None)
+        self.assertFalse(outcome.repeated)
+
     def open_run_and_task(
         self,
         run_id: str,
@@ -4218,6 +4228,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
                 expected_task_id="task-01",
             )
         self.assertEqual(resolved, abort_binding)
+        self._record_orchestrator_provenance(run_id, "authenticated abort disposition fixture")
         # The disposition is load-bearing: without it the abort dead-ends the task.
         with self.cli_process_context(), mock.patch.object(
             builders,
@@ -4235,12 +4246,8 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             )
         with self.cli_process_context():
             finished = builders.task_finish(
-                self.repo,
-                run_id,
-                idempotency_key=key(f"{run_id}-finish"),
-                task="task-01",
-                status="complete",
-            )
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
+                task="task-01", status="complete")
         self.assertFalse(finished.repeated)
         self.assertEqual(finished.records[0]["status"], "complete")
         with self.cli_process_context(), mock.patch.object(
@@ -4336,11 +4343,10 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         exit_code, status = self.invoke_cli("--chain-id", chain_id, "status")
         self.assertEqual(exit_code, 0, status)
         self.assertEqual(status["state"], "aborted")
+        self._record_orchestrator_provenance(run_id, "abort retry fixture")
         with self.cli_process_context():
             finished = builders.task_finish(
-                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
-                task="task-01", status="complete",
-            )
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"), task="task-01", status="complete")
         self.assertEqual(finished.records[0]["status"], "complete")
 
     def test_abort_refuses_landed_chain_and_keeps_its_landing(self) -> None:
@@ -4450,11 +4456,10 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertNotEqual(journal_after, journal_before)
 
         # The disposition satisfies the guards, correlation, and validation.
+        self._record_orchestrator_provenance(run_id, "retrospective abort disposition fixture")
         with self.cli_process_context():
             finished = builders.task_finish(
-                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
-                task="task-01", status="complete",
-            )
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"), task="task-01", status="complete")
             self.assertEqual(finished.records[0]["status"], "complete")
             closed = builders.run_close(
                 self.repo, run_id, idempotency_key=key(f"{run_id}-close"),
@@ -4505,11 +4510,10 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         tombstone = json.loads(tombstone_path.read_text(encoding="utf-8"))
 
         # Revision 11 acceptance: the task closes over the undispositioned tombstone.
+        self._record_orchestrator_provenance(run_id, "operator tombstone disposition fixture")
         with self.cli_process_context():
             finished = builders.task_finish(
-                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
-                task="task-01", status="complete",
-            )
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish"), task="task-01", status="complete")
         self.assertEqual(finished.records[0]["status"], "complete")
         # Without the disposition a passed close is refused by journal-only correlation.
         projected = self._journal_records(run_dir) + [{"type": "run_closed", "judgment": "passed"}]
@@ -4658,11 +4662,11 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         chain_id = self.start_bound_fast_chain(run_id)
         run_dir = self.repo / ".codex-orchestrator" / "runs" / run_id
         self._quarantine_and_tombstone(chain_id)
+        self._record_orchestrator_provenance(run_id, "tombstone control fixture")
         with self.cli_process_context():
             builders.task_finish(
                 self.repo, run_id, idempotency_key=key(f"{run_id}-finish"),
-                task="task-01", status="complete",
-            )
+                task="task-01", status="complete")
         exit_code, disposed = self.invoke_cli(
             "--run-id", run_id, "--chain-id", chain_id, "commit", "abort-disposition"
         )
@@ -4920,14 +4924,11 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         exit_code, verified = self.invoke_cli("--chain-id", second_chain, "verify")
         self.assertEqual(exit_code, 0, verified)
         # task-01's finish ignores task-02's live, journal-cited chain ...
+        self._record_orchestrator_provenance(run_id, "first task terminal-scope fixture")
         with self.cli_process_context():
             finished = builders.task_finish(
-                self.repo,
-                run_id,
-                idempotency_key=key(f"{run_id}-finish-01"),
-                task="task-01",
-                status="complete",
-            )
+                self.repo, run_id, idempotency_key=key(f"{run_id}-finish-01"),
+                task="task-01", status="complete")
         self.assertEqual(finished.records[0]["status"], "complete")
         # ... while task-02's own nonterminal chain still refuses its finish,
         # and run-close still sees every chain in the run.

@@ -19,6 +19,8 @@ from . import batch, journal
 from .chain_paths import chain_storage_root
 
 route_vocab = journal.route_vocab
+route_evidence = journal.route_evidence
+route_provenance = journal.route_provenance
 
 # ``journal`` installs the sibling ``scripts/forge`` directory before this
 # import, including dynamic archive/CLI load orders used by installed surfaces.
@@ -8888,13 +8890,14 @@ def run_open(
             "type": "run_started",
             "goal": goal,
             "repo": str(repository),
-            "repo_head": _git_one(repository, "rev-parse", "HEAD"),
+            "repo_head": (repo_head := _git_one(repository, "rev-parse", "HEAD")),
             "repo_status": _git_lines(
                 repository, "status", "--short", "--untracked-files=all"
             ),
             "plugin_ref": plugin_ref,
             "scope": list(canonical_scope),
             "writer_contract": journal.WRITER_CONTRACT,
+            **route_evidence.opening_fields(repository, repo_head, refusal=journal.CoordinationRefusal),
             **(
                 {"successor_of": successor_of}
                 if successor_of is not None
@@ -9100,11 +9103,12 @@ def task_finish(
     def prove(
         state: journal.RunState,
         repository: Path,
-        _records: Sequence[dict[str, object]],
+        records: Sequence[dict[str, object]],
     ) -> None:
         _terminal_chain_guard(
             repository, run_id, state.records, task_id=task
         )
+        route_provenance.enforce_task_finish(state.records, task, status, records[0].get("files"), refusal=journal.CoordinationRefusal)
 
     return batch.execute_existing_batch(
         repo,
@@ -9139,6 +9143,8 @@ def execution_start(
     event_source: str,
     events: str | None,
     sandbox: str | None = None,
+    route_source: str | None = None,
+    route_sha256: str | None = None,
 ) -> batch.BatchOutcome:
     inputs = {
         "agent": agent,
@@ -9155,8 +9161,9 @@ def execution_start(
         "event_source": event_source,
         "events": events,
     }
-    if sandbox is not None:
-        inputs["sandbox"] = sandbox
+    for field, value in (("sandbox", sandbox), ("route_source", route_source), ("route_sha256", route_sha256)):
+        if value is not None:
+            inputs[field] = value
 
     def validate() -> None:
         for field in (
@@ -9164,19 +9171,6 @@ def execution_start(
             "worktree", "prompt", "handoff", "event_source",
         ):
             _caller_text("execution", field, inputs[field])
-        route_fields_are_canonical = (
-            route_vocab.canonical_role(role, provider) == role
-            and route_vocab.canonical_provider(provider) == provider
-            and route_vocab.canonical_mode(mode)[0] == mode
-            and route_vocab.canonical_event_source(event_source) == event_source
-        )
-        if sandbox is not None and route_fields_are_canonical:
-            _caller_text("execution", "sandbox", sandbox)
-            if sandbox not in route_vocab.SANDBOX_IDS:
-                journal._invalid_record_field(
-                    "execution", "sandbox", "must be one of "
-                    + ", ".join(route_vocab.SANDBOX_IDS)
-                )
         if events is not None:
             _caller_text("execution", "events", events)
         elif event_source == "exec":
@@ -9721,6 +9715,7 @@ def run_close(
         _terminal_chain_guard(
             repository, run_id, state.records, task_id=None
         )
+        route_provenance.enforce_run_close(state.records, judgment, refusal=journal.CoordinationRefusal)
 
     return batch.execute_existing_batch(
         repo,

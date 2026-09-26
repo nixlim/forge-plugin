@@ -234,23 +234,15 @@ class Revision9TerminalRaceTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
     def open_run_and_task(self, run_id: str) -> None:
         _batch, builders, _journal = CLI._coordination_modules()
         with self.cli_context():
-            builders.run_open(
-                self.repo,
-                run_id,
-                idempotency_key=key(f"{run_id}-open"),
-                goal="Exercise the terminal/chain serialization boundary",
-                scope=["docs/**"],
-                plugin_ref="forge-revision9-terminal-race-tests",
-            )
+            builders.run_open(self.repo, run_id, idempotency_key=key(f"{run_id}-open"),
+                goal="Exercise the terminal/chain serialization boundary", scope=["docs/**"],
+                plugin_ref="forge-revision9-terminal-race-tests")
             builders.task_start(
-                self.repo,
-                run_id,
-                idempotency_key=key(f"{run_id}-task"),
-                task="task-01",
+                self.repo, run_id,
+                idempotency_key=key(f"{run_id}-task"), task="task-01",
                 goal="Serialize one bound chain against terminal journal state",
                 acceptance=["The journal-outer race has one valid order"],
-                files=["docs/guide.md"],
-            )
+                files=["docs/guide.md"])
 
     def prepare_case(self, action: str, run_id: str) -> str | None:
         self.open_run_and_task(run_id)
@@ -287,6 +279,14 @@ class Revision9TerminalRaceTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         label = f"{action}-{terminal}-{order}"
         run_id = f"run-20260828-terminal-race-{label}"
         chain_id = self.prepare_case(action, run_id)
+        if (action, terminal, order) == ("start", "task-finish", "terminal-first"):
+            _batch, builders, _journal = CLI._coordination_modules()
+            with self.cli_context():
+                builders.decision_add(
+                    self.repo, run_id, idempotency_key=key(f"{run_id}-orchestrator-provenance"),
+                    task="task-01", resolution="orchestrator-owned: terminal race fixture",
+                    finding=None, outcome=None, risk=None, basis=["terminal-race test setup"],
+                    binding_chain=None, binding_id=None)
         run_dir = (
             CLI.Repository(self.repo).common_root()
             / ".codex-orchestrator"

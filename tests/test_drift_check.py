@@ -82,7 +82,15 @@ class DriftFixture:
         shutil.copy2(MUTATION_HELPER, self.plugin / "scripts/forge/run-scoped-mutation.py")
         shutil.copy2(EMIT_EVENT, self.plugin / "scripts/forge/emit-decision-event.py")
         shutil.copy2(JOURNAL_PATTERNS, self.plugin / "scripts/forge/journal-patterns.py")
-        shutil.copy2(JOURNAL_PATTERNS.with_name("route_vocab.py"), self.plugin / "scripts/forge/route_vocab.py")
+        dependencies = (
+            "route_config.py", "route_config_git.py", "route_config_probe.py",
+            "route_evidence.py", "route_provenance.py", "route_vocab.py",
+        )
+        for dependency in dependencies:
+            shutil.copy2(
+                JOURNAL_PATTERNS.with_name(dependency),
+                self.plugin / "scripts/forge" / dependency,
+            )
         self._script(
             "run-evals.sh",
             """#!/bin/sh
@@ -396,24 +404,19 @@ class DriftCheckTests(unittest.TestCase):
         self.assertNotIn("fresh reviewer", baseline_check["summary"].lower())
 
     def test_disabled_or_invalid_journal_extractor_forces_exit_two(self) -> None:
-        unavailable = {
-            "available": False,
-            "decision_outcomes": {},
-            "diagnostics": [],
-            "failure": "disabled",
-            "findings": {"by_reviewer_role": {}, "by_severity": {}},
-            "routing": [],
-            "tasks": [],
-        }
+        unavailable = {"available": False, "decision_outcomes": {}, "diagnostics": [], "failure": "disabled", "findings": {"by_reviewer_role": {}, "by_severity": {}}, "routing": [], "tasks": []}
+        routing_row = {"agent": "agent", "committed_effort": "high", "committed_model": "model", "execution": "execution-01", "recorded_effort": "high", "recorded_model": "model", "route_source": "local", "run_id": "run", "status": "local"}
+
+        def extractor(payload: dict) -> str:
+            return "import json\n" + f"payload = {payload!r}\n" + 'print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))\n'
         variants = {
             "disabled": (
-                "import json\n"
-                f"payload = {unavailable!r}\n"
-                'print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))\n'
-                "raise SystemExit(2)\n",
+                extractor(unavailable) + "raise SystemExit(2)\n",
                 "disabled",
             ),
             "invalid-output": ('print("{}")\n', "journal-patterns-output"),
+            "invalid-route-source": (extractor({**unavailable, "available": True, "failure": "", "routing": [{**routing_row, "route_source": "future"}]}), "journal-patterns-output"),
+            "invalid-routing-status": (extractor({**unavailable, "available": True, "failure": "", "routing": [{**routing_row, "status": "future"}]}), "journal-patterns-output"),
         }
         for label, (source, expected_failure) in variants.items():
             with self.subTest(control=label):
@@ -554,7 +557,8 @@ class DriftCheckTests(unittest.TestCase):
 
     def test_nonempty_journal_patterns_are_discovered_and_forwarded(self) -> None:
         fixture = self.fixture()
-        policy_sha = fixture.git("rev-parse", "HEAD")
+        fixture.write(".codex/agents/implementer.toml", 'model = "route-model"\nmodel_reasoning_effort = "high"\n')
+        policy_sha = fixture.commit("record fixture route")
         exclude = fixture.repo / ".git/info/exclude"
         exclude.write_text(
             exclude.read_text(encoding="utf-8") + ".codex-orchestrator/\n",
@@ -573,6 +577,9 @@ class DriftCheckTests(unittest.TestCase):
                 "task": "task-integration",
                 "type": "execution",
             },
+            {"agent": "implementer-fixture", "effort": "high", "execution": "execution-03", "head": policy_sha, "model": "other-model", "provider": "codex", "role": "implementation", "route_source": "local", "task": "task-integration", "type": "execution"},
+            {"agent": "implementer-fixture", "effort": "high", "execution": "execution-02", "head": policy_sha, "model": "route-model", "provider": "codex", "role": "implementation", "route_source": "plugin-default", "task": "task-integration", "type": "execution"},
+            {"agent": "implementer-fixture", "effort": "high", "execution": "execution-04", "head": policy_sha, "model": "other-model", "provider": "codex", "role": "implementation", "route_source": "committed-default", "task": "task-integration", "type": "execution"},
             {
                 "diagnostic": "exact integration diagnostic",
                 "outcome": "user_action_required",
@@ -622,16 +629,10 @@ class DriftCheckTests(unittest.TestCase):
                 "by_severity": {"MAJOR": 1},
             },
             "routing": [
-                {
-                    "agent": "review-fixture",
-                    "committed_effort": "",
-                    "committed_model": "",
-                    "execution": "execution-01",
-                    "recorded_effort": "high",
-                    "recorded_model": "recorded-model",
-                    "run_id": "run-drift-integration",
-                    "status": "unavailable",
-                }
+                {"agent": "review-fixture", "committed_effort": "", "committed_model": "", "execution": "execution-01", "recorded_effort": "high", "recorded_model": "recorded-model", "route_source": "unrecorded", "run_id": "run-drift-integration", "status": "unavailable"},
+                {"agent": "implementer-fixture", "committed_effort": "high", "committed_model": "route-model", "execution": "execution-02", "recorded_effort": "high", "recorded_model": "route-model", "route_source": "plugin-default", "run_id": "run-drift-integration", "status": "matched"},
+                {"agent": "implementer-fixture", "committed_effort": "high", "committed_model": "route-model", "execution": "execution-03", "recorded_effort": "high", "recorded_model": "other-model", "route_source": "local", "run_id": "run-drift-integration", "status": "local"},
+                {"agent": "implementer-fixture", "committed_effort": "high", "committed_model": "route-model", "execution": "execution-04", "recorded_effort": "high", "recorded_model": "other-model", "route_source": "committed-default", "run_id": "run-drift-integration", "status": "mismatched"},
             ],
             "tasks": [
                 {

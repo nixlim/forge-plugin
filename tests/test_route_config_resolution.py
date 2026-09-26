@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
 
-from tests.test_route_config_support import codex_toml, route_config, route_text
+from tests.test_route_config_support import ROOT, codex_toml, route_config, route_text
 
 
 class RouteResolutionMixin:
@@ -31,6 +34,51 @@ class RouteResolutionMixin:
                 route = resolution.for_role(role)
                 self.assertEqual((route.provider, route.model, route.effort), values)
                 self.assertEqual(route.route_source, "committed-default")
+
+    def test_probe_support_is_lazy_until_init_or_probe_commands(self) -> None:
+        import_only = """
+import sys
+from pathlib import Path
+import route_config
+assert "route_config_probe" not in sys.modules
+repo = Path(sys.argv[1])
+route_config.load(repo, head=sys.argv[2])
+assert "route_config_probe" not in sys.modules
+route_config.init_routes(repo)
+assert "route_config_probe" in sys.modules
+"""
+        environment = dict(
+            os.environ, PYTHONPATH=str(ROOT / "scripts/forge")
+        )
+        initialized = subprocess.run(
+            [sys.executable, "-c", import_only, str(self.repo), self.head()],
+            capture_output=True,
+            text=True,
+            env=environment,
+            check=False,
+        )
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+
+        self.fake_executable("codex", "exit 1\n")
+        probe = """
+import sys
+from pathlib import Path
+import route_config
+assert "route_config_probe" not in sys.modules
+reports, diagnostics = route_config._probe(Path(sys.argv[1]), "implementer")
+assert "route_config_probe" in sys.modules
+assert len(reports) == 1 and diagnostics == ["forge: codex launch refused — route probe failed"]
+"""
+        probe_environment = self.probe_environment()
+        probe_environment["PYTHONPATH"] = str(ROOT / "scripts/forge")
+        probed = subprocess.run(
+            [sys.executable, "-c", probe, str(self.repo)],
+            capture_output=True,
+            text=True,
+            env=probe_environment,
+            check=False,
+        )
+        self.assertEqual(probed.returncode, 0, probed.stderr)
 
     def test_review_final_uses_only_a_valid_initial_frontmatter_block(self) -> None:
         valid = (
@@ -80,6 +128,29 @@ class RouteResolutionMixin:
             (final.provider, final.model, final.effort, final.route_source),
             ("codex", "codex-final", "high", "committed-default"),
         )
+
+    def test_fixed_head_ignores_replace_refs(self) -> None:
+        original = self.commit_paths(
+            {".codex/agents/implementer.toml": codex_toml("original-model", "high")},
+            "original route",
+        )
+        replacement = self.commit_paths(
+            {".codex/agents/implementer.toml": codex_toml("replacement-model", "low")},
+            "replacement route",
+        )
+        self.git(self.repo, "replace", "-f", original, replacement)
+        status, stdout, stderr = self.invoke(
+            "resolve",
+            "--repo",
+            str(self.repo),
+            "--role",
+            "implementer",
+            "--head",
+            original,
+        )
+        self.assertEqual((status, stderr), (0, ""))
+        route = json.loads(stdout)
+        self.assertEqual((route["model"], route["effort"]), ("original-model", "high"))
 
     def test_review_final_committed_default_chain_recomputes_each_digest(self) -> None:
         head = self.commit_paths(

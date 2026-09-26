@@ -16,6 +16,12 @@ from codex_orchestrator import builders, journal
 
 class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestCase):
 
+    def _append_orchestrator_provenance(self, repo: Path, run_id: str) -> None:
+        builders.decision_add(
+            repo, run_id, idempotency_key=key(f"{run_id}-orchestrator-provenance"),
+            task="task-01", resolution="orchestrator-owned: terminal-control fixture", finding=None,
+            outcome=None, risk=None, basis=["terminal-control test setup"], binding_chain=None, binding_id=None)
+
     def _append_test_landing(
         self, repo: Path, run_id: str, chain_id: str
     ) -> dict[str, object]:
@@ -150,9 +156,9 @@ class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestC
         with self.api_environment():
             repo, run_id, run_binding = self._terminal_control_repo("abort-accepted")
             chain_id, state_path = self._write_bound_chain_state(
-                repo, run_id, run_binding=run_binding, outbox=None
-            )
+                repo, run_id, run_binding=run_binding, outbox=None)
             self._abort_bound_chain_fixture(repo, chain_id, state_path)
+            self._append_orchestrator_provenance(repo, run_id)
             with mock.patch.object(
                 builders,
                 "TERMINAL_CHAIN_CONTROLS",
@@ -559,8 +565,8 @@ class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestC
         with self.api_environment():
             repo, run_id, run_binding = self._terminal_control_repo("control-enumeration")
             self._write_bound_chain_state(
-                repo, run_id, run_binding=run_binding, outbox={"pending": True}
-            )
+                repo, run_id, run_binding=run_binding, outbox={"pending": True})
+            self._append_orchestrator_provenance(repo, run_id)
             with mock.patch.object(
                 builders,
                 "TERMINAL_CHAIN_CONTROLS",
@@ -568,14 +574,13 @@ class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestC
             ):
                 outcome = builders.task_finish(
                     repo, run_id, idempotency_key=key("no-enumeration"),
-                    task="task-01", status="complete",
-                )
+                    task="task-01", status="complete")
             self.assertEqual(outcome.records[0]["status"], "complete")
 
             repo, run_id, _run_binding = self._terminal_control_repo("control-lock")
             chain_id, _ = self._write_bound_chain_state(
-                repo, run_id, run_binding=None, outbox=None
-            )
+                repo, run_id, run_binding=None, outbox=None)
+            self._append_orchestrator_provenance(repo, run_id)
             lock = repo / ".forge/chains" / f".{chain_id}.events.lock"
             target = Path(self.temporary.name) / "hostile-chain-lock"
             target.write_text("foreign\n", encoding="utf-8")
@@ -594,14 +599,13 @@ class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestC
             ):
                 outcome = builders.task_finish(
                     repo, run_id, idempotency_key=key("without-lock"),
-                    task="task-01", status="complete",
-                )
+                    task="task-01", status="complete")
             self.assertEqual(outcome.records[0]["status"], "complete")
 
             repo, run_id, _run_binding = self._terminal_control_repo("control-binding")
             self._write_bound_chain_state(
-                repo, run_id, run_binding={"malformed": True}, outbox=None
-            )
+                repo, run_id, run_binding={"malformed": True}, outbox=None)
+            self._append_orchestrator_provenance(repo, run_id)
             with mock.patch.object(
                 builders,
                 "TERMINAL_CHAIN_CONTROLS",
@@ -609,14 +613,13 @@ class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestC
             ):
                 outcome = builders.task_finish(
                     repo, run_id, idempotency_key=key("without-binding"),
-                    task="task-01", status="complete",
-                )
+                    task="task-01", status="complete")
             self.assertEqual(outcome.records[0]["status"], "complete")
 
             repo, run_id, run_binding = self._terminal_control_repo("control-landing")
             self._write_bound_chain_state(
-                repo, run_id, run_binding=run_binding, outbox=None
-            )
+                repo, run_id, run_binding=run_binding, outbox=None)
+            self._append_orchestrator_provenance(repo, run_id)
             with mock.patch.object(
                 builders,
                 "TERMINAL_CHAIN_CONTROLS",
@@ -624,8 +627,7 @@ class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestC
             ):
                 outcome = builders.task_finish(
                     repo, run_id, idempotency_key=key("without-landing"),
-                    task="task-01", status="complete",
-                )
+                    task="task-01", status="complete")
             self.assertEqual(outcome.records[0]["status"], "complete")
 
             repo, run_id, run_binding = self._terminal_control_repo("control-outbox")
@@ -649,8 +651,7 @@ class Revision9TerminalBuilderTests(Revision9BuilderBatchSupport, unittest.TestC
             ):
                 outcome = builders.task_finish(
                     repo, run_id, idempotency_key=key("without-outbox"),
-                    task="task-01", status="complete",
-                )
+                    task="task-01", status="complete")
             self.assertEqual(outcome.records[0]["status"], "complete")
 
             repo, run_id, run_binding = self._terminal_control_repo("control-replay")

@@ -12,13 +12,15 @@ POLICIES = {
         encoding="utf-8"
     ),
 }
-DEFERRED_TO = {
-    "FR-245": "E/I/B",
-    "FR-246": "E",
-    "FR-247": "J",
-    "DM-018": "J/E",
+DEFERRED_MARKERS = {
+    "FR-245": "(Revision 15 authority; implementation deferred to chain E/I/B)",
+    "FR-246": "(Revision 15 authority; implementation deferred to chain E)",
+    "DM-018": (
+        "(Revision 15 authority; `review.request.route` implementation deferred "
+        "to chain E)"
+    ),
 }
-IMPLEMENTED = ("FR-244",)
+IMPLEMENTED = ("FR-244", "FR-247")
 NEW_CONTROL_PATHS = ("system/claude/**", "system/local/**")
 REVIEWER_PATTERNS = (
     ("agent-prompt-template", "system/claude/prompts/**"),
@@ -80,21 +82,19 @@ def assert_deferred_authority(specification: str) -> None:
     for requirement_id in IMPLEMENTED:
         block = requirement_block(specification, requirement_id)
         markers = re.findall(
-            r"\(Revision 15 authority; implementation deferred to chain [^)]+\)",
+            r"\(Revision 15 authority; (?:`[^`]+` )?implementation deferred "
+            r"to chain [^)]+\)",
             block,
         )
         if markers:
             raise AssertionError(
                 f"{requirement_id} retains deferral markers {markers!r}"
             )
-    for requirement_id, destination in DEFERRED_TO.items():
+    for requirement_id, expected in DEFERRED_MARKERS.items():
         block = requirement_block(specification, requirement_id)
-        expected = (
-            "(Revision 15 authority; implementation deferred "
-            f"to chain {destination})"
-        )
         markers = re.findall(
-            r"\(Revision 15 authority; implementation deferred to chain [^)]+\)",
+            r"\(Revision 15 authority; (?:`[^`]+` )?implementation deferred "
+            r"to chain [^)]+\)",
             block,
         )
         if markers != [expected]:
@@ -150,6 +150,51 @@ class SpecificationRevision15Tests(unittest.TestCase):
         )
         with self.assertRaisesRegex(AssertionError, "FR-244"):
             assert_deferred_authority(mutant)
+
+    def test_fr247_deferral_assertion_detects_its_reinsertion(self) -> None:
+        block = requirement_block(SPEC, "FR-247")
+        self.assertNotIn("implementation deferred to chain J", block)
+        mutant = SPEC.replace(
+            "**FR-247** (MUST): Task-completion provenance.",
+            "**FR-247** (MUST): Task-completion provenance "
+            "(Revision 15 authority; implementation deferred to chain J).",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "FR-247"):
+            assert_deferred_authority(mutant)
+
+    def test_chain_j_shipped_contracts_are_explicit(self) -> None:
+        dm018 = requirement_block(SPEC, "DM-018")
+        for literal in (
+            "emits both `route` and `orchestrator_model` on every new `run_started`",
+            "typed `run-open` unconditionally resolves all four launched roles",
+            "forge: routes file refused — malformed line 1",
+            "`when present` clauses retain compatibility only for historical records",
+            "uses exactly one of `var-unset`, `transcript-absent`, or `unreadable`",
+            "can never refuse typed `run-open`",
+            "forge: execution refused — role <role> has no frozen route in the run snapshot",
+        ):
+            self.assertIn(literal, dm018)
+        for helper in ("route_evidence.py", "route_provenance.py"):
+            self.assertIn(
+                f"`scripts/forge/{helper}`",
+                SPEC.split("## 6. Data Model", 1)[0],
+            )
+        self.assertIn(
+            "`route_source` is exactly `local`, `committed-default`, "
+            "`plugin-default`, or `unrecorded`, and `status` is exactly `local`, "
+            "`matched`, `mismatched`, or `unavailable`",
+            SPEC,
+        )
+        self.assertIn(
+            "Status `local` is produced when the recorded model or effort differs "
+            "from the committed default because a developer-local route was selected.",
+            SPEC,
+        )
+        self.assertEqual(
+            SPEC.count('"route_source":"plugin-default","run_id":"run-01"'), 2
+        )
+        self.assertIn("routing local/matched/mismatched/unavailable cases", SPEC)
 
     def test_fr244_amendments_pin_probe_and_review_final_defaults(self) -> None:
         block = requirement_block(SPEC, "FR-244")
@@ -214,11 +259,7 @@ class SpecificationRevision15Tests(unittest.TestCase):
         )
 
     def test_each_deferral_assertion_detects_its_removal(self) -> None:
-        for requirement_id, destination in DEFERRED_TO.items():
-            marker = (
-                "(Revision 15 authority; implementation deferred "
-                f"to chain {destination})"
-            )
+        for requirement_id, marker in DEFERRED_MARKERS.items():
             with self.subTest(requirement=requirement_id):
                 block = requirement_block(SPEC, requirement_id)
                 self.assertIn(marker, block)

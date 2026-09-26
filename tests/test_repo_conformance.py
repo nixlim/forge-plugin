@@ -19,6 +19,8 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts/forge") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts/forge"))
+import route_evidence  # noqa: E402
+import route_provenance  # noqa: E402
 import route_vocab  # noqa: E402
 
 POLICY_PATH = Path("forge-project.md")
@@ -36,6 +38,31 @@ class ConformanceError(RuntimeError):
 
 def git(repo: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(["git", *arguments], cwd=repo, check=False, capture_output=True)
+
+
+def committed_head(repo: Path) -> str:
+    return git(repo, "rev-parse", "HEAD").stdout.decode().strip()
+
+
+def fixture_run(repo: Path, records: list[dict] | tuple[dict, ...]) -> Path:
+    run_dir = repo / "run"
+    run_dir.mkdir()
+    journal = run_dir / "journal.jsonl"
+    journal.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    return run_dir
+
+
+def numbered_records(lines: list[str], errors: list[str]) -> list[tuple[int, dict[str, object]]]:
+    records = []
+    for line_number, line in enumerate(lines, 1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            errors.append(f"journal line {line_number}: invalid JSON: {exc.msg}")
+            continue
+        if isinstance(record, dict):
+            records.append((line_number, record))
+    return records
 
 
 def committed_text(repo: Path, revision: str, path: Path) -> str:
@@ -357,6 +384,8 @@ def recorded_authority(repo: Path, head: str, record: dict[str, object], line_nu
     prefix = f"journal line {line_number}: "
     if provider is None:
         return None, None, prefix + f"execution has unsupported provider {raw_provider!r}", None
+    if role is not None and route_evidence.projected_route_source(record) == "local":
+        return None, None, None, None
     if provider == "codex" and role in {"implementer", "review-cheap", "plan"}:
         authority_path = ROLE_PATHS[role]
     elif provider == "claude" and role == "review-final":
@@ -390,13 +419,14 @@ def check_run(repo: Path, run_dir: Path) -> tuple[list[str], list[str]]:
         lines = journal.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError) as exc:
         return [f"could not read {journal}: {exc}"], []
-    for line_number, line in enumerate(lines, 1):
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            errors.append(f"journal line {line_number}: invalid JSON: {exc.msg}")
-            continue
-        if not isinstance(record, dict) or record.get("type") != "execution":
+    numbered = numbered_records(lines, errors)
+    records = [record for _, record in numbered]
+    opening = records[0] if records else {}
+    model_evidence = opening.get("orchestrator_model")
+    observed = model_evidence.get("observed") if isinstance(model_evidence, dict) else None
+    orchestrator_family = route_vocab.model_family(observed) if isinstance(observed, str) else None
+    for line_number, record in numbered:
+        if record.get("type") != "execution":
             continue
         # CONTROL historical-routing-fields-fatal BEGIN
         invalid_fields = [
@@ -423,17 +453,41 @@ def check_run(repo: Path, run_dir: Path) -> tuple[list[str], list[str]]:
         if route_error is not None:
             errors.append(route_error)
             continue
-        if authority is None or authority_path is None:
-            continue
+        prefix = f"journal line {line_number}: agent {record.get('agent')!r}"
+        local = route_evidence.projected_route_source(record) == "local"
+        local_note = (
+            "developer-local selection "
+            f"(route_sha256 {record.get('route_sha256')})"
+        )
         recorded = record.get("model"), record.get("effort")
         # CONTROL historical-routing-finding BEGIN
-        if recorded != authority:
-            findings.append(
-                f"journal line {line_number}: agent {record.get('agent')!r} recorded "
+        if authority is not None and authority_path is not None and recorded != authority:
+            finding = (
+                f"{prefix} recorded "
                 f"model/effort {recorded!r}; expected model/effort {authority!r} "
                 f"from {head}:{authority_path}"
             )
+            findings.append(finding)
+        elif local:
+            findings.append(f"{prefix}; {local_note}")
         # CONTROL historical-routing-finding END
+        provider = route_vocab.canonical_provider(record.get("provider"))
+        role = route_vocab.canonical_role(record.get("role"), provider or "")
+        if role == "implementer" and record.get("sandbox") == "instruction-bounded":
+            findings.append(f"{prefix}; implementer ran instruction-bounded")
+        if (
+            role == "review-final"
+            and orchestrator_family is not None
+            and route_vocab.model_family(record.get("model")) == orchestrator_family
+        ):
+            findings.append(f"{prefix}; same-model binding review")
+    if route_provenance.route_aware(records):
+        findings.extend(
+            f"task {task_id!r}: orchestrator-owned completion"
+            for task_id in route_provenance.complete_tasks(records)
+            if route_provenance.completion_provenance(records, task_id)
+            == route_provenance.ORCHESTRATOR_OWNED
+        )
     return errors, findings
 
 
@@ -732,15 +786,10 @@ class RepoConformanceTests(unittest.TestCase):
 
     def test_historical_route_mismatches_are_all_reported_and_nonfatal(self) -> None:
         repo = self.fixture_repo()
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, capture_output=True
-        ).stdout.strip()
-        run_dir = repo / "run"
-        run_dir.mkdir()
-        (run_dir / "journal.jsonl").write_text(
-            "\n".join(
-                json.dumps(record)
-                for record in (
+        head = committed_head(repo)
+        run_dir = fixture_run(
+            repo,
+            (
                     {"type": "run_started"},
                     {
                         "type": "execution",
@@ -763,10 +812,7 @@ class RepoConformanceTests(unittest.TestCase):
                         "model": "fable",
                         "effort": "medium",
                     },
-                )
-            )
-            + "\n",
-            encoding="utf-8",
+            ),
         )
         expected = [
             (
@@ -799,15 +845,7 @@ class RepoConformanceTests(unittest.TestCase):
 
     def test_malformed_historical_route_fields_refuse_without_findings(self) -> None:
         repo = self.fixture_repo()
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo,
-            check=True,
-            text=True,
-            capture_output=True,
-        ).stdout.strip()
-        run_dir = repo / "run"
-        run_dir.mkdir()
+        head = committed_head(repo)
         base = {
             "type": "execution",
             "agent": "codex-review-01",
@@ -827,10 +865,7 @@ class RepoConformanceTests(unittest.TestCase):
             record = dict(base)
             record[field] = value
             records.append(record)
-        (run_dir / "journal.jsonl").write_text(
-            "".join(json.dumps(record) + "\n" for record in records),
-            encoding="utf-8",
-        )
+        run_dir = fixture_run(repo, records)
 
         errors, findings = check_run(repo, run_dir)
 
@@ -863,16 +898,9 @@ class RepoConformanceTests(unittest.TestCase):
                 "test_current_route_mismatch_refuses_at_cli_boundary",
             ),
             "historical-routing-finding": (
-                "        if recorded != authority:\n"
-                "            findings.append(\n"
-                "                f\"journal line {line_number}: agent "
-                "{record.get('agent')!r} recorded \"\n"
-                "                f\"model/effort {recorded!r}; expected "
-                "model/effort {authority!r} \"\n"
-                "                f\"from {head}:{authority_path}\"\n"
-                "            )\n",
-                "        if recorded != authority:\n"
-                "            pass\n",
+                "        if authority is not None and authority_path is not None "
+                "and recorded != authority:\n",
+                "        if False:\n",
                 "test_historical_route_mismatches_are_all_reported_and_nonfatal",
             ),
             "historical-routing-fields-fatal": (
@@ -919,13 +947,10 @@ class RepoConformanceTests(unittest.TestCase):
 
     def test_historical_audit_uses_route_committed_at_execution_head(self) -> None:
         repo = self.fixture_repo()
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, capture_output=True
-        ).stdout.strip()
-        run_dir = repo / "run"
-        run_dir.mkdir()
-        (run_dir / "journal.jsonl").write_text(
-            json.dumps(
+        head = committed_head(repo)
+        run_dir = fixture_run(
+            repo,
+            [
                 {
                     "type": "execution",
                     "agent": "codex-review-01",
@@ -936,9 +961,7 @@ class RepoConformanceTests(unittest.TestCase):
                     "model": "gpt-5.6-sol",
                     "effort": "medium",
                 }
-            )
-            + "\n",
-            encoding="utf-8",
+            ],
         )
 
         errors, findings = check_run(repo, run_dir)
@@ -959,13 +982,10 @@ class RepoConformanceTests(unittest.TestCase):
         subprocess.run(
             ["git", "commit", "-q", "-m", "remove authority"], cwd=repo, check=True
         )
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, capture_output=True
-        ).stdout.strip()
-        run_dir = repo / "run"
-        run_dir.mkdir()
-        (run_dir / "journal.jsonl").write_text(
-            json.dumps(
+        head = committed_head(repo)
+        run_dir = fixture_run(
+            repo,
+            [
                 {
                     "type": "execution",
                     "agent": "codex-review-01",
@@ -976,9 +996,7 @@ class RepoConformanceTests(unittest.TestCase):
                     "model": "gpt-5.6-sol",
                     "effort": "high",
                 }
-            )
-            + "\n",
-            encoding="utf-8",
+            ],
         )
 
         errors, findings = check_run(repo, run_dir)
@@ -989,9 +1007,7 @@ class RepoConformanceTests(unittest.TestCase):
 
     def test_historical_audit_ignores_later_authority_changes(self) -> None:
         repo = self.fixture_repo()
-        old_head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, capture_output=True
-        ).stdout.strip()
+        old_head = committed_head(repo)
         route = repo / REVIEWER_PATH
         route.write_text(
             route.read_text(encoding="utf-8").replace(
@@ -1002,10 +1018,9 @@ class RepoConformanceTests(unittest.TestCase):
         )
         subprocess.run(["git", "add", str(REVIEWER_PATH)], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "new routing"], cwd=repo, check=True)
-        run_dir = repo / "run"
-        run_dir.mkdir()
-        (run_dir / "journal.jsonl").write_text(
-            json.dumps(
+        run_dir = fixture_run(
+            repo,
+            [
                 {
                     "type": "execution",
                     "agent": "codex-review-01",
@@ -1016,9 +1031,7 @@ class RepoConformanceTests(unittest.TestCase):
                     "model": "gpt-5.6-sol",
                     "effort": "high",
                 }
-            )
-            + "\n",
-            encoding="utf-8",
+            ],
         )
 
         self.assertEqual(check_run(repo, run_dir), ([], []))
@@ -1027,13 +1040,10 @@ class RepoConformanceTests(unittest.TestCase):
         self,
     ) -> None:
         repo = self.fixture_repo()
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, capture_output=True
-        ).stdout.strip()
-        run_dir = repo / "run"
-        run_dir.mkdir()
-        (run_dir / "journal.jsonl").write_text(
-            json.dumps(
+        head = committed_head(repo)
+        run_dir = fixture_run(
+            repo,
+            [
                 {
                     "type": "execution",
                     "agent": "claude-review-final",
@@ -1044,9 +1054,7 @@ class RepoConformanceTests(unittest.TestCase):
                     "model": "fable",
                     "effort": "high",
                 }
-            )
-            + "\n",
-            encoding="utf-8",
+            ],
         )
 
         self.assertEqual(check_run(repo, run_dir), ([], []))
@@ -1069,13 +1077,10 @@ class RepoConformanceTests(unittest.TestCase):
 
     def test_historical_audit_fails_closed_for_unclassified_provider(self) -> None:
         repo = self.fixture_repo()
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo, check=True, text=True, capture_output=True
-        ).stdout.strip()
-        run_dir = repo / "run"
-        run_dir.mkdir()
-        (run_dir / "journal.jsonl").write_text(
-            json.dumps(
+        head = committed_head(repo)
+        run_dir = fixture_run(
+            repo,
+            [
                 {
                     "type": "execution",
                     "agent": "mystery-review",
@@ -1084,9 +1089,7 @@ class RepoConformanceTests(unittest.TestCase):
                     "model": "gpt-5.6-sol",
                     "effort": "high",
                 }
-            )
-            + "\n",
-            encoding="utf-8",
+            ],
         )
 
         errors, findings = check_run(repo, run_dir)

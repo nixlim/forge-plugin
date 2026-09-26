@@ -1323,7 +1323,7 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         mutant_root = self.scratch / "owner-mutant"
         shutil.copytree(ROOT / "scripts" / "codex_orchestrator", mutant_root / "codex_orchestrator")
         (mutant_root / "forge").mkdir()
-        for dependency in ("commitment_paths.py", "route_vocab.py"):
+        for dependency in ("commitment_paths.py", "route_config.py", "route_config_git.py", "route_config_probe.py", "route_evidence.py", "route_provenance.py", "route_vocab.py"):
             shutil.copy2(ROOT / "scripts/forge" / dependency, mutant_root / "forge" / dependency)
         shutil.copy2(ORCH_TOOLS, mutant_root / "codex_orch_tools.py")
         mutant_journal = mutant_root / "codex_orchestrator" / "journal.py"
@@ -1411,7 +1411,7 @@ class D13ConcurrentRepositoryHarnessTests(unittest.TestCase):
         mutant_root = self.scratch / "identity-mutant"
         shutil.copytree(ROOT / "scripts/codex_orchestrator", mutant_root / "codex_orchestrator")
         (mutant_root / "forge").mkdir()
-        for dependency in ("commitment_paths.py", "route_vocab.py"):
+        for dependency in ("commitment_paths.py", "route_config.py", "route_config_git.py", "route_config_probe.py", "route_evidence.py", "route_provenance.py", "route_vocab.py"):
             shutil.copy2(ROOT / "scripts/forge" / dependency, mutant_root / "forge" / dependency)
         shutil.copy2(ORCH_TOOLS, mutant_root / "codex_orch_tools.py")
         mutant_journal = mutant_root / "codex_orchestrator/journal.py"

@@ -27,6 +27,8 @@ FORGE_SCRIPTS = Path(__file__).resolve().parents[1] / "forge"
 if str(FORGE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(FORGE_SCRIPTS))
 
+import route_evidence  # noqa: E402
+import route_provenance  # noqa: E402, F401
 import route_vocab  # noqa: E402
 from commitment_paths import (  # noqa: E402
     iter_record_citations, path_tokens,
@@ -1860,8 +1862,7 @@ def _validate_proposed_record(
     if "schema" not in NEW_WRITE_VALIDATION_CONTROLS:
         return candidate
 
-    kind = str(candidate["type"])
-    activated = _writer_contract_active(prior_records)
+    kind, activated = str(candidate["type"]), _writer_contract_active(prior_records)
     if "recorded_at" not in candidate:
         _invalid_record_field(kind, "recorded_at", "is required")
     recorded_at = candidate.get("recorded_at")
@@ -1882,8 +1883,7 @@ def _validate_proposed_record(
         if "run_id" not in candidate:
             _invalid_record_field(kind, "run_id", "is required")
         _required_string(candidate, kind, "goal")
-        repository = _required_string(candidate, kind, "repo", nonempty=False)
-        repository_path = Path(repository)
+        repository_path = Path(_required_string(candidate, kind, "repo", nonempty=False))
         if not repository_path.is_absolute():
             _invalid_record_field(kind, "repo", "must be an absolute path")
         try:
@@ -1915,6 +1915,7 @@ def _validate_proposed_record(
                 _invalid_record_field(
                     kind, "writer_contract", f"must be exactly {WRITER_CONTRACT}"
                 )
+        route_evidence.validate_run_started(candidate, historical=_historical_replay is _HISTORICAL_REPLAY, refusal=CoordinationRefusal)
         return candidate
 
     if kind == "task":
@@ -1982,17 +1983,12 @@ def _validate_proposed_record(
                 _invalid_record_field(kind, field, requirement)
         for field in ("prompt", "handoff", "event_source"):
             _required_string(candidate, kind, field)
-        # FR-019 readers do not reinterpret persisted route vocabulary.  Only
-        # archive recovery holds this identity; every writer takes the branch.
+        # FR-019 historical replay preserves record shape without applying new
+        # route vocabulary, trio, or run-snapshot controls.
         if _historical_replay is not _HISTORICAL_REPLAY:
-            try:
-                route_vocab.validate_new_write(role=candidate["role"], provider=candidate["provider"], mode=candidate["mode"], event_source=candidate["event_source"])
-            except route_vocab.NewWriteRefusal as exc:
-                raise CoordinationRefusal("forge: journal append refused — invalid journal record: " + str(exc)) from None
-        if "sandbox" in candidate:
-            sandbox = _required_string(candidate, kind, "sandbox")
-            if _historical_replay is not _HISTORICAL_REPLAY and sandbox not in route_vocab.SANDBOX_IDS:
-                _invalid_record_field(kind, "sandbox", "must be one of " + ", ".join(route_vocab.SANDBOX_IDS))
+            route_evidence.validate_execution(candidate, prior_records, historical=False, refusal=CoordinationRefusal)
+        elif "sandbox" in candidate:
+            _required_string(candidate, kind, "sandbox")
         if "events" in candidate:
             _required_string(candidate, kind, "events", nonempty=candidate.get("event_source") == "exec")
         elif candidate.get("event_source") == "exec":
@@ -2046,8 +2042,7 @@ def _validate_proposed_record(
         return candidate
 
     if kind == "decision":
-        decision_id = _required_string(candidate, kind, "id")
-        resolution = _required_string(candidate, kind, "resolution")
+        decision_id, resolution = _required_string(candidate, kind, "id"), _required_string(candidate, kind, "resolution")
         for field in ("task", "finding", "outcome", "risk"):
             if field in candidate and not isinstance(candidate.get(field), str):
                 _invalid_record_field(kind, field, "must be a string")

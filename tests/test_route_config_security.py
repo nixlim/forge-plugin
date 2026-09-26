@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import errno
+import gc
 import hashlib
 import json
 import os
+import signal
 import stat
+import subprocess
+import sys
 import time
+import warnings
 from unittest import mock
 
 from tests.test_route_config_support import (
@@ -44,6 +49,55 @@ schema = "forge-routes/1"
 
 
 class RouteSecurityMixin:
+    def _assert_git_timeout_reaped_without_resource_warning(self) -> None:
+        fake_git = self.fake_executable("git", "trap '' TERM\nsleep 10\n")
+        real_popen = subprocess.Popen
+        processes: list[subprocess.Popen[bytes]] = []
+
+        class DelayedReapPopen(real_popen):  # type: ignore[misc]
+            def wait(self, timeout: float | None = None) -> int:
+                if timeout is not None:
+                    raise subprocess.TimeoutExpired(self.args, timeout)
+                return super().wait(timeout)
+
+            def kill(self) -> None:
+                try:
+                    os.kill(self.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+        def launch(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = DelayedReapPopen(*args, **kwargs)  # type: ignore[arg-type]
+            processes.append(process)
+            return process
+
+        unraisable: list[object] = []
+        environment = {"PATH": f"{fake_git.parent}:/usr/bin:/bin"}
+        with (
+            warnings.catch_warnings(),
+            mock.patch.object(sys, "unraisablehook", unraisable.append),
+            mock.patch.dict(os.environ, environment),
+            mock.patch.object(route_config, "GIT_TIMEOUT_SECONDS", 0.01),
+            mock.patch.object(route_config_git.subprocess, "Popen", side_effect=launch),
+        ):
+            warnings.simplefilter("error", ResourceWarning)
+            with self.assertRaisesRegex(
+                route_config.RouteRefusal,
+                "^forge: routes file refused — git timed out$",
+            ):
+                route_config._git(self.repo, "status")
+            self.assertEqual(len(processes), 1)
+            self.assertIsNotNone(processes[0].returncode)
+            self.assertTrue(processes[0].stdout is not None and processes[0].stdout.closed)
+            processes.clear()
+            gc.collect()
+        resource_warnings = [
+            event
+            for event in unraisable
+            if isinstance(getattr(event, "exc_value", None), ResourceWarning)
+        ]
+        self.assertEqual(resource_warnings, [])
+
     def test_owner_only_and_read_only_modes_follow_the_write_bit_mask(self) -> None:
         for mode in (0o600, 0o400, 0o644):
             with self.subTest(mode=oct(mode)):
@@ -168,14 +222,41 @@ class RouteSecurityMixin:
             "GIT_ALTERNATE_OBJECT_DIRECTORIES",
             "GIT_CEILING_DIRECTORIES",
             "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+            "GIT_REPLACE_REF_BASE",
+            "GIT_LITERAL_PATHSPECS",
+            "GIT_GLOB_PATHSPECS",
+            "GIT_NOGLOB_PATHSPECS",
+            "GIT_ICASE_PATHSPECS",
+            "GIT_ATTR_NOSYSTEM",
+            "GIT_ATTR_SOURCE",
         }
         self.assertEqual(route_config_git.SCRUBBED_GIT_ENVIRONMENT, expected)
         injected = {name: f"sentinel-{name}" for name in expected}
+        injected.update(
+            {
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.excludesfile",
+                "GIT_CONFIG_VALUE_0": "sentinel-excludes",
+                "GIT_NO_REPLACE_OBJECTS": "0",
+            }
+        )
         injected["FORGE_KEEP_ME"] = "preserved"
         with mock.patch.dict(os.environ, injected):
             environment = route_config_git._git_environment()
         self.assertTrue(expected.isdisjoint(environment))
+        self.assertFalse(any(name.startswith("GIT_CONFIG_") for name in environment))
+        self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
         self.assertEqual(environment["FORGE_KEEP_ME"], "preserved")
+        ambient_excludes = self.scratch / "ambient-excludes"
+        ambient_excludes.write_bytes(route_config.EXCLUDE_LINE + b"\n")
+        self.write_routes(route_text(), ignored=False)
+        injected = {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.excludesfile",
+            "GIT_CONFIG_VALUE_0": str(ambient_excludes),
+        }
+        with mock.patch.dict(os.environ, injected):
+            self.assert_route_refusal("unignored")
 
     def test_git_timeouts_are_bounded_and_contextual(self) -> None:
         self.assertEqual(route_config.GIT_TIMEOUT_SECONDS, 30)
@@ -208,6 +289,7 @@ class RouteSecurityMixin:
         self.assertLess(time.monotonic() - started, 1.0)
         time.sleep(0.4)
         self.assertFalse(survivor.exists())
+        self._assert_git_timeout_reaped_without_resource_warning()
 
     def test_missing_file_is_default_resolution_and_check_reports_both_states(self) -> None:
         resolution = self.load()
@@ -286,6 +368,13 @@ class RouteSecurityMixin:
             route_config.init_routes(self.repo)
         self.assertFalse((outside / "routes.toml").exists())
 
+    def test_init_directory_creation_error_has_init_diagnostic(self) -> None:
+        denied = PermissionError(errno.EACCES, "injected directory refusal")
+        with mock.patch.object(route_config.os, "mkdir", side_effect=denied):
+            status, stdout, stderr = self.invoke("init", "--repo", str(self.repo))
+        self.assertEqual((status, stdout), (1, ""))
+        self.assertEqual(stderr, "forge: route init refused — unreadable\n")
+
     def test_init_rolls_back_route_when_exclude_update_fails(self) -> None:
         destination = self.repo / ".forge/local/routes.toml"
         with mock.patch.object(
@@ -293,7 +382,10 @@ class RouteSecurityMixin:
             "_update_exclude",
             side_effect=OSError(errno.EIO, "injected exclude failure"),
         ):
-            with self.assertRaises(OSError):
+            with self.assertRaisesRegex(
+                route_config.RouteRefusal,
+                "^forge: route init refused — unreadable$",
+            ):
                 route_config.init_routes(self.repo)
         self.assertFalse(os.path.lexists(destination))
         self.assertEqual(route_config.init_routes(self.repo), destination)
@@ -315,7 +407,10 @@ class RouteSecurityMixin:
             real_write_all(descriptor, data)
 
         with mock.patch.object(route_config, "_write_all", side_effect=fail_second_write):
-            with self.assertRaises(OSError):
+            with self.assertRaisesRegex(
+                route_config.RouteRefusal,
+                "^forge: route init refused — unreadable$",
+            ):
                 route_config.init_routes(self.repo)
         self.assertEqual(exclude.read_bytes(), original)
         self.assertFalse(os.path.lexists(destination))
