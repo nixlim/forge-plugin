@@ -90,10 +90,10 @@ JOURNAL_OUTBOX_PENDING = (
 RUN_CLOSE_VALIDATION_REFUSAL = (
     "forge: journal builder refused — passing run validation failed"
 )
-# Activation scans cap states well above the observed 89,294-byte maximum and
-# full event histories above the observed 4,258,703-byte maximum.
+# Caps are well above observed maxima: state 196,080 bytes and event history 8,433,733 bytes
+# (2026-09-27); bead forge-plugin-6f70 tracks per-event snapshot growth.
 _ACTIVATION_STATE_CAP_BYTES = 1_048_576
-_ACTIVATION_EVENTS_CAP_BYTES = 8_388_608
+_ACTIVATION_EVENTS_CAP_BYTES = 67_108_864
 _ACTIVATION_EVENT_ONE_CAP_BYTES = 65_536
 
 # DM-014 events are deltas, not the full-state snapshots carried by DM-012.
