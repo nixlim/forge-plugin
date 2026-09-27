@@ -24,6 +24,7 @@ INCONCLUSIVE_TEMPLATE = (
 )
 NO_HEURISTIC_TEMPLATE = "forge: no seeded assertion heuristic for {stack} — advisory only"
 WAIVER_TEMPLATE = "forge: assertion waiver: {path}: {reason}"
+DELETED_TEMPLATE = "forge: deleted test path skipped: {path}"
 
 ASSERTION_HEURISTIC_RE = re.compile(r"^Assertion heuristic: (regex|literal): `([^`]+)`$")
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
@@ -842,14 +843,22 @@ def check_files(
     if not path_labels:
         raise CheckFailure("no test files supplied")
 
-    seen: set[str] = set()
+    output: list[str] = []
     inputs: list[tuple[str, Path, str, str | None]] = []
-    for path_label in path_labels:
-        if path_label in seen:
-            continue
-        seen.add(path_label)
+    for path_label in dict.fromkeys(path_labels):
         path = Path(path_label)
         if not path.is_file():
+            # A deletion is absence only (lstat ENOENT/ENOTDIR; a final symlink is
+            # not followed) of a printable, relative, non-option label, the shape
+            # git-derived touched paths take. A newline-joined argv list (GH#18),
+            # an absolute or option-shaped label, any other lstat error, and a
+            # present non-file all stay exit 2 (FR-144 malformed input).
+            try:
+                path.lstat()
+            except (FileNotFoundError, NotADirectoryError):
+                if path_label.isprintable() and not path_label.startswith(("-", "/")):
+                    output.append(DELETED_TEMPLATE.format(path=path_label))
+                    continue
             raise CheckFailure("test path is not a file")
         is_python = path.suffix.lower() == ".py"
         if is_python:
@@ -862,7 +871,6 @@ def check_files(
         inputs.append((path_label, path, source, waiver))
 
     rules = parse_stack_rules(stacks_file)
-    output: list[str] = []
     blocking = False
 
     for path_label, path, source, waiver in inputs:
@@ -931,10 +939,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.stacks_file,
             args.stack_override,
         )
-    except CheckFailure:
-        print(FAILURE_MESSAGE, file=sys.stderr)
-        return 2
-    except Exception:
+    except Exception:  # CheckFailure included
         # FR-144 requires tool failures to have one stable, fail-closed diagnostic.
         print(FAILURE_MESSAGE, file=sys.stderr)
         return 2
