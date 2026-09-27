@@ -1986,7 +1986,7 @@ def _validate_proposed_record(
         # FR-019 historical replay preserves record shape without applying new
         # route vocabulary, trio, or run-snapshot controls.
         if _historical_replay is not _HISTORICAL_REPLAY:
-            route_evidence.validate_execution(candidate, prior_records, historical=False, refusal=CoordinationRefusal)
+            route_evidence.validate_execution(candidate, prior_records, refusal=CoordinationRefusal)
         elif "sandbox" in candidate:
             _required_string(candidate, kind, "sandbox")
         if "events" in candidate:

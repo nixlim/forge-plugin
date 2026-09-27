@@ -6,8 +6,9 @@ import hashlib
 import json
 import os
 import re
+import stat
 from pathlib import Path
-from typing import NoReturn
+from typing import BinaryIO, NoReturn
 
 import route_config
 import route_vocab
@@ -18,6 +19,7 @@ EXECUTION_ROUTE_SOURCES = ROUTE_SOURCES | {"unrecorded"}
 EXECUTION_ROUTE_TRIO = ("sandbox", "route_source", "route_sha256")
 ORCHESTRATOR_REASONS = frozenset(("var-unset", "transcript-absent", "unreadable"))
 TRANSCRIPT_TAIL_BYTES = 1024 * 1024
+TRANSCRIPT_OPEN_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 EXECUTION_ROUTE_FIELDS_TO_COMPARE = (
     "provider",
@@ -68,8 +70,21 @@ def _as_transcript_record(value: object) -> dict[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
+def _open_transcript(path: Path) -> BinaryIO:
+    descriptor = os.open(path, TRANSCRIPT_OPEN_FLAGS)
+    try:
+        regular = stat.S_ISREG(os.fstat(descriptor).st_mode)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    if not regular:
+        os.close(descriptor)
+        raise OSError("transcript is not a regular file")
+    return os.fdopen(descriptor, "rb")
+
+
 def _last_transcript_model(path: Path) -> str | None:
-    with path.open("rb") as stream:
+    with _open_transcript(path) as stream:
         stream.seek(0, os.SEEK_END)
         end = stream.tell()
         start = max(0, end - TRANSCRIPT_TAIL_BYTES)
@@ -287,17 +302,9 @@ def validate_execution(
     record: dict[str, object],
     prior_records: tuple[dict[str, object], ...],
     *,
-    historical: bool,
     refusal: type[Exception] = RuntimeError,
 ) -> None:
-    """Validate the execution route trio and compare it with the run snapshot."""
-
-    if historical:
-        if "sandbox" in record and (
-            not isinstance(record.get("sandbox"), str) or not record.get("sandbox")
-        ):
-            _refuse("execution.sandbox must be a nonempty string", refusal)
-        return
+    """Validate a new execution write's route vocabulary, trio, and snapshot match."""
     try:
         route_vocab.validate_new_write(
             role=str(record["role"]),
@@ -313,8 +320,14 @@ def validate_execution(
     if snapshot is None:
         return
     provider = str(record["provider"])
-    role = route_vocab.canonical_role(str(record["role"]), provider)
-    assert role is not None
+    raw_role = str(record["role"])
+    role = route_vocab.canonical_role(raw_role, provider)
+    if role is None:
+        _refuse(
+            f"execution role {raw_role!r} is not canonical; use one of "
+            + ", ".join(route_vocab.ROLE_IDS),
+            refusal,
+        )
     expected = _snapshot_route(snapshot, role, refusal)
     for field in EXECUTION_ROUTE_FIELDS_TO_COMPARE:
         if record.get(field) != expected.get(field):
