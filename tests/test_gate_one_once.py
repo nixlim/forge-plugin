@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,9 +24,74 @@ ROOT = Path(__file__).resolve().parents[1]
 CHAIN_CORE = package_module("chain_core")
 GATE_EVIDENCE = package_module("chain_core._gate_evidence")
 POLICY_BYTES = (ROOT / "forge-project.md").read_bytes()
+RISK_TIER = ROOT / "scripts/forge/risk_tier.py"
+TYPE_BASELINE = ".refactor/type-baseline.json"
+TYPE_BASELINE_TRIGGER_ROW = (
+    "| `.refactor/type-baseline.json` | binding review and explicit operator approval "
+    "(type-check ratchet strength authority) |"
+)
 
 CANDIDATE = "a" * 64
 OTHER = "b" * 64
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    ).stdout.strip()
+
+
+def classifier_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(
+            None,
+            (str(ROOT / "scripts/forge"), environment.get("PYTHONPATH", "")),
+        )
+    )
+    return environment
+
+
+def classify_type_baseline(
+    policy_bytes: bytes,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, object] | None]:
+    with tempfile.TemporaryDirectory() as directory:
+        repo = Path(directory)
+        git(repo, "init", "-q")
+        git(repo, "config", "user.name", "Forge Test")
+        git(repo, "config", "user.email", "forge@example.test")
+        (repo / "forge-project.md").write_bytes(policy_bytes)
+        baseline = repo / TYPE_BASELINE
+        baseline.parent.mkdir(parents=True)
+        baseline.write_text('{"revision": 1}\n', encoding="utf-8")
+        git(repo, "add", "forge-project.md", TYPE_BASELINE)
+        git(repo, "commit", "-qm", "policy")
+        policy_sha = git(repo, "rev-parse", "HEAD")
+        baseline.write_text('{"revision": 2}\n', encoding="utf-8")
+        git(repo, "add", TYPE_BASELINE)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(RISK_TIER),
+                "--repo",
+                str(repo),
+                "--policy-sha",
+                policy_sha,
+                "--staged",
+            ],
+            cwd=repo,
+            env=classifier_environment(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    payload = json.loads(result.stdout) if result.stdout else None
+    return result, payload
 
 
 def docs_evidence(path: str = "docs/guide.md", **overrides: object) -> dict[str, object]:
@@ -225,6 +294,46 @@ class CommittedPolicyPinsTests(unittest.TestCase):
         self.assertIsInstance(baseline["errors"], dict)
         self.assertEqual(baseline["total"], sum(baseline["errors"].values()))
         self.assertTrue(all("::" in key for key in baseline["errors"]))
+
+    def test_type_baseline_is_control_class_and_has_an_approval_trigger(self) -> None:
+        risk_tier = load_script("risk_tier_type_baseline_pin", RISK_TIER)
+        text = POLICY_BYTES.decode("utf-8")
+        policy = risk_tier.parse_policy(text, "0" * 40)
+        control_patterns = [
+            patterns for category, patterns in policy.category_rows if category == "control"
+        ]
+        self.assertEqual(len(control_patterns), 1)
+        self.assertIn(TYPE_BASELINE, control_patterns[0])
+        trigger_lines = risk_tier.regions(text)["project-triggers"].splitlines()
+        self.assertEqual(trigger_lines.count(TYPE_BASELINE_TRIGGER_ROW), 1)
+
+    def test_type_baseline_control_pattern_sets_the_hard_tier(self) -> None:
+        result, payload = classify_type_baseline(POLICY_BYTES)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertEqual(payload["derived_tier"], "hard")
+        paths = payload["paths"]
+        self.assertIsInstance(paths, list)
+        self.assertEqual(len(paths), 1)
+        path = paths[0]
+        self.assertIs(path["control_floor"], True)
+        self.assertIn("control", path["categories"])
+
+        marker = b", `.refactor/type-baseline.json`"
+        self.assertEqual(POLICY_BYTES.count(marker), 1)
+        mutant_policy = POLICY_BYTES.replace(marker, b"", 1)
+        mutant_result, mutant = classify_type_baseline(mutant_policy)
+        self.assertEqual(mutant_result.returncode, 0, mutant_result.stderr)
+        self.assertIsNotNone(mutant)
+        assert mutant is not None
+        self.assertEqual(mutant["derived_tier"], "standard")
+        mutant_paths = mutant["paths"]
+        self.assertIsInstance(mutant_paths, list)
+        self.assertEqual(len(mutant_paths), 1)
+        mutant_path = mutant_paths[0]
+        self.assertIs(mutant_path["control_floor"], False)
+        self.assertEqual(mutant_path["categories"], ["config"])
 
     def test_changelog_is_in_the_fast_tier_row(self) -> None:
         risk_tier = load_script("risk_tier_gate_once", ROOT / "scripts/forge/risk_tier.py")

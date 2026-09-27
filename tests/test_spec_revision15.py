@@ -26,6 +26,14 @@ REVIEWER_PATTERNS = (
     ("agent-prompt-template", "system/claude/prompts/**"),
     ("reviewer-routing", "scripts/forge/forge_cli/app/**"),
     ("reviewer-routing", "system/local/**"),
+    ("reviewer-routing", "scripts/forge/route_config.py"),
+    ("reviewer-routing", "scripts/forge/route_config_git.py"),
+    ("reviewer-routing", "scripts/forge/route_config_probe.py"),
+    ("reviewer-routing", "scripts/forge/route_vocab.py"),
+    ("model-provider-version", "scripts/forge/route_config.py"),
+    ("model-provider-version", "scripts/forge/route_config_git.py"),
+    ("model-provider-version", "scripts/forge/route_config_probe.py"),
+    ("model-provider-version", "scripts/forge/route_vocab.py"),
 )
 
 
@@ -287,21 +295,60 @@ class SpecificationRevision15Tests(unittest.TestCase):
 
     def test_reviewer_pattern_assertions_detect_coherent_removal(self) -> None:
         removals = {
-            "system/claude/prompts/**": ("system/claude/prompts/**, ", ""),
-            "scripts/forge/forge_cli/app/**": (
+            ("agent-prompt-template", "system/claude/prompts/**"): (
+                "system/claude/prompts/**, ",
+                "",
+            ),
+            ("reviewer-routing", "scripts/forge/forge_cli/app/**"): (
                 "scripts/forge/forge_cli/app/**, ",
                 "",
             ),
-            "system/local/**": (", system/local/** |", " |"),
+            ("reviewer-routing", "system/local/**"): (", system/local/** |", " |"),
+            ("reviewer-routing", "scripts/forge/route_config.py"): (
+                "app/**, scripts/forge/route_config.py, ",
+                "app/**, ",
+            ),
+            ("reviewer-routing", "scripts/forge/route_config_git.py"): (
+                "app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, ",
+                "app/**, scripts/forge/route_config.py, ",
+            ),
+            ("reviewer-routing", "scripts/forge/route_config_probe.py"): (
+                "scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py, system/",
+                "scripts/forge/route_vocab.py, system/",
+            ),
+            ("reviewer-routing", "scripts/forge/route_vocab.py"): (
+                "scripts/forge/route_vocab.py, system/local/** |",
+                "system/local/** |",
+            ),
+            ("model-provider-version", "scripts/forge/route_config.py"): (
+                "engine/**, scripts/forge/route_config.py, ",
+                "engine/**, ",
+            ),
+            ("model-provider-version", "scripts/forge/route_config_git.py"): (
+                "engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, ",
+                "engine/**, scripts/forge/route_config.py, ",
+            ),
+            ("model-provider-version", "scripts/forge/route_config_probe.py"): (
+                "scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py |",
+                "scripts/forge/route_vocab.py |",
+            ),
+            ("model-provider-version", "scripts/forge/route_vocab.py"): (
+                ", scripts/forge/route_vocab.py |",
+                " |",
+            ),
         }
-        for pattern, (old, new) in removals.items():
-            with self.subTest(pattern=pattern):
+        self.assertEqual(sorted(removals), sorted(REVIEWER_PATTERNS))
+        for (control, pattern), (old, new) in removals.items():
+            with self.subTest(control=control, pattern=pattern):
+                for label, document in (("spec", SPEC), *POLICIES.items()):
+                    self.assertEqual(document.count(old), 1, label)
                 mutant_spec = SPEC.replace(old, new, 1)
                 mutant_policies = {
                     label: document.replace(old, new, 1)
                     for label, document in POLICIES.items()
                 }
-                with self.assertRaisesRegex(AssertionError, re.escape(pattern)):
+                message = re.escape(f"canonical {control} lacks {pattern}")
+                with self.assertRaisesRegex(AssertionError, message):
                     assert_trigger_controls(mutant_spec, mutant_policies)
 
     def test_path_row_assertions_detect_each_removal(self) -> None:

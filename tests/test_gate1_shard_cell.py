@@ -8,8 +8,9 @@ synthetic test trees, so the fail-closed semantics are proved without running th
 
 The cell's host guards (the ``/dev/shm/agents-sem/gate`` slot and the ``/proc/pressure/cpu``
 wait) are re-entrant through ``FORGE_GATE1_NESTED=1``, which the cell exports to every module
-process. These tests set it explicitly so a standalone run never takes the host slot the
-enclosing gate may already hold, and pin the guard text statically instead.
+process. These tests set it explicitly except for the PSI test. That test unsets it, denies the
+gate slot through a sitecustomize ``mkdir`` patch, and proves an unreadable pressure file ends
+the wait.
 """
 
 from __future__ import annotations
@@ -39,6 +40,45 @@ def gate1_cell() -> str:
 PASSING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(True)\n"
 FAILING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_bad(self):\n        self.fail('bad')\n"
 EMPTY_SHELL = '"""Retained shell after a test split: collects no test."""\n'
+PSI_GUARDED_BLOCK = """\
+        try:
+            reading = pressure.read_text()
+        except OSError:
+            break
+        match = re.search(r"^some .*?avg10=([0-9.]+)", reading, flags=re.MULTILINE)"""
+PSI_UNGUARDED_LINE = (
+    '        match = re.search(r"^some .*?avg10=([0-9.]+)", '
+    "pressure.read_text(), flags=re.MULTILINE)"
+)
+PSI_UNSUPPORTED_SITECUSTOMIZE = """\
+import errno
+import os
+import pathlib
+
+if os.environ.get("FORGE_TEST_PSI_UNSUPPORTED") == "1":
+    original_exists = pathlib.Path.exists
+    original_read_text = pathlib.Path.read_text
+    original_mkdir = pathlib.Path.mkdir
+
+    def patched_exists(self, *args, **kwargs):
+        if str(self) == "/proc/pressure/cpu":
+            return True
+        return original_exists(self, *args, **kwargs)
+
+    def patched_read_text(self, *args, **kwargs):
+        if str(self) == "/proc/pressure/cpu":
+            raise OSError(errno.EOPNOTSUPP, "Operation not supported", str(self))
+        return original_read_text(self, *args, **kwargs)
+
+    def patched_mkdir(self, *args, **kwargs):
+        if str(self) == "/dev/shm/agents-sem/gate":
+            raise PermissionError(errno.EACCES, "Permission denied", str(self))
+        return original_mkdir(self, *args, **kwargs)
+
+    pathlib.Path.exists = patched_exists
+    pathlib.Path.read_text = patched_read_text
+    pathlib.Path.mkdir = patched_mkdir
+"""
 MODULE_LINE = re.compile(r"^gate-1 (?P<name>test_\w+): exit (?P<exit>-?\d+) ran (?P<ran>-?\d+) in (?P<seconds>[0-9.?]+)s (?P<verdict>OK|FAILED)$", re.M)
 SUMMARY_LINE = re.compile(r"^gate-1: (?P<modules>\d+) modules, (?P<tests>\d+) tests, (?P<workers>\d+) workers, (?P<slot>slot held|slot unavailable|nested), (?P<running>\d+)s running, (?P<waited>\d+)s waiting for host pressure, (?P<verdict>OK|FAILED)$", re.M)
 
@@ -58,6 +98,35 @@ class Gate1WorkQueueCellTests(unittest.TestCase):
             cwd=root, env=environment, capture_output=True, text=True, timeout=120,
         )
 
+    def run_psi_cell(self, cell: str) -> subprocess.CompletedProcess:
+        root = Path(tempfile.mkdtemp(prefix="forge-gate1-psi-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "tests").mkdir()
+        (root / "tests" / "test_ok.py").write_text(PASSING, encoding="utf-8")
+        site_dir = root / "site"
+        site_dir.mkdir()
+        (site_dir / "sitecustomize.py").write_text(
+            PSI_UNSUPPORTED_SITECUSTOMIZE, encoding="utf-8"
+        )
+        environment = dict(os.environ)
+        environment["PATH"] = str(Path(sys.executable).parent) + os.pathsep + environment.get(
+            "PATH", ""
+        )
+        pythonpath = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = str(site_dir) + (
+            os.pathsep + pythonpath if pythonpath else ""
+        )
+        environment["FORGE_TEST_PSI_UNSUPPORTED"] = "1"
+        environment.pop("FORGE_GATE1_NESTED", None)
+        return subprocess.run(
+            ["bash", "-c", cell, "forge"],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
     def test_cell_is_a_single_fenced_work_queue_cell_with_host_guards(self) -> None:
         cell = gate1_cell()
         self.assertTrue(cell.startswith("python3 - <<'PY'"))
@@ -72,6 +141,8 @@ class Gate1WorkQueueCellTests(unittest.TestCase):
         self.assertIn("fcntl.flock(gate_lock, fcntl.LOCK_EX)", cell)
         self.assertIn('pathlib.Path("/proc/pressure/cpu")', cell)
         self.assertIn("deadline = started + 300", cell)
+        self.assertIn("reading = pressure.read_text()", cell)
+        self.assertIn("except OSError:\n            break", cell)
         self.assertIn('nested = os.environ.get("FORGE_GATE1_NESTED") == "1"', cell)
         self.assertIn('slot = "nested" if nested else "slot unavailable"', cell)
         self.assertIn('slot = "slot held"', cell)
@@ -84,6 +155,24 @@ class Gate1WorkQueueCellTests(unittest.TestCase):
             "<!-- FORGE:REGION gate1-test-command END -->", 1
         )[0]
         self.assertEqual(region.count("```bash"), 1)
+
+    def test_unreadable_psi_file_ends_wait_without_taking_gate_slot(self) -> None:
+        completed = self.run_psi_cell(gate1_cell())
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        summary = SUMMARY_LINE.search(completed.stdout)
+        self.assertIsNotNone(summary, completed.stdout)
+        self.assertEqual(summary["slot"], "slot unavailable")
+        self.assertEqual(summary["waited"], "0")
+        self.assertEqual(summary["verdict"], "OK")
+
+    def test_unreadable_psi_file_fails_without_guard(self) -> None:
+        cell = gate1_cell()
+        self.assertEqual(cell.count(PSI_GUARDED_BLOCK), 1)
+        mutant = cell.replace(PSI_GUARDED_BLOCK, PSI_UNGUARDED_LINE, 1)
+        completed = self.run_psi_cell(mutant)
+        output = completed.stdout + completed.stderr
+        self.assertNotEqual(completed.returncode, 0, output)
+        self.assertRegex(output, r"OSError|Operation not supported")
 
     def test_every_module_runs_once_and_the_summary_counts_them(self) -> None:
         tree = {f"test_mod{i}.py": PASSING for i in range(6)}

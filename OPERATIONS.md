@@ -351,11 +351,17 @@ The CLI path proceeds as follows:
 2. **Apply the changelog rule.** If configured, run it first. Its declared outputs
    are added to the candidate; changed output invalidates downstream evidence and
    causes classification to run again.
-3. **Execute mechanical verification.** Run Gate 1 twice consecutively with
-   matching environment fingerprints, then relevant stack validations, the
-   assertion sensor, commit invariants, and a secret scan of the exact review
-   artifact. Control candidates additionally require strict baseline integrity
-   and any applicable candidate-bound fresh reviewer evaluations.
+3. **Execute mechanical verification.** Run Gate 1 once for the candidate. When
+   the classifier's own per-path evidence shows every staged path with exactly
+   the `docs` category, no control floor, and no trigger-path match, `verify`
+   instead records a `gate-1` skip with reason `docs-class candidate` and
+   launches no test process; that skip is not gate proof for a run-bound task,
+   and the docs-contract stack validation still runs. Then run the relevant
+   stack validations, the assertion sensor, commit invariants, and a secret
+   scan of the exact review artifact. Control candidates additionally require
+   strict baseline integrity and any applicable candidate-bound fresh reviewer
+   evaluations. The two-consecutive-passes rule in Step 6 governs run-level
+   end-to-end verification after a defect fix, never this gate.
 4. **Request the appropriate independent review.** Fast commits omit this review
    only. Standard commits use a fresh Codex reviewer; hard commits use
    `review-final`. The review package binds the candidate, policy, profile, and
@@ -607,8 +613,13 @@ kinds of isolation. Operational reports should preserve those distinctions.
 Installed target repositories supply their own test and validation policy. This
 source repository additionally requires its full unittest discovery gate, routing
 conformance, Python size limits, and import-boundary checks. Its configured Gate 1
-fans the full module set across up to four subprocesses and refuses empty discovery
-or a shard without a final unittest summary.
+runs every test module as its own unittest process, pulled longest-first from a
+work queue by up to eight workers. Outside a running gate cell it first waits for
+and takes the host-wide gate slot, continuing without it only when the slot
+cannot be created, opened, or locked, then waits up to 300 seconds while host
+CPU pressure (some avg10) is at or above 10 percent; an unreadable pressure
+reading counts as no pressure. It refuses empty discovery, a failing module, and
+a module without a final unittest summary.
 
 Before finishing source work, run the repository's required checks:
 

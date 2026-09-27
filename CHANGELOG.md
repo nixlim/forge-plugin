@@ -22,6 +22,8 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Reviewer-facing eval triggers (operator rulings 2026-09-27, policy task E0 of routing chain E, run-20260927-route-e): the `reviewer-routing` and `model-provider-version` rows now name `scripts/forge/route_config.py`, `route_config_git.py`, `route_config_probe.py` and `route_vocab.py`, in the specification table (with a dated amendment sentence), `forge-project.md`, the rendered template and `policy.py`, so any change to route resolution triggers fresh reviewer evaluations; the FR-230 phase-3 evidence is re-minted for `policy.py`.
+- Revision 17 follow-ups (forge-plugin-9a5k): `OPERATIONS.md` describes Gate 1 once per candidate; the `AGENTS.md` region mirror matches `forge-project.md`; an unreadable `/proc/pressure/cpu` counts as no pressure signal so the Gate 1 cell proceeds instead of failing; `.refactor/type-baseline.json` is control class with its own trigger row.
 - Host policy (operator direction 2026-09-27): Codex implementer executions share one host-wide pool of 8 across forge-plugin and omnipus-ai, taken through `sem-run impl --slots 8`, replacing the prose cap of 4 in the `agent-project-context` region of `forge-project.md`.
 - Governance (Revision 17): Gate 1 runs once per candidate and not for docs-class candidates, whose skip is
   recorded under the `gate-1` ID with reason `docs-class candidate` (FR-214/FR-215/DM-013; the pair-voiding rule

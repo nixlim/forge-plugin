@@ -84,7 +84,7 @@ test gate. Installed repository surfaces are rendered from `system/`, `skills/`,
 | `bash` | `*.sh` |
 | `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**`, `LICENSE`, `.forge/evals/candidates/**` |
 | `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `*.js`, `.claude-plugin/**`, `hooks/**`, `system/**`, `.beads/**` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**`, `tests/fixtures/**` |
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**`, `tests/fixtures/**`, `.refactor/type-baseline.json` |
 <!-- FORGE:REGION file-categories END -->
 
 ## Stack Validations
@@ -204,6 +204,8 @@ python3 - <<'PY'
 # Both guards are no-ops where those paths do not exist (CI) and inside a
 # running gate cell: FORGE_GATE1_NESTED=1 is exported to every module process,
 # so a test that exercises this cell never re-takes the slot it already holds.
+# A pressure file that exists but cannot be read (a PSI-disabled kernel, psi=0,
+# raises EOPNOTSUPP) is no pressure signal: the wait ends and the run proceeds.
 # Fail-closed: any module process exiting other than 0, or exiting 5 (no tests
 # ran) without a "Ran 0 tests" summary, or any module without a final unittest
 # summary, or an empty module set fails the cell. A module that legitimately
@@ -237,7 +239,11 @@ def wait_for_host() -> float:
     deadline = started + 300
     pressure = pathlib.Path("/proc/pressure/cpu")
     while not nested and pressure.exists() and time.monotonic() < deadline:
-        match = re.search(r"^some .*?avg10=([0-9.]+)", pressure.read_text(), flags=re.MULTILINE)
+        try:
+            reading = pressure.read_text()
+        except OSError:
+            break
+        match = re.search(r"^some .*?avg10=([0-9.]+)", reading, flags=re.MULTILINE)
         if not match or float(match.group(1)) < 10.0:
             break
         time.sleep(10)
@@ -417,6 +423,7 @@ Output path: `CHANGELOG.md`
 | `system/local/**` | STRICT evals and routing conformance |
 | `scripts/forge/**`, `hooks/**` | affected focused tests plus full unittest discovery |
 | `skills/**`, `forge-project.md` | policy/parser contract tests plus binding review |
+| `.refactor/type-baseline.json` | binding review and explicit operator approval (type-check ratchet strength authority) |
 <!-- FORGE:REGION project-triggers END -->
 
 ## Completeness Project Items
@@ -525,9 +532,9 @@ event-retention: 400d
 |---|---|
 | constitution | rules/** |
 | agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, system/local/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
-| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/** |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 
