@@ -9,15 +9,98 @@ from typing import TYPE_CHECKING, Any, Mapping
 from forge_cli import chain_core, engine, runtime
 from forge_cli.app._candidate_observation import _observe_current_merge_candidate
 from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Outcome, V2ReasonCode
+from forge_cli.policy import sha256_bytes
 
 if TYPE_CHECKING:
     from forge_cli.app._merge_engine import MergeEngine
 
+
+def _write_review_verdict(
+    self: MergeEngine, state: Mapping[str, Any], relative: str, data: bytes
+) -> str:
+    try:
+        return engine._write_merge_artifact(self.ctx, state, relative, data)
+    except FileExistsError:
+        if engine._merge_run_directory(state) is not None:
+            raise
+        reference = (Path(".forge") / "chains" / str(state["chain_id"]) / relative).as_posix()
+        existing = engine._read_merge_artifact(
+            self.ctx, state, reference, sha256_bytes(data), "review verdict"
+        )
+        if existing != data:
+            raise FrozenError(
+                "existing merge review verdict differs",
+                chain_id=str(state["chain_id"]), schema=REVISION9_OUTPUT_SCHEMA,
+            ) from None
+        return reference
+
+
+def _record_review_verdict(
+    self: MergeEngine,
+    state: dict[str, Any],
+    verdict: dict[str, Any],
+    data: bytes,
+    changed_paths: list[str],
+) -> Outcome:
+    """Capture and transition one already-validated merge review verdict."""
+
+    review = state["review"]
+    verdict_ref = _write_review_verdict(
+        self, state, f"review/iteration-{review['iteration']:02d}/verdict.txt", data
+    )
+    verdict.update(
+        {
+            "reviewer_role": "review-final",
+            "iteration": review["iteration"],
+            "recorded_at": chain_core.iso_z(),
+            "verdict_path": verdict_ref,
+        }
+    )
+    current_review = {**copy.deepcopy(review), "verdict": verdict}
+    delta: dict[str, Any] = {"review": current_review}
+    if verdict["verdict"] == "BLOCK":
+        delta["state"] = "revising"
+        if int(review["iteration"]) == 8:
+            current_review["residual_risk"] = {
+                "at": chain_core.iso_z(),
+                "reason": "review iteration cap reached",
+                "findings": copy.deepcopy(verdict["findings"]),
+            }
+    else:
+        control_paths = changed_paths if state["tier"]["control"] else []
+        delta["authorization"] = {
+            "candidate_head": state["candidate"]["candidate_head"],
+            "generation_digest": state["candidate"]["generation_digest"],
+            "diff_summary": (
+                f"{len(changed_paths)} changed path(s); "
+                f"diff_sha256={state['candidate']['diff_sha256']}"
+            ),
+            "control_paths": control_paths,
+            "review_verdict": "PASS",
+            "recorded_at": chain_core.iso_z(),
+        }
+        delta["state"] = "awaiting_approval" if state["tier"]["control"] else "authorized"
+    current = self.store.transition(
+        state,
+        "review_attached",
+        {"delta": delta},
+        generation_digest=str(state["candidate"]["generation_digest"]),
+        at=chain_core.iso_z(),
+    )
+    return engine._success(
+        current,
+        f"merge review {verdict['verdict']} recorded",
+        f"forge status --chain-id {state['chain_id']}",
+        evidence_refs=[verdict_ref],
+    )
+
+
 def review_attach(self: MergeEngine, verdict_file: str) -> Outcome:
     chain_core._require_merge_adapter_control("mandatory-review-final")
-    state = self._preflight_lifecycle(self._load(), "review attach")
+    state = self._load()
     self._halt(state)
-    review = state.get("review")
+    review, request = self._legacy_attach_request(state)
+    state = self._preflight_lifecycle(state, "review attach")
     iteration = review.get("iteration", 0) if isinstance(review, Mapping) else 0
     if type(iteration) is not int:
         raise FrozenError(
@@ -25,7 +108,6 @@ def review_attach(self: MergeEngine, verdict_file: str) -> Outcome:
             chain_id=str(state["chain_id"]),
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    request = review.get("request") if isinstance(review, Mapping) else None
     eighth_request_pending = bool(
         state["state"] == "reviewing"
         and iteration == 8
@@ -48,14 +130,17 @@ def review_attach(self: MergeEngine, verdict_file: str) -> Outcome:
         )
     if state["state"] != "reviewing":
         self._wrong_state(state, "reviewing", "review attach")
-    _repository, _policy, changed_paths = _observe_current_merge_candidate(
-        self.ctx, state, verb="review attach"
-    )
     if (
         not isinstance(request, dict)
         or request.get("reviewer") != "review-final"
     ):
         self._wrong_state(state, "a current review-final request", "review attach")
+    assert isinstance(request, dict)
+    if not request.get("invocation"):
+        self._wrong_state(state, "a legacy review-final invocation", "review attach")
+    _repository, _policy, changed_paths = _observe_current_merge_candidate(
+        self.ctx, state, verb="review attach"
+    )
     engine._read_merge_artifact(
         self.ctx,
         state,
@@ -113,61 +198,7 @@ def review_attach(self: MergeEngine, verdict_file: str) -> Outcome:
             observed=str(exc),
             chain=state,
         ) from exc
-    verdict_ref = engine._write_merge_artifact(
-        self.ctx,
-        state,
-        f"review/iteration-{review['iteration']:02d}/verdict.txt",
-        data,
-    )
-    verdict.update(
-        {
-            "reviewer_role": "review-final",
-            "iteration": review["iteration"],
-            "recorded_at": chain_core.iso_z(),
-            "verdict_path": verdict_ref,
-        }
-    )
-    current_review = {**copy.deepcopy(review), "verdict": verdict}
-    delta: dict[str, Any] = {"review": current_review}
-    if verdict["verdict"] == "BLOCK":
-        delta["state"] = "revising"
-        if int(review["iteration"]) == 8:
-            current_review["residual_risk"] = {
-                "at": chain_core.iso_z(),
-                "reason": "review iteration cap reached",
-                "findings": copy.deepcopy(verdict["findings"]),
-            }
-    else:
-        control_paths = list(changed_paths) if state["tier"]["control"] else []
-        delta["authorization"] = {
-            "candidate_head": state["candidate"]["candidate_head"],
-            "generation_digest": state["candidate"]["generation_digest"],
-            "diff_summary": (
-                f"{len(changed_paths)} changed path(s); "
-                f"diff_sha256={state['candidate']['diff_sha256']}"
-            ),
-            "control_paths": control_paths,
-            "review_verdict": "PASS",
-            "recorded_at": chain_core.iso_z(),
-        }
-        delta["state"] = (
-            "awaiting_approval"
-            if state["tier"]["control"]
-            else "authorized"
-        )
-    current = self.store.transition(
-        state,
-        "review_attached",
-        {"delta": delta},
-        generation_digest=str(state["candidate"]["generation_digest"]),
-        at=chain_core.iso_z(),
-    )
-    return engine._success(
-        current,
-        f"merge review {verdict['verdict']} recorded",
-        f"forge status --chain-id {state['chain_id']}",
-        evidence_refs=[verdict_ref],
-    )
+    return self._record_review_verdict(state, verdict, data, list(changed_paths))
 
 def review_disposition(
     self: MergeEngine, finding: int, severity: str, resolution: str

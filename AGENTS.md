@@ -550,9 +550,9 @@ event-retention: 400d
 |---|---|
 | constitution | rules/** |
 | agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py, system/local/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
-| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 

@@ -255,6 +255,7 @@ def build_parser() -> ContractArgumentParser:
     review_commands = review.add_subparsers(dest="review_command", required=True)
     review_commands.add_parser("request")
     review_commands.add_parser("collect")
+    review_commands.add_parser("cancel")
     attach = review_commands.add_parser("attach")
     attach.add_argument("--verdict-file", required=True)
     disposition = review_commands.add_parser("disposition")

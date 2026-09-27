@@ -15,6 +15,7 @@ from . import _verbs_lifecycle
 from . import _verbs_gate
 from . import _verbs_gate_evals
 from . import _verbs_decision
+from . import _verbs_review_cancel
 from . import _verbs_review_request
 from . import _verbs_review_collect
 from . import _verbs_finalize
@@ -139,7 +140,7 @@ class Engine:
         if (
             state.get("candidate", {}).get("sha256")
             and not chain_core.candidate_is_v2(state)
-            and verb not in {"commit restage", "commit abort"}
+            and verb not in {"commit restage", "commit abort", "review cancel"}
         ):
             raise Refusal(
                 ReasonCode.STATE_PRECONDITION,
@@ -186,7 +187,8 @@ class Engine:
             )
         current_head = self.ctx.repo.head()
         if current_head != state["repo_head"]:
-            self._record_head_moved(state, current_head)
+            if verb != "review cancel":
+                self._record_head_moved(state, current_head)
             if not allow_head_moved:
                 raise Refusal(
                     ReasonCode.HEAD_MOVED,
@@ -242,11 +244,24 @@ class Engine:
             return chain_core._forge_command(state, "verify")
         if state_name == "reviewing":
             request = state["review"].get("request")
-            if not request:
+            if not request or request.get("cleared"):
                 return chain_core._forge_command(state, "review request")
-            if request.get("reviewer") == "review-cheap":
+            if request.get("lane") == "forge-review-lane/1" or (
+                request.get("reviewer") == "review-cheap"
+                and request.get("pid")
+                and not request.get("provider")
+            ):
                 return chain_core._forge_command(state, "review collect")
-            return chain_core._forge_command(state, "review attach --verdict-file <path>")
+            if (
+                request.get("reviewer") == "review-final"
+                and request.get("invocation")
+                and not request.get("pid")
+                and not request.get("provider")
+            ):
+                return chain_core._forge_command(
+                    state, "review attach --verdict-file <path>"
+                )
+            return chain_core._forge_command(state, "review collect")
         if state_name == "revising":
             return chain_core._forge_command(state, "commit restage --paths <path>...")
         if state_name == "awaiting_approval":
@@ -292,6 +307,7 @@ class Engine:
     _profiles_for_path = staticmethod(_verbs_review_request._profiles_for_path)
     _review_package = _verbs_review_request._review_package
     review_request = _serialize_worktree_command(_verbs_review_request.review_request)
+    review_cancel = _serialize_worktree_command(_verbs_review_cancel.review_cancel)
     _parse_verdict = staticmethod(_verbs_review_collect._parse_verdict)
     _apply_verdict = _verbs_review_collect._apply_verdict
     review_collect = _serialize_worktree_command(_verbs_review_collect.review_collect)

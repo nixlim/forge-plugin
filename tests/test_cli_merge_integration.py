@@ -312,15 +312,8 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         ):
             verified = engine.verify()
         self.assertTrue(verified.ok)
-        engine.review_request()
-        state = engine.store.load(str(started.chain_id))
-        verdict = self.write_verdict(
-            f"{started.chain_id}-pass.txt",
-            "PASS",
-            state["review"]["request"],
-        )
-        attached = engine.review_attach(str(verdict))
-        self.assertEqual(attached.state, "authorized")
+        _requested, _request, collected = self.complete_review(engine)
+        self.assertEqual(collected.state, "authorized")
         return engine, engine.store, engine.store.load(str(started.chain_id))
 
     @staticmethod
@@ -586,14 +579,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         reviewing = store.load(chain_id)
         self.assertTrue(integrated.ok)
         self.assertEqual(reviewing["state"], "reviewing")
-        engine.review_request()
-        requested = store.load(chain_id)
-        verdict = self.write_verdict(
-            f"{chain_id}-generation-two-pass.txt",
-            "PASS",
-            requested["review"]["request"],
-        )
-        engine.review_attach(str(verdict))
+        self.complete_review(engine)
         second_authorized = store.load(chain_id)
         newer_head = str(second_authorized["candidate"]["candidate_head"])
         self.assertNotEqual(newer_head, older_head)
@@ -2502,14 +2488,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             [older_head, newer_head],
         )
 
-        engine.review_request()
-        requested = store.load(chain_id)
-        verdict = self.write_verdict(
-            f"{chain_id}-fresh-epoch-pass.txt",
-            "PASS",
-            requested["review"]["request"],
-        )
-        attached = engine.review_attach(str(verdict))
+        _requested, _request, attached = self.complete_review(engine)
         reviewed = store.load(chain_id)
         self.assertEqual(attached.state, "authorized")
         self.assertEqual(reviewed["candidate"]["candidate_head"], fresh_head)
@@ -3921,12 +3900,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         engine = CLI.MergeEngine(self.context(chain_id=str(started.chain_id)))
         with mock.patch.object(RUNTIME, "run_bounded", side_effect=self.passing_process):
             engine.verify()
-        engine.review_request()
-        state = engine.store.load(str(started.chain_id))
-        verdict = self.write_verdict(
-            "invalid-mode-pass.txt", "PASS", state["review"]["request"]
-        )
-        engine.review_attach(str(verdict))
+        self.complete_review(engine)
         awaiting = engine.store.load(str(started.chain_id))
         self.assertIn(awaiting["state"], {"authorized", "awaiting_approval"})
         if awaiting["state"] == "awaiting_approval":
@@ -6101,15 +6075,9 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         ):
             second_verified = second_engine.verify()
         self.assertTrue(second_verified.ok)
-        second_engine.review_request()
-        second_requested = second_engine.store.load(second_chain_id)
-        second_verdict = self.write_verdict(
-            f"{second_chain_id}-pass.txt",
-            "PASS",
-            second_requested["review"]["request"],
-        )
-        second_attached = second_engine.review_attach(str(second_verdict))
+        _requested, _request, second_attached = self.complete_review(second_engine)
         self.assertEqual(second_attached.state, "authorized")
+        second_authorized = second_engine.store.load(second_chain_id)
 
         common = CLI.Repository(self.repo).git_common_dir()
         remote_before = self.git_at(
@@ -6202,7 +6170,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(second_terminal["integration"]["condition"], "none")
         self.assertEqual(
             second_terminal["candidate"]["candidate_head"],
-            second_requested["candidate"]["candidate_head"],
+            second_authorized["candidate"]["candidate_head"],
         )
         self.assertEqual(
             self.git_at(self.origin, "rev-parse", "refs/heads/fixture-main"),
@@ -7625,16 +7593,9 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
 
         for iteration in range(1, 9):
-            engine.review_request()
+            _outcome, _request, _collected = self.complete_review(engine, mode="block")
             requested = store.load(self.chain_id)
             self.assertEqual(requested["review"]["iteration"], iteration)
-            verdict = self.write_verdict(
-                f"integration-cap-block-{iteration}.txt",
-                "BLOCK",
-                requested["review"]["request"],
-                ("MAJOR", f"unresolved finding {iteration}"),
-            )
-            engine.review_attach(str(verdict))
             attached = store.load(self.chain_id)
             self.assertEqual(attached["state"], "revising")
             self.assertEqual(attached["review"]["iteration"], iteration)
@@ -7692,10 +7653,10 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 "review iteration cap of 8 reached; no further merge review is admitted",
             ),
             (
-                "attach",
-                lambda: engine.review_attach(str(verdict)),
+                "collect",
+                engine.review_collect,
                 CLI.V2ReasonCode.ITERATION_CAP,
-                "forge: review attach refused — review iteration cap of 8 is final",
+                "forge: review collect refused — review iteration cap of 8 is final",
             ),
             (
                 "disposition",

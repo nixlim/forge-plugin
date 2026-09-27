@@ -79,6 +79,7 @@
       "scripts/forge/forge_cli/app/_engine_refresh.py",
       "scripts/forge/forge_cli/app/_engine_release_aborted.py",
       "scripts/forge/forge_cli/app/_engine_release_pending.py",
+      "scripts/forge/forge_cli/app/_engine_review_launch.py",
       "scripts/forge/forge_cli/app/_engine_review_request.py",
       "scripts/forge/forge_cli/app/_engine_review_verdict.py",
       "scripts/forge/forge_cli/app/_engine_start_chain.py",
@@ -159,13 +160,20 @@
       "scripts/forge/forge_cli/engine/_merge_scope_derive.py",
       "scripts/forge/forge_cli/engine/_merge_worktree.py",
       "scripts/forge/forge_cli/engine/_parser.py",
+      "scripts/forge/forge_cli/engine/_review_attempt.py",
+      "scripts/forge/forge_cli/engine/_review_attempt_proc.py",
+      "scripts/forge/forge_cli/engine/_review_lane_api.py",
+      "scripts/forge/forge_cli/engine/_review_launch.py",
       "scripts/forge/forge_cli/engine/_review_transport.py",
+      "scripts/forge/forge_cli/engine/_review_wrapper.py",
+      "scripts/forge/forge_cli/engine/_review_wrapper_io.py",
       "scripts/forge/forge_cli/engine/_state.py",
       "scripts/forge/forge_cli/engine/_verbs_decision.py",
       "scripts/forge/forge_cli/engine/_verbs_finalize.py",
       "scripts/forge/forge_cli/engine/_verbs_gate.py",
       "scripts/forge/forge_cli/engine/_verbs_gate_evals.py",
       "scripts/forge/forge_cli/engine/_verbs_lifecycle.py",
+      "scripts/forge/forge_cli/engine/_verbs_review_cancel.py",
       "scripts/forge/forge_cli/engine/_verbs_review_collect.py",
       "scripts/forge/forge_cli/engine/_verbs_review_request.py",
       "scripts/forge/forge_cli/engine/_verbs_status.py",
@@ -176,6 +184,7 @@
       "scripts/forge/forge_cli/runtime.py"
     ],
     "tests": [
+      "tests/_review_lane_support.py",
       "tests/test_cli_merge_integration.py",
       "tests/test_cli_merge_lifecycle.py",
       "tests/test_fr223_v2_hook.py",
@@ -194,19 +203,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "159377f944c44f6e1814a52476fefff73e1cfc84a629795bd25f2c439f667ea8"
+      "result_sha256": "7f849d946748c87228a28ac2e07258d3c50d81370d3e15d64edc48cc693dda64"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "fe919cc6b7b4ec87d00d21e10eb29e2a5bc4d8bb38e4379da4eca40aa7c6278c"
+      "result_sha256": "652253c1936bdc7922fb3016ae565bcb965f6870e4a6b47c8451ae5d37fa9a32"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "72d149ba2e16b6c4a61230d00b8753d505cf71f0bb3030b9a58ca86d76273e74"
+      "result_sha256": "3ae1bd521d1afc908cb6a18bb267cde7ee0e9cfdee44d9cc0014db21cad03254"
     },
     {
       "slot": "push",
@@ -224,13 +233,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "b93f56cb55aac9b4d7a42e0c342045172fae378ddc0b0b6924492b4e5cd0a9e8"
+      "result_sha256": "200f846665db6d16bec748390f59a85ba4d73378a3002297d533aa3b03b224da"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "2bab9f9b5bb8256250dde8ee8fec7d92c343e637cc6eb1d2b9fc8e3957703fdf"
+      "result_sha256": "d7993c74706f11325347d10dcac6355799ad2be7456998d740be7c0582a7d836"
     }
   ]
 }

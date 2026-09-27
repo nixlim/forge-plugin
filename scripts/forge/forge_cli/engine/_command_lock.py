@@ -14,6 +14,14 @@ from pathlib import Path
 from forge_cli.envelope import FrozenError, OUTPUT_SCHEMA, Outcome, REVISION9_OUTPUT_SCHEMA
 import functools
 
+_TERMINAL_SELECTION_METHODS = frozenset({
+    "status",
+    "abort",
+    "abort_disposition",
+    "operator_tombstone",
+    "review_cancel",
+})
+
 
 def _new_state(
     chain_id: str,
@@ -203,12 +211,7 @@ def _command_run_lock_id(engine: "Engine", method_name: str) -> str | None:
             ):
                 return str(raw_binding["run_id"])
             return None
-    include_terminal = method_name in {
-        "status",
-        "abort",
-        "abort_disposition",
-        "operator_tombstone",
-    }
+    include_terminal = method_name in _TERMINAL_SELECTION_METHODS
     selected = _peek_selected_chain(engine, include_terminal=include_terminal)
     binding = selected.get("run_binding") if isinstance(selected, dict) else None
     if isinstance(binding, Mapping) and isinstance(binding.get("run_id"), str):

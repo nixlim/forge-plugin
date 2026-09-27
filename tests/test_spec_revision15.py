@@ -13,14 +13,9 @@ POLICIES = {
     ),
 }
 DEFERRED_MARKERS = {
-    "FR-245": "(Revision 15 authority; implementation deferred to chain E/I/B)",
-    "FR-246": "(Revision 15 authority; implementation deferred to chain E)",
-    "DM-018": (
-        "(Revision 15 authority; `review.request.route` implementation deferred "
-        "to chain E)"
-    ),
+    "FR-245": "(Revision 15 authority; implementer and plan cells deferred to chain I)",
 }
-IMPLEMENTED = ("FR-244", "FR-247")
+IMPLEMENTED = ("FR-244", "FR-246", "FR-247", "DM-018")
 NEW_CONTROL_PATHS = ("system/claude/**", "system/local/**")
 REVIEWER_PATTERNS = (
     ("agent-prompt-template", "system/claude/prompts/**"),
@@ -29,10 +24,16 @@ REVIEWER_PATTERNS = (
     ("reviewer-routing", "scripts/forge/route_config.py"),
     ("reviewer-routing", "scripts/forge/route_config_git.py"),
     ("reviewer-routing", "scripts/forge/route_config_probe.py"),
+    ("reviewer-routing", "scripts/forge/route_evidence.py"),
+    ("reviewer-routing", "scripts/forge/route_floor.py"),
+    ("reviewer-routing", "scripts/forge/route_provenance.py"),
     ("reviewer-routing", "scripts/forge/route_vocab.py"),
     ("model-provider-version", "scripts/forge/route_config.py"),
     ("model-provider-version", "scripts/forge/route_config_git.py"),
     ("model-provider-version", "scripts/forge/route_config_probe.py"),
+    ("model-provider-version", "scripts/forge/route_evidence.py"),
+    ("model-provider-version", "scripts/forge/route_floor.py"),
+    ("model-provider-version", "scripts/forge/route_provenance.py"),
     ("model-provider-version", "scripts/forge/route_vocab.py"),
 )
 
@@ -90,9 +91,7 @@ def assert_deferred_authority(specification: str) -> None:
     for requirement_id in IMPLEMENTED:
         block = requirement_block(specification, requirement_id)
         markers = re.findall(
-            r"\(Revision 15 authority; (?:`[^`]+` )?implementation deferred "
-            r"to chain [^)]+\)",
-            block,
+            r"\(Revision 15 authority; [^)]*deferred to chain [^)]+\)", block
         )
         if markers:
             raise AssertionError(
@@ -101,9 +100,7 @@ def assert_deferred_authority(specification: str) -> None:
     for requirement_id, expected in DEFERRED_MARKERS.items():
         block = requirement_block(specification, requirement_id)
         markers = re.findall(
-            r"\(Revision 15 authority; (?:`[^`]+` )?implementation deferred "
-            r"to chain [^)]+\)",
-            block,
+            r"\(Revision 15 authority; [^)]*deferred to chain [^)]+\)", block
         )
         if markers != [expected]:
             raise AssertionError(
@@ -170,6 +167,88 @@ class SpecificationRevision15Tests(unittest.TestCase):
         )
         with self.assertRaisesRegex(AssertionError, "FR-247"):
             assert_deferred_authority(mutant)
+
+    def test_fr246_deferral_assertion_detects_its_reinsertion(self) -> None:
+        block = requirement_block(SPEC, "FR-246")
+        self.assertNotIn("implementation deferred to chain E", block)
+        mutant = SPEC.replace(
+            "**FR-246** (MUST): Headless review-final lane.",
+            "**FR-246** (MUST): Headless review-final lane "
+            "(Revision 15 authority; implementation deferred to chain E).",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "FR-246"):
+            assert_deferred_authority(mutant)
+
+    def test_dm018_deferral_assertion_detects_its_reinsertion(self) -> None:
+        block = requirement_block(SPEC, "DM-018")
+        self.assertNotIn("implementation deferred to chain E", block)
+        mutant = SPEC.replace(
+            "**DM-018**: Route and launch provenance.",
+            "**DM-018**: Route and launch provenance "
+            "(Revision 15 authority; implementation deferred to chain E).",
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "DM-018"):
+            assert_deferred_authority(mutant)
+
+    def test_fr246_headless_review_amendment_literals(self) -> None:
+        block = requirement_block(SPEC, "FR-246")
+        self.assertEqual(
+            block.count("Revision-17 headless-review amendment to **FR-246**:"),
+            1,
+        )
+        literals = (
+            "forge-review-identity/1",
+            "forge-review-process/2",
+            "forge-review-lane/1",
+            "getpid() == getpgid(0) == getsid(0)",
+            "[sys.executable, \"-I\", \"-c\", <exact-wrapper-source>, ...]",
+            "os.link",
+            "kp_proc.p_starttime",
+            "wrapper-dead / child-alive",
+            "forge: review cancel refused — identity-unproven; member PIDs <pids>; "
+            "recorded PGID <pgid>; nothing was signalled",
+            "forge: review cancel refused — kill-unconfirmed: <pids>",
+            "FR-210's shared review verbs gain `cancel`",
+            "forge: review request shape newer than this plugin — finish or abort "
+            "the chain on the requesting version",
+            "forge: review request refused — route diverges from run snapshot for <role>: <field>",
+            "forge: review request refused — role <role> has no frozen route in the run snapshot",
+            "finding: MAJOR no reviewer verdict — <error>",
+            "wrapper failure",
+            "merge Option A",
+            "CLAUDE_CODE_USE_BEDROCK=1",
+            "base64, hex, split strings",
+            "FR-060's Revision-15 headless-review amendment is likewise deferred for "
+            "the legacy `/forge:worktree-merge` skill, which owns no Forge CLI merge "
+            "chain and keeps its interactive review-final until it does; FR-234's CLI "
+            "merge lane is unaffected.",
+        )
+        for literal in literals:
+            with self.subTest(literal=literal):
+                self.assertIn(literal, block)
+        exact_kill = "forge: review cancel refused — kill-unconfirmed: <pids>"
+        with self.assertRaises(AssertionError):
+            self.assertIn(
+                exact_kill, block.replace(exact_kill, "kill-unconfirmed: <pids>")
+            )
+        self.assertEqual(SPEC.count("forge review cancel --chain-id <id>"), 2)
+        self.assertIn("`review request|collect|cancel|attach|disposition`", SPEC)
+        self.assertNotIn("`citation invalid`", block)
+        self.assertNotIn("read _ <&3 || exit 97", block.split(
+            "Revision-17 headless-review amendment to **FR-246**:", 1
+        )[1])
+
+    def test_dm018_new_lane_route_is_mandatory(self) -> None:
+        block = requirement_block(SPEC, "DM-018")
+        for literal in (
+            "whose `lane` is `forge-review-lane/1` MUST carry",
+            "“when present” survives only for legacy request shapes",
+            "forge: review request refused — route diverges from run snapshot for <role>: <field>",
+            "forge: review request refused — role <role> has no frozen route in the run snapshot",
+        ):
+            self.assertIn(literal, block)
 
     def test_chain_j_shipped_contracts_are_explicit(self) -> None:
         dm018 = requirement_block(SPEC, "DM-018")
@@ -313,7 +392,26 @@ class SpecificationRevision15Tests(unittest.TestCase):
                 "app/**, scripts/forge/route_config.py, ",
             ),
             ("reviewer-routing", "scripts/forge/route_config_probe.py"): (
-                "scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py, system/",
+                "scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, "
+                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
+                "scripts/forge/route_vocab.py, system/",
+                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
+            ),
+            ("reviewer-routing", "scripts/forge/route_evidence.py"): (
+                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
+                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
+                "scripts/forge/route_vocab.py, system/",
+            ),
+            ("reviewer-routing", "scripts/forge/route_floor.py"): (
+                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
+                "scripts/forge/route_evidence.py, scripts/forge/route_provenance.py, "
+                "scripts/forge/route_vocab.py, system/",
+            ),
+            ("reviewer-routing", "scripts/forge/route_provenance.py"): (
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
                 "scripts/forge/route_vocab.py, system/",
             ),
             ("reviewer-routing", "scripts/forge/route_vocab.py"): (
@@ -329,7 +427,26 @@ class SpecificationRevision15Tests(unittest.TestCase):
                 "engine/**, scripts/forge/route_config.py, ",
             ),
             ("model-provider-version", "scripts/forge/route_config_probe.py"): (
-                "scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py |",
+                "scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, "
+                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
+                "scripts/forge/route_vocab.py |",
+                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
+            ),
+            ("model-provider-version", "scripts/forge/route_evidence.py"): (
+                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
+                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
+                "scripts/forge/route_vocab.py |",
+            ),
+            ("model-provider-version", "scripts/forge/route_floor.py"): (
+                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
+                "scripts/forge/route_evidence.py, scripts/forge/route_provenance.py, "
+                "scripts/forge/route_vocab.py |",
+            ),
+            ("model-provider-version", "scripts/forge/route_provenance.py"): (
+                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
                 "scripts/forge/route_vocab.py |",
             ),
             ("model-provider-version", "scripts/forge/route_vocab.py"): (

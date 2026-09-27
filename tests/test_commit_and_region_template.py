@@ -126,7 +126,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         canonical = POLICY.REVIEWER_EVAL_TRIGGER_TABLE.encode("utf-8")
         self.assertEqual(
             hashlib.sha256(canonical).hexdigest(),
-            "895486c4ef0392b704860dbfc3fe52fdf51583544e354d1375544c2e487bdea1",
+            "e347704d6b910b38c617b712c2eb14f0c4a512903c1a4cf3a72ecc30db629790",
         )
         self.assertEqual(specification_match.group(1), canonical)
         for label, path in (
@@ -141,7 +141,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
                 self.assertEqual(body, canonical)
                 self.assertEqual(
                     hashlib.sha256(body).hexdigest(),
-                    "895486c4ef0392b704860dbfc3fe52fdf51583544e354d1375544c2e487bdea1",
+                    "e347704d6b910b38c617b712c2eb14f0c4a512903c1a4cf3a72ecc30db629790",
                 )
 
     def test_sixteen_regions_are_complete_and_in_contract_order(self) -> None:

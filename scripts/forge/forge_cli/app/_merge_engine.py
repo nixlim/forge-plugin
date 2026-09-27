@@ -9,6 +9,7 @@ from . import _engine_final_mode
 from . import _engine_gate
 from . import _engine_lifecycle
 from . import _engine_review_request
+from . import _engine_review_launch
 from . import _engine_review_verdict
 from . import _engine_refresh
 from . import _engine_start_chain
@@ -144,9 +145,20 @@ class MergeEngine:
     _record_gate_result = _engine_gate._record_gate_result
     gate_run = _engine_gate.gate_run
     verify = _engine_gate.verify
+    _legacy_attach_request = _engine_review_request._legacy_attach_request
     _review_package = _engine_review_request._review_package
-    review_request = _engine_review_request.review_request
-    review_collect = _engine_review_request.review_collect
+    _publish_cancel_completion = _engine_review_request._publish_cancel_completion
+    _publish_launch_failure = _engine_review_request._publish_launch_failure
+    _review_cancel_admitted = _engine_review_request._review_cancel_admitted
+    _read_cancel_records = staticmethod(_engine_review_request._read_cancel_records)
+    _cancel_group_outcome = _engine_review_request._cancel_group_outcome
+    _refuse_wrapper_identity_unproven = _engine_review_request._refuse_wrapper_identity_unproven
+    _review_retry_outcome = _engine_review_request._review_retry_outcome
+    _validated_review_completion = _engine_review_request._validated_review_completion
+    review_request = _engine_review_launch.review_request
+    review_collect = _engine_review_launch.review_collect
+    review_cancel = _engine_review_launch.review_cancel
+    _record_review_verdict = _engine_review_verdict._record_review_verdict
     review_attach = _engine_review_verdict.review_attach
     review_disposition = _engine_review_verdict.review_disposition
 

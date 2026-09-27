@@ -647,14 +647,14 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
             CLI.CommandContext(CLI.Repository(self.root), CLI.ChainStore(self.root), options)
         )
 
-        status_args = CLI.build_parser().parse_args(["status"])
-        status = CLI.dispatch(engine, status_args)
+        status = CLI.dispatch(engine, CLI.build_parser().parse_args(["status"]))
         self.assertTrue(status.ok)
         self.assertEqual(status.schema, "forge-cli/2")
         before = store.events_path(chain_id).read_bytes()
         review_argv = (
             ("review", "request"),
             ("review", "collect"),
+            ("review", "cancel"),
             ("review", "attach", "--verdict-file", "verdict.txt"),
             (
                 "review",

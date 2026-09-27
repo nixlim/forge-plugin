@@ -55,6 +55,8 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
             RUNTIME, "SCRIPT_DIR", self.helpers
         ), mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT), patch_engine(
             "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), patch_engine(
+            "CLAUDE_EXECUTABLE", str(self.helpers / "fake-claude")
         ):
             yield
 
@@ -1091,14 +1093,9 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
         request = self.state(chain_id)["review"]["request"]
         self.assertIsInstance(request, dict)
         self.assertEqual(request["reviewer"], "review-final")
-        verdict = self.write_verdict("revision9-matrix-pass.txt", "PASS", request)
+        self.wait_for_review_completion(request)
         reviewed = self.invoke_cli(
-            "--chain-id",
-            chain_id,
-            "review",
-            "attach",
-            "--verdict-file",
-            str(verdict),
+            "--chain-id", chain_id, "review", "collect"
         )
         self.assertEqual(reviewed["state"], "authorized")
         finalized = self.invoke_cli(

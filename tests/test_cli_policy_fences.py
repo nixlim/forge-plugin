@@ -77,9 +77,9 @@ cadence: 14d
 |---|---|
 | constitution | rules/** |
 | agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py, system/local/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
-| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_vocab.py |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 <!-- FORGE:REGION guard-denied-commands BEGIN -->
@@ -315,6 +315,30 @@ class ParsePolicyTests(unittest.TestCase):
             nested = CLI.parse_policy("3" * 40, policy(NESTED_GATE1))
         self.assertNotEqual(nested.gate1, FLAT_CELL)
         self.assertTrue(nested.gate1.startswith("  "))
+
+    def test_route_floor_literal_is_load_bearing_in_both_trigger_rows(self) -> None:
+        def assert_dual_match() -> None:
+            rows = POLICY._parse_reviewer_eval_triggers(
+                POLICY.REVIEWER_EVAL_TRIGGER_TABLE
+            )
+            controls = tuple(
+                control
+                for control, patterns in rows
+                if "scripts/forge/route_floor.py" in patterns
+            )
+            self.assertEqual(
+                controls, ("reviewer-routing", "model-provider-version")
+            )
+
+        assert_dual_match()
+        disabled = POLICY.REVIEWER_EVAL_TRIGGER_TABLE.replace(
+            "scripts/forge/route_floor.py, ", "", 2
+        )
+        with (
+            mock.patch.object(POLICY, "REVIEWER_EVAL_TRIGGER_TABLE", disabled),
+            self.assertRaises(AssertionError),
+        ):
+            assert_dual_match()
 
 
 class HelpTextTests(unittest.TestCase):

@@ -3,7 +3,7 @@
   "result_id": "fr230-phase-3-re-verification-matrix",
   "slot": "re-verification-matrix",
   "status": "PASS",
-  "subject_candidate_sha256": "668b85a7d0dc87612fd180bcbd5b6cc2c99cba4b6a48c10e7e7191f9139a42b5",
+  "subject_candidate_sha256": "9b40d7b3fdb1ae7954cb40f8ef53f598ef7e8f4467020ad1728400c62480bd90",
   "command": [
     "python3",
     "-m",

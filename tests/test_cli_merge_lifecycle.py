@@ -64,22 +64,24 @@ class MergeCarriedRegressionTests(ADAPTERS.MergeAdapterFixture):
         )
         self.assertEqual(
             caught.exception.message,
-            "forge: review request refused — merge transition is not admitted",
+            "forge: review request refused — a review request is outstanding; "
+            "use review collect",
         )
         self.assertTrue(first.ok)
         self.assertEqual(request["transport"], "single-master-package")
-        self.assertEqual(request["byte_length"], byte_length)
+        self.assertEqual(request["byte_length"], len(master_bytes))
         self.assertEqual(request["window_size"], 65_536)
         self.assertEqual(
             request["window_count"],
-            (byte_length + 65_535) // 65_536,
+            (len(master_bytes) + 65_535) // 65_536,
         )
-        self.assertEqual(master_bytes, oversized)
+        self.assertIn(oversized, master_bytes)
         self.assertEqual(master.read_bytes(), master_bytes)
         self.assertEqual(store.load(self.chain_id)["review"]["request"], request)
         self.assertEqual(
             store.events_path(self.chain_id).read_bytes(), events_before_retry
         )
+        self.collect_review(engine, request)
 
     def test_git_status_failure_is_a_structured_v2_refusal(self) -> None:
         original = CLI.Repository.git
@@ -4138,12 +4140,7 @@ class MergeLifecycleRefreshTests(ADAPTERS.MergeAdapterFixture):
 
     def test_refresh_after_block_increments_generation_and_retains_iteration(self) -> None:
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
-        engine.review_request()
-        request = store.load(self.chain_id)["review"]["request"]
-        verdict = self.write_verdict(
-            "lifecycle-block.txt", "BLOCK", request, ("MAJOR", "repair")
-        )
-        engine.review_attach(str(verdict))
+        self.complete_review(engine, mode="block")
         (self.worktree / "src" / "app.py").write_text(
             "VALUE = 3\n", encoding="utf-8"
         )
@@ -4301,10 +4298,7 @@ class MergeLifecycleApprovalTests(ADAPTERS.MergeAdapterFixture):
             self.worktree, "commit", "--quiet", "-m", "control candidate"
         )
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
-        engine.review_request()
-        request = store.load(self.chain_id)["review"]["request"]
-        verdict = self.write_verdict("control-pass.txt", "PASS", request)
-        engine.review_attach(str(verdict))
+        self.complete_review(engine)
         state = store.load(self.chain_id)
         self.assertEqual(state["state"], "awaiting_approval")
         self.assertTrue(state["tier"]["control"])
@@ -4332,12 +4326,7 @@ class MergeLifecycleApprovalTests(ADAPTERS.MergeAdapterFixture):
 
     def test_finding_disposition_cosign_is_distinct_and_same_state(self) -> None:
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
-        engine.review_request()
-        request = store.load(self.chain_id)["review"]["request"]
-        verdict = self.write_verdict(
-            "finding-block.txt", "BLOCK", request, ("MAJOR", "repair")
-        )
-        engine.review_attach(str(verdict))
+        self.complete_review(engine, mode="block")
         with self.assertRaises(CLI.Refusal) as parked:
             engine.review_disposition(1, "MAJOR", "accepted risk")
         self.assertEqual(parked.exception.reason_code, CLI.V2ReasonCode.APPROVAL_REQUIRED)
@@ -4735,12 +4724,7 @@ class MergeLifecycleVerifyTests(ADAPTERS.MergeAdapterFixture):
 class MergeLifecycleReviewEdgeTests(ADAPTERS.MergeAdapterFixture):
     def blocked_chain(self):
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
-        engine.review_request()
-        request = store.load(self.chain_id)["review"]["request"]
-        verdict = self.write_verdict(
-            "edge-block.txt", "BLOCK", request, ("MAJOR", "repair")
-        )
-        engine.review_attach(str(verdict))
+        self.complete_review(engine, mode="block")
         return store, engine, store.load(self.chain_id)
 
     def test_review_request_and_disposition_cap_refusals_are_structured(self) -> None:

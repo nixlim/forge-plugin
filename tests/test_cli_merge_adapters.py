@@ -129,6 +129,12 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
         plugin_patch = mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT)
         plugin_patch.start()
         self.addCleanup(plugin_patch.stop)
+        for name in ("CODEX", "CLAUDE"):
+            provider_patch = patch_engine(
+                f"{name}_EXECUTABLE", str(self.helpers / f"fake-{name.lower()}")
+            )
+            provider_patch.start()
+            self.addCleanup(provider_patch.stop)
         CLI.register_coordination_seams()
 
         policy = (self.repo / "forge-project.md").read_text(encoding="utf-8")
@@ -440,6 +446,26 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
         with mock.patch.object(RUNTIME, "run_bounded", side_effect=passing):
             outcome = engine.verify()
         return admission, generation, store, engine, outcome, calls
+
+    def complete_review(self, engine, *, mode: str = "pass"):
+        executable = self.helpers / f"fake-claude{'-' + mode if mode != 'pass' else ''}"
+        with patch_engine("CLAUDE_EXECUTABLE", str(executable)):
+            requested = engine.review_request()
+        state = engine.store.load(str(engine.ctx.options.chain_id))
+        request = state["review"]["request"]
+        return requested, request, self.collect_review(engine, request)
+
+    def collect_review(self, engine, request, verdict=None, *findings):
+        completion_path = self.wait_for_review_completion(request)
+        if verdict is not None:
+            verdict_path = self.repo / str(request["verdict_path"])
+            rendered = self.write_verdict("replacement.txt", verdict, request, *findings)
+            verdict_bytes = rendered.read_bytes()
+            verdict_path.write_bytes(verdict_bytes)
+            completion = json.loads(completion_path.read_text(encoding="utf-8"))
+            completion.update(verdict_digest=digest(verdict_bytes), verdict_size=len(verdict_bytes))
+            completion_path.write_bytes(CLI.canonical_bytes(completion) + b"\n")
+        return engine.review_collect()
 
 
 class MergeAdmissionAdapterTests(MergeAdapterFixture):
@@ -1266,10 +1292,7 @@ class MergeGateAdapterTests(MergeAdapterFixture):
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain(
             bound=True
         )
-        engine.review_request()
-        request = store.load(self.chain_id)["review"]["request"]
-        verdict = self.write_verdict("merge-pass.txt", "PASS", request)
-        engine.review_attach(str(verdict))
+        _outcome, request, _collected = self.complete_review(engine)
         attached = store.load(self.chain_id)
         self.assertEqual(attached["state"], "authorized")
 
@@ -1316,10 +1339,7 @@ class MergeGateAdapterTests(MergeAdapterFixture):
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain(
             bound=True
         )
-        engine.review_request()
-        request = store.load(self.chain_id)["review"]["request"]
-        verdict = self.write_verdict("merge-mutation-pass.txt", "PASS", request)
-        engine.review_attach(str(verdict))
+        _outcome, request, _collected = self.complete_review(engine)
 
         _batch, _builders, journal_module = CLI._coordination_modules()
         run_dir = self.repo / ".codex-orchestrator" / "runs" / self.run_id
@@ -1436,16 +1456,7 @@ class MergeGateAdapterTests(MergeAdapterFixture):
         _admission, _generation, _store, engine, _outcome, _calls = self.verify_chain(
             bound=True
         )
-        engine.review_request()
-        state = engine.store.load(self.chain_id)
-        request = state["review"]["request"]
-        verdict = self.write_verdict(
-            "merge-bound-block.txt",
-            "BLOCK",
-            request,
-            ("MAJOR", "fixture block"),
-        )
-        engine.review_attach(str(verdict))
+        self.complete_review(engine, mode="block")
         _batch, _builders, journal = CLI._coordination_modules()
         run_dir = self.repo / ".codex-orchestrator" / "runs" / self.run_id
         gate_three = [
@@ -1460,36 +1471,38 @@ class MergeGateAdapterTests(MergeAdapterFixture):
 
 
 class MergeReviewAdapterTests(MergeAdapterFixture):
-    def test_review_is_mandatory_single_master_and_collect_cannot_skip(self) -> None:
+    def test_review_is_mandatory_single_master_and_collect_requires_request(self) -> None:
         _admission, generation, store, engine, _outcome, _calls = self.verify_chain()
         before = store.events_path(self.chain_id).read_bytes()
         with self.assertRaises(CLI.Refusal) as caught:
             engine.review_collect()
-        self.assertEqual(caught.exception.reason_code, CLI.V2ReasonCode.SKIP_NOT_PERMITTED)
+        self.assertEqual(caught.exception.reason_code, CLI.V2ReasonCode.STATE_PRECONDITION)
         self.assertEqual(
             caught.exception.message,
-            "forge: review collect refused — merge review-final cannot be skipped or replaced",
+            "forge: review collect refused — merge transition is not admitted",
         )
         self.assertEqual(store.events_path(self.chain_id).read_bytes(), before)
 
-        engine.review_request()
-        requested = store.load(self.chain_id)
-        request = requested["review"]["request"]
-        self.assertEqual(request["reviewer"], "review-final")
-        self.assertEqual(request["candidate"], self.candidate_head)
+        with patch_engine("new_attempt_id", return_value="attempt-0123456789abcdef") as mint:
+            engine.review_request()
+        request = store.load(self.chain_id)["review"]["request"]
+        self.assertEqual(
+            (mint.call_count, request["attempt"], request["reviewer"], request["candidate"]),
+            (1, "attempt-0123456789abcdef", "review-final", self.candidate_head),
+        )
         self.assertEqual(
             request["generation_digest"], generation.candidate["generation_digest"]
         )
-        package = self.repo / request["package"]
-        package_bytes = package.read_bytes()
+        package_bytes = (self.repo / request["package"]).read_bytes()
         self.assertEqual(digest(package_bytes), request["package_digest"])
         self.assertEqual(request["byte_length"], len(package_bytes))
         self.assertIn(b"FORGE MERGE REVIEW MASTER PACKAGE v1", package_bytes)
         self.assertIn(
-            f"target: {CLI.canonical_bytes(requested['target']).decode()}".encode(),
+            f"target: {CLI.canonical_bytes(request['target']).decode()}".encode(),
             package_bytes,
         )
         self.assertIn(b"--- BEGIN UNTRUSTED CANDIDATE DIFF ---", package_bytes)
+        self.collect_review(engine, request)
 
     def test_oversized_master_package_uses_single_master_transport(self) -> None:
         _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
@@ -1507,10 +1520,12 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
         state = store.load(self.chain_id)
         request = state["review"]["request"]
         package_path = self.repo / request["package"]
-        package_digest = digest(oversized)
+        package_bytes = package_path.read_bytes()
+        package_digest = digest(package_bytes)
+        byte_length = len(package_bytes)
         window_size = ENGINE.REVIEW_MASTER_WINDOW_BYTES
         window_count = (byte_length + window_size - 1) // window_size
-        receipt = f"{outcome.message}\n{request['invocation']}"
+        prompt = (self.repo / request["prompt_path"]).read_text(encoding="utf-8")
 
         self.assertEqual(state["state"], "reviewing")
         self.assertEqual(request["transport"], "single-master-package")
@@ -1522,39 +1537,26 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
         self.assertTrue(package_path.is_file())
         self.assertEqual(package_path.stat().st_uid, os.geteuid())
         self.assertEqual(package_path.stat().st_nlink, 1)
-        self.assertEqual(package_path.read_bytes(), oversized)
+        self.assertIn(marker, package_bytes)
         self.assertEqual(
             b"".join(
                 ENGINE.iter_verified_master_package_windows(
                     package_path, byte_length, package_digest
                 )
             ),
-            oversized,
+            package_bytes,
         )
-        self.assertIn("authoritative-master", receipt)
-        self.assertIn(
-            f"path={json.dumps(str(package_path), ensure_ascii=True)}", receipt
-        )
-        self.assertIn(f"byte-length={byte_length}", receipt)
-        self.assertIn(f"sha256={package_digest}", receipt)
-        self.assertIn(
-            "windows=[65536*n, min(65536*(n+1), byte_length))", receipt
-        )
-        self.assertIn(
-            f"window-count=ceil({byte_length}/65536)={window_count}", receipt
-        )
-        self.assertIn(
-            "reader=forge_cli.engine.iter_verified_master_package_windows", receipt
-        )
-        self.assertNotIn(marker.decode(), receipt)
-        self.assertEqual(
-            sorted(path.name for path in package_path.parent.iterdir()),
-            ["master-package.txt"],
-        )
+        self.assertIn("authoritative-master", prompt)
+        self.assertIn(f"sha256={package_digest}", prompt)
+        self.assertNotIn(marker.decode(), outcome.message)
+        self.assertEqual(request["lane"], "forge-review-lane/1")
+        self.assertEqual(request["provider"], "claude")
+        self.assertEqual(request["attempt"], Path(request["completion_path"]).parent.name)
+        self.collect_review(engine, request)
         after_events = store.events_path(self.chain_id).read_bytes()
         self.assertTrue(after_events.startswith(before_events))
         self.assertEqual(
-            len(after_events.splitlines()), len(before_events.splitlines()) + 1
+            len(after_events.splitlines()), len(before_events.splitlines()) + 2
         )
 
     def test_disposition_slot_allows_minor_then_exactly_one_above_minor(self) -> None:
@@ -1571,18 +1573,18 @@ class MergeReviewAdapterTests(MergeAdapterFixture):
             for line in store.events_path(self.chain_id).read_bytes().splitlines()
         ]
         self.assertTrue(CLI._merge_history_uses_additive_grammar(admitted_history))
-        engine.review_request()
+        with patch_engine("CLAUDE_EXECUTABLE", str(self.helpers / "fake-claude")):
+            engine.review_request()
         request = store.load(self.chain_id)["review"]["request"]
-        verdict = self.write_verdict(
-            "merge-block.txt",
-            "BLOCK",
+        self.collect_review(
+            engine,
             request,
+            "BLOCK",
             ("MINOR", "minor finding"),
             ("MAJOR", "major finding"),
             ("CRITICAL", "critical finding"),
             ("MAJOR", "second major finding"),
         )
-        engine.review_attach(str(verdict))
         self.assertEqual(store.load(self.chain_id)["state"], "revising")
 
         engine.review_disposition(1, "MINOR", "accept minor risk")

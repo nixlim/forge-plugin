@@ -100,6 +100,8 @@ def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
             return routed.review_request()
         if args.review_command == "collect":
             return routed.review_collect()
+        if args.review_command == "cancel":
+            return routed.review_cancel()
         if args.review_command == "attach":
             return routed.review_attach(args.verdict_file)
         if args.review_command == "disposition":

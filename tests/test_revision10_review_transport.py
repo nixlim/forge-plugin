@@ -8,7 +8,6 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 
@@ -175,19 +174,6 @@ class Revision10MasterReaderTests(unittest.TestCase):
 
 
 class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
-    direct_request_keys = {
-        "argv_digest",
-        "candidate",
-        "invocation",
-        "iteration",
-        "package",
-        "package_digest",
-        "profile_map",
-        "profiles",
-        "requested_at",
-        "reviewer",
-    }
-
     def setUp(self) -> None:
         super().setUp()
         environment_patch = mock.patch.dict(os.environ, self.environment(), clear=True)
@@ -199,6 +185,11 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
         plugin_patch = mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT)
         plugin_patch.start()
         self.addCleanup(plugin_patch.stop)
+        for name, executable in (
+            ("CODEX_EXECUTABLE", self.helpers / "fake-codex"),
+            ("CLAUDE_EXECUTABLE", self.helpers / "fake-claude"),
+        ):
+            self.enterContext(patch_engine(name, str(executable)))
 
     @staticmethod
     def package_of_length(length: int, prefix: bytes = b"") -> bytes:
@@ -226,48 +217,21 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
         reviewer: str = "review-final",
         candidate_diff: bytes = b"fixture candidate diff\n",
     ) -> tuple[object, dict[str, object], Path]:
-        engine, chain_id, state = self.ready_engine()
-        candidate_header = f"candidate: {state['candidate']['sha256']}\n".encode()
+        engine, chain_id, _state = self.ready_engine()
         package_parts = (
             package,
             reviewer,
             ["review-coding"],
             {"scripts/tool.py": ["review-coding"]},
-            candidate_header,
+            b"fixture transport header\n",
             b"fixture controlling policy\n",
             b"fixture fresh reviewer evidence\n",
             candidate_diff,
         )
-        contexts = [
-            patch_engine("_mechanical_complete", return_value=True),
-            mock.patch.object(engine, "_review_package", return_value=package_parts),
-        ]
-        if reviewer == "review-cheap":
-            real_popen = ENGINE.subprocess.Popen
-
-            def launch_reviewer_or_delegate(argv, *args, **kwargs):
-                if (
-                    isinstance(argv, (list, tuple))
-                    and len(argv) >= 3
-                    and argv[1] == "-c"
-                    and argv[2] == ENGINE.REVIEW_LAUNCHER_CODE
-                ):
-                    return SimpleNamespace(pid=424242)
-                return real_popen(argv, *args, **kwargs)
-
-            contexts.append(
-                mock.patch.object(
-                    ENGINE.subprocess,
-                    "Popen",
-                    side_effect=launch_reviewer_or_delegate,
-                )
-            )
-        with contexts[0], contexts[1]:
-            if len(contexts) == 3:
-                with contexts[2]:
-                    outcome = engine.review_request()
-            else:
-                outcome = engine.review_request()
+        with patch_engine("_mechanical_complete", return_value=True), mock.patch.object(
+            engine, "_review_package", return_value=package_parts
+        ):
+            outcome = engine.review_request()
         request = self.state(chain_id)["review"]["request"]
         master = self.repo / str(request["package"])
         self.request_engine = engine
@@ -300,26 +264,19 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
             "reader=forge_cli.engine.iter_verified_master_package_windows", receipt
         )
 
-    def test_exact_threshold_keeps_the_byte_identical_legacy_receipt_and_keys(self) -> None:
+    def test_exact_threshold_keeps_the_byte_identical_direct_package(self) -> None:
         self.assertEqual(ENGINE.REVIEW_DIRECT_PACKAGE_MAX_BYTES, 786_432)
         package = self.package_of_length(ENGINE.REVIEW_DIRECT_PACKAGE_MAX_BYTES)
 
         outcome, request, master = self.request_package(package)
 
         package_digest = sha256(package)
-        candidate = str(request["candidate"])
-        invocation = (
-            "spawn review-final with package "
-            f"{master} candidate {candidate} package {package_digest}"
-        )
-        self.assertEqual(set(request), self.direct_request_keys)
         self.assertEqual(master.read_bytes(), package)
         self.assertEqual(request["package_digest"], package_digest)
-        self.assertEqual(request["invocation"], invocation)
-        self.assertEqual(
-            outcome.message,
-            f"review-final package={master} digest={package_digest}; invocation={invocation}",
-        )
+        self.assertEqual(request["lane"], "forge-review-lane/1")
+        self.assertEqual(request["provider"], "claude")
+        self.assertNotIn("invocation", request)
+        self.assertIn("review-final launched detached", outcome.message)
 
     def test_threshold_plus_one_writes_one_full_master_and_pointer_receipt(self) -> None:
         marker = b"REVISION10_MASTER_BYTES_MUST_NOT_APPEAR_IN_RECEIPT"
@@ -339,20 +296,14 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
         self.assertEqual(request["package_digest"], package_digest)
         self.assertEqual(master.read_bytes(), package)
         self.assertEqual(sha256(master.read_bytes()), package_digest)
-        self.assertEqual(outcome.evidence_refs, (str(request["package"]),))
-        self.assert_oversized_receipt(
-            str(request["invocation"]),
-            master=master,
-            byte_length=byte_length,
-            master_digest=package_digest,
-        )
+        self.assertIn(str(request["package"]), outcome.evidence_refs)
         self.assert_oversized_receipt(
             outcome.message,
             master=master,
             byte_length=byte_length,
             master_digest=package_digest,
         )
-        self.assertNotIn(marker.decode(), str(request["invocation"]))
+        self.assertNotIn("invocation", request)
         self.assertNotIn(marker.decode(), outcome.message)
 
     def assert_standard_oversized_package_is_pointer_only(self) -> None:
@@ -387,37 +338,31 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
         ), self.assertRaises(AssertionError):
             self.assert_standard_oversized_package_is_pointer_only()
 
-    def test_oversized_review_final_attach_keeps_candidate_and_digest_binding(self) -> None:
+    def test_oversized_review_final_collect_keeps_package_binding(self) -> None:
         byte_length = ENGINE.REVIEW_DIRECT_PACKAGE_MAX_BYTES + 1
         package = self.package_of_length(byte_length, b"binding master\n")
         _outcome, request, master = self.request_package(package)
         selected_chain_id = self.request_chain_id
         engine = self.request_engine
-        package_digest = str(request["package_digest"])
-        wrong_digest = (
-            ("0" if package_digest[0] != "0" else "1") + package_digest[1:]
-        )
-        wrong = self.temp_root / "wrong-oversized-digest.txt"
-        wrong.write_text(
-            "VERDICT: PASS\n"
-            f"candidate: {request['candidate']}\n"
-            f"package: {wrong_digest}\n",
-            encoding="utf-8",
-        )
+        self.wait_for_review_completion(request)
+        original = master.read_bytes()
+        master.write_bytes(b"substituted oversized package\n")
 
         with self.assertRaises(CLI.Refusal) as caught:
-            engine.review_attach(str(wrong))
+            engine.review_collect()
         self.assertEqual(
             caught.exception.reason_code, CLI.ReasonCode.REVIEW_VERDICT_INVALID
         )
         self.assertEqual(self.state(selected_chain_id)["state"], "reviewing")
 
-        valid = self.write_verdict("valid-oversized-digest.txt", "PASS", request)
-        attached = engine.review_attach(str(valid))
+        master.write_bytes(original)
+        collected = engine.review_collect()
 
-        self.assertEqual(attached.state, "awaiting_approval")
+        self.assertEqual(collected.state, "awaiting_approval")
         persisted = self.state(selected_chain_id)
-        self.assertEqual(persisted["review"]["verdict"]["package_digest"], package_digest)
+        self.assertEqual(
+            persisted["review"]["verdict"]["package_digest"], request["package_digest"]
+        )
         self.assertEqual(master.read_bytes(), package)
 
 

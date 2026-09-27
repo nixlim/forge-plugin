@@ -362,10 +362,15 @@ type = "layers"
 containers = ["forge_cli.engine"]
 layers = [
     "_engine",
-    "_verbs_decision | _verbs_finalize | _verbs_gate | _verbs_gate_evals | _verbs_lifecycle | _verbs_review_collect | _verbs_review_request | _verbs_status | _verbs_tombstone",
+    "_verbs_decision | _verbs_finalize | _verbs_gate | _verbs_gate_evals | _verbs_lifecycle | _verbs_review_cancel | _verbs_review_collect | _verbs_review_request | _verbs_status | _verbs_tombstone",
+    "_review_launch",
+    "_review_lane_api",
     "_finalize | _merge_candidate_generation",
-    "_approval | _candidate_ops | _fresh_eval_evidence | _gate_checks | _merge_bootstrap_child | _merge_candidate_observation",
+    "_approval | _candidate_ops | _fresh_eval_evidence | _gate_checks | _merge_bootstrap_child | _merge_candidate_observation | _review_attempt",
     "_archive | _classification | _cli_options | _command_lock | _fresh_eval | _journal | _merge_bootstrap_result | _merge_candidate | _merge_claim | _merge_conflict | _merge_epoch | _merge_rebase_integrated | _merge_scope_binding | _merge_scope_derive | _merge_worktree | _parser | _review_transport",
+    "_review_attempt_proc",
+    "_review_wrapper",
+    "_review_wrapper_io",
     "_core",
     "_state",
 ]
@@ -386,7 +391,7 @@ layers = [
     "_merge_engine",
     # MergeEngine decompose (bead forge-plugin-37fr): seam modules hold the moved bodies and import
     # _merge_engine only under TYPE_CHECKING (excluded above); the _steps siblings hold tier-2 helpers.
-    "_engine_abort | _engine_bootstrap | _engine_cleanup | _engine_cleanup_child | _engine_conflict_observation | _engine_epoch_ancestry | _engine_epoch_fetch | _engine_epoch_push | _engine_epoch_rebase | _engine_epoch_suite | _engine_final_mode | _engine_finalize | _engine_gate | _engine_lifecycle | _engine_lock | _engine_observation | _engine_observe_remote | _engine_rebase_recovery | _engine_recover | _engine_recover_bootstrap | _engine_recover_conflict | _engine_refresh | _engine_release_aborted | _engine_release_pending | _engine_review_request | _engine_review_verdict | _engine_start_chain",
+    "_engine_abort | _engine_bootstrap | _engine_cleanup | _engine_cleanup_child | _engine_conflict_observation | _engine_epoch_ancestry | _engine_epoch_fetch | _engine_epoch_push | _engine_epoch_rebase | _engine_epoch_suite | _engine_final_mode | _engine_finalize | _engine_gate | _engine_lifecycle | _engine_lock | _engine_observation | _engine_observe_remote | _engine_rebase_recovery | _engine_recover | _engine_recover_bootstrap | _engine_recover_conflict | _engine_refresh | _engine_release_aborted | _engine_release_pending | _engine_review_launch | _engine_review_request | _engine_review_verdict | _engine_start_chain",
     "_engine_lock_steps | _engine_observe_remote_steps | _engine_recover_steps",
     "_admission | _candidate_observation | _mutation_journal",
 ]

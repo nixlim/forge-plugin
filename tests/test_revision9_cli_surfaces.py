@@ -1265,7 +1265,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             RUNTIME, "PLUGIN_ROOT", ROOT
         ), patch_engine(
             "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
-        ):
+        ), patch_engine("CLAUDE_EXECUTABLE", str(self.helpers / "fake-claude")):
             yield
 
     def invoke_cli(self, *argv: str) -> tuple[int, dict[str, object]]:
@@ -1274,8 +1274,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
     def invoke_cli_at(
         self, repository: Path, *argv: str
     ) -> tuple[int, dict[str, object]]:
-        stdout = io.StringIO()
-        stderr = io.StringIO()
+        stdout, stderr = io.StringIO(), io.StringIO()
         with self.cli_process_context(), contextlib.redirect_stdout(
             stdout
         ), contextlib.redirect_stderr(stderr):
@@ -3615,6 +3614,7 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             RUNTIME, "PLUGIN_ROOT", ROOT
         ), patch_engine(
             "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), patch_engine("CLAUDE_EXECUTABLE", str(self.helpers / "fake-claude")
         ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exit_code = CLI.main(
                 [

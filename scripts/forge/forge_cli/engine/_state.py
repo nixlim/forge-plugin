@@ -8,7 +8,9 @@ import re
 TERMINAL_STATES = {"closed", "aborted"}
 
 
-TERMINAL_TOUCH_VERBS = frozenset({"status", "commit abort", "commit abort-disposition"})
+TERMINAL_TOUCH_VERBS = frozenset(
+    {"status", "commit abort", "commit abort-disposition", "review cancel"}
+)
 
 
 STATE_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -59,6 +61,9 @@ _CHAIN_CAPABILITIES: dict[object, dict[str, Any]] = {}
 
 
 CODEX_EXECUTABLE = "codex"
+
+
+CLAUDE_EXECUTABLE = "claude"
 
 
 FRESH_REVIEWER_EVAL_REQUEST_SCHEMA = "forge-fresh-reviewer-eval-request/1"
@@ -114,152 +119,6 @@ Apply every committed project-focus item, matching project trigger, and complete
 this package. Format findings with principle IDs, complete the Review Completeness Check, and
 provide a PASS or BLOCK verdict with severity-ranked findings.
 """
-
-
-REVIEW_LAUNCHER_CODE = r'''
-import datetime
-import hashlib
-import json
-import os
-import secrets
-import stat
-import subprocess
-import sys
-
-attempt_fd = int(sys.argv[1])
-verdict_fd = int(sys.argv[2])
-argv_json, expected_digest, expected_prompt_digest = sys.argv[3:]
-argv = json.loads(argv_json)
-actual_digest = hashlib.sha256(
-    json.dumps(argv, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-).hexdigest()
-started = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-returncode = 127
-reviewer_pid = None
-error = None
-actual_prompt_digest = ""
-verdict_digest = ""
-verdict_size = 0
-
-def open_regular(name, flags):
-    descriptor = os.open(
-        name,
-        flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NONBLOCK", 0),
-        dir_fd=attempt_fd,
-    )
-    opened = os.fstat(descriptor)
-    if not stat.S_ISREG(opened.st_mode) or opened.st_uid != os.geteuid():
-        os.close(descriptor)
-        raise OSError(f"{name} is not an owner-controlled regular file")
-    return descriptor
-
-try:
-    attempt_stat = os.fstat(attempt_fd)
-    verdict_stat = os.fstat(verdict_fd)
-    if not stat.S_ISDIR(attempt_stat.st_mode) or attempt_stat.st_uid != os.geteuid():
-        raise OSError("attempt directory is unsafe")
-    if not stat.S_ISREG(verdict_stat.st_mode) or verdict_stat.st_uid != os.geteuid():
-        raise OSError("verdict descriptor is unsafe")
-    if actual_digest != expected_digest:
-        raise ValueError("reviewer argv digest mismatch")
-    prompt_fd = open_regular("prompt.md", os.O_RDONLY)
-    try:
-        prompt_parts = []
-        while True:
-            chunk = os.read(prompt_fd, 65536)
-            if not chunk:
-                break
-            prompt_parts.append(chunk)
-        prompt_data = b"".join(prompt_parts)
-    finally:
-        os.close(prompt_fd)
-    actual_prompt_digest = hashlib.sha256(prompt_data).hexdigest()
-    if actual_prompt_digest != expected_prompt_digest:
-        raise ValueError("reviewer prompt digest mismatch")
-    events_fd = open_regular("events.jsonl", os.O_WRONLY | os.O_APPEND)
-    try:
-        child = subprocess.Popen(
-            argv,
-            stdin=subprocess.PIPE,
-            stdout=events_fd,
-            stderr=events_fd,
-            close_fds=True,
-            pass_fds=(verdict_fd,),
-        )
-        reviewer_pid = child.pid
-        child.communicate(prompt_data)
-        returncode = child.returncode
-    finally:
-        os.close(events_fd)
-    # Re-open the verdict by name under the guarded attempt directory: the
-    # reviewer writes --output-last-message by path and may replace the
-    # inode (atomic rename), so the pre-opened descriptor can go stale.
-    read_fd = open_regular("verdict.txt", os.O_RDONLY)
-    try:
-        verdict_parts = []
-        while True:
-            chunk = os.read(read_fd, 65536)
-            if not chunk:
-                break
-            verdict_parts.append(chunk)
-            if sum(len(part) for part in verdict_parts) > 65536:
-                raise ValueError("reviewer verdict exceeds 65536 bytes")
-    finally:
-        os.close(read_fd)
-    verdict_data = b"".join(verdict_parts)
-    verdict_digest = hashlib.sha256(verdict_data).hexdigest()
-    verdict_size = len(verdict_data)
-except BaseException as exc:
-    error = type(exc).__name__
-completed = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
-record = {
-    "argv_digest": actual_digest,
-    "completed_at": completed,
-    "error": error,
-    "prompt_digest": actual_prompt_digest,
-    "returncode": returncode,
-    "reviewer_pid": reviewer_pid,
-    "schema": "forge-review-process/1",
-    "started_at": started,
-    "verdict_digest": verdict_digest,
-    "verdict_size": verdict_size,
-    "wrapper_pid": os.getpid(),
-}
-temporary_name = f".completion-{secrets.token_hex(8)}.tmp"
-descriptor = os.open(
-    temporary_name,
-    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-    0o600,
-    dir_fd=attempt_fd,
-)
-try:
-    data = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8") + b"\n"
-    os.fchmod(descriptor, 0o600)
-    offset = 0
-    while offset < len(data):
-        written = os.write(descriptor, data[offset:])
-        if written <= 0:
-            raise OSError("short completion write")
-        offset += written
-    os.fsync(descriptor)
-    os.close(descriptor)
-    descriptor = -1
-    os.replace(
-        temporary_name,
-        "completion.json",
-        src_dir_fd=attempt_fd,
-        dst_dir_fd=attempt_fd,
-    )
-    os.fsync(attempt_fd)
-finally:
-    if descriptor >= 0:
-        os.close(descriptor)
-    try:
-        os.unlink(temporary_name, dir_fd=attempt_fd)
-    except FileNotFoundError:
-        pass
-'''
 
 
 GLOBAL_OPTIONS_HELP = """\

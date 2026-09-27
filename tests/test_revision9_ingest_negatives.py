@@ -67,6 +67,8 @@ class Revision9IngestPredicateNegativeTests(
             RUNTIME, "PLUGIN_ROOT", ROOT
         ), patch_engine(
             "CODEX_EXECUTABLE", str(self.helpers / "fake-codex")
+        ), patch_engine(
+            "CLAUDE_EXECUTABLE", str(self.helpers / "fake-claude")
         ):
             yield
 
@@ -233,16 +235,9 @@ class Revision9IngestPredicateNegativeTests(
             )
             self.assertEqual(exit_code, 0, requested)
             request = self.state(chain_id)["review"]["request"]
-            verdict = self.write_verdict(
-                f"{run_id}-pass.txt", "PASS", request
-            )
+            self.wait_for_review_completion(request)
             exit_code, attached = self.invoke_cli(
-                "--chain-id",
-                chain_id,
-                "review",
-                "attach",
-                "--verdict-file",
-                str(verdict),
+                "--chain-id", chain_id, "review", "collect"
             )
             self.assertEqual(exit_code, 0, attached)
             self.assertEqual(attached["state"], "awaiting_approval")
