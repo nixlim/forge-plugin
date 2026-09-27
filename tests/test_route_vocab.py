@@ -6,11 +6,41 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "forge"))
 
+import route_config  # noqa: E402
+import route_evidence  # noqa: E402
 import route_vocab  # noqa: E402
+
+MODEL_ID_PROBES = ("fable", "claude-fable-5-1[1m]", "m" * 128, "m" * 129, "model name", "-model")
+
+
+def model_id_grammar_forks() -> list[tuple[str, str]]:
+    """Name each route surface whose model-id verdict differs from route_vocab.MODEL_ID_RE."""
+
+    pinned = re.compile(route_vocab.MODEL_ID_RE)
+    forks: list[tuple[str, str]] = []
+    if (route_config.MODEL_RE.pattern, route_config.MODEL_RE.flags) != (
+        pinned.pattern,
+        pinned.flags,
+    ):
+        forks.append(("route_config.MODEL_RE", pinned.pattern))
+    for raw in MODEL_ID_PROBES:
+        valid = pinned.fullmatch(raw) is not None
+        entry = {"provider": "codex", "model": raw, "effort": "high", "route_source": "local"}
+        entry["route_sha256"] = route_evidence.route_digest("implementer", entry)
+        route_entry_valid = route_evidence._valid_route_entry("implementer", entry) is None
+        verdicts = (
+            ("transcript model", route_evidence._valid_transcript_model(raw)),
+            ("run_started.route model", route_entry_valid),
+            ("orchestrator_model", route_evidence._valid_orchestrator_model({"observed": raw})),
+        )
+        forks.extend((surface, raw) for surface, verdict in verdicts if verdict is not valid)
+    return forks
 
 
 class RouteVocabularyConstantTests(unittest.TestCase):
@@ -395,6 +425,32 @@ class ModelVocabularyTests(unittest.TestCase):
         for raw in (None, 1, [], {}):
             with self.subTest(raw=raw):
                 self.assertIsNone(route_vocab.model_family(raw))
+
+
+class ModelIdGrammarPinTests(unittest.TestCase):
+    def test_route_modules_share_the_route_vocab_model_id_grammar(self) -> None:
+        self.assertEqual([], model_id_grammar_forks())
+
+    def test_grammar_pin_detects_a_forked_route_config_literal(self) -> None:
+        forked = re.compile(route_vocab.MODEL_ID_RE.replace("{0,127}", "{0,255}"))
+        with mock.patch.object(route_config, "MODEL_RE", forked):
+            self.assertEqual(
+                [("route_config.MODEL_RE", route_vocab.MODEL_ID_RE)], model_id_grammar_forks()
+            )
+
+    def test_route_evidence_reads_the_route_vocab_grammar_at_every_site(self) -> None:
+        with mock.patch.object(route_vocab, "MODEL_ID_RE", r"^.+$"):
+            self.assertEqual([("route_config.MODEL_RE", r"^.+$")], model_id_grammar_forks())
+        stand_in = SimpleNamespace(MODEL_ID_RE=r"^.+$")
+        with mock.patch.object(route_evidence, "route_vocab", stand_in):
+            forks = model_id_grammar_forks()
+        self.assertEqual(
+            {"transcript model", "run_started.route model", "orchestrator_model"},
+            {surface for surface, _raw in forks},
+        )
+        self.assertEqual(
+            {"m" * 129, "model name", "-model"}, {raw for _surface, raw in forks}
+        )
 
 
 if __name__ == "__main__":

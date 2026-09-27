@@ -436,9 +436,11 @@ shell hooks must remain portable across macOS and Linux. Treat `docs/specs/forge
 as committed control authority. Preserve exact diagnostics, committed-policy sourcing, one-cell
 `bash -c` argv discipline, process isolation, bounded output, and fail-closed timeouts. Do not
 stage, commit, push, or weaken a gate without the authority required by the active task.
-This host is shared with omnipus-ai. At most 4 implementer executions run concurrently across both
-repositories; Gate 1 cells take the host gate slot (`/dev/shm/agents-sem/gate`) and are never launched
-by hand while another is running; builds and test sweeps outside a gate go through `sem-run`.
+This host is shared with omnipus-ai. Codex implementer executions draw from one host-wide pool of 8
+shared by both repositories: every launch takes a slot with `sem-run impl --slots 8`
+(`/dev/shm/agents-sem/impl`) and waits for one; Gate 1 cells take the host gate slot
+(`/dev/shm/agents-sem/gate`) and are never launched by hand while another is running; builds and test
+sweeps outside a gate go through `sem-run`.
 <!-- FORGE:REGION agent-project-context END -->
 
 ## Mutation Testing

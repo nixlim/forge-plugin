@@ -16,11 +16,13 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Route evidence (forge-plugin-577d) validates transcript, `run_started.route` and `run_started.orchestrator_model` model ids with `route_vocab.MODEL_ID_RE`, the grammar the specification cites, instead of `route_config.MODEL_RE`; a test pins `route_config.MODEL_RE` to that grammar and proves every route_evidence site reads it, and the vocabulary reader tests (forge-plugin-4g68.16) assert the exact unknown Claude execution-role hard error beside the Codex one.
 - Run scope and run-bound candidate validation (forge-plugin-dn9e) now admit the DM-007 committed `.forge/evals/` and `.forge/history/` subtrees while continuing to refuse transient roots and every other `.forge` child; the specification carries the Revision-16 FR-192/FR-014 amendment, and FR-230 phase-3 result evidence is re-minted for the changed `candidate.py` subject (five fixtures, manifest result digests, and the manifest byte pin; generation stays 1).
 - Run-bound fresh reviewer evaluations (forge-plugin-4w5o) now keep the outer journal lock visible to worker-thread durability probes: the formerly thread-local active-lock registry is context-propagating and every fresh-evaluation worker runs under its own copied context. Unbound chains and single-threaded paths are unchanged; the FR-230 phase-3 result evidence is re-minted for the changed fresh_evals.py subject (five fixtures, manifest result digests and the manifest byte pin; generation stays 1).
 
 ### Changed
 
+- Host policy (operator direction 2026-09-27): Codex implementer executions share one host-wide pool of 8 across forge-plugin and omnipus-ai, taken through `sem-run impl --slots 8`, replacing the prose cap of 4 in the `agent-project-context` region of `forge-project.md`.
 - Governance (Revision 17): Gate 1 runs once per candidate and not for docs-class candidates, whose skip is
   recorded under the `gate-1` ID with reason `docs-class candidate` (FR-214/FR-215/DM-013; the pair-voiding rule
   and `_void_mismatched_gate_one_pair` are retired); the Gate 1 cell is a duration-balanced work queue over

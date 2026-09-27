@@ -370,20 +370,24 @@ class VocabularyReaderTests(unittest.TestCase):
                     finding,
                 )
 
-        unknown = {
-            "agent": "unknown-role",
-            "provider": "codex",
-            "role": "navigator",
-            "head": self.head,
-        }
-        self.assertIsNone(committed_route(self.repo, unknown))
-        _authority, _path, error, finding = recorded_authority(
-            self.repo, self.head, unknown, 999
+        unknown_roles = (
+            (998, "claude", "journal line 998: unknown Claude execution role 'navigator'"),
+            (999, "codex", "journal line 999: unknown Codex execution role 'navigator'"),
         )
-        self.assertEqual(
-            "journal line 999: unknown Codex execution role 'navigator'", error
-        )
-        self.assertIsNone(finding)
+        for line, provider, expected_error in unknown_roles:
+            unknown = {
+                "agent": f"unknown-{provider}-role",
+                "provider": provider,
+                "role": "navigator",
+                "head": self.head,
+            }
+            with self.subTest(provider=provider, role="navigator"):
+                self.assertIsNone(committed_route(self.repo, unknown))
+                _authority, _path, error, finding = recorded_authority(
+                    self.repo, self.head, unknown, line
+                )
+                self.assertEqual(expected_error, error)
+                self.assertIsNone(finding)
 
     def test_monitor_accepts_legacy_sources_but_still_rejects_unknowns(self) -> None:
         targets, errors = monitor.inflight_targets(self.run_dir)

@@ -93,7 +93,7 @@ def _last_transcript_model(path: Path) -> str | None:
 
 
 def _valid_transcript_model(value: object) -> bool:
-    return isinstance(value, str) and route_config.MODEL_RE.fullmatch(value) is not None
+    return isinstance(value, str) and re.fullmatch(route_vocab.MODEL_ID_RE, value) is not None
 
 
 def orchestrator_model(repo: Path) -> dict[str, object]:
@@ -150,7 +150,7 @@ def _valid_route_entry(role: str, entry: object) -> str | None:
     detail = None
     if not isinstance(provider, str) or provider not in route_config.PROVIDERS:
         detail = f"run_started.route.{role}.provider must be one of claude, codex"
-    elif not isinstance(model, str) or route_config.MODEL_RE.fullmatch(model) is None:
+    elif not isinstance(model, str) or re.fullmatch(route_vocab.MODEL_ID_RE, model) is None:
         detail = f"run_started.route.{role}.model must be a valid model id"
     elif not isinstance(effort, str) or effort not in route_config.EFFORTS[provider]:
         detail = f"run_started.route.{role}.effort is invalid for provider {provider}"
@@ -175,7 +175,7 @@ def _valid_orchestrator_model(value: object) -> bool:
         observed = value.get("observed")
         return (
             isinstance(observed, str)
-            and route_config.MODEL_RE.fullmatch(observed) is not None
+            and re.fullmatch(route_vocab.MODEL_ID_RE, observed) is not None
         )
     reason = value.get("reason")
     return (
