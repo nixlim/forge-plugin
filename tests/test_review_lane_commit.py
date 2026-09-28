@@ -23,8 +23,8 @@ FIXTURE = (
     Path(__file__).parent
     / "fixtures/review_lane/vendored_verbs_review_collect_c35af17.json"
 )
-CANDIDATE = "1" * 64
-PACKAGE = "2" * 64
+CANDIDATE, PACKAGE = "1" * 64, "2" * 64
+GATE_ONE_PASS = {"candidate": CANDIDATE, "result": "passed", "stdout_stderr_digest": "6" * 64}
 ATTEMPT_ID = "attempt-" + "a" * 16
 FUTURE = "2999-01-01T00:00:00Z"
 IDENTITY = {
@@ -241,7 +241,7 @@ class CommitReviewPathTests(unittest.TestCase):
         )
         package = b"EXACT-PACKAGE-BYTES\n"
         parts = (package, "review-final", [], {}, b"h", b"c", b"f", b"d")
-        state = {"candidate": {"sha256": CANDIDATE}}
+        state = reviewing(None) | {"kind": "commit", "steps": {"gate-1": [GATE_ONE_PASS]}}
         with mock.patch.object(REQUEST, "_review_package_is_oversized", return_value=False):
             prompt = REQUEST._review_prompt(
                 state, parts, paths.package_path, PACKAGE, route, paths

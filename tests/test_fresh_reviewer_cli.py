@@ -110,10 +110,12 @@ class FreshReviewerCLIFixture(unittest.TestCase):
             if step_id == CORE.FRESH_REVIEWER_EVALS_GATE:
                 continue
             if step_id == "gate-1":
-                self.state["steps"][step_id] = [
-                    {**passed, "env_fingerprint": "fresh-cli-fixture"},
-                    {**passed, "env_fingerprint": "fresh-cli-fixture"},
-                ]
+                gate_passed = {
+                    **passed,
+                    "env_fingerprint": "fresh-cli-fixture",
+                    "stdout_stderr_digest": sha256(b"fresh-cli gate-1 fixture\n"),
+                }
+                self.state["steps"][step_id] = [dict(gate_passed), dict(gate_passed)]
             else:
                 self.state["steps"][step_id] = [dict(passed)]
         CLI._transition_state(self.state, "verifying")

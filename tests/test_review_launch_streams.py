@@ -211,7 +211,7 @@ class ReviewLaunchStreamTests(WrapperHarness):
         self.assertEqual(WRAPPER.STDERR_LIMIT_BYTES, 1024 * 1024)
         self.assertEqual(WRAPPER.VERDICT_LIMIT_BYTES, 65_536)
         self.assertEqual(WRAPPER.STREAM_DRAIN_SECONDS, 1.0)
-        self.assertEqual(LAUNCH.PROFILE_TIMEOUT_SECONDS["review"], 1200)
+        self.assertEqual(LAUNCH.PROFILE_TIMEOUT_SECONDS["review"], 2400)
         self.assertEqual(LAUNCH.IDENTITY_DEADLINE_SECONDS, 60)
         self.assertEqual(LAUNCH.VERSION_PROBE_TIMEOUT_SECONDS, 10)
         self.assertEqual(LAUNCH.VERSION_PROBE_LIMIT_BYTES, 4096)
@@ -221,10 +221,10 @@ class ReviewLaunchStreamTests(WrapperHarness):
 
     def test_production_launcher_binds_isolation_source_limits_and_environment(self) -> None:
         source = WRAPPER.wrapper_source()
-        baseline = self.prepared_launch("prepared-a", source, 1200, 5)
+        baseline = self.prepared_launch("prepared-a", source, 2400, 5)
         timeout = self.prepared_launch("prepared-b", source, 7, 5)
-        grace = self.prepared_launch("prepared-c", source, 1200, 1)
-        changed_source = self.prepared_launch("prepared-d", source + "\n# source mutant\n", 1200, 5)
+        grace = self.prepared_launch("prepared-c", source, 2400, 1)
+        changed_source = self.prepared_launch("prepared-d", source + "\n# source mutant\n", 2400, 5)
         launches = (baseline, timeout, grace, changed_source)
         self.addCleanup(lambda: [LAUNCH.close_review_launch(item) for item in launches])
 
@@ -239,7 +239,7 @@ class ReviewLaunchStreamTests(WrapperHarness):
             assert_isolated(mutant)
         self.assertEqual(len({item.launcher_argv_digest for item in launches}), 4)
         config = json.loads(baseline.config_json)
-        self.assertEqual((config["timeout"], config["grace"]), (1200, 5))
+        self.assertEqual((config["timeout"], config["grace"]), (2400, 5))
 
         sentinel = object()
         with mock.patch.object(LANE_API.subprocess, "Popen", return_value=sentinel) as popen:

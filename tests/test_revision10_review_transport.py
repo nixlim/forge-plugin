@@ -201,7 +201,17 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
         self.change("scripts/tool.py", "CONTROL = 2\n")
         started = self.start("scripts/tool.py")
         chain_id = str(started["chain_id"])
-        state = self.force_state(chain_id, "reviewing")
+
+        def record_gate_one_pass(state):
+            state["steps"]["gate-1"] = [
+                {
+                    "candidate": state["candidate"]["sha256"],
+                    "result": "passed",
+                    "stdout_stderr_digest": sha256(b"revision-10 gate-1 fixture\n"),
+                }
+            ]
+
+        state = self.force_state(chain_id, "reviewing", record_gate_one_pass)
         repository = CLI.Repository(self.repo)
         context = CLI.CommandContext(
             repository,

@@ -25,7 +25,7 @@ from forge_cli.engine._state import CODEX_EXECUTABLE as CODEX_EXECUTABLE
 from forge_cli.envelope import FrozenError, ReasonCode, Refusal
 from forge_cli.policy import sha256_bytes
 
-PROFILE_TIMEOUT_SECONDS = {"review": 1200, "implementer": 3600, "plan": 1200}
+PROFILE_TIMEOUT_SECONDS = {"review": 2400, "implementer": 3600, "plan": 1200}
 VERSION_PROBE_TIMEOUT_SECONDS = 10
 VERSION_PROBE_LIMIT_BYTES = 4096
 IDENTITY_DEADLINE_SECONDS = 60

@@ -35,7 +35,7 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
     def test_committed_timeouts_and_probe_bounds_are_pinned(self) -> None:
         self.assertEqual(
             LAUNCH.PROFILE_TIMEOUT_SECONDS,
-            {"review": 1200, "implementer": 3600, "plan": 1200},
+            {"review": 2400, "implementer": 3600, "plan": 1200},
         )
         self.assertEqual(LAUNCH.IDENTITY_DEADLINE_SECONDS, 60)
         self.assertEqual(LAUNCH.VERSION_PROBE_TIMEOUT_SECONDS, 10)

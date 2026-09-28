@@ -236,23 +236,26 @@ class SpecificationRevision15Tests(unittest.TestCase):
         self.assertEqual(SPEC.count("forge review cancel --chain-id <id>"), 2)
         self.assertIn("`review request|collect|cancel|attach|disposition`", SPEC)
         self.assertNotIn("`citation invalid`", block)
-        self.assertNotIn("read _ <&3 || exit 97", block.split(
-            "Revision-17 headless-review amendment to **FR-246**:", 1
-        )[1])
+        amendment = "Revision-17 headless-review amendment to **FR-246**:"
+        self.assertNotIn("read _ <&3 || exit 97", block.split(amendment, 1)[1])
 
     def test_fr246_engine_verdict_transport_is_single_and_trailing(self) -> None:
-        block = requirement_block(SPEC, "FR-246")
-        sentence = (
+        sentences = (
             "For an engine-launched reviewer, Forge extracts the shared review-verdict "
-            "transport from the byte-identical retained raw final message as its single "
-            "trailing verdict block—the last stripped line exactly `VERDICT: PASS` or "
-            "`VERDICT: BLOCK` followed only by transport-grammar lines—and fails closed "
-            "on zero or several exact verdict lines (including an otherwise quoted exact "
-            "verdict line) or any other trailing line. Any stripped line beginning with "
-            "`VERDICT:` that is not exactly `VERDICT: PASS` or exactly `VERDICT: BLOCK`, "
-            "anywhere in the message, also fails closed."
-        )
-        self.assertEqual(block.count(sentence), 1)
+            "transport from the byte-identical retained raw final message as its single trailing "
+            "verdict block—the last stripped line exactly `VERDICT: PASS` or `VERDICT: BLOCK` "
+            "followed only by transport-grammar lines—and fails closed on zero or several exact "
+            "verdict lines (including an otherwise quoted exact verdict line) or any other "
+            "trailing line.\n"
+            "Any stripped line beginning with `VERDICT:` that is not exactly `VERDICT: PASS` or "
+            "exactly `VERDICT: BLOCK`, anywhere in the message, also fails closed.\n"
+            "The engine prompt derives its Gate 1 scope from the chain's current-candidate record: "
+            "a newest current-candidate passed run states that full discovery passed on that exact "
+            "candidate, cites its recorded evidence, prohibits re-running full discovery or the "
+            "Gate 1 cell, and directs focused modules plus in-memory disable checks; an operator "
+            "or docs-class skip states the recorded reason and leaves test selection to the "
+            "reviewer within the fixed review timeout; any other state fails closed.").splitlines()
+        self.assertEqual([requirement_block(SPEC, "FR-246").count(s) for s in sentences], [1, 1, 1])
 
     def test_fr245_claude_reviewer_profiles_are_exact(self) -> None:
         block = requirement_block(SPEC, "FR-245")

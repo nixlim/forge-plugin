@@ -25,6 +25,7 @@ REQUEST = package_module("engine._verbs_review_request")
 
 CANDIDATE = commit_fixture.CANDIDATE
 PACKAGE = commit_fixture.PACKAGE
+GATE_DIGEST = "3" * 64
 BARE = review_support.verdict_for_prompt(
     review_support.review_prompt(CANDIDATE, PACKAGE).decode("utf-8")
 ).encode()
@@ -46,7 +47,14 @@ REAL_SHAPED = (
     b"is separately bound, so prose and markdown remain auditable without entering the "
     b"strict parser. No above-MINOR finding remains.\n\n"
 ) + TRANSPORT + b"\n"
-PROMPT_INSTRUCTION = (
+REVIEW_SCOPE_PARAGRAPH = (
+    "\nGate 1 full unittest discovery passed on this exact candidate. "
+    f"The chain records that run with stdout/stderr SHA-256 {GATE_DIGEST}. "
+    "Do not run full unittest discovery or the Gate 1 cell. Run only focused "
+    "test modules for the change, plus your own in-memory disable checks. "
+    "Finish well within the review timeout.\n"
+).encode()
+PROMPT_INSTRUCTION = REVIEW_SCOPE_PARAGRAPH + (
     "\nThe reviewer's final message must END with exactly one verdict block. "
     "Nothing may follow that block, including an Iteration: line.\n"
     "The block must start with a first line that is exactly VERDICT: PASS or "
@@ -362,11 +370,28 @@ class VerdictTransportTests(unittest.TestCase):
             role, provider, "fixture-model", "high", "committed-default", "a" * 64,
             "read-only" if provider == "codex" else "instruction-bounded",
         )
-        commit_state = {"candidate": {"sha256": CANDIDATE}}
+        commit_state = {
+            "kind": "commit",
+            "candidate": {"sha256": CANDIDATE},
+            "steps": {"gate-1": [{
+                "candidate": CANDIDATE, "result": "passed",
+                "stdout_stderr_digest": GATE_DIGEST,
+            }]},
+        }
         parts = (
             b"package", role, [], {}, b"header", b"control", b"fresh", b"diff"
         )
-        merge_state = {"candidate": {"candidate_head": CANDIDATE}}
+        merge_state = {
+            "kind": "merge",
+            "candidate": {
+                "candidate_head": CANDIDATE, "generation_digest": "4" * 64,
+            },
+            "steps": {"gate-1": [{
+                "result": "passed", "generation_digest": "4" * 64,
+                "criterion": "gate-1: full unittest discovery",
+                "stdout_stderr_digest": GATE_DIGEST,
+            }]},
+        }
         with (
             mock.patch.object(REQUEST, "_review_package_is_oversized", return_value=oversized),
             mock.patch.object(
@@ -389,9 +414,24 @@ class VerdictTransportTests(unittest.TestCase):
 
     def test_prompt_instruction_bytes_disclose_prefix_and_trailing_rules(self) -> None:
         self.assertEqual(
-            LANE_API.verdict_prompt_instruction(CANDIDATE, PACKAGE), PROMPT_INSTRUCTION
+            LANE_API.verdict_prompt_instruction(
+                CANDIDATE,
+                PACKAGE,
+                {
+                    "kind": "commit",
+                    "candidate": {"sha256": CANDIDATE},
+                    "steps": {"gate-1": [{
+                        "candidate": CANDIDATE, "result": "passed",
+                        "stdout_stderr_digest": GATE_DIGEST,
+                    }]},
+                },
+            ),
+            PROMPT_INSTRUCTION,
         )
         self.assertNotIn(b"\nVERDICT:", PROMPT_INSTRUCTION)
+        self.assertFalse(any(
+            line.startswith(b"VERDICT:") for line in REVIEW_SCOPE_PARAGRAPH.splitlines()
+        ))
         self.assertIn(
             b"Nothing may follow that block, including an Iteration: line.",
             PROMPT_INSTRUCTION,
@@ -416,25 +456,28 @@ class VerdictTransportTests(unittest.TestCase):
                     prompt = self._prompt(lane, provider, role, oversized)
                     self.assertTrue(prompt.endswith(PROMPT_INSTRUCTION))
                     self.assertEqual(prompt.count(PROMPT_INSTRUCTION), 1)
+                    self.assertEqual(prompt.count(REVIEW_SCOPE_PARAGRAPH), 1)
 
-    def test_prompt_instruction_disable_leg_fails_for_every_provider_role_cell(
+    def test_prompt_scope_paragraph_disable_leg_fails_for_every_prompt_path(
         self,
     ) -> None:
-        for lane, provider, role in PROMPT_CELLS:
-            with self.subTest(lane=lane, provider=provider, role=role):
-                self.assertTrue(
-                    self._prompt(lane, provider, role, False).endswith(
-                        PROMPT_INSTRUCTION
-                    )
-                )
-                with mock.patch.object(
-                    LANE_API, "verdict_prompt_instruction", return_value=b""
-                ), self.assertRaises(AssertionError):
-                    self.assertTrue(
-                        self._prompt(lane, provider, role, False).endswith(
-                            PROMPT_INSTRUCTION
-                        )
-                    )
+        mutant = mutated_function(
+            LANE_API.verdict_prompt_instruction,
+            "return review_scope_paragraph(state) + verdict_block_instruction(",
+            "return b'' + verdict_block_instruction(",
+        )
+        for oversized in (False, True):
+            for lane, provider, role in PROMPT_CELLS:
+                with self.subTest(
+                    lane=lane, provider=provider, role=role, oversized=oversized
+                ):
+                    prompt = self._prompt(lane, provider, role, oversized)
+                    self.assertEqual(prompt.count(REVIEW_SCOPE_PARAGRAPH), 1)
+                    with mock.patch.object(
+                        LANE_API, "verdict_prompt_instruction", new=mutant
+                    ), self.assertRaises(AssertionError):
+                        prompt = self._prompt(lane, provider, role, oversized)
+                        self.assertEqual(prompt.count(REVIEW_SCOPE_PARAGRAPH), 1)
 
 
 if __name__ == "__main__":

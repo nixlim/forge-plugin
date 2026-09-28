@@ -194,7 +194,7 @@ def _review_package(
     return package, reviewer, profiles, profile_map, header, control, fresh_evidence, candidate_diff
 
 
-def _review_prompt(
+def _review_prompt_base(
     state: Mapping[str, Any],
     package_parts: tuple[bytes, str, list[str], dict[str, list[str]], bytes, bytes, bytes, bytes],
     package_path: Path,
@@ -234,8 +234,25 @@ def _review_prompt(
         )
     if route.role == "review-final" and route.provider == "codex":
         prompt = paths.role_body + b"\n" + prompt
+    return prompt
+
+
+def _review_prompt(
+    state: Mapping[str, Any],
+    package_parts: tuple[bytes, str, list[str], dict[str, list[str]], bytes, bytes, bytes, bytes],
+    package_path: Path,
+    package_digest: str,
+    route: _review_launch.ReviewRoute,
+    paths: _review_launch.ReviewPaths,
+) -> bytes:
+    """Build a commit-lane prompt, requiring Gate 1 evidence for chain states."""
+
+    prompt = _review_prompt_base(
+        state, package_parts, package_path, package_digest, route, paths
+    )
+    candidate = str(state["candidate"]["sha256"])
     return prompt + _review_lane_api.verdict_prompt_instruction(
-        str(state["candidate"]["sha256"]), package_digest
+        candidate, package_digest, state
     )
 
 

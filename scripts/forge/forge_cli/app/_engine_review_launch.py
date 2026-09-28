@@ -168,7 +168,7 @@ def _review_prompt(
         ).encode()
     if route.provider == "codex":
         prompt = paths.role_body + b"\n" + prompt
-    return prompt + _review_lane_api.verdict_prompt_instruction(candidate, package_digest)
+    return prompt + _review_lane_api.verdict_prompt_instruction(candidate, package_digest, state)
 
 
 def _request_record(

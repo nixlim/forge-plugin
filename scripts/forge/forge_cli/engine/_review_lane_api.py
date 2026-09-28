@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ from forge_cli import chain_core
 from forge_cli.engine import _review_attempt
 from forge_cli.engine._review_wrapper import reap_detached, wrapper_source
 from forge_cli.engine._review_wrapper_io import COMPLETION_SCHEMA as COMPLETION_SCHEMA
+from forge_cli.envelope import ReasonCode, Refusal, V2ReasonCode
 
 COMPLETION_KEYS = _review_attempt.COMPLETION_KEYS
 COMPLETION_ERRORS = _review_attempt.COMPLETION_ERRORS
@@ -38,6 +40,124 @@ LOST_OUTCOMES = frozenset({
 })
 _VERDICT_LINES = frozenset({"VERDICT: PASS", "VERDICT: BLOCK"})
 _FINDING_LINE = re.compile(r"finding: (CRITICAL|MAJOR|MINOR) .+")
+
+
+def _scope_refusal(state: Mapping[str, Any], observed: str) -> Refusal:
+    message = (
+        "forge: review request refused — no truthful current-candidate Gate 1 scope record"
+    )
+    expected = "a recorded operator/docs-class skip or a cited current Gate 1 PASS"
+    if state.get("kind") == "merge":
+        chain_id = str(state.get("chain_id") or "")
+        remediation = "forge merge gate run gate-1"
+        if chain_id:
+            remediation += f" --chain-id {chain_id}"
+        return chain_core._merge_refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            message,
+            expected=expected,
+            observed=observed,
+            remediation=remediation,
+            chain=state,
+        )
+    command_state = state if isinstance(state.get("chain_id"), str) else None
+    return Refusal(
+        ReasonCode.EVIDENCE_INCOMPLETE,
+        message,
+        expected=expected,
+        observed=observed,
+        remediation=chain_core._forge_command(command_state, "gate run gate-1"),
+        chain=state,
+    )
+
+
+def _passed_scope(state: Mapping[str, Any], record: Mapping[str, Any]) -> bytes:
+    digest = record.get("stdout_stderr_digest")
+    if not isinstance(digest, str) or chain_core.SHA256_RE.fullmatch(digest) is None:
+        raise _scope_refusal(state, "current Gate 1 PASS has no recorded evidence digest")
+    return (
+        "\nGate 1 full unittest discovery passed on this exact candidate. "
+        f"The chain records that run with stdout/stderr SHA-256 {digest}. "
+        "Do not run full unittest discovery or the Gate 1 cell. Run only focused "
+        "test modules for the change, plus your own in-memory disable checks. "
+        "Finish well within the review timeout.\n"
+    ).encode()
+
+
+def _operator_skip_scope(state: Mapping[str, Any], record: Mapping[str, Any]) -> bytes:
+    reason = record.get("reason")
+    if not isinstance(reason, str) or not reason:
+        raise _scope_refusal(state, "operator Gate 1 skip has no recorded reason")
+    return (
+        "\nGate 1 full unittest discovery was operator-skipped on this exact candidate. "
+        f"The chain's recorded skip reason is {json.dumps(reason)}. "
+        "The review timeout is fixed; choose tests that fit within it.\n"
+    ).encode()
+
+
+def _docs_skip_scope(state: Mapping[str, Any]) -> bytes:
+    reason = json.dumps(chain_core.DOCS_CLASS_SKIP_REASON)
+    return (
+        "\nGate 1 full unittest discovery was skipped on this exact docs-class candidate. "
+        f"The chain's recorded skip reason is {reason}. "
+        "The review timeout is fixed; choose tests that fit within it.\n"
+    ).encode()
+
+
+def _commit_review_scope(state: Mapping[str, Any]) -> bytes:
+    steps = state.get("steps")
+    candidate = state.get("candidate")
+    if not isinstance(steps, Mapping) or not isinstance(candidate, Mapping):
+        raise _scope_refusal(state, "commit Gate 1 state is malformed")
+    runs = steps.get("gate-1")
+    current = (
+        [
+            record
+            for record in runs
+            if isinstance(record, Mapping)
+            and record.get("candidate") == candidate.get("sha256")
+        ]
+        if isinstance(runs, list)
+        else []
+    )
+    newest = current[-1] if current else None
+    if isinstance(newest, Mapping) and newest.get("result") == "passed":
+        return _passed_scope(state, newest)
+    skips = steps.get("user_skips")
+    operator_skip = skips.get("gate-1") if isinstance(skips, Mapping) else None
+    if isinstance(operator_skip, Mapping):
+        return _operator_skip_scope(state, operator_skip)
+    if newest is None:
+        raise _scope_refusal(state, "no Gate 1 record matches the current candidate")
+    if (
+        newest.get("result") == "skipped"
+        and newest.get("reason") == chain_core.DOCS_CLASS_SKIP_REASON
+    ):
+        return _docs_skip_scope(state)
+    raise _scope_refusal(state, f"newest current Gate 1 result is {newest.get('result')!r}")
+
+
+def _merge_review_scope(state: Mapping[str, Any]) -> bytes:
+    candidate = state.get("candidate")
+    steps = state.get("steps")
+    if not isinstance(candidate, Mapping) or not isinstance(steps, Mapping):
+        raise _scope_refusal(state, "merge Gate 1 state is malformed")
+    facts = chain_core._merge_current_gate_facts(
+        "gate-1", steps.get("gate-1"), str(candidate.get("generation_digest") or "")
+    )
+    if facts is None or len(facts) != 1:
+        raise _scope_refusal(state, "no current-generation Gate 1 PASS is recorded")
+    return _passed_scope(state, facts[0])
+
+
+def review_scope_paragraph(state: Mapping[str, Any]) -> bytes:
+    """Render the truthful Gate 1 scope instruction from persisted chain evidence."""
+
+    if state.get("kind") == "commit":
+        return _commit_review_scope(state)
+    if state.get("kind") == "merge":
+        return _merge_review_scope(state)
+    raise _scope_refusal(state, f"unknown chain kind {state.get('kind')!r}")
 
 
 def verdict_transport(data: bytes) -> bytes:
@@ -69,8 +189,8 @@ def verdict_transport(data: bytes) -> bytes:
     return "\n".join(transport).encode("utf-8")
 
 
-def verdict_prompt_instruction(candidate: str, package_digest: str) -> bytes:
-    """Render the final-message suffix contract after the package digest exists."""
+def verdict_block_instruction(candidate: str, package_digest: str) -> bytes:
+    """Render the invariant trailing final-message contract."""
 
     return (
         "\nThe reviewer's final message must END with exactly one verdict block. "
@@ -82,6 +202,16 @@ def verdict_prompt_instruction(candidate: str, package_digest: str) -> bytes:
         "Zero or more lines: finding: <CRITICAL|MAJOR|MINOR> <text>\n"
         "No other line of the final message may begin with VERDICT:.\n"
     ).encode()
+
+
+def verdict_prompt_instruction(
+    candidate: str, package_digest: str, state: Mapping[str, Any]
+) -> bytes:
+    """Render the evidence-derived scope followed by the trailing verdict contract."""
+
+    return review_scope_paragraph(state) + verdict_block_instruction(
+        candidate, package_digest
+    )
 
 
 def cancel_kill_unconfirmed_message(members: Sequence[int]) -> str:

@@ -59,7 +59,7 @@ class ReviewLaunchIsolationTests(ReviewLaneSupport, unittest.TestCase):
         self.assertEqual(launch.launcher_argv[3], WRAPPER.wrapper_source())
         self.assertLess(len(launch.launcher_argv[3].encode()), 131_072)
         config = json.loads(launch.config_json)
-        self.assertEqual((config["timeout"], config["grace"]), (1200, 5))
+        self.assertEqual((config["timeout"], config["grace"]), (2400, 5))
         self.assertEqual(config["role_body_digest"], paths.role_body_digest)
         self.assertNotIn("leaves", config)
         self.assertNotIn("events_existing", config)
