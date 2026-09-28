@@ -67,13 +67,14 @@ REVIEWED_BASE="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
 WORKTREE_DIR="$(git rev-parse --show-toplevel)"
 BRANCH="$(git branch --show-current)"
 git diff "origin/${DEFAULT_BRANCH}...HEAD"
-git diff --name-only "origin/${DEFAULT_BRANCH}...HEAD"
+git diff --no-renames --no-ext-diff --no-textconv --name-only "origin/${DEFAULT_BRANCH}...HEAD"
 ```
 
 The full merge-diff operation is `git diff origin/<default-branch>...HEAD`. Classify every changed
 path from that range against the committed `file-categories` region returned by
-`git show HEAD:forge-project.md` and the built-in `control` category. The built-in category always
-includes:
+`git show HEAD:forge-project.md` and the built-in `control` category. List those paths with the
+`--no-renames` name listing above, so a rename lists both its source and its destination and a
+rename out of a guarded path still classifies its source. The built-in category always includes:
 
 - `forge-project.md`
 - `.forge-manifest`
@@ -260,9 +261,12 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-test-quality.py" -- <touched-
 
 Pass each path as its own argv element. Exit 1 from the Python AST branch or exit 2 from sensor
 failure blocks Gate 2. Exit 0 advances, while every non-Python advisory, no-heuristic notice, and
-valid waiver path plus reason remains in Gate 2 and Gate 3 evidence. A waiver affects only the
-assertion sensor for its one file; it never skips tests, scoped mutation, invariants, or sensing in
-another file.
+valid waiver path plus reason remains in Gate 2 and Gate 3 evidence. A touched test path the
+candidate range deletes, including the source of a rename, is a skipped input, not a sensor
+failure: keep each `forge: deleted test path skipped: <path>` note the sensor prints in the same
+Gate 2 and Gate 3 evidence; the note is not a surfaced disposition and emits no `assertion_*`
+event. A waiver affects only the assertion sensor for its one file; it never skips tests, scoped
+mutation, invariants, or sensing in another file.
 
 After preserving the sensor's primary result, hash the exact merge-diff bytes used for this gate
 candidate and make exactly one advisory `emit-decision-event.py` append attempt for each surfaced
@@ -281,8 +285,13 @@ Gate 3 is unconditional. Do not skip, downgrade, replace, or auto-PASS it for an
 range, for a branch composed entirely of four-line fast-marker commits, or for prior commit-level
 review evidence. Merge composition and integration risk are assessed independently here.
 
-Start the `review-final` Claude agent as a reviewer distinct from the author. Give it the full
-`CANDIDATE_HEAD`, the constitution at
+Start the `review-final` Claude agent as a reviewer distinct from the author. Until this skill owns
+a Forge CLI merge chain, FR-060's engine-owned `review request` plus `review collect` path is not
+available to it, and the spec's Revision-17 headless-review amendment to FR-246 keeps this
+interactive agent as its Gate 3 reviewer on its committed agent definition: a developer-local
+`review-final` route does not apply to it, and `forge review attach` is never used for it.
+
+Give it the full `CANDIDATE_HEAD`, the constitution at
 `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md`, and the exact, unmodified diff generated for
 the resolved full-SHA candidate range:
 
@@ -342,7 +351,7 @@ Show all of the following:
 
 ```bash
 git diff --stat origin/<default-branch>...HEAD
-git diff --name-only origin/<default-branch>...HEAD
+git diff --no-renames --no-ext-diff --no-textconv --name-only origin/<default-branch>...HEAD
 git rev-parse HEAD
 ```
 
@@ -525,8 +534,8 @@ Perform all required re-runs inside the lock and before push:
   mutation checks by repeating the plugin runner invocation with `--base "$INTEGRATED_BASE"` and
   `--head "$INTEGRATED_HEAD"`, replacing the earlier mutation evidence file (and passing the same
   explicitly selected journal/task pair when a run is open). Re-derive changed paths and
-  assertion-sensor inputs from `INTEGRATED_RANGE`; require clean Gate 1 and Gate 2 passes while
-  preserving mutation findings as Gate 3 evidence.
+  assertion-sensor inputs from `INTEGRATED_RANGE` with the same `--no-renames` name listing; require
+  clean Gate 1 and Gate 2 passes while preserving mutation findings as Gate 3 evidence.
   This covers both remote movement after the initial gates and a candidate that was already behind
   the default branch when the chain began. Never push an untested integrated tree.
 - If conflicts were resolved, Gate 3 is mandatory on the post-rebase candidate because the content

@@ -296,6 +296,14 @@ forge review disposition --finding <n> --severity <sev> --resolution <text>
     mechanism (FR-053).
 ```
 
+> **Revision-17 note (2026-09-27).** The spec's FR-246 amendment
+> supersedes the tier split in `review request`, `review collect`, and `review attach` above. Both
+> tiers are engine-launched detached processes on the route their resolved `review-cheap` or
+> `review-final` role selects, including a headless Claude `review-final`; `review collect` alone
+> binds a new verdict; the added `review cancel` ends an attempt whose reviewer outlived its
+> wrapper; and `review attach` survives only for a pre-upgrade request with the
+> legacy `invocation` shape. The revision-5 text above is kept as the design record.
+
 ### Anti-anchoring (best-effort ordering control)
 
 ```
@@ -809,6 +817,15 @@ both the current candidate hash and that package digest, validates the grammar, 
 the attach. This converts "one sloppy Write call" into "deliberate multi-step forgery" —
 moving the failure out of the negligence class — and no further. The spec must state this
 asymmetry rather than paper over it.
+
+> **Revision-17 note (2026-09-27).** The limit stated above
+> held for an interactive Agent-tool subagent, not for the headless Claude CLI: under the spec's
+> FR-246 amendment `review request` launches `review-final` itself as a detached process with
+> recorded identity and `review collect` binds its verdict, so both tiers now share the structural
+> closure described for the Codex tier, within the two tradeoffs that amendment states. The legacy
+> `/forge:worktree-merge` skill, which owns no CLI merge chain, keeps the interactive subagent under
+> that amendment's deferral, so the limit above still applies to its Gate 3. The same-user-adversary
+> limit above still applies.
 
 ## System of Record (D7)
 

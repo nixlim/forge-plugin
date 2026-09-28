@@ -54,7 +54,7 @@ units may be reintegrated incrementally; the diagram groups delivery for readabi
 | Claude main session | Plans, owns the run journal and worktrees, verifies evidence, coordinates gates, and reintegrates | An agent's handoff does not substitute for observed verification |
 | Fresh Codex implementer | Implements an assigned task in its dedicated worktree | May commit through Forge in its own worktree; must not push or operate on another branch |
 | Fresh Codex first-pass reviewer | Independently inspects the assigned candidate | Uses the native read-only sandbox and a separate session from the author |
-| Claude `review-final` | Gives the binding final PASS/BLOCK where required | Must not edit; it can execute checks, and its no-write boundary is instruction-based |
+| `review-final` (resolved route; shipped default Claude) | Gives the binding final PASS/BLOCK where required | Must not edit; a Claude reviewer can execute checks and its no-write boundary is instruction-based, while a Codex reviewer runs read-only |
 | Forge scripts and CLI | Enforce mechanical preconditions, execute bounded checks, record evidence, and reject invalid transitions | They do not replace human approval or semantic review |
 
 The shipped role configuration assigns Codex implementation to `gpt-5.6-sol` with
@@ -97,6 +97,8 @@ The diagram shows responsibility and data flow, not a claim that every operation
 passes through one executable. `/forge:commit` implements its own five-step skill
 procedure and uses shared candidate helpers; it is not a thin wrapper around
 `forge commit ...`. The persisted commit CLI is a separate operational surface.
+Since the headless review lane, `/forge:commit` has no standard or hard reviewer
+of its own; those reviews run only through a persisted chain's engine review lane.
 Likewise, the current worktree-merge skill orchestrates its own checks and Git
 sequence, using the common-lock helper without owning a CLI merge chain.
 
@@ -148,6 +150,9 @@ At the source revision inspected for this guide:
   dispatcher conditionally admit the merge command family. Merge implementation
   code exists, but its presence does not make that public workflow active.
 - Reintegration uses [`/forge:worktree-merge`](skills/worktree-merge/SKILL.md).
+  Until that skill runs on a Forge CLI merge chain, its Gate 3 keeps the
+  interactive Claude `review-final` agent; the spec's Revision-17 headless-review
+  amendment to FR-246 defers FR-060's engine-owned review path for it.
   The later `forge merge ...` and standalone `forge push` contracts in the
   specification must not be presented as commands currently available here.
 - The later CLI design uses bounded lock epochs and external review between
@@ -196,8 +201,8 @@ flowchart TD
 | Classification | Consequence |
 |---|---|
 | `fast` commit | Omits only the commit's adversarial reviewer; retains tests, other required checks, identity verification, halt checks, and locks |
-| `standard` commit | Requires a fresh Codex first-pass reviewer |
-| `hard` commit | Requires Claude `review-final` |
+| `standard` commit | Requires a fresh `review-cheap` reviewer on its resolved route (shipped default Codex) |
+| `hard` commit | Requires `review-final` on its resolved route (shipped default Claude) |
 | Control-class change | Has a hard floor, strict baseline evaluation, applicable fresh reviewer evaluations, and explicit candidate-bound operator approval |
 | Any reintegration | Requires binding `review-final`, including a branch made entirely of fast commits |
 
@@ -363,9 +368,11 @@ The CLI path proceeds as follows:
    evaluations. The two-consecutive-passes rule in Step 6 governs run-level
    end-to-end verification after a defect fix, never this gate.
 4. **Request the appropriate independent review.** Fast commits omit this review
-   only. Standard commits use a fresh Codex reviewer; hard commits use
-   `review-final`. The review package binds the candidate, policy, profile, and
-   exact patch. It excludes the implementer's claimed results and earlier verdicts.
+   only. Standard commits use a fresh `review-cheap` reviewer and hard commits use
+   `review-final`, each on its resolved route: `review request` launches the reviewer
+   and `review collect` alone binds its verdict. The review package binds the candidate,
+   policy, profile, and exact patch. It excludes the implementer's claimed results and earlier
+   verdicts.
 5. **Resolve findings.** BLOCK returns the change for revision. Restaging creates
    a new candidate and invalidates the old candidate's authority. Reverify after
    fixes. Eight review invocations without PASS require escalation, not a commit.
@@ -384,8 +391,8 @@ flowchart LR
     Start["start: stage and snapshot"] --> Verify["verify: mechanical gates"]
     Verify --> Tier{"Tier?"}
     Tier -->|fast| Authorized["Authorized if all requirements hold"]
-    Tier -->|standard| Cheap["Fresh Codex review"]
-    Tier -->|hard| Final["Claude review-final"]
+    Tier -->|standard| Cheap["Fresh review-cheap"]
+    Tier -->|hard| Final["review-final"]
     Cheap -->|PASS| Authority{"Operator approval required?"}
     Final -->|PASS| Authority
     Cheap -->|BLOCK| Restage["Revise and restage"]

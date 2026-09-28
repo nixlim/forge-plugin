@@ -372,8 +372,8 @@ class CommitSkillTests(unittest.TestCase):
             ".github/workflows/**",
         ):
             self.assertIn(path, COMMIT_SKILL)
-        self.assertIn("fresh, read-only Codex `review-cheap`", COMMIT_SKILL)
-        self.assertIn("`review-final` Claude agent", COMMIT_SKILL)
+        self.assertIn("select role `review-cheap`", COMMIT_SKILL)
+        self.assertIn("select role `review-final`", COMMIT_SKILL)
         self.assertIn("distinct agent from the author", COMMIT_SKILL)
         self.assertIn("Project configuration may extend this list", COMMIT_SKILL)
         self.assertIn("must never remove or narrow", COMMIT_SKILL)

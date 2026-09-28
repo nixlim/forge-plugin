@@ -10,6 +10,7 @@ the sensor with that control removed in memory flips the outcome.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,40 @@ LABEL_GUARD = 'path_label.isprintable() and not path_label.startswith(("-", "/")
 PRINTABLE_GUARD = "path_label.isprintable() and "
 SHAPE_GUARD = ' and not path_label.startswith(("-", "/"))'
 ABSENCE_ERRORS = "except (FileNotFoundError, NotADirectoryError):"
+DELETED_PROSE = "forge: deleted test path skipped: <path>"
+NO_EVENT_PROSE = "emits no `assertion_*` event"
+
+
+def normalize(text: str) -> str:
+    return " ".join(text.split())
+
+
+def extracted_deleted_template(source: str) -> str:
+    match = re.search(r'^DELETED_TEMPLATE = "([^"]+)"$', source, flags=re.MULTILINE)
+    if match is None:
+        raise AssertionError("deleted-path template is missing")
+    return match.group(1)
+
+
+def assert_deleted_path_prose(
+    commit: str, merge: str, sensor_source: str, *, template: str | None = None
+) -> None:
+    anchor = 'check-test-quality.py" -- <touched-test-path>...'
+    end = "After preserving the sensor's primary result"
+    sections = (
+        normalize(commit).split(anchor, 1)[1].split(end, 1)[0],
+        normalize(merge).split(anchor, 1)[1].split(end, 1)[0],
+    )
+    for section in sections:
+        if section.count(f"`{DELETED_PROSE}`") != 1:
+            raise AssertionError("deleted-path note must appear once in the sensor section")
+        if section.count(NO_EVENT_PROSE) != 1:
+            raise AssertionError("deleted-path note must suppress assertion events exactly once")
+    actual_template = (
+        template if template is not None else extracted_deleted_template(sensor_source)
+    )
+    if actual_template.format(path="<path>") != DELETED_PROSE:
+        raise AssertionError("sensor and skill deletion notes differ")
 
 
 def note(label: str) -> str:
@@ -207,6 +242,31 @@ class DeletedTestPathTests(unittest.TestCase):
         self.assert_fails_closed(
             self.run_sensor("tests/test_gone.py", seed=self.scratch / "missing-stacks.md")
         )
+
+    def test_skipped_deletion_prose_matches_sensor_without_events(self) -> None:
+        commit = (ROOT / "skills/commit/SKILL.md").read_text(encoding="utf-8")
+        merge = (ROOT / "skills/worktree-merge/SKILL.md").read_text(encoding="utf-8")
+        sensor_source = SENSOR.read_text(encoding="utf-8")
+        assert_deleted_path_prose(commit, merge, sensor_source)
+
+        for label, original in (("commit", commit), ("merge", merge)):
+            prose = normalize(original)
+            for control in (f"`{DELETED_PROSE}`", NO_EVENT_PROSE):
+                with self.subTest(skill=label, disabled=control):
+                    self.assertEqual(prose.count(control), 1)
+                    mutant = prose.replace(control, "DISABLED_CONTROL", 1)
+                    args = (mutant, merge) if label == "commit" else (commit, mutant)
+                    with self.assertRaises(AssertionError):
+                        assert_deleted_path_prose(*args, sensor_source)
+
+        template = extracted_deleted_template(sensor_source)
+        with self.subTest(disabled="sensor template"), self.assertRaises(AssertionError):
+            assert_deleted_path_prose(
+                commit,
+                merge,
+                sensor_source,
+                template=template.replace("deleted", "disabled", 1),
+            )
 
 
 if __name__ == "__main__":

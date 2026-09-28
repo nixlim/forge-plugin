@@ -142,7 +142,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-test-quality.py" -- <touched-
 
 Exit 1 from the Python AST branch and exit 2 for sensor failure both block Step 2. Exit 0 is a
 pass for gate flow, but preserve every non-Python advisory, missing-heuristic notice, and valid
-waiver path plus reason in Step 2 and review evidence. A waiver suppresses only that file's
+waiver path plus reason in Step 2 and review evidence. A touched test path the candidate deletes is
+a skipped input, not a sensor failure: preserve each
+`forge: deleted test path skipped: <path>` note the sensor prints in the same evidence; the note is
+not a surfaced disposition and emits no `assertion_*` event. A waiver suppresses only that file's
 assertion sensor; it never skips tests, mutation checks, invariants, or another file.
 
 After preserving the sensor's primary result, retain each surfaced disposition until Step 4 has
@@ -439,17 +442,48 @@ Route the review as follows:
   Step 5; fast never skips classification, validation, invariants, assertion-quality, changelog,
   secret scan, halt, lock, index-tree re-observation, guard recomputation, produced-commit
   verification, or the marker.
-- `standard`: launch a fresh, read-only Codex `review-cheap` execution with the complete iteration
-  protocol below. Use the canonical committed-only prompt construction and preparation in
-  [`orchestrate`](../orchestrate/SKILL.md#forge-isolation-and-prompt-construction), with the same
-  repository worktree used to create the immutable review artifact, recorded for the execution, and passed to
-  `-C`.
-  When an explicitly identified run is open, record it before launch.
-- `hard`: launch the `review-final` Claude agent. Every control or trigger-path match is hard, and
-  control-class hard candidates retain explicit candidate-bound human approval. This reviewer is
-  instruction-bounded and execution-capable: it shares the writable worktree, may run inspection
-  and execution-backed checks, and must never mutate the repository through Bash. Its missing
-  Edit/Write tools are not an OS-level read-only sandbox.
+- `standard`: select role `review-cheap`, with the complete iteration protocol below. Its prompt
+  follows the canonical committed-only prompt construction in
+  [`orchestrate`](../orchestrate/SKILL.md#forge-isolation-and-prompt-construction). The resolved
+  `review-cheap` route supplies its provider, model, and effort; the shipped default is Codex.
+- `hard`: select role `review-final`. Every control or trigger-path match is hard, and
+  control-class hard candidates retain explicit candidate-bound human approval. The resolved
+  `review-final` route supplies its provider, model, and effort; the shipped default is Claude with
+  the plugin-owned `agents/review-final.md` body.
+
+A Claude reviewer in either role is instruction-bounded and execution-capable: it shares the
+writable worktree, may run inspection and execution-backed checks, and must never mutate the
+repository through Bash. Its missing Edit/Write tools are not an OS-level read-only sandbox. A
+Codex reviewer runs in the `read-only` sandbox.
+
+The Forge engine alone launches either reviewer, on the persisted commit chain that holds this
+exact candidate. Below, `forge` is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py"`.
+
+1. `forge review request --chain-id <id>` resolves the role's route at the candidate's base
+   commit, starts the detached headless reviewer, and records the attempt. It refuses before
+   recording anything when the route cannot be resolved or, on a run-bound chain, diverges from
+   the run's frozen route
+   (`forge: review request refused — route diverges from run snapshot for <role>: <field>`), and
+   it refuses while an earlier attempt is still outstanding.
+1. `forge review collect --chain-id <id>` is the only way a new request's verdict binds. While it
+   reports `launching` or a running reviewer, wait and collect again; never issue another request.
+   A timeout, stream cap, malformed stream line, provider error, or missing or invalid verdict
+   binds the engine's synthetic BLOCK, whose finding begins
+   `finding: MAJOR no reviewer verdict —`.
+1. `forge review cancel --chain-id <id>` is used only when collect names it, or to end the last
+   attempt of a chain that was aborted, went inactive, or reached the iteration cap while that
+   attempt had no completion.
+
+On a persisted chain you never hand a reviewer a prompt, instruction, or package yourself: the
+engine assembles them, and the instruction and payload rules below are the content contract that
+package follows. A not-logged-in result clears the attempt; the operator logs in manually, then
+requests again. For a persisted chain's candidate, never spawn an interactive or Agent-tool
+`review-final`, never launch a chain reviewer by prose, and never run `review attach` for a new
+request: attach admits only a request made before the lane upgrade that is still in `reviewing`
+with the legacy `invocation` shape. A commit run without a persisted chain has no admissible
+standard or hard reviewer, so this skill alone completes only `fast` candidates; for any other
+candidate treat the reviewer as unavailable, stop, and report that the candidate must go through
+the persisted Forge CLI commit chain.
 
 When a reviewer is required, it must be a distinct agent from the author. A reused author context,
 unavailable reviewer, launch error, missing verdict, or anything other than explicit PASS/BLOCK is
@@ -534,9 +568,11 @@ an old verdict merely because a later snapshot has the same authorization ID.
 For each BLOCK, address every MAJOR or CRITICAL finding or consciously disposition it before the
 next review. Dispositioning any finding above MINOR requires explicit user approval; never
 self-approve it. After any fix, re-run the affected Step 2 validations before staging the fix and
-launching a fresh re-review. One reviewer invocation is one iteration. Stop after at most 8 review
-iterations. If iteration 8 does not PASS, record the outstanding findings and why they remain as
-residual risk, escalate to the user, and never commit.
+launching a fresh re-review. One bound verdict, including the engine's synthetic BLOCK, is one
+iteration; an attempt cleared without a verdict (cancelled, abandoned, wrapper-lost, launch-failed,
+or not-logged-in) consumes none. Stop after at most 8 review iterations. If iteration 8 does not
+PASS, record the outstanding findings and why they remain as residual risk, escalate to the user,
+and never commit.
 
 When an explicitly identified run is open, append a journal gate verification for every Step 4
 review. Its criterion must be exactly `gate-3: review-final verdict`; its `check` must name

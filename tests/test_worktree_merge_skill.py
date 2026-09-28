@@ -504,6 +504,30 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("agent handoff and claimed gate result as a claim", SKILL)
         self.assertIn("integration target, not in the agent's worktree", SKILL)
 
+    def test_name_only_listings_disable_rename_detection(self) -> None:
+        flags = (" --no-renames ", " --no-ext-diff ", " --no-textconv ")
+        patches = ('git diff "origin/${DEFAULT_BRANCH}...HEAD"', 'git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"', 'git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"')
+        def assert_contract(text: str) -> None:
+            listings = [line for line in text.splitlines() if line.startswith("git diff") and "--name-only" in line]
+            self.assertEqual(len(listings), 2)
+            self.assertTrue(all(flag in listing for listing in listings for flag in flags))
+            self.assertTrue(all(sum(patch in line for line in text.splitlines()) == 1 and all(flag not in line for line in text.splitlines() if patch in line for flag in flags) for patch in patches))
+        assert_contract(SKILL)
+        mutants = tuple((f"remove {flag} from {listing}", SKILL.replace(listing, listing.replace(flag, " ", 1), 1)) for listing in SKILL.splitlines() if "--name-only" in listing for flag in flags) + tuple((f"add {flag} to {patch}", SKILL.replace(patch, f"{patch}{flag}", 1)) for patch in patches for flag in flags)
+        for label, mutant in mutants:
+            with self.subTest(control=label), self.assertRaises(AssertionError):
+                assert_contract(mutant)
+        self.addCleanup((scratch := tempfile.TemporaryDirectory(prefix="forge-wtm-renames-")).cleanup)
+        repo = Path(scratch.name)
+        (repo / "skills").mkdir()
+        (repo / "skills/x.md").write_text("guarded\n", encoding="utf-8")
+        commands = (("init", "-q"), ("add", "."), ("-c", "user.name=Forge", "-c", "user.email=forge@example.invalid", "commit", "-qm", "initial"), ("mv", "skills/x.md", "docs-x.md"), ("-c", "user.name=Forge", "-c", "user.email=forge@example.invalid", "commit", "-qm", "rename"))
+        for command in commands:
+            subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True, text=True)
+        argv = ["git", "diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--name-only", "HEAD~1...HEAD"]
+        self.assertCountEqual(subprocess.run(argv, cwd=repo, check=True, capture_output=True, text=True).stdout.splitlines(), ["skills/x.md", "docs-x.md"])
+        self.assertEqual(subprocess.run(["git", "-c", "diff.renames=true", *argv[1:2], *argv[3:]], cwd=repo, check=True, capture_output=True, text=True).stdout.splitlines(), ["docs-x.md"])
+
     def test_unsafe_bulk_stage_commands_are_absent(self) -> None:
         self.assertNotIn("git add .", SKILL)
         self.assertNotIn("git add -A", SKILL)

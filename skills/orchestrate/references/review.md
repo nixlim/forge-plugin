@@ -79,3 +79,14 @@ Verify review findings against the repository. The only allowed resume is a targ
 round by this same reviewer: use its recorded `session_id`, the next execution directory, and no
 `-C` flag, as shown in [`monitoring.md`](monitoring.md). Start a fresh reviewer for a distinct
 unresolved question. Never resume an implementer.
+
+## Gate Reviews Are Engine-Launched
+
+The first-pass review above is an agent cycle inside the run, never a commit or merge gate review:
+do not attach its handoff or verdict to a chain and do not cite it as Gate 3 evidence. A persisted
+commit chain's Step 4 reviewer is launched only by the Forge engine through
+`forge review request --chain-id <id>`, and its verdict binds only through
+`forge review collect --chain-id <id>`, as the [commit skill](../../commit/SKILL.md) describes.
+Never spawn an interactive `review-final` for a persisted chain's candidate and never use
+`review attach` for a new request. The legacy `/forge:worktree-merge` skill owns no Forge CLI
+merge chain and keeps its interactive Gate 3 `review-final`, as that skill describes.
