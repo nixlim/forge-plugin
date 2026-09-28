@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
 
@@ -58,6 +59,31 @@ class CheckFileLengthTests(unittest.TestCase):
             status = MODULE.main()
         return status, out.getvalue(), err.getvalue()
 
+    @contextlib.contextmanager
+    def patched_default_max(self, max_lines: int) -> Iterator[None]:
+        original_add_argument = MODULE.argparse.ArgumentParser.add_argument
+
+        def add_argument(parser, *name_or_flags, **kwargs):
+            if name_or_flags == ("--max",):
+                kwargs["default"] = max_lines
+            return original_add_argument(parser, *name_or_flags, **kwargs)
+
+        with mock.patch.object(MODULE.argparse.ArgumentParser, "add_argument", add_argument):
+            yield
+
+    def assert_default_boundary(self) -> None:
+        at_limit = _python_file(self.root, "at_limit.py", 1000)
+        over_limit = _python_file(self.root, "over_limit.py", 1001)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            accepted = self.run_main([at_limit.name])
+            rejected = self.run_main([over_limit.name])
+
+        self.assertEqual(accepted, (0, "ok: 1 files within budget (max 1000)\n", ""))
+        self.assertEqual(rejected[0], 1)
+        self.assertIn("over_limit.py: 1001 code lines > budget 1000", rejected[1])
+        self.assertIn("1 file(s) violate the size budget (max 1000", rejected[1])
+        self.assertEqual(rejected[2], "")
+
     def test_code_lines_ignores_blank_and_comment_lines(self) -> None:
         self.assertEqual(MODULE.code_lines("small.py"), 3)
 
@@ -72,6 +98,36 @@ class CheckFileLengthTests(unittest.TestCase):
         status, out, _ = self.run_main(["--max", "5", "small.py", "same.py"])
         self.assertEqual(status, 0)
         self.assertEqual(out, "ok: 2 files within budget (max 5)\n")
+
+    def test_default_accepts_1000_code_lines_and_rejects_1001(self) -> None:
+        self.assert_default_boundary()
+
+    def test_environment_max_overrides_default(self) -> None:
+        with mock.patch.dict(os.environ, {"REFACTOR_MAX_LINES": "2"}, clear=True):
+            status, out, err = self.run_main(["small.py"])
+
+        self.assertEqual(status, 1)
+        self.assertIn("small.py: 3 code lines > budget 2", out)
+        self.assertIn("1 file(s) violate the size budget (max 2", out)
+        self.assertEqual(err, "")
+
+    def test_command_line_max_overrides_environment_and_default(self) -> None:
+        with mock.patch.dict(os.environ, {"REFACTOR_MAX_LINES": "4"}, clear=True):
+            status, out, err = self.run_main(["--max", "2", "small.py"])
+
+        self.assertEqual(status, 1)
+        self.assertIn("small.py: 3 code lines > budget 2", out)
+        self.assertIn("1 file(s) violate the size budget (max 2", out)
+        self.assertEqual(err, "")
+
+    def test_default_boundary_control_disabled_in_memory_is_detected(self) -> None:
+        for mutated_default in (500, 100_000):
+            with (
+                self.subTest(mutated_default=mutated_default),
+                self.patched_default_max(mutated_default),
+                self.assertRaises(AssertionError),
+            ):
+                self.assert_default_boundary()
 
     def test_hook_exits_two_with_exact_diagnostic_for_grown_file(self) -> None:
         payload = json.dumps({"tool_input": {"file_path": str(self.root / "grown.py")}})

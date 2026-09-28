@@ -1,6 +1,6 @@
 ## File & module size (enforced by tooling; see scripts/check_file_length.py, pyproject.toml)
 
-- No Python file over 500 code lines. If an edit would push a file over budget, STOP and
+- No Python file over 1000 code lines. If an edit would push a file over budget, STOP and
   split it first with `/refactor-python:split-module <file>`, then make the change.
 - Files listed in `.refactor-baseline.json` are grandfathered: they may shrink, never grow.
 - Functions: complexity ≤ 10, ≤ 50 statements, ≤ 6 args (ruff C901 / PLR09xx). Existing

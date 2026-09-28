@@ -12,7 +12,8 @@ authors = [{ name = "alexzh3" }]
 # ---------------------------------------------------------------------------
 # Guardrails (installed 2026-09-13 by /refactor-python:guardrails).
 # Thresholds are deliberate; raise one only with a comment here explaining why.
-# Companion checks: scripts/check_file_length.py (500 code lines per file, with
+# Operator direction 2026-09-28: the 500-line budget distorted code quality.
+# Companion checks: scripts/check_file_length.py (1000 code lines per file, with
 # .refactor-baseline.json grandfathering) and [tool.importlinter] below.
 # ---------------------------------------------------------------------------
 [tool.ruff]

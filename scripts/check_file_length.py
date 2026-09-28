@@ -17,7 +17,7 @@ Modes:
         Record current counts of files currently over budget so they are
         grandfathered (they may shrink but not grow).
 
-Config precedence: --max flag > REFACTOR_MAX_LINES env > 500.
+Config precedence: --max flag > REFACTOR_MAX_LINES env > 1000.
 Baseline default: .refactor-baseline.json in the current directory.
 """
 from __future__ import annotations
@@ -116,7 +116,7 @@ def _hook(args: argparse.Namespace, baseline: dict[str, int]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="*")
-    ap.add_argument("--max", type=int, default=int(os.environ.get("REFACTOR_MAX_LINES", "500")))
+    ap.add_argument("--max", type=int, default=int(os.environ.get("REFACTOR_MAX_LINES", "1000")))
     ap.add_argument("--baseline", default=os.environ.get("REFACTOR_BASELINE", DEFAULT_BASELINE))
     ap.add_argument("--hook", action="store_true")
     ap.add_argument("--write-baseline", metavar="FILE")
