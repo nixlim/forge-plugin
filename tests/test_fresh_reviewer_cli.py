@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from tests import _review_lane_support as review_support
 from tests._cli_loader import load_cli, package_module, patch_engine
 from tests._fresh_eval_support import (
     CANDIDATE,
@@ -1091,8 +1092,10 @@ class FreshReviewerCLIProvenanceTests(FreshReviewerCLIFixture):
         _launcher, passed = self.pass_fresh()
         fresh_manifest = self.manifest_bytes(passed)
         manifest = json.loads(fresh_manifest)
+        logs = self.store.common_root / "fake-review-provider/logs"
+        provider = review_support.install_fake_provider(logs.parent / "bin", "claude", log_dir=logs)
 
-        with self.no_halt():
+        with self.no_halt(), patch_engine("CLAUDE_EXECUTABLE", str(provider)):
             code, verified = self.invoke("verify")
             self.assertEqual(code, 0, verified)
             self.assertEqual(self.load()["state"], "reviewing")
@@ -1102,19 +1105,15 @@ class FreshReviewerCLIProvenanceTests(FreshReviewerCLIFixture):
         state = self.load()
         review_request = state["review"]["request"]
         self.assertEqual(review_request["reviewer"], "review-final")
-        self.assertEqual(
-            review_request["iteration"],
-            state["steps"]["fresh-reviewer-evals"][-1]["iteration"],
-        )
+        fresh_step = state["steps"]["fresh-reviewer-evals"][-1]
+        self.assertEqual(review_request["iteration"], fresh_step["iteration"])
+        completion = self.store.common_root / review_request["completion_path"]
+        review_support.wait_for_completion(completion)
+        launch_argv = json.loads((logs / "claude.argv.json").read_text())
+        self.assertEqual(launch_argv[0], "-p")
         package = (self.store.common_root / review_request["package"]).read_bytes()
-        self.assertIn(
-            b"--- BEGIN UNTRUSTED FRESH REVIEWER EVALUATION EVIDENCE ---",
-            package,
-        )
-        self.assertIn(
-            b"--- END UNTRUSTED FRESH REVIEWER EVALUATION EVIDENCE ---",
-            package,
-        )
+        self.assertIn(b"--- BEGIN UNTRUSTED FRESH REVIEWER EVALUATION EVIDENCE ---", package)
+        self.assertIn(b"--- END UNTRUSTED FRESH REVIEWER EVALUATION EVIDENCE ---", package)
         self.assertIn(BASELINE_TRANSCRIPT, package)
         self.assertIn(fresh_manifest, package)
         self.assertIn(b'"schema":"forge-review-fresh-eval-evidence/1"', package)
@@ -1125,10 +1124,8 @@ class FreshReviewerCLIProvenanceTests(FreshReviewerCLIFixture):
         for result in manifest["results"]:
             verdict = (self.store.common_root / result["verdict_path"]).read_bytes()
             self.assertIn(verdict, package)
-            self.assertIn(
-                f"--- fresh verdict {result['fixture_id']} ".encode("utf-8"),
-                package,
-            )
+            marker = f"--- fresh verdict {result['fixture_id']} ".encode()
+            self.assertIn(marker, package)
         self.assertLess(
             package.index(b"--- END UNTRUSTED FRESH REVIEWER EVALUATION EVIDENCE ---"),
             package.index(b"--- BEGIN UNTRUSTED CANDIDATE DIFF ---"),

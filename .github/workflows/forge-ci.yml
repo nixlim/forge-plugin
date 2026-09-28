@@ -24,8 +24,19 @@ jobs:
         with:
           python-version: "3.13"
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
       - name: Install gate tooling (mypy, pinned to the tracked type baseline's checker)
         run: python3 -m pip install --quiet mypy==2.3.1
+
+      - name: Install provider CLIs (pinned; no credentials)
+        run: |
+          # CI stays unauthenticated; hermetic tests never contact real providers.
+          npm install -g --no-fund --no-audit @anthropic-ai/claude-code@2.1.283 @openai/codex@0.155.1
+          claude --version
+          codex --version
 
       - name: Gate 1 — committed gate-1 policy cell (work-queue full discovery)
         run: |
