@@ -240,6 +240,48 @@ class SpecificationRevision15Tests(unittest.TestCase):
             "Revision-17 headless-review amendment to **FR-246**:", 1
         )[1])
 
+    def test_fr246_engine_verdict_transport_is_single_and_trailing(self) -> None:
+        block = requirement_block(SPEC, "FR-246")
+        sentence = (
+            "For an engine-launched reviewer, Forge extracts the shared review-verdict "
+            "transport from the byte-identical retained raw final message as its single "
+            "trailing verdict block—the last stripped line exactly `VERDICT: PASS` or "
+            "`VERDICT: BLOCK` followed only by transport-grammar lines—and fails closed "
+            "on zero or several exact verdict lines (including an otherwise quoted exact "
+            "verdict line) or any other trailing line. Any stripped line beginning with "
+            "`VERDICT:` that is not exactly `VERDICT: PASS` or exactly `VERDICT: BLOCK`, "
+            "anywhere in the message, also fails closed."
+        )
+        self.assertEqual(block.count(sentence), 1)
+
+    def test_fr245_claude_reviewer_profiles_are_exact(self) -> None:
+        block = requirement_block(SPEC, "FR-245")
+        argv = (
+            "claude -p --safe-mode --strict-mcp-config --output-format stream-json "
+            "--verbose --model <m> --effort <e> --system-prompt-file {body} "
+            "--tools \"{tools}\" --permission-prompts none "
+            "--dangerously-skip-permissions --no-session-persistence"
+        )
+        expected = (
+            argv.format(
+                body="<plugin>/system/claude/prompts/review-cheap.md",
+                tools="Read,Grep,Glob,Bash",
+            ),
+            argv.format(
+                body="<derived-review-final-body>",
+                tools="Read,Bash,Glob,Grep",
+            ),
+        )
+        for profile in expected:
+            self.assertEqual(block.count(profile), 1)
+        sentence = (
+            "The Claude reviewer cells run with permission checks bypassed via "
+            "`--dangerously-skip-permissions`, so Bash executes without prompts; the "
+            "no-write boundary stays instruction-bounded, as FR-111 states; and "
+            "`--no-session-persistence` means the session is not persisted."
+        )
+        self.assertEqual(block.count(sentence), 1)
+
     def test_dm018_new_lane_route_is_mandatory(self) -> None:
         block = requirement_block(SPEC, "DM-018")
         for literal in (

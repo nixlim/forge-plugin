@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import stat
 import subprocess
@@ -35,6 +36,52 @@ LOST_OUTCOMES = frozenset({
     "boot-id-changed",
     "wrapper-lost",
 })
+_VERDICT_LINES = frozenset({"VERDICT: PASS", "VERDICT: BLOCK"})
+_FINDING_LINE = re.compile(r"finding: (CRITICAL|MAJOR|MINOR) .+")
+
+
+def verdict_transport(data: bytes) -> bytes:
+    """Extract one strict trailing transport from a reviewer's raw final message."""
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("verdict is not UTF-8") from exc
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    verdict_indexes = [index for index, line in enumerate(lines) if line in _VERDICT_LINES]
+    if not verdict_indexes:
+        raise ValueError("reviewer final message has no exact verdict line")
+    if len(verdict_indexes) != 1:
+        raise ValueError("reviewer final message has more than one exact verdict line")
+    verdict_index = verdict_indexes[0]
+    for line in lines:
+        if line.startswith("VERDICT:") and line not in _VERDICT_LINES:
+            raise ValueError(f"unexpected VERDICT-prefixed line: {line}")
+    transport = lines[verdict_index:]
+    for line in transport[1:]:
+        if line.startswith(("candidate: ", "package: ")):
+            continue
+        if line.startswith("finding: "):
+            if _FINDING_LINE.fullmatch(line):
+                continue
+            raise ValueError("finding line has invalid grammar")
+        raise ValueError(f"unexpected verdict line: {line}")
+    return "\n".join(transport).encode("utf-8")
+
+
+def verdict_prompt_instruction(candidate: str, package_digest: str) -> bytes:
+    """Render the final-message suffix contract after the package digest exists."""
+
+    return (
+        "\nThe reviewer's final message must END with exactly one verdict block. "
+        "Nothing may follow that block, including an Iteration: line.\n"
+        "The block must start with a first line that is exactly VERDICT: PASS or "
+        "exactly VERDICT: BLOCK, followed by these exact lines:\n"
+        f"candidate: {candidate}\n"
+        f"package: {package_digest}\n"
+        "Zero or more lines: finding: <CRITICAL|MAJOR|MINOR> <text>\n"
+        "No other line of the final message may begin with VERDICT:.\n"
+    ).encode()
 
 
 def cancel_kill_unconfirmed_message(members: Sequence[int]) -> str:

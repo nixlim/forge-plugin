@@ -316,17 +316,18 @@ def reviewer_argv(
         raise ValueError(f"unsupported reviewer cell: {provider}/{role}")
     if role == "review-cheap":
         system_prompt = paths.plugin_root / "system/claude/prompts/review-cheap.md"
-        tools = "Read,Grep,Glob,LS,Bash"
+        tools = "Read,Grep,Glob,Bash"
     else:
         if paths.role_body_path is None:
             raise ValueError("review-final body was not materialized")
         system_prompt = paths.role_body_path
-        tools = "Read,Bash,Glob,Grep,LS"
+        tools = "Read,Bash,Glob,Grep"
     return [
         CLAUDE_EXECUTABLE, "-p", "--safe-mode", "--strict-mcp-config",
         "--output-format", "stream-json", "--verbose", "--model", model,
         "--effort", effort, "--system-prompt-file", str(system_prompt),
         "--tools", tools, "--permission-prompts", "none",
+        "--dangerously-skip-permissions", "--no-session-persistence",
     ]
 
 

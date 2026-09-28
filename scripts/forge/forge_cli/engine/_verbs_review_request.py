@@ -219,7 +219,7 @@ def _review_prompt(
             package_path, len(package), package_digest, str(state["candidate"]["sha256"])
         )
     elif route.role == "review-final" and route.provider == "codex":
-        return paths.role_body + b"\n" + package + output_contract
+        prompt = package + output_contract
     else:
         contract = (
             output_contract.decode()
@@ -234,7 +234,9 @@ def _review_prompt(
         )
     if route.role == "review-final" and route.provider == "codex":
         prompt = paths.role_body + b"\n" + prompt
-    return prompt
+    return prompt + _review_lane_api.verdict_prompt_instruction(
+        str(state["candidate"]["sha256"]), package_digest
+    )
 
 
 def _attempt_relative(request: Mapping[str, Any]) -> str:

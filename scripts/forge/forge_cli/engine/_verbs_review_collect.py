@@ -383,9 +383,11 @@ def _new_lane_collect(
         )
         if len(data) != completion["verdict_size"] or not data:
             raise ValueError("missing, empty or size-mismatched verdict")
+        transport = _review_lane_api.verdict_transport(data)
         verdict = self._parse_verdict(
-            data, str(state["candidate"]["sha256"]), str(request["package_digest"])
+            transport, str(state["candidate"]["sha256"]), str(request["package_digest"])
         )
+        verdict["verdict_transport_digest"] = sha256_bytes(transport)
     except (Refusal, ValueError) as exc:
         return _review_attempt.with_stale_evidence(
             _synthetic_block(self, state, request, f"invalid verdict: {exc}"), stale

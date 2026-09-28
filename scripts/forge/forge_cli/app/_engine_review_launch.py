@@ -24,10 +24,8 @@ def _terminal_error(error: object) -> bool:
 
 
 def _immutable_identity_matches(before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
-    return all(
-        before.get(name) == after.get(name)
-        for name in _review_lane_api.IMMUTABLE_IDENTITY_FIELDS
-    )
+    fields = _review_lane_api.IMMUTABLE_IDENTITY_FIELDS
+    return all(before.get(name) == after.get(name) for name in fields)
 
 
 def _iteration(state: Mapping[str, Any]) -> int:
@@ -170,7 +168,7 @@ def _review_prompt(
         ).encode()
     if route.provider == "codex":
         prompt = paths.role_body + b"\n" + prompt
-    return prompt
+    return prompt + _review_lane_api.verdict_prompt_instruction(candidate, package_digest)
 
 
 def _request_record(
@@ -394,9 +392,11 @@ def _finish_completed_review(
         )
         if not data or len(data) != completion["verdict_size"]:
             raise ValueError("missing, empty or size-mismatched verdict")
+        transport = _review_lane_api.verdict_transport(data)
         verdict = engine.Engine._parse_verdict(
-            data, str(state["candidate"]["candidate_head"]), str(request["package_digest"])
+            transport, str(state["candidate"]["candidate_head"]), str(request["package_digest"])
         )
+        verdict["verdict_transport_digest"] = sha256_bytes(transport)
     except (Refusal, KeyError, TypeError, ValueError) as exc:
         return _synthetic_block(self, state, request, f"invalid verdict: {exc}", changed_paths)
     return self._record_review_verdict(state, verdict, data, changed_paths)

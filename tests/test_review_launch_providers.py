@@ -218,25 +218,16 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
         paths = self.paths()
         executable = str(self.bin_dir / "claude")
         common = [
-            executable,
-            "-p",
-            "--safe-mode",
-            "--strict-mcp-config",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--model",
-            "fable",
-            "--effort",
-            "high",
-            "--system-prompt-file",
+            executable, "-p", "--safe-mode", "--strict-mcp-config",
+            "--output-format", "stream-json", "--verbose", "--model", "fable",
+            "--effort", "high", "--system-prompt-file",
         ]
         cases = {
             "review-cheap": (
                 self.plugin_root / "system/claude/prompts/review-cheap.md",
-                "Read,Grep,Glob,LS,Bash",
+                "Read,Grep,Glob,Bash",
             ),
-            "review-final": (paths.role_body_path, "Read,Bash,Glob,Grep,LS"),
+            "review-final": (paths.role_body_path, "Read,Bash,Glob,Grep"),
         }
         with mock.patch.object(LAUNCH, "CLAUDE_EXECUTABLE", executable):
             for role, (body, tools) in cases.items():
@@ -245,11 +236,8 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
                         LAUNCH.reviewer_argv("claude", role, "fable", "high", paths),
                         common
                         + [
-                            str(body),
-                            "--tools",
-                            tools,
-                            "--permission-prompts",
-                            "none",
+                            str(body), "--tools", tools, "--permission-prompts", "none",
+                            "--dangerously-skip-permissions", "--no-session-persistence",
                         ],
                     )
 
@@ -520,16 +508,15 @@ class ReviewLaunchBoundaryTests(ReviewLaneSupport, unittest.TestCase):
             WRAPPER.reap_detached(process)
         process.wait.assert_not_called()
 
-    def test_argv_controls_are_load_bearing(self) -> None:
+    def _assert_argv_controls_are_load_bearing(
+        self, provider: str, model: str, controls: tuple[str, ...]
+    ) -> None:
         paths = self.paths()
 
         def assert_controls() -> None:
-            argv = LAUNCH.reviewer_argv(
-                "codex", "review-final", "gpt-5.6-sol", "high", paths
-            )
-            self.assertIn("--json", argv)
-            self.assertIn("approval_policy=never", argv)
-            self.assertIn("read-only", argv)
+            argv = LAUNCH.reviewer_argv(provider, "review-final", model, "high", paths)
+            for control in controls:
+                self.assertIn(control, argv)
 
         assert_controls()
         real = LAUNCH.reviewer_argv
@@ -540,12 +527,27 @@ class ReviewLaunchBoundaryTests(ReviewLaneSupport, unittest.TestCase):
                 side_effect=lambda *args, **kwargs: [
                     item
                     for item in real(*args, **kwargs)
-                    if item not in {"--json", "approval_policy=never", "read-only"}
+                    if item not in controls
                 ],
             ),
             self.assertRaises(AssertionError),
         ):
             assert_controls()
+
+    def test_argv_controls_are_load_bearing(self) -> None:
+        self._assert_argv_controls_are_load_bearing(
+            "codex", "gpt-5.6-sol", ("--json", "approval_policy=never", "read-only")
+        )
+
+    def test_claude_bypass_permissions_control_is_load_bearing(self) -> None:
+        self._assert_argv_controls_are_load_bearing(
+            "claude", "fable", ("--dangerously-skip-permissions",)
+        )
+
+    def test_claude_no_session_persistence_control_is_load_bearing(self) -> None:
+        self._assert_argv_controls_are_load_bearing(
+            "claude", "fable", ("--no-session-persistence",)
+        )
 
 
 if __name__ == "__main__":
