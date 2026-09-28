@@ -17,13 +17,12 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn
 
-from route_config_git import RouteRefusal, git_path, run_git
+from route_config_git import RouteRefusal, default_acl_risk, git_path, owner_only_writable, run_git
 
 ROLES = ("implementer", "review-cheap", "review-final", "plan")
 PROVIDERS = frozenset({"codex", "claude"})
-EFFORTS = {
-    "codex": frozenset({"minimal", "low", "medium", "high", "ultra"}),
-    "claude": frozenset({"low", "medium", "high", "xhigh", "max"})}
+EFFORTS = {"codex": frozenset({"minimal", "low", "medium", "high", "ultra"}),
+           "claude": frozenset({"low", "medium", "high", "xhigh", "max"})}
 PLUGIN_DEFAULTS = {
     "implementer": ("codex", "gpt-5.6-sol", "ultra"),
     "review-cheap": ("codex", "gpt-5.6-sol", "high"),
@@ -58,9 +57,8 @@ CODEX_ROUTE_RE = {
     "model": re.compile(r'^[ \t]*model[ \t]*=[ \t]*"([^"\\\r\n]+)' + _CODEX_SUFFIX),
     "effort": re.compile(
         r'^[ \t]*model_reasoning_effort[ \t]*=[ \t]*"([^"\\\r\n]+)' + _CODEX_SUFFIX)}
-CLAUDE_ROUTE_RE = {
-    "model": re.compile(r"^[ \t]*model:[ \t]*(\S+)[ \t]*$"),
-    "effort": re.compile(r"^[ \t]*effort:[ \t]*(\S+)[ \t]*$")}
+CLAUDE_ROUTE_RE = {"model": re.compile(r"^[ \t]*model:[ \t]*(\S+)[ \t]*$"),
+                   "effort": re.compile(r"^[ \t]*effort:[ \t]*(\S+)[ \t]*$")}
 
 
 class UsageError(RuntimeError):
@@ -112,10 +110,8 @@ def _probe_support() -> Any:
     return __import__("route_config_probe")
 
 
-def _git(
-    repo: Path, *arguments: str, resolution: bool = False
-) -> subprocess.CompletedProcess[bytes]:
-    return run_git(repo, *arguments, timeout=GIT_TIMEOUT_SECONDS, resolution=resolution)
+def _git(repo: Path, *args: str, resolution: bool = False) -> subprocess.CompletedProcess[bytes]:
+    return run_git(repo, *args, timeout=GIT_TIMEOUT_SECONDS, resolution=resolution)
 
 
 def _git_common_dir(repo: Path) -> Path:
@@ -417,12 +413,15 @@ def _read_exclude(directory: int) -> tuple[bytes, int]:
     try:
         descriptor = os.open("exclude", flags, dir_fd=directory)
     except FileNotFoundError:
+        if default_acl_risk(directory, 0o600):
+            raise RouteRefusal("forge: route init refused — unsafe info/exclude") from None
         return b"", 0o600
     except OSError as exc:
         raise RouteRefusal("forge: route init refused — unsafe info/exclude") from exc
     metadata = os.fstat(descriptor)
-    unsafe = not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
-    if unsafe or metadata.st_mode & 0o022:
+    unsafe = (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+              or default_acl_risk(directory, metadata.st_mode))
+    if unsafe or not owner_only_writable(descriptor, metadata):
         os.close(descriptor)
         raise RouteRefusal("forge: route init refused — unsafe info/exclude")
     with os.fdopen(descriptor, "rb") as stream:

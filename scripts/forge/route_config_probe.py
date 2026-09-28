@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from route_config_git import owner_only_writable
+
 PROBE_TIMEOUT_SECONDS = 120
 TERMINATE_GRACE_SECONDS = 5
 STDOUT_LIMIT_BYTES = 16 * 1024 * 1024
@@ -107,7 +109,7 @@ def _secure_child(parent: int, name: str) -> int:
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid != os.geteuid()
-        or metadata.st_mode & 0o022
+        or not owner_only_writable(descriptor, metadata)
     ):
         os.close(descriptor)
         raise UnsafeDirectoryError(name)

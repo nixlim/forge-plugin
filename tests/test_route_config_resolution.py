@@ -5,8 +5,15 @@ import json
 import os
 import subprocess
 import sys
+from unittest import mock
 
-from tests.test_route_config_support import ROOT, codex_toml, route_config, route_text
+from tests.test_route_config_support import (
+    ROOT,
+    codex_toml,
+    route_config,
+    route_config_git,
+    route_text,
+)
 
 
 class RouteResolutionMixin:
@@ -38,11 +45,28 @@ class RouteResolutionMixin:
     def test_probe_support_is_lazy_until_init_or_probe_commands(self) -> None:
         import_only = """
 import sys
+from unittest import mock
 from pathlib import Path
 import route_config
+import route_config_git
 assert "route_config_probe" not in sys.modules
 repo = Path(sys.argv[1])
-route_config.load(repo, head=sys.argv[2])
+targets = (
+    (route_config_git.pwd, "getpwuid"),
+    (route_config_git.grp, "getgrgid"),
+    (route_config_git.pwd, "getpwall"),
+    (route_config_git.grp, "getgrall"),
+)
+lookups = [mock.patch.object(module, name) for module, name in targets]
+with (
+    lookups[0] as getpwuid,
+    lookups[1] as getgrgid,
+    lookups[2] as getpwall,
+    lookups[3] as getgrall,
+):
+    route_config.load(repo, head=sys.argv[2])
+for lookup in (getpwuid, getgrgid, getpwall, getgrall):
+    lookup.assert_not_called()
 assert "route_config_probe" not in sys.modules
 route_config.init_routes(repo)
 assert "route_config_probe" in sys.modules
@@ -79,6 +103,56 @@ assert len(reports) == 1 and diagnostics == ["forge: codex launch refused — ro
             check=False,
         )
         self.assertEqual(probed.returncode, 0, probed.stderr)
+
+    def test_info_default_acl_accounts_for_exclude_replacement_mode(self) -> None:
+        repos = {}
+        info_metadata = []
+        for label, exclude_mode in (("group", 0o664), ("owner", 0o644)):
+            repo = self.make_repo(f"default-acl-{label}")
+            info = repo / ".git/info"
+            info.chmod(0o755)
+            (info / "exclude").chmod(exclude_mode)
+            repos[label] = repo
+            info_metadata.append(info.stat())
+
+        def fake_listxattr(target: object) -> list[str]:
+            if not isinstance(target, int):
+                return []
+            actual = os.fstat(target)
+            if any(os.path.samestat(actual, expected) for expected in info_metadata):
+                return ["system.posix_acl_default"]
+            return []
+
+        refusal = (1, "", "forge: route init refused — unsafe info/exclude\n")
+        private_group = mock.patch.object(
+            route_config_git, "_owner_private_group", return_value=True
+        )
+        listxattr = mock.patch.object(
+            route_config_git.os, "listxattr", side_effect=fake_listxattr, create=True
+        )
+        with private_group, listxattr:
+            self.assertEqual(self.invoke("init", "--repo", str(repos["group"])), refusal)
+            with self.assertRaises(AssertionError), mock.patch.object(
+                route_config,
+                "default_acl_risk",
+                side_effect=lambda descriptor, _mode: route_config_git.default_acl_risk(
+                    descriptor, 0
+                ),
+            ):
+                self.assertEqual(self.invoke("init", "--repo", str(repos["group"])), refusal)
+            status, _stdout, stderr = self.invoke(
+                "init", "--repo", str(repos["owner"])
+            )
+            self.assertEqual((status, stderr), (0, ""))
+
+        missing = self.make_repo("default-acl-no-listxattr")
+        (missing / ".git/info").chmod(0o755)
+        (missing / ".git/info/exclude").chmod(0o664)
+        with (
+            mock.patch.object(route_config_git.os, "listxattr", None, create=True),
+            mock.patch.object(route_config_git, "_owner_private_group", return_value=True),
+        ):
+            self.assertEqual(self.invoke("init", "--repo", str(missing)), refusal)
 
     def test_review_final_uses_only_a_valid_initial_frontmatter_block(self) -> None:
         valid = (

@@ -52,6 +52,7 @@ def codex_toml(model: str, effort: str) -> str:
 class RouteConfigSupport:
     def setUp(self) -> None:
         super().setUp()
+        self.addCleanup(os.umask, os.umask(0o022))
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.scratch = Path(self.temporary.name)

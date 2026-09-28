@@ -1,12 +1,26 @@
-"""Bounded, environment-scrubbed Git calls for route configuration."""
+"""Bounded Git calls and owner-only path checks for route configuration.
+
+The private-group check requires NSS to enumerate matching owner and group
+records. A directory service can still hide another account's primary or
+supplementary membership in that group, so such unseen memberships remain a
+risk; the synchronous NSS calls also have no local timeout.
+"""
 
 from __future__ import annotations
 
+import errno
+import grp
 import os
+import pwd
 import signal
+import stat
 import subprocess
 import time
 from pathlib import Path
+
+ACL_XATTRS = frozenset({"system.posix_acl_access", "system.richacl", "system.nfs4_acl"})
+DEFAULT_ACL_XATTRS = frozenset({"system.posix_acl_default"})
+NO_XATTR_SUPPORT = frozenset({errno.ENOTSUP, errno.EOPNOTSUPP})
 
 SCRUBBED_GIT_ENVIRONMENT = frozenset(
     {
@@ -31,6 +45,88 @@ SCRUBBED_GIT_ENVIRONMENT = frozenset(
 
 class RouteRefusal(RuntimeError):
     """A fail-closed route configuration refusal."""
+
+
+def _identity_is_enumerable(
+    owner: pwd.struct_passwd,
+    group: grp.struct_group,
+    accounts: list[pwd.struct_passwd],
+    groups: list[grp.struct_group],
+) -> bool:
+    owner_visible = any(
+        entry.pw_uid == owner.pw_uid
+        and entry.pw_name == owner.pw_name
+        and entry.pw_gid == owner.pw_gid
+        for entry in accounts
+    )
+    matching_groups = [entry for entry in groups if entry.gr_gid == group.gr_gid]
+    group_visible = bool(matching_groups) and all(
+        entry.gr_gid == group.gr_gid
+        and entry.gr_name == group.gr_name
+        and set(entry.gr_mem) == set(group.gr_mem)
+        for entry in matching_groups
+    )
+    return owner_visible and group_visible
+
+
+def _owner_private_group(uid: int, gid: int) -> bool:
+    """Return whether ``gid`` is ``uid``'s enumerable, private primary group."""
+
+    try:
+        owner = pwd.getpwuid(uid)
+        group = grp.getgrgid(gid)
+        accounts = pwd.getpwall()
+        groups = grp.getgrall()
+    except (KeyError, OSError):
+        return False
+    if owner.pw_gid != gid or not _identity_is_enumerable(owner, group, accounts, groups):
+        return False
+    foreign = {entry.pw_name for entry in accounts if entry.pw_uid != uid}
+    aliases = {entry.pw_name for entry in accounts if entry.pw_uid == uid}
+    if any(name in foreign or name not in aliases for name in group.gr_mem):
+        return False
+    return not any(entry.pw_gid == gid and entry.pw_uid != uid for entry in accounts)
+
+
+def _may_have_acl(descriptor: int, names: frozenset[str]) -> bool:
+    listxattr = getattr(os, "listxattr", None)
+    if listxattr is None:
+        return True
+    try:
+        present = listxattr(descriptor)
+    except OSError as exc:
+        return exc.errno not in NO_XATTR_SUPPORT
+    return not names.isdisjoint(present)
+
+
+def _may_have_access_acl(descriptor: int) -> bool:
+    """Return whether an access ACL may widen the group-class write bit."""
+
+    return _may_have_acl(descriptor, ACL_XATTRS)
+
+
+def default_acl_risk(descriptor: int, replacement_mode: int) -> bool:
+    """Return whether a default ACL may grant group-class replacement writes."""
+
+    try:
+        group_writable = (os.fstat(descriptor).st_mode | replacement_mode) & stat.S_IWGRP
+    except OSError:
+        return True
+    if not group_writable:
+        return False
+    return _may_have_acl(descriptor, DEFAULT_ACL_XATTRS)
+
+
+def owner_only_writable(descriptor: int, metadata: os.stat_result) -> bool:
+    """Return whether the inode is writable only by its owner or private group."""
+
+    if metadata.st_mode & stat.S_IWOTH:
+        return False
+    if not metadata.st_mode & stat.S_IWGRP:
+        return True
+    if _may_have_access_acl(descriptor):
+        return False
+    return _owner_private_group(metadata.st_uid, metadata.st_gid)
 
 
 def _git_environment() -> dict[str, str]:
