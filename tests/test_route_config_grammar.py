@@ -32,7 +32,7 @@ class RouteGrammarMixin:
             route_config.EFFORTS,
             {
                 "codex": frozenset({"minimal", "low", "medium", "high", "ultra"}),
-                "claude": frozenset({"low", "medium", "high", "max"}),
+                "claude": frozenset({"low", "medium", "high", "xhigh", "max"}),
             },
         )
         data = b"""\t
@@ -141,6 +141,7 @@ effort = "max" # assignment
             "inherit": (route_text(model="inherit"), "model"),
             "bad-model": (route_text(model="bad model"), "model"),
             "codex-effort": (route_text(effort="max"), "effort"),
+            "codex-xhigh": (route_text(effort="xhigh"), "effort"),
             "claude-effort": (
                 route_text(provider="claude", model="fable", effort="ultra"),
                 "effort",
@@ -161,7 +162,7 @@ effort = "max" # assignment
         self.assert_route_refusal("invalid value for model in [implementer]")
         efforts = {
             "codex": ("minimal", "low", "medium", "high", "ultra"),
-            "claude": ("low", "medium", "high", "max"),
+            "claude": ("low", "medium", "high", "xhigh", "max"),
         }
         for provider, values in efforts.items():
             for effort in values:

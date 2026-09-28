@@ -23,7 +23,7 @@ ROLES = ("implementer", "review-cheap", "review-final", "plan")
 PROVIDERS = frozenset({"codex", "claude"})
 EFFORTS = {
     "codex": frozenset({"minimal", "low", "medium", "high", "ultra"}),
-    "claude": frozenset({"low", "medium", "high", "max"})}
+    "claude": frozenset({"low", "medium", "high", "xhigh", "max"})}
 PLUGIN_DEFAULTS = {
     "implementer": ("codex", "gpt-5.6-sol", "ultra"),
     "review-cheap": ("codex", "gpt-5.6-sol", "high"),
