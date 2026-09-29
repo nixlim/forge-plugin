@@ -117,6 +117,22 @@ class RouteSnapshotTests(Revision9BuilderBatchSupport, unittest.TestCase):
             (run_dir / relative).write_text("evidence\n", encoding="utf-8")
         return opening
 
+    def _open_legacy_task(self, run_id: str) -> None:
+        with self.api_environment():
+            self._open_legacy_run(self.repo, run_id, scope=[f"scopes/{run_id}/**"])
+            builders.task_start(
+                self.repo,
+                run_id,
+                idempotency_key=key(f"{run_id}-task"),
+                task="task-01",
+                goal="Exercise pre-route compatibility",
+                acceptance=["The execution is accepted"],
+                files=[f"scopes/{run_id}/example.py"],
+            )
+        run_dir = self.run_dir(self.repo, run_id)
+        for relative in ("prompt.md", "events.jsonl", "handoff.md"):
+            (run_dir / relative).write_text("evidence\n", encoding="utf-8")
+
     def _execution(
         self,
         run_id: str,
@@ -452,8 +468,11 @@ class RouteSnapshotTests(Revision9BuilderBatchSupport, unittest.TestCase):
         )
 
         run_id = "run-20260925-route-unrecorded"
-        opening = self._open_task(run_id)
-        route = opening["route"]["implementer"]
+        self._open_legacy_task(run_id)
+        route = {
+            "provider": "codex", "model": "legacy-route-model", "effort": "low",
+            "route_source": "local", "route_sha256": "a" * 64,
+        }
         outcome = self._execution(
             run_id,
             route,
@@ -479,22 +498,7 @@ class RouteSnapshotTests(Revision9BuilderBatchSupport, unittest.TestCase):
 
     def test_pre_snapshot_run_skips_route_comparison(self) -> None:
         run_id = "run-20260925-route-legacy"
-        with self.api_environment():
-            self._open_legacy_run(
-                self.repo, run_id, scope=[f"scopes/{run_id}/**"]
-            )
-            builders.task_start(
-                self.repo,
-                run_id,
-                idempotency_key=key(f"{run_id}-task"),
-                task="task-01",
-                goal="Exercise pre-route compatibility",
-                acceptance=["The execution is accepted"],
-                files=[f"scopes/{run_id}/example.py"],
-            )
-        run_dir = self.run_dir(self.repo, run_id)
-        for relative in ("prompt.md", "events.jsonl", "handoff.md"):
-            (run_dir / relative).write_text("evidence\n", encoding="utf-8")
+        self._open_legacy_task(run_id)
         route = {
             "provider": "codex",
             "model": "legacy-route-model",

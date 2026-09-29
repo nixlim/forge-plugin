@@ -1,12 +1,12 @@
 ---
 name: forge-workflow
-description: Run the full Codex orchestration workflow end to end.
+description: Forge's end-to-end owner workflow for a governed repository run, from scope admission and typed task planning through routed execution, verification, gated closure, reintegration, and durable reporting. Use this skill whenever work in a repository with forge-project.md needs a complete Forge run rather than one focused execution, including requests to implement a multi-task change, finish an existing run, or take a candidate through its gates and final report.
 ---
 
 # Workflow
 
 Use this skill for one complete run. This skill owns the lifecycle from planning through the final
-report. Use `${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/SKILL.md` for each focused Codex-agent
+report. Use `${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/SKILL.md` for each focused routed-agent
 execution, review, or verification cycle.
 
 ## Run Initialization
@@ -159,8 +159,9 @@ only after that locked, non-mutating retirement and never over a foreign live pr
    idempotency key. Serialize every overlap in files, contracts, or shared resources;
    isolated worktrees support concurrent tasks only when their ownership is disjoint.
 <!-- forge: modified from upstream — fail closed at the run-lifecycle launch boundary (FR-033/092) -->
-6. For each task, use the orchestrate skill to assign a fresh Codex implementer, capture its
-   prompt, events, and handoff, and independently verify the result. Never resume an implementer;
+6. For each task, use the orchestrate skill to launch a fresh routed implementer through
+   `forge launch`, collect its result with `forge launch collect`, and independently verify the
+   result. Never resume an implementer;
    only the same reviewer may be resumed for a targeted confirmation round under the orchestrate
    contract. Immediately before every new execution launch, require this checkpoint to exit 0:
 

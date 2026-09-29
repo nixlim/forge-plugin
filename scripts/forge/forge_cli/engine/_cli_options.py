@@ -7,6 +7,8 @@ from forge_cli import chain_core, runtime
 import re
 import sys
 
+LAUNCH_RUN_ID_REQUIRED = "forge: launch refused — explicit --repo and --run-id are required"
+
 
 def _message_from_args(args: argparse.Namespace) -> str:
     if args.message is not None:
@@ -36,6 +38,55 @@ def _validate_revision9_cross_options(
     options: chain_core.CLIOptions, args: argparse.Namespace
 ) -> None:
     """Refuse Revision-9 flag tuples before repository discovery."""
+
+    if args.command == "launch":
+        options.revision9_face = True
+        if options.repo is None or options.run_id is None:
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                LAUNCH_RUN_ID_REQUIRED,
+                expected="one nonempty --repo and --run-id",
+                observed="missing launch repository or run identity",
+                remediation="rerun launch with the exact --repo and --run-id",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        if options.chain_id is not None:
+            raise Refusal(
+                V2ReasonCode.RUN_TASK_BINDING_INVALID,
+                "forge: launch refused — --chain-id is not admitted",
+                expected="no chain identity",
+                observed=options.chain_id,
+                remediation="remove --chain-id and retry launch",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        command = args.launch_command
+        start_values = (args.role, args.task, args.worktree, args.brief)
+        if command is None:
+            if any(value is None for value in start_values) or args.execution is not None:
+                raise Refusal(
+                    V2ReasonCode.STATE_PRECONDITION,
+                    "forge: launch refused — --role, --task, --worktree and --brief "
+                    "are required, and --execution is not admitted",
+                    expected="the exact launch start option tuple",
+                    observed="missing or conflicting launch start options",
+                    remediation="supply the four start options and remove --execution",
+                    schema=REVISION9_OUTPUT_SCHEMA,
+                )
+            return
+        execution = args.execution
+        if any(value is not None for value in start_values) or not isinstance(
+            execution, str
+        ) or re.fullmatch(r"execution-[0-9]{2}", execution) is None:
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: launch {command} refused — exactly --execution execution-NN "
+                "is required",
+                expected="one two-digit execution identity and no start options",
+                observed="missing, malformed, or conflicting launch options",
+                remediation=f"rerun launch {command} with exactly --execution execution-NN",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        return
 
     if args.command == "chain" and args.chain_command == "tombstone":
         options.revision9_face = True

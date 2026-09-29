@@ -12,10 +12,8 @@ POLICIES = {
         encoding="utf-8"
     ),
 }
-DEFERRED_MARKERS = {
-    "FR-245": "(Revision 15 authority; implementer and plan cells deferred to chain I)",
-}
-IMPLEMENTED = ("FR-244", "FR-246", "FR-247", "DM-018")
+DEFERRED_MARKERS = {}
+IMPLEMENTED = ("FR-244", "FR-245", "FR-246", "FR-247", "DM-018")
 NEW_CONTROL_PATHS = ("system/claude/**", "system/local/**")
 REVIEWER_PATTERNS = (
     ("agent-prompt-template", "system/claude/prompts/**"),
@@ -390,20 +388,16 @@ class SpecificationRevision15Tests(unittest.TestCase):
             SPEC,
         )
 
-    def test_each_deferral_assertion_detects_its_removal(self) -> None:
-        for requirement_id, marker in DEFERRED_MARKERS.items():
+    def test_implemented_requirement_headings_have_no_deferral_marker(self) -> None:
+        for requirement_id in IMPLEMENTED:
             with self.subTest(requirement=requirement_id):
-                block = requirement_block(SPEC, requirement_id)
-                self.assertIn(marker, block)
-                block_start = SPEC.index(block)
-                marker_start = block_start + block.index(marker)
-                mutant = (
-                    SPEC[:marker_start]
-                    + "(Revision 15 authority)"
-                    + SPEC[marker_start + len(marker) :]
+                heading = next(
+                    line for line in SPEC.splitlines()
+                    if re.match(rf"(?:- )?\*\*{requirement_id}\*\*", line)
                 )
-                with self.assertRaisesRegex(AssertionError, requirement_id):
-                    assert_deferred_authority(mutant)
+                self.assertNotRegex(
+                    heading, r"\(Revision 15 authority; [^)]*deferred[^)]*\)"
+                )
 
     def test_trigger_regions_are_mirrored_and_fail_closed(self) -> None:
         assert_trigger_controls(SPEC, POLICIES)

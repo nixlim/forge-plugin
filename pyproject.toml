@@ -363,7 +363,8 @@ type = "layers"
 containers = ["forge_cli.engine"]
 layers = [
     "_engine",
-    "_verbs_decision | _verbs_finalize | _verbs_gate | _verbs_gate_evals | _verbs_lifecycle | _verbs_review_cancel | _verbs_review_collect | _verbs_review_request | _verbs_status | _verbs_tombstone",
+    "_verbs_decision | _verbs_finalize | _verbs_gate | _verbs_gate_evals | _verbs_launch | _verbs_launch_collect | _verbs_lifecycle | _verbs_review_cancel | _verbs_review_collect | _verbs_review_request | _verbs_status | _verbs_tombstone",
+    "_launch_lane",
     "_review_launch",
     "_review_lane_api",
     "_finalize | _merge_candidate_generation",

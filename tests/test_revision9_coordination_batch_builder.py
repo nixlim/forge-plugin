@@ -21,6 +21,7 @@ class Revision9BatchBuilderTests(Revision9BuilderBatchSupport, unittest.TestCase
         run_id = "run-20260828-revision9-roundtrip"
         with self.api_environment():
             opened = self.open_run(self.repo, run_id)
+            route = opened.records[0]["route"]["implementer"]
             self.assertFalse(opened.repeated)
             self.assertEqual(opened.records[0]["writer_contract"], journal.WRITER_CONTRACT)
             repeated_open = self.open_run(self.repo, run_id)
@@ -54,17 +55,20 @@ class Revision9BatchBuilderTests(Revision9BuilderBatchSupport, unittest.TestCase
                 idempotency_key=key("execution"),
                 agent="codex-impl-01",
                 task="task-01",
-                provider="codex",
+                provider=route["provider"],
                 role="implementer",
                 mode="headless",
-                model="gpt-test",
-                effort="high",
+                model=route["model"],
+                effort=route["effort"],
                 worktree=str(self.repo.resolve()),
                 head=self.head,
                 prompt="prompt.md",
                 handoff="handoff.md",
                 event_source="exec",
                 events="events.jsonl",
+                sandbox="workspace-write",
+                route_source=route["route_source"],
+                route_sha256=route["route_sha256"],
             )
             self.assertEqual(execution.records[0]["execution"], "execution-01")
             builders.execution_result(
@@ -126,14 +130,9 @@ class Revision9BatchBuilderTests(Revision9BuilderBatchSupport, unittest.TestCase
                 follow_ups=[],
             )
 
-        records, issues = journal.read_journal(
-            self.run_dir(self.repo, run_id) / "journal.jsonl"
-        )
+        records, issues = journal.read_journal(self.run_dir(self.repo, run_id) / "journal.jsonl")
         self.assertEqual(issues, [])
-        self.assertEqual([record["type"] for record in records], [
-            "run_started", "task", "execution", "execution_result", "verification",
-            "decision", "task", "run_closed",
-        ])
+        self.assertEqual([record["type"] for record in records], ["run_started", "task", "execution", "execution_result", "verification", "decision", "task", "run_closed"])
         self.assertTrue(all(record["run_id"] == run_id for record in records))
         self.assertTrue(all("recorded_at" in record for record in records))
         receipts = [

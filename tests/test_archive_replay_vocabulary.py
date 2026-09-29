@@ -91,13 +91,20 @@ class ArchiveReplayVocabularyTests(unittest.TestCase):
 
     def _build_recovery_run(self) -> None:
         builders = archive.journal_builders
-        builders.run_open(
+        archive.journal_engine.open_run(
             self.repo,
             RECOVERY_RUN_ID,
-            idempotency_key=key("open recovery"),
-            goal="Approve one historical archive recovery",
-            scope=["tracked"],
-            plugin_ref="forge-test-route-v2",
+            ["tracked"],
+            {
+                "type": "run_started",
+                "recorded_at": "2026-09-23T12:00:00Z",
+                "run_id": RECOVERY_RUN_ID,
+                "goal": "Approve one historical archive recovery",
+                "repo": str(self.repo.resolve()),
+                "repo_head": self.head,
+                "repo_status": [],
+                "plugin_ref": "forge-test-route-v2",
+            },
         )
         builders.task_start(
             self.repo,
@@ -173,14 +180,20 @@ class ArchiveReplayVocabularyTests(unittest.TestCase):
         )
         reviewer["sandbox"] = "danger-full-access"
         batches = [archive.journal_engine._journal_line(record) for record in records]
-        self.assertEqual(len(batches), len(receipts))
-        journal_raw = b""
-        for receipt, batch_bytes in zip(receipts, batches, strict=True):
+        prefix_count = len(batches) - sum(int(row["record_count"]) for row in receipts)
+        self.assertEqual(prefix_count, 1)
+        journal_raw = b"".join(batches[:prefix_count])
+        offset = prefix_count
+        for receipt in receipts:
+            count = int(receipt["record_count"])
+            batch_bytes = b"".join(batches[offset : offset + count])
+            offset += count
             receipt["base_size"] = len(journal_raw)
             receipt["batch_sha256"] = hashlib.sha256(batch_bytes).hexdigest()
             journal_raw += batch_bytes
             receipt["journal_size"] = len(journal_raw)
             receipt["journal_sha256"] = hashlib.sha256(journal_raw).hexdigest()
+        self.assertEqual(offset, len(batches))
         journal.write_bytes(journal_raw)
         ledger.write_bytes(
             b"".join(

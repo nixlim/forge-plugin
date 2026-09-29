@@ -45,6 +45,16 @@ def _merge_command_engine(engine: engine.Engine) -> MergeEngine:
     )
 
 
+def _dispatch_launch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
+    if args.launch_command == "collect":
+        return engine.launch_collect(args.execution)
+    if args.launch_command == "cancel":
+        return engine.launch_cancel(args.execution)
+    return engine.launch(
+        role=args.role, task=args.task, worktree=args.worktree, brief=args.brief
+    )
+
+
 def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
     if args.command == "common-lock" and args.common_lock_command == "hold":
         return chain_core.hold_common_lock(
@@ -121,6 +131,8 @@ def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
                 task_status=args.task_status,
                 idempotency_key=args.idempotency_key,
             )
+    if args.command == "launch":
+        return _dispatch_launch(engine, args)
     if args.command == "commit":
         if args.commit_command == "start":
             if (engine.ctx.options.run_id is None) != (args.task is None):
@@ -206,7 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         verbose="--verbose" in raw_argv,
         original_argv=tuple(raw_argv),
         revision9_face=(
-            raw_command == "common-lock"
+            raw_command in {"common-lock", "launch"}
             or (runtime.MERGE_LIFECYCLE_ACTIVE and raw_command == "merge")
         ),
     )
@@ -218,6 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         options.revision9_face = bool(
             options.run_id is not None
             or "journal" in command_argv
+            or bool(command_argv and command_argv[0] == "launch")
             or bool(command_argv and command_argv[0] == "common-lock")
             or bool(
                 runtime.MERGE_LIFECYCLE_ACTIVE
@@ -239,7 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         args = engine.build_parser().parse_args(command_argv)
         options.revision9_face = options.revision9_face or bool(
-            args.command in {"journal", "common-lock"}
+            args.command in {"journal", "common-lock", "launch"}
             or (runtime.MERGE_LIFECYCLE_ACTIVE and args.command == "merge")
             or (
                 args.command == "commit"
@@ -253,6 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         run_id_admitted = bool(
             args.command == "journal"
+            or args.command == "launch"
             or (
                 runtime.MERGE_LIFECYCLE_ACTIVE
                 and args.command == "merge"

@@ -140,7 +140,11 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[chain_core.CLIOptions,
         else:
             remaining.append(argument)
             index += 1
-    if options.chain_id and not chain_core.CHAIN_ID_RE.fullmatch(options.chain_id):
+    if (
+        options.chain_id
+        and not chain_core.CHAIN_ID_RE.fullmatch(options.chain_id)
+        and (not remaining or remaining[0] != "launch")
+    ):
         raise Refusal(
             ReasonCode.STATE_PRECONDITION,
             "invalid --chain-id grammar",
@@ -298,6 +302,14 @@ def build_parser() -> ContractArgumentParser:
         "--operation", choices=tuple(sorted(chain_core.COMMON_LOCK_OPERATIONS)), required=True
     )
     common_lock_hold.add_argument("--ready-fd", type=int, required=True)
+
+    launch = commands.add_parser("launch")
+    launch.add_argument("launch_command", nargs="?", choices=("collect", "cancel"))
+    launch.add_argument("--role", choices=("implementer", "plan"))
+    launch.add_argument("--task")
+    launch.add_argument("--worktree")
+    launch.add_argument("--brief")
+    launch.add_argument("--execution")
     return parser
 
 

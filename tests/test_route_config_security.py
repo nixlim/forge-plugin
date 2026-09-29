@@ -23,6 +23,8 @@ from tests.test_route_config_support import (
 EXPECTED_SEED = (
     "# <common-root>/.forge/local/routes.toml   — one per clone, "
     """never committed, owner-only
+# Without a Forge init run, create this file manually with:
+# python3 <plugin-root>/scripts/forge/route_config.py init --repo <absolute repo path>
 schema = "forge-routes/1"
 
 # [implementer]
@@ -307,10 +309,10 @@ class RouteSecurityMixin:
         destination = route_config.init_routes(self.repo)
         seed = (ROOT / "system/local/routes.toml.seed").read_bytes()
         self.assertEqual(seed, EXPECTED_SEED)
-        self.assertEqual(len(seed), 473)
+        self.assertEqual(len(seed), 620)
         self.assertEqual(
             hashlib.sha256(seed).hexdigest(),
-            "4d79d84719762a82302ca46f1d0230d262177ddeaad24f027d9a3127cef54a12",
+            "dcbd9817b6076fe882bbfe6d7e7d6534f3a7fc4a37f908d70f0f4a68c9c60001",
         )
         active = [line for line in seed.splitlines() if line and not line.startswith(b"#")]
         self.assertEqual(active, [b'schema = "forge-routes/1"'])

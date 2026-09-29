@@ -1,4 +1,6 @@
 # <common-root>/.forge/local/routes.toml   — one per clone, never committed, owner-only
+# Without a Forge init run, create this file manually with:
+# python3 <plugin-root>/scripts/forge/route_config.py init --repo <absolute repo path>
 schema = "forge-routes/1"
 
 # [implementer]

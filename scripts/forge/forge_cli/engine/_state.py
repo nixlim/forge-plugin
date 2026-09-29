@@ -126,15 +126,16 @@ global options (accepted before or after the verb; parsed ahead of argparse):
   --repo PATH        a directory inside the target repository (default: cwd)
   --run-id RUN_ID    bind a new chain to this explicitly identified open
                      orchestration run; `commit start` then requires --task,
-                     and later chain verbs inherit the binding (no --run-id)
+                     `journal` and `launch` name the run directly, and later
+                     chain verbs inherit the binding (no --run-id)
   --chain-id ID      select the chain a shared verb addresses; required by
                      merge shared verbs and `chain tombstone`
   --json             machine-readable JSON output
   --verbose          include diagnostic detail in refusals and receipts
 
 --task TASK_ID is not global: it is a verb option of `commit start`, `merge start`,
-and `journal ingest-chain` (accepted only after the verb) naming the run task the
-chain's gate verifications cite.
+`journal ingest-chain`, and `launch` (accepted only after the verb) naming the run
+task the chain's gate verifications cite.
 """
 
 

@@ -9145,6 +9145,7 @@ def execution_start(
     sandbox: str | None = None,
     route_source: str | None = None,
     route_sha256: str | None = None,
+    launch_marker: str | None = None,
 ) -> batch.BatchOutcome:
     inputs = {
         "agent": agent,
@@ -9161,15 +9162,12 @@ def execution_start(
         "event_source": event_source,
         "events": events,
     }
-    for field, value in (("sandbox", sandbox), ("route_source", route_source), ("route_sha256", route_sha256)):
+    for field, value in (("sandbox", sandbox), ("route_source", route_source), ("route_sha256", route_sha256), ("launch_marker", launch_marker)):
         if value is not None:
             inputs[field] = value
 
     def validate() -> None:
-        for field in (
-            "agent", "task", "provider", "role", "mode", "model", "effort",
-            "worktree", "prompt", "handoff", "event_source",
-        ):
+        for field in ("agent", "task", "provider", "role", "mode", "model", "effort", "worktree", "prompt", "handoff", "event_source"):
             _caller_text("execution", field, inputs[field])
         if events is not None:
             _caller_text("execution", "events", events)

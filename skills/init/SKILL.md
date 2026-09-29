@@ -111,17 +111,31 @@ Complete every precondition before running the installer.
    or `agent-rebase.lock.intent` by hand except as the operator-reserved dead-owner clearing the
    worktree-merge skill describes. Never bypass locking.
 
-5. Require `codex`. Read every `model = "..."` value from
-   `${CLAUDE_PLUGIN_ROOT}/system/codex/agents/*.toml`, reject a missing or malformed value, and
-   deduplicate the model names. Run exactly one trivial, read-only probe per distinct model, for
-   example:
+5. From the repository root, require a committed `HEAD`, initialize the developer-local route
+   configuration, enforce the provider CLI version floors, and probe every resolved route. Run
+   these commands in order:
 
    ```bash
-   codex exec --model "$MODEL" --sandbox read-only "Reply with exactly FORGE_MODEL_OK."
+   git -C "$REPO_ROOT" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null || { echo "forge: init stopped — the current branch has no commit yet; make a first commit, then re-run /forge:init" >&2; exit 1; }
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/route_config.py" init --repo "$REPO_ROOT"
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/route_floor.py" --repo "$REPO_ROOT"
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/route_config.py" probe --repo "$REPO_ROOT"
    ```
 
-   A nonzero exit, rejected model, or unavailable model stops init immediately. Name the rejected
-   model in the report; do not substitute a different model or lower its reasoning effort.
+   The first command stops an unborn branch with exactly
+   `forge: init stopped — the current branch has no commit yet; make a first commit, then re-run
+   /forge:init`, before any route command runs or developer-local route state is written. A fresh
+   route initialization exits 0. On re-init, the exit-1 diagnostic
+   `forge: route init refused — routes file already exists` is expected: continue without changing
+   the existing route bytes. Any other nonzero route-init exit, any
+   nonzero route-floor exit, or a route-probe exit of 1 stops init with its diagnostic unchanged;
+   never substitute another route.
+
+   These commands write only developer-local, never-committed state:
+   `<common-root>/.forge/local/routes.toml` (0600 in a 0700 directory), one
+   `/.forge/local/` line in the common checkout's `info/exclude`, and transient scratch under
+   `<common-root>/.forge/tmp/route-probe/`. They are not step 6's first target-repository mutation,
+   and any failure here leaves `.forge-manifest` unchanged.
 
 6. Immediately before Phase 1, handle the manifest as the final precondition. On plugin re-init, require
    the existing `.forge-manifest` to be well formed before making any target-repository mutation:
@@ -131,8 +145,9 @@ Complete every precondition before running the installer.
    the filled bodies reported in step 2; a malformed, duplicate, unknown, or inconsistent value
    stops init without changing the manifest.
 
-   Only after every preceding confirmation and model probe has passed, make re-init invalidation
-   the first target-repository mutation. If the manifest contains the exact line
+   Only after every preceding confirmation and both the route floor and route probe checks have
+   passed, make re-init invalidation the first target-repository mutation. If the manifest contains
+   the exact line
    `init_completed: true`, replace only that line with `init_completed: false` in a same-directory
    temporary file, verify every other byte is unchanged, and atomically rename the temporary file
    over `.forge-manifest`. If it already contains the exact line `init_completed: false`, leave the
@@ -565,8 +580,8 @@ Treat the complete init output as a control-class change.
    to the Phase 0 state into `.forge/tmp/init-candidate.diff`. Include binary patches, every tracked
    change, every new untracked install file in stable byte ordering, every `.forge-new` collision,
    and `.forge-manifest` containing exactly `init_completed: false`; exclude only ignored scratch
-   state. Do not hide a file, stage unrelated content, or omit the manifest. An unborn branch uses
-   the empty tree as its baseline.
+   state. Do not hide a file, stage unrelated content, or omit the manifest. Phase 0 step 5 requires
+   the branch's first commit, so an unborn branch never reaches candidate materialization.
 
    Secret-scan the frozen snapshot; a suspected secret blocks review and must never be echoed.
    Select the SHA-256 implementation once: prefer `sha256sum` when `command -v sha256sum` succeeds,

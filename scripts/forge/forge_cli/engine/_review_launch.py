@@ -5,18 +5,15 @@ from __future__ import annotations
 import dataclasses
 import errno
 import os
-import re
-import selectors
-import signal
 import stat
 import subprocess
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import route_config
 import route_evidence
+import route_floor
 
 from forge_cli import chain_core, runtime
 from forge_cli.engine import _review_lane_api
@@ -25,7 +22,7 @@ from forge_cli.engine._state import CODEX_EXECUTABLE as CODEX_EXECUTABLE
 from forge_cli.envelope import FrozenError, ReasonCode, Refusal
 from forge_cli.policy import sha256_bytes
 
-PROFILE_TIMEOUT_SECONDS = {"review": 2400, "implementer": 3600, "plan": 1200}
+PROFILE_TIMEOUT_SECONDS = {"review": 2400, "implementer": 14400, "plan": 1200}
 VERSION_PROBE_TIMEOUT_SECONDS = 10
 VERSION_PROBE_LIMIT_BYTES = 4096
 IDENTITY_DEADLINE_SECONDS = 60
@@ -33,8 +30,6 @@ _PROBE_SUPPORT = route_config._probe_support()
 TERMINATE_GRACE_SECONDS: int = int(_PROBE_SUPPORT.TERMINATE_GRACE_SECONDS)
 CODEX_NOT_LOGGED_IN: str = str(_PROBE_SUPPORT.CODEX_NOT_LOGGED_IN)
 CLAUDE_NOT_LOGGED_IN: str = str(_PROBE_SUPPORT.CLAUDE_NOT_LOGGED_IN)
-VERSION_FLOORS = {"codex": (0, 155, 0), "claude": (2, 1, 278)}
-_VERSION_RE = re.compile(rb"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)")
 _ATTEMPT_NAMES = {
     "package": "package.txt", "prompt": "prompt.txt", "events": "events.jsonl",
     "stderr": "stderr.log", "identity": "identity.json",
@@ -331,79 +326,6 @@ def reviewer_argv(
     ]
 
 
-def _group_exists(pid: int) -> bool:
-    try:
-        os.killpg(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
-    return True
-
-
-def _terminate_probe(process: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    deadline = time.monotonic() + TERMINATE_GRACE_SECONDS
-    while _group_exists(process.pid) and time.monotonic() < deadline:
-        process.poll()
-        time.sleep(0.01)
-    if _group_exists(process.pid):
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    try:
-        process.wait(timeout=TERMINATE_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-
-def _bounded_probe_output(
-    process: subprocess.Popen[bytes],
-) -> tuple[bytes, bytes, str | None]:
-    assert process.stdout is not None and process.stderr is not None
-    streams = {process.stdout.fileno(): "stdout", process.stderr.fileno(): "stderr"}
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    selector = selectors.DefaultSelector()
-    for descriptor, name in streams.items():
-        selector.register(descriptor, selectors.EVENT_READ, name)
-    deadline = time.monotonic() + VERSION_PROBE_TIMEOUT_SECONDS
-    outcome: str | None = None
-    while selector.get_map() and outcome is None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            outcome = "timeout"
-            break
-        for key, _mask in selector.select(min(remaining, 0.1)):
-            chunk = os.read(key.fd, VERSION_PROBE_LIMIT_BYTES + 1)
-            if not chunk:
-                selector.unregister(key.fd)
-                continue
-            buffer = buffers[str(key.data)]
-            buffer.extend(chunk[: VERSION_PROBE_LIMIT_BYTES + 1 - len(buffer)])
-            if len(buffer) > VERSION_PROBE_LIMIT_BYTES:
-                outcome = "limit"
-                break
-    selector.close()
-    if outcome is None:
-        try:
-            process.wait(timeout=max(0.0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            outcome = "timeout"
-    if outcome is not None:
-        _terminate_probe(process)
-    stdout, stderr = bytes(buffers["stdout"]), bytes(buffers["stderr"])
-    process.stdout.close()
-    process.stderr.close()
-    return stdout, stderr, outcome
-
-
 def probe_provider_version(
     provider: str,
     executable: str,
@@ -414,57 +336,25 @@ def probe_provider_version(
     verb: str = "review request",
 ) -> str:
     try:
-        process = subprocess.Popen(
-            [executable, "--version"],
-            cwd=str(cwd),
-            env=dict(environment),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-            close_fds=True,
+        return route_floor.check_floor(
+            provider,
+            executable,
+            environment,
+            cwd=cwd,
+            verb=verb,
+            timeout_seconds=VERSION_PROBE_TIMEOUT_SECONDS,
+            limit_bytes=VERSION_PROBE_LIMIT_BYTES,
+            grace_seconds=TERMINATE_GRACE_SECONDS,
         )
-    except OSError as exc:
-        message = (
-            f"forge: {verb} refused — {provider} executable is unavailable: {executable}"
+    except route_floor.FloorRefusal as exc:
+        expected = (
+            f"available {executable} executable"
+            if exc.kind == "unavailable"
+            else "a launchable reviewer route"
         )
         raise _review_refusal(
-            message, state, expected=f"available {executable} executable", verb=verb
+            exc.message, state, expected=expected, verb=verb
         ) from exc
-    stdout, stderr, outcome = _bounded_probe_output(process)
-    if outcome == "timeout":
-        message = (
-            f"forge: {verb} refused — {provider} version probe timed out "
-            f"after {VERSION_PROBE_TIMEOUT_SECONDS} s"
-        )
-        raise _review_refusal(message, state, verb=verb)
-    if outcome == "limit":
-        message = (
-            f"forge: {verb} refused — {provider} version probe output "
-            f"exceeded {VERSION_PROBE_LIMIT_BYTES} bytes"
-        )
-        raise _review_refusal(message, state, verb=verb)
-    if process.returncode != 0:
-        message = (
-            f"forge: {verb} refused — {provider} version probe failed "
-            f"with exit {process.returncode}"
-        )
-        raise _review_refusal(message, state, verb=verb)
-    match = _VERSION_RE.search(stdout + b"\n" + stderr)
-    if match is None:
-        message = f"forge: {verb} refused — {provider} version output is unparseable"
-        raise _review_refusal(message, state, verb=verb)
-    version = tuple(int(part) for part in match.groups())
-    floor = VERSION_FLOORS[provider]
-    rendered = ".".join(str(part) for part in version)
-    if version < floor:
-        required = ".".join(str(part) for part in floor)
-        message = (
-            f"forge: {verb} refused — {provider} version {rendered} "
-            f"is below required {required}"
-        )
-        raise _review_refusal(message, state, verb=verb)
-    return rendered
 
 
 def _prepare_live_files(paths: ReviewPaths, prompt: bytes) -> None:

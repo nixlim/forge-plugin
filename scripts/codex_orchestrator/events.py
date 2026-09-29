@@ -7,6 +7,17 @@ from pathlib import Path
 
 PARSER_VERSION = "0.1.0"
 
+# forge: modified from upstream — summarize engine-launched Claude stream-json
+CLAUDE_EVENT_TYPES = {
+    "assistant",
+    "error",
+    "rate_limit_event",
+    "result",
+    "system",
+    "tool_progress",
+    "user",
+}
+
 EXEC_EVENT_TYPES = {
     "thread.started",
     "turn.started",
@@ -37,6 +48,7 @@ class StreamSummary:
     error: object = None
     last_agent_message: str = ""
     terminal: EventRecord | None = None
+    event_source: str = "exec"
 
     @property
     def event_count(self) -> int:
@@ -93,6 +105,54 @@ class StreamSummary:
                 if isinstance(text, str):
                     self.last_agent_message = text
 
+    # forge: modified from upstream — map Claude stream-json onto upstream states
+    def consume_claude(self, record: EventRecord) -> None:
+        kind = record.event_type
+        self.event_counts[kind] += 1
+        if kind in {"<invalid-json>", "<non-object>"}:
+            self.parse_errors += 1
+        if kind in CLAUDE_EVENT_TYPES:
+            self.known_count += 1
+        else:
+            self.unknown_event_types.add(kind)
+            return
+        if self.status == "idle":
+            self.status = "starting"
+
+        event = record.event
+        native_id = event.get("session_id")
+        if isinstance(native_id, str) and native_id:
+            self.thread_id = native_id
+        if kind == "system" and event.get("subtype") == "init":
+            self.status = "starting"
+            self.usage = None
+            self.error = None
+            self.last_agent_message = ""
+            self.terminal = None
+        elif kind == "assistant":
+            self.status = "active"
+            self.usage = None
+            self.error = None
+            self.terminal = None
+            text = claude_message_text(event)
+            if text:
+                self.last_agent_message = text
+        elif kind == "result" and event.get("is_error") is False:
+            self.status = "complete"
+            self.usage = event.get("usage")
+            self.error = None
+            self.terminal = record
+        elif kind == "result" and event.get("is_error") is True:
+            self.status = "failed"
+            self.usage = event.get("usage")
+            self.error = claude_result_error(event)
+            self.terminal = record
+        elif kind == "error":
+            self.status = "failed"
+            self.usage = None
+            self.error = event.get("error") or event.get("message")
+            self.terminal = record
+
     def details(self) -> dict[str, object]:
         details: dict[str, object] = {}
         if self.usage is not None:
@@ -113,6 +173,41 @@ def json_dumps(payload: object) -> str:
 def event_type(event: dict[str, object]) -> str:
     value = event.get("type")
     return value if isinstance(value, str) else "<missing>"
+
+
+def claude_message_text(event: dict[str, object]) -> str:
+    message = event.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        block.get("text")
+        for block in content
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ]
+    return "".join(parts)
+
+
+def claude_result_error(event: dict[str, object]) -> object:
+    for key in ("error", "errors", "result"):
+        value = event.get(key)
+        if value is not None:
+            return value
+    return event.get("subtype")
+
+
+def detected_event_source(record: EventRecord) -> str | None:
+    if record.event_type in CLAUDE_EVENT_TYPES - {"error"}:
+        return "claude"
+    if record.event_type == "error" and "session_id" in record.event:
+        return "claude"
+    if record.event_type in EXEC_EVENT_TYPES:
+        return "exec"
+    return None
 
 
 def decode_event_line(line: str) -> EventRecord | None:
@@ -136,8 +231,11 @@ def is_reconnect_notice(record: EventRecord) -> bool:
     return "reconnecting" in json_dumps(record.event).lower()
 
 
-def summarize_stream(path: Path) -> StreamSummary:
-    summary = StreamSummary()
+def summarize_stream(path: Path, *, event_source: str | None = None) -> StreamSummary:
+    if event_source not in {None, "exec", "claude"}:
+        raise ValueError(f"unsupported event source: {event_source}")
+    summary = StreamSummary(event_source=event_source or "exec")
+    detected = event_source
     with path.open("rb") as handle:
         while True:
             raw_line = handle.readline()
@@ -162,7 +260,16 @@ def summarize_stream(path: Path) -> StreamSummary:
                 if summary.status == "idle":
                     summary.status = "starting"
                 break
-            summary.consume(record)
+            if detected is None:
+                detected = detected_event_source(record)
+                if detected is None:
+                    summary.consume(record)
+                    continue
+                summary.event_source = detected
+            if detected == "claude":
+                summary.consume_claude(record)
+            else:
+                summary.consume(record)
     return summary
 
 

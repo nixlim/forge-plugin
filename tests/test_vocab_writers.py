@@ -93,7 +93,8 @@ class VocabularyWriterTests(unittest.TestCase):
             (run_dir / relative).write_text("evidence\n", encoding="utf-8")
         records, issues = journal.read_journal(run_dir / "journal.jsonl")
         self.assertEqual(issues, [])
-        self.snapshot = records[0]["route"]["implementer"]
+        self.routes = records[0]["route"]
+        self.snapshot = self.routes["implementer"]
         self.execution_number = 0
 
     def git(self, *arguments: str) -> subprocess.CompletedProcess[str]:
@@ -149,14 +150,17 @@ class VocabularyWriterTests(unittest.TestCase):
         record.update(updates)
         return record
 
-    def route_fields(self, sandbox: object = "workspace-write") -> dict[str, object]:
+    def route_fields(
+        self, sandbox: object = "workspace-write", *, role: str = "implementer"
+    ) -> dict[str, object]:
+        snapshot = self.routes[role]
         return {
-            "provider": self.snapshot["provider"],
-            "model": self.snapshot["model"],
-            "effort": self.snapshot["effort"],
+            "provider": snapshot["provider"],
+            "model": snapshot["model"],
+            "effort": snapshot["effort"],
             "sandbox": sandbox,
-            "route_source": self.snapshot["route_source"],
-            "route_sha256": self.snapshot["route_sha256"],
+            "route_source": snapshot["route_source"],
+            "route_sha256": snapshot["route_sha256"],
         }
 
     def legacy_cases(self) -> tuple[tuple[str, str, str, dict[str, str]], ...]:
@@ -244,7 +248,7 @@ class VocabularyWriterTests(unittest.TestCase):
                     str(caught.exception),
                 )
 
-    def test_canonical_writes_accept_all_ids_and_claude_implementer(self) -> None:
+    def test_canonical_writes_accept_all_ids(self) -> None:
         cases = (
             ("claude", "implementer", "headless", "exec"),
             ("codex", "review-cheap", "detached", "claude"),
@@ -259,6 +263,10 @@ class VocabularyWriterTests(unittest.TestCase):
                 arguments = self.execution_arguments(
                     provider=provider, role=role, mode=mode, event_source=event_source
                 )
+                if role in {"implementer", "plan"}:
+                    sandbox = "workspace-write" if role == "implementer" else "read-only"
+                    arguments.update(self.route_fields(sandbox, role=role))
+                    provider = str(arguments["provider"])
                 outcome = builders.execution_start(self.repo, RUN_ID, **arguments)
                 record = outcome.records[0]
                 self.assertEqual(
@@ -268,7 +276,7 @@ class VocabularyWriterTests(unittest.TestCase):
 
     def test_sandbox_is_optional_but_route_trio_is_all_or_none(self) -> None:
         without_sandbox = builders.execution_start(
-            self.repo, RUN_ID, **self.execution_arguments()
+            self.repo, RUN_ID, **self.execution_arguments(role="review-cheap")
         ).records[0]
         self.assertNotIn("sandbox", without_sandbox)
         partial = (

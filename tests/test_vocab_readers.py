@@ -393,11 +393,11 @@ class VocabularyReaderTests(unittest.TestCase):
         targets, errors = monitor.inflight_targets(self.run_dir)
         self.assertEqual([], errors)
         target_agents = {target.agent for target in targets}
+        # forge: modified from upstream — select Claude records with event paths
         expected = {
             record["agent"]
             for record in self.records
             if record.get("type") == "execution"
-            and record.get("event_source") not in {"claude", "agent-tool"}
         }
         self.assertEqual(expected, target_agents)
 

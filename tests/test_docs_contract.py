@@ -111,11 +111,11 @@ PROMPT_CONTRACT_MARKERS = {
         "MUST NOT come from working-tree state, another checkout, or a rendered agent",
     ),
     "monitoring": (
-        "[prompt-construction contract](../SKILL.md#forge-isolation-and-prompt-construction)",
-        "git -C <worktree> show HEAD:forge-project.md",
-        "git -C <worktree> show HEAD:.forge/history/gotchas.md",
-        "same absolute `<worktree>`",
-        "never use either working-tree file or a rendered agent definition",
+        "For Codex, `prompt.md` and stdin start with the applicable plugin role template",
+        "committed `agent-project-context`, optional committed gotchas, and the concrete task assignment",
+        "For Claude, the applicable committed role body is passed only through the exact FR-245 argv flag",
+        "Both committed inputs come from the recorded absolute worktree at its committed\nHEAD",
+        "never use working-tree prose or a rendered agent definition",
     ),
     "review": (
         "[prompt-construction contract](../SKILL.md#forge-isolation-and-prompt-construction)",
@@ -151,9 +151,9 @@ def assert_prompt_feed_forward_contract(documents: dict[str, str]) -> None:
     canonical = documents["orchestrate"].split(
         "## Forge Isolation And Prompt Construction", maxsplit=1
     )[1].split("## Forge Execution Preparation And Launch", maxsplit=1)[0]
-    monitoring = documents["monitoring"].split("## Headless Codex", maxsplit=1)[1].split(
-        "The entry records", maxsplit=1
-    )[0]
+    monitoring = documents["monitoring"].split(
+        "### Typed Implementer And Plan Launches", maxsplit=1
+    )[1].split("The generated owner record includes", maxsplit=1)[0]
     review = documents["review"].split("For the first independent review:", maxsplit=1)[1].split(
         "Immediately before launch", maxsplit=1
     )[0]
@@ -170,9 +170,9 @@ def assert_prompt_feed_forward_contract(documents: dict[str, str]) -> None:
         ),
         "monitoring": (
             "applicable plugin role template",
-            "git -C <worktree> show HEAD:forge-project.md",
-            "git -C <worktree> show HEAD:.forge/history/gotchas.md",
-            "concrete\ntask assignment",
+            "committed `agent-project-context`",
+            "optional committed gotchas",
+            "concrete task assignment",
         ),
         "review": (
             "`${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`",
@@ -847,7 +847,7 @@ class DocumentationContractTests(unittest.TestCase):
 
     # forge: modified from upstream — migrate the README diagram contract to workflow prose
     def test_workflow_skill_documents_the_full_workflow(self) -> None:
-        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        workflow = _flat((ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8"))
         close_sequence = " → ".join(
             ("validate --gates", "run_closed", "validate --gates", "archive", "report.md")
         )
@@ -856,7 +856,7 @@ class DocumentationContractTests(unittest.TestCase):
             "This skill owns the lifecycle from planning through the final",
             "Claude turns the goal into a concrete plan",
             "Ask Codex to review Claude's plan",
-            "use the orchestrate skill to assign a fresh Codex implementer",
+            "use the orchestrate skill to launch a fresh routed implementer through `forge launch`", "collect its result with `forge launch collect`",
             "independently verify the result",
             "inspect the final repository state",
             close_sequence,
@@ -1232,20 +1232,19 @@ class DocumentationContractTests(unittest.TestCase):
             self.assertIn(field, run_started)
 
     def test_execution_records_its_worktree_and_ref_before_launch(self) -> None:
-        orchestrate = (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8")
-        monitoring = (ROOT / "skills/orchestrate/references/monitoring.md").read_text(encoding="utf-8")
+        orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"))
+        monitoring = _flat((ROOT / "skills/orchestrate/references/monitoring.md").read_text(encoding="utf-8"))
         contract = (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8")
+        typed_launch = orchestrate.split("### Typed Implementer And Plan Launches", maxsplit=1)[1]
 
-        self.assertIn("absolute worktree, full HEAD", orchestrate)
-        self.assertIn("absolute `worktree`, full `head`", monitoring)
-        self.assertIn("git -C <worktree> rev-parse --show-toplevel", monitoring)
+        self.assertLess(typed_launch.index("Append the journal `execution` owner record."), typed_launch.index("Launch the process through the isolated wrapper."))
+        for document in (typed_launch, monitoring):
+            self.assertIn("generated owner record includes the absolute worktree, full HEAD", document)
         records = jsonl_records(contract)
         execution = next(record for record in records if record["type"] == "execution")
         self.assertTrue(Path(execution["worktree"]).is_absolute())
-        for field in ("worktree", "head", "branch"):
+        for field in ("worktree", "head"):
             self.assertIn(field, execution)
-        self.assertIn("Read the absolute `worktree` from the preceding execution", monitoring)
-        self.assertIn("do not check out or reset to it", monitoring)
 
     # forge: modified from upstream — only reviewer confirmation rounds may resume
     def test_reviewer_resume_uses_the_next_execution_directory_without_cwd_override(self) -> None:
@@ -1267,10 +1266,8 @@ class DocumentationContractTests(unittest.TestCase):
 
     # forge: modified from upstream — cover launch routing, detachment, prompt, and monitoring
     def test_forge_launch_and_monitor_contract_is_complete(self) -> None:
-        orchestrate = (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8")
-        monitoring = (ROOT / "skills/orchestrate/references/monitoring.md").read_text(
-            encoding="utf-8"
-        )
+        orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"))
+        monitoring = _flat((ROOT / "skills/orchestrate/references/monitoring.md").read_text(encoding="utf-8"))
         implementer = (ROOT / "system/codex/prompts/implementer.md").read_text(encoding="utf-8")
         reviewer = (ROOT / "system/codex/prompts/review-cheap.md").read_text(encoding="utf-8")
         planner = (ROOT / "system/codex/prompts/plan.md").read_text(encoding="utf-8")
@@ -1287,22 +1284,22 @@ class DocumentationContractTests(unittest.TestCase):
             self.assertIn(value, orchestrate)
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/implementer.md", orchestrate)
         self.assertIn("${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md", orchestrate)
-        self.assertLess(orchestrate.index("Create the next numbered"), orchestrate.index("Launch the process"))
+        for command in (
+            "forge launch --repo <repo> --run-id <run-id> --role implementer --task <task-id> --worktree <absolute-worktree> --brief <absolute-brief>", "forge launch --repo <repo> --run-id <run-id> --role plan --task <task-id> --worktree <absolute-worktree> --brief <absolute-brief>",
+            "forge launch collect --repo <repo> --run-id <run-id> --execution <execution-NN>", "forge launch cancel --repo <repo> --run-id <run-id> --execution <execution-NN>",
+        ):
+            self.assertIn(command, orchestrate)
         for value in (
-            "codex exec --json --output-last-message",
-            '-c model="<role model>"',
-            '-c model_reasoning_effort="<role effort>"',
-            "set -m",
-            "nohup codex exec",
-            'disown "$launch_pid"',
-            "exactly three lines",
-            "no later than 60 minutes",
-            "codex_agent_stale",
-            "state --dump-event-types",
-            "machine-sleep gap",
+            "provider, model, effort, and sandbox come from the run's frozen resolved route", "never hand-substitute provider flags for those roles",
+            "completion.json` when the provider exits or hits its fixed timeout", "non-blocking poll for that file, bounded at 60 minutes",
+            "Collect, never a hand-written `execution_result`, is the lifecycle authority",
         ):
             self.assertIn(value, orchestrate)
-        for value in ("PID", "PGID", "events file mtime", "Never conclude failure"):
+        for value in (
+            "typed Codex and typed Claude launches only when their owner record names a stream-JSON `events` file", "Subagent-mode Claude records have no events file and are not monitor targets",
+            "monitor notifications are observational", "`forge launch collect` and `forge launch cancel` remain the only lifecycle authorities",
+            "ambiguity protocol below applies only to reviewer prose sessions",
+        ):
             self.assertIn(value, monitoring)
         sentence = (
             "You may commit inside this worktree. You must NEVER push, never touch any branch "
@@ -1615,15 +1612,17 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertNotIn("unanchored alternative", workflow)
 
     def test_workflow_owns_the_complete_run_and_delegates_focused_cycles(self) -> None:
-        orchestrate = (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8")
-        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"))
+        workflow = _flat((ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8"))
 
         self.assertIn("This skill owns the lifecycle from planning", workflow)
         self.assertIn("Claude turns the goal into a concrete plan", workflow)
         self.assertIn("review as a task and focused agent cycle", workflow)
-        self.assertIn("use the orchestrate skill", workflow)
-        self.assertIn("Focused Agent Cycle", orchestrate)
-        self.assertIn("Save the exact prompt and append `execution` before launch", orchestrate)
+        self.assertIn("each focused routed-agent execution, review, or verification cycle", workflow)
+        self.assertIn("use the orchestrate skill to launch a fresh routed implementer", workflow)
+        self.assertIn("Use this skill for one focused agent cycle", orchestrate)
+        self.assertIn("workflow skill owns planning, run initialization, task decomposition, closure, and reporting", orchestrate)
+        self.assertIn("saves the exact prompt and appends `execution` before launch", orchestrate)
         self.assertNotIn("This skill owns the run protocol", orchestrate)
         self.assertNotIn("`run_started`", orchestrate)
         self.assertNotIn("`run_closed`", orchestrate)

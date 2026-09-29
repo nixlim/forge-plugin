@@ -276,6 +276,46 @@ def _execution_route_shape(
     return True
 
 
+def _validate_launch_marker(
+    record: dict[str, object], refusal: type[Exception]
+) -> None:
+    if "launch_marker" not in record:
+        return
+    expected = f"{record.get('agent')}/{record.get('execution')}/launch.json"
+    agent = record.get("agent")
+    safe_agent = isinstance(agent, str) and agent not in {"", ".", ".."} \
+        and "/" not in agent and "\\" not in agent
+    if (
+        record.get("launch_marker") != expected
+        or not safe_agent
+        or not all(field in record for field in EXECUTION_ROUTE_TRIO)
+        or record.get("mode") != "detached"
+    ):
+        _refuse(
+            f"execution.launch_marker must equal {expected} and requires the route "
+            "trio and mode detached",
+            refusal,
+        )
+
+
+def _require_snapshot_route(
+    record: dict[str, object],
+    snapshot: dict[str, object] | None,
+    has_route: bool,
+    refusal: type[Exception],
+) -> None:
+    if snapshot is None or has_route:
+        return
+    role = route_vocab.canonical_role(
+        str(record["role"]), str(record["provider"])
+    )
+    if role in {"implementer", "plan"}:
+        raise refusal(
+            f"forge: execution refused — role {role} carries no route fields "
+            "in a run with a route snapshot"
+        )
+
+
 def _refuse_divergence(
     role: str, field: str, refusal: type[Exception]
 ) -> NoReturn:
@@ -314,9 +354,12 @@ def validate_execution(
         )
     except route_vocab.NewWriteRefusal as exc:
         _refuse(str(exc), refusal)
-    if not _execution_route_shape(record, refusal):
-        return
+    _validate_launch_marker(record, refusal)
+    has_route = _execution_route_shape(record, refusal)
     snapshot = _opening_snapshot(prior_records)
+    _require_snapshot_route(record, snapshot, has_route, refusal)
+    if not has_route:
+        return
     if snapshot is None:
         return
     provider = str(record["provider"])

@@ -14,12 +14,16 @@ from .journal import (
     route_vocab,
 )
 
+# forge: modified from upstream — monitor engine-launched Claude event streams
+MONITORED_EVENT_SOURCES = frozenset({"exec", "claude"})
+
 
 @dataclass(frozen=True)
 class MonitorTarget:
     path: Path
     agent: str | None = None
     execution: str | None = None
+    event_source: str | None = None
 
 
 def error_payload(message: str, *, path: Path | None = None) -> dict[str, object]:
@@ -71,22 +75,26 @@ def inflight_targets(
         if key in completed:
             continue
         raw_event_source = record.get("event_source")
-        event_source = route_vocab.canonical_event_source(raw_event_source)
-        if event_source == "claude":
-            continue
-        value = record.get("events")
-        if not isinstance(value, str) or not value:
-            errors.append(
-                error_payload(
-                    f"execution {key[0]}/{key[1]} has no events file"
-                )
-            )
-            continue
-        if raw_event_source is not None and event_source != "exec":
+        event_source = (
+            route_vocab.canonical_event_source(raw_event_source)
+            if raw_event_source is not None
+            else "exec"
+        )
+        if event_source not in MONITORED_EVENT_SOURCES:
             errors.append(
                 error_payload(
                     f"execution {key[0]}/{key[1]} uses unsupported event source; "
                     "only managed exec streams are supported"
+                )
+            )
+            continue
+        value = record.get("events")
+        if not isinstance(value, str) or not value:
+            if event_source == "claude":
+                continue
+            errors.append(
+                error_payload(
+                    f"execution {key[0]}/{key[1]} has no events file"
                 )
             )
             continue
@@ -99,7 +107,14 @@ def inflight_targets(
                 )
             )
             continue
-        targets.append(MonitorTarget(path=path, agent=key[0], execution=key[1]))
+        targets.append(
+            MonitorTarget(
+                path=path,
+                agent=key[0],
+                execution=key[1],
+                event_source=event_source,
+            )
+        )
     return targets, errors
 
 
@@ -147,7 +162,7 @@ def monitor_payload(
     payload: dict[str, object] = {
         "type": kind,
         "path": str(target.path),
-        "source": "exec",
+        "source": summary.event_source,
         "thread_id": thread_id_from(summary, event),
         "mtime": int(target.path.stat().st_mtime),
     }
@@ -179,6 +194,8 @@ def terminal_notification(
             payload["error"] = terminal.event["error"]
         elif terminal.event_type == "error":
             payload["message"] = event_text(terminal.event)
+        elif summary.error is not None:
+            payload["error"] = summary.error
     return payload
 
 
@@ -194,7 +211,7 @@ def scan_monitor_target(target: MonitorTarget, stale_seconds: int) -> str:
                 error_payload("event stream does not exist or is not a file", path=path)
             )
             return "error"
-        summary = summarize_stream(path)
+        summary = summarize_stream(path, event_source=target.event_source)
         compat = compatibility(summary)
         if compat["parse_confidence"] == "low":
             payload = monitor_payload("codex_agent_unknown", target, summary, None)

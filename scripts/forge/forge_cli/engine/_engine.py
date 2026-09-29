@@ -11,6 +11,8 @@ from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES, TERMINAL
 from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal
 from . import _verbs_tombstone
 from . import _verbs_status
+from . import _verbs_launch
+from . import _verbs_launch_collect
 from . import _verbs_lifecycle
 from . import _verbs_gate
 from . import _verbs_gate_evals
@@ -29,6 +31,9 @@ class Engine:
     operator_tombstone = _serialize_worktree_command(_verbs_tombstone.operator_tombstone)
     journal_batch_recover = _verbs_status.journal_batch_recover
     journal_ingest_chain = _verbs_status.journal_ingest_chain
+    launch = _verbs_launch.launch
+    launch_collect = _verbs_launch_collect.launch_collect
+    launch_cancel = _verbs_launch_collect.launch_cancel
 
     def _chains_for_worktree(self) -> list[dict[str, Any]]:
         chains: list[dict[str, Any]] = []
