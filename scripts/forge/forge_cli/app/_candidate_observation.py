@@ -180,6 +180,9 @@ def _observe_current_merge_candidate(
     names = repository.git(
         [
             "diff",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
             "--name-only",
             "-z",
             "--diff-filter=ACDMRTUXB",

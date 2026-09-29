@@ -162,6 +162,7 @@ def _merge_candidate_observation_step_specs(
                 "git",
                 "--no-pager",
                 "diff",
+                "--no-renames",
                 "--no-ext-diff",
                 "--no-textconv",
                 "--name-only",

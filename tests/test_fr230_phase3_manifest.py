@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 from unittest import mock
 
 
@@ -79,8 +79,11 @@ RESULT_KEYS = (
     "suite_tail",
 )
 RESULT_ID = re.compile(r"^fr230-phase-[34]-[a-z][a-z0-9-]*$")
-RESULT_TEST_TIMEOUT_SECONDS = 40
+# Measured: 10.5-11.5s unloaded, 23s at 2x and 45s at 4x oversubscription.
+# The runner is 1.4-2.5x slower; 120s is about 11x unloaded and 2.7x worst.
+RESULT_TEST_TIMEOUT_SECONDS = 120
 RESULT_OUTPUT_LIMIT = 65536
+RESULT_OUTPUT_TAIL_LIMIT = 4096
 RESULT_STREAM_POLL_SECONDS = 0.05
 RESULT_TERM_GRACE_SECONDS = 0.25
 RESULT_KILL_GRACE_SECONDS = 1.0
@@ -137,6 +140,23 @@ PHASE4_RESULT_IDS = {
 }
 RESULT_TESTS = {**PHASE3_RESULT_TESTS, **PHASE4_RESULT_TESTS}
 RESULT_IDS = {**PHASE3_RESULT_IDS, **PHASE4_RESULT_IDS}
+PROCESS_FAILURE_REASONS = (
+    "timed_out",
+    "output_exceeded",
+    "stream_failed",
+    "remaining_group_after_exit",
+    "cleanup_not_proven",
+)
+
+
+class StructuredResult(NamedTuple):
+    data: bytes | None
+    reason: str | None
+    elapsed_seconds: float = 0.0
+    tail: bytes = b""
+
+
+INVALID_RESULT = StructuredResult(None, "evidence_invalid")
 
 
 class DuplicateMember(ValueError):
@@ -272,7 +292,7 @@ def result_evidence(
     ).encode("utf-8")
 
 
-_LIVE_RESULT_CACHE: dict[tuple[str, str, str, str], bytes | None] = {}
+_LIVE_RESULT_CACHE: dict[tuple[str, str, str, str], StructuredResult] = {}
 
 
 def result_process_group_exists(process_group: int) -> bool:
@@ -372,9 +392,10 @@ def bounded_process_output(
     timeout: float,
     max_output: int,
     merge_stderr: bool,
-) -> tuple[int, bytes] | None:
+) -> StructuredResult:
     """Run one isolated process with bounded output and proven group cleanup."""
 
+    started = time.monotonic()
     try:
         process = subprocess.Popen(
             argv,
@@ -386,16 +407,13 @@ def bounded_process_output(
             start_new_session=True,
         )
     except (OSError, ValueError, subprocess.SubprocessError):
-        return None
+        return StructuredResult(b"", "stream_failed", time.monotonic() - started)
 
     assert process.stdout is not None
     output = bytearray()
     returncode: int | None = None
-    timed_out = False
-    output_exceeded = False
-    stream_failed = False
+    failures: set[str] = set()
     reached_eof = False
-    remaining_group_after_exit = False
     cleanup_proven = False
     selector: selectors.BaseSelector | None = None
     try:
@@ -407,13 +425,15 @@ def bounded_process_output(
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                timed_out = True
+                failures.add("timed_out")
                 break
             events = selector.select(min(remaining, RESULT_STREAM_POLL_SECONDS))
             if events and not reached_eof:
                 reached_eof, output_exceeded = read_available_result_output(
                     descriptor, output, max_output
                 )
+                if output_exceeded:
+                    failures.add("output_exceeded")
                 if reached_eof:
                     selector.unregister(descriptor)
                 if output_exceeded:
@@ -428,14 +448,17 @@ def bounded_process_output(
                 reached_eof, output_exceeded = read_available_result_output(
                     descriptor, output, max_output
                 )
+                if output_exceeded:
+                    failures.add("output_exceeded")
             if output_exceeded:
                 break
             # poll() reaped the leader.  A still-existing group therefore
             # proves a descendant remains and cannot be allowed to earn PASS.
-            remaining_group_after_exit = result_process_group_exists(process.pid)
+            if result_process_group_exists(process.pid):
+                failures.add("remaining_group_after_exit")
             break
     except (OSError, ValueError, subprocess.SubprocessError):
-        stream_failed = True
+        failures.add("stream_failed")
     finally:
         # This executes for success, failure, timeout, cap breach, parser I/O
         # failure, and exceptions.  No terminal path can leave group members
@@ -450,19 +473,21 @@ def bounded_process_output(
                 selector.close()
             process.stdout.close()
 
-    if (
-        timed_out
-        or output_exceeded
-        or stream_failed
-        or remaining_group_after_exit
-        or not cleanup_proven
-        or returncode != 0
-    ):
-        return None
-    return returncode, bytes(output)
+    if not cleanup_proven:
+        failures.add("cleanup_not_proven")
+    retained = bytes(output)
+    reason = next((item for item in PROCESS_FAILURE_REASONS if item in failures), None)
+    if reason is None and returncode != 0:
+        reason = f"returncode {returncode}"
+    return StructuredResult(
+        retained,
+        reason,
+        time.monotonic() - started,
+        retained[-RESULT_OUTPUT_TAIL_LIMIT:],
+    )
 
 
-def live_result_test_passes(root: Path, test_id: str) -> bool:
+def live_result_test_passes(root: Path, test_id: str) -> StructuredResult:
     """Rerun one exact unittest with bounded streaming and group-death proof."""
 
     environment = os.environ.copy()
@@ -475,22 +500,22 @@ def live_result_test_passes(root: Path, test_id: str) -> bool:
         max_output=RESULT_OUTPUT_LIMIT,
         merge_stderr=True,
     )
-    if completed is None:
-        return False
-    returncode, output = completed
-    if returncode != 0:
-        return False
+    if completed.reason is not None:
+        return completed
     try:
-        decoded = output.decode("utf-8")
+        assert completed.data is not None
+        decoded = completed.data.decode("utf-8")
     except UnicodeDecodeError:
-        return False
+        return completed._replace(reason="invalid_result_output")
     lines = [line for line in decoded.splitlines() if line]
     ran = [
         int(match.group(1))
         for line in lines
         if (match := re.fullmatch(r"Ran ([0-9]+) tests? in [0-9.]+s", line))
     ]
-    return lines[-1:] == ["OK"] and ran[-1:] == [1]
+    if lines[-1:] != ["OK"] or ran[-1:] != [1]:
+        return completed._replace(reason="invalid_result_output")
+    return completed
 
 
 def resolve_live_result(
@@ -498,23 +523,23 @@ def resolve_live_result(
     slot: str,
     result_id: str,
     candidate: str,
-) -> bytes | None:
+) -> StructuredResult:
     if RESULT_ID.fullmatch(result_id) is None:
-        return None
+        return INVALID_RESULT
     evidence_path = root / RESULT_EVIDENCE_DIR / f"{result_id}.json"
     try:
         evidence_stat = evidence_path.lstat()
     except OSError:
-        return None
+        return INVALID_RESULT
     if not stat.S_ISREG(evidence_stat.st_mode) or evidence_stat.st_size > 65536:
-        return None
+        return INVALID_RESULT
     try:
         raw = read_bounded_regular(evidence_path, RESULT_OUTPUT_LIMIT)
         payload = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
     except (OSError, ValueError, UnicodeError, json.JSONDecodeError, DuplicateMember):
-        return None
+        return INVALID_RESULT
     if not isinstance(payload, dict) or tuple(payload) != RESULT_KEYS:
-        return None
+        return INVALID_RESULT
     command = payload.get("command")
     if (
         payload.get("schema") != "fr230-test-result/1"
@@ -534,19 +559,33 @@ def resolve_live_result(
         or payload.get("suite_tail") != "OK"
         or raw != result_evidence(slot, result_id, command[3], candidate)
     ):
-        return None
+        return INVALID_RESULT
     if result_id != RESULT_IDS.get(slot) or command[3] != RESULT_TESTS.get(slot):
-        return None
+        return INVALID_RESULT
     evidence_digest = hashlib.sha256(raw).hexdigest()
     key = (slot, result_id, candidate, evidence_digest)
     if key in _LIVE_RESULT_CACHE:
         return _LIVE_RESULT_CACHE[key]
-    resolved = raw if live_result_test_passes(root, command[3]) else None
+    completed = live_result_test_passes(root, command[3])
+    resolved = StructuredResult(
+        raw if completed.reason is None else None,
+        completed.reason,
+        completed.elapsed_seconds,
+        completed.tail,
+    )
     _LIVE_RESULT_CACHE[key] = resolved
     return resolved
 
 
-Resolver = Callable[[Path, str, str, str], bytes | None]
+Resolver = Callable[[Path, str, str, str], StructuredResult]
+
+
+def unresolved_result_issue(slot: str, resolution: StructuredResult) -> str:
+    reason = resolution.reason or "unknown"
+    return (
+        f"PASS result evidence is unresolved: {slot} "
+        f"({reason}, {resolution.elapsed_seconds:.1f}s)"
+    )
 
 
 def validate_manifest(
@@ -764,9 +803,10 @@ def validate_manifest(
         if not candidate:
             issues.append(f"PASS binding has no resolved subject candidate: {slot}")
             continue
-        evidence = resolver(root, slot, result_id, candidate)
+        resolution = resolver(root, slot, result_id, candidate)
+        evidence = resolution.data
         if evidence is None:
-            issues.append(f"PASS result evidence is unresolved: {slot}")
+            issues.append(unresolved_result_issue(slot, resolution))
             continue
         if hashlib.sha256(evidence).hexdigest() != result_sha256:
             issues.append(f"PASS result evidence digest mismatches: {slot}")
@@ -830,16 +870,12 @@ def static_resolver(
     slot: str,
     result_id: str,
     candidate: str,
-) -> bytes | None:
+) -> StructuredResult:
     del root
     if result_id != RESULT_IDS.get(slot):
-        return None
-    return result_evidence(
-        slot,
-        result_id,
-        RESULT_TESTS[slot],
-        candidate,
-    )
+        return INVALID_RESULT
+    evidence = result_evidence(slot, result_id, RESULT_TESTS[slot], candidate)
+    return StructuredResult(evidence, None)
 
 
 def historical_predecessor(root: Path, expected_digest: object) -> bytes | None:
@@ -863,13 +899,11 @@ def historical_predecessor(root: Path, expected_digest: object) -> bytes | None:
         max_output=HISTORY_LIST_OUTPUT_LIMIT,
         merge_stderr=False,
     )
-    if history is None:
-        return None
-    history_returncode, history_output = history
-    if history_returncode != 0:
+    if history.reason is not None:
         return None
     try:
-        commits = history_output.decode("ascii").splitlines()
+        assert history.data is not None
+        commits = history.data.decode("ascii").splitlines()
     except UnicodeDecodeError:
         return None
     for commit in commits:
@@ -883,13 +917,11 @@ def historical_predecessor(root: Path, expected_digest: object) -> bytes | None:
             max_output=MANIFEST_SIZE_LIMIT,
             merge_stderr=False,
         )
-        if shown is None:
+        if shown.reason is not None:
             return None
-        shown_returncode, shown_output = shown
-        if shown_returncode != 0:
-            continue
-        if hashlib.sha256(shown_output).hexdigest() == expected_digest:
-            return shown_output
+        assert shown.data is not None
+        if hashlib.sha256(shown.data).hexdigest() == expected_digest:
+            return shown.data
     return None
 
 
@@ -922,12 +954,15 @@ def validate_current_manifest(
 
 class LiveResultRunnerTests(unittest.TestCase):
     @staticmethod
-    def write_probe(root: Path, module: str, source: str) -> str:
-        package = root / "tests"
-        package.mkdir()
-        (package / "__init__.py").write_text("", encoding="utf-8")
-        (package / f"{module}.py").write_text(source, encoding="utf-8")
-        return f"tests.{module}.RunnerProbe.test_probe"
+    def run_probe(root: Path, source: str) -> StructuredResult:
+        return bounded_process_output(
+            root,
+            [sys.executable, "-c", source],
+            environment=os.environ.copy(),
+            timeout=RESULT_TEST_TIMEOUT_SECONDS,
+            max_output=RESULT_OUTPUT_LIMIT,
+            merge_stderr=True,
+        )
 
     @staticmethod
     def stop_probe(pid_path: Path) -> None:
@@ -942,126 +977,137 @@ class LiveResultRunnerTests(unittest.TestCase):
         except ProcessLookupError:
             pass
 
-    def test_live_result_output_overflow_terminates_before_later_side_effect(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory(prefix="forge-fr230-output-cap-") as raw:
+    def test_each_bounded_failure_reason_is_forced_and_load_bearing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="forge-fr230-runner-") as raw:
             root = Path(raw)
             pid_path = root / "probe.pid"
-            survived = root / "overflow-survived"
-            test_id = self.write_probe(
-                root,
-                "test_output_cap_probe",
-                (
-                    "import os\n"
-                    "import time\n"
-                    "import unittest\n"
-                    "from pathlib import Path\n\n"
-                    "class RunnerProbe(unittest.TestCase):\n"
-                    "    def test_probe(self):\n"
-                    f"        pid_path = Path({str(pid_path)!r})\n"
-                    "        pid_path.write_text(str(os.getpid()), encoding='ascii')\n"
-                    f"        os.write(1, b'x' * ({RESULT_OUTPUT_LIMIT} + 1))\n"
-                    "        time.sleep(0.5)\n"
-                    f"        Path({str(survived)!r}).write_text('survived\\n', encoding='utf-8')\n"
-                    "        time.sleep(2)\n"
-                ),
-            )
-            try:
-                self.assertFalse(live_result_test_passes(root, test_id))
-                time.sleep(0.65)
-                self.assertFalse(
-                    survived.exists(),
-                    "output overflow did not terminate the process group immediately",
-                )
-            finally:
-                self.stop_probe(pid_path)
+            survived = root / "probe-survived"
+            def source(*lines: str) -> str:
+                return "\n".join(lines) + "\n"
 
-    def test_live_result_rejects_and_kills_lingering_descendant(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="forge-fr230-descendant-") as raw:
-            root = Path(raw)
-            pid_path = root / "descendant.pid"
-            survived = root / "descendant-survived"
-            descendant = (
-                "import os\n"
-                "import signal\n"
-                "import time\n"
-                "from pathlib import Path\n"
-                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                f"Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='ascii')\n"
-                "time.sleep(0.75)\n"
-                f"Path({str(survived)!r}).write_text('survived\\n', encoding='utf-8')\n"
-                "time.sleep(2)\n"
+            leader_prefix = source(
+                "import os",
+                "import time",
+                "from pathlib import Path",
+                f"pid_path = Path({str(pid_path)!r})",
+                "pid_path.write_text(str(os.getpid()), encoding='ascii')",
             )
-            test_id = self.write_probe(
-                root,
-                "test_descendant_probe",
-                (
-                    "import subprocess\n"
-                    "import sys\n"
-                    "import time\n"
-                    "import unittest\n"
-                    "from pathlib import Path\n\n"
-                    "class RunnerProbe(unittest.TestCase):\n"
-                    "    def test_probe(self):\n"
-                    f"        subprocess.Popen([sys.executable, '-c', {descendant!r}])\n"
-                    f"        ready = Path({str(pid_path)!r})\n"
-                    "        deadline = time.monotonic() + 2\n"
-                    "        while not ready.exists() and time.monotonic() < deadline:\n"
-                    "            time.sleep(0.01)\n"
-                    "        self.assertTrue(ready.exists())\n"
+            descendant = source(
+                "import os",
+                "import signal",
+                "import time",
+                "from pathlib import Path",
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+                f"Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='ascii')",
+                "time.sleep(0.75)",
+                f"Path({str(survived)!r}).write_text('survived\\n', encoding='utf-8')",
+                "time.sleep(2)",
+            )
+            scripts = {
+                "timed_out": leader_prefix + source(
+                    "time.sleep(0.5)",
+                    f"Path({str(survived)!r}).write_text('survived\\n', encoding='utf-8')",
                 ),
-            )
-            try:
-                self.assertFalse(live_result_test_passes(root, test_id))
-                time.sleep(0.9)
-                self.assertFalse(
-                    survived.exists(),
-                    "a descendant survived the live-result terminal path",
-                )
-            finally:
-                self.stop_probe(pid_path)
-
-    def test_live_result_timeout_terminates_before_later_side_effect(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="forge-fr230-timeout-") as raw:
-            root = Path(raw)
-            pid_path = root / "probe.pid"
-            survived = root / "timeout-survived"
-            test_id = self.write_probe(
-                root,
-                "test_timeout_probe",
-                (
-                    "import os\n"
-                    "import time\n"
-                    "import unittest\n"
-                    "from pathlib import Path\n\n"
-                    "class RunnerProbe(unittest.TestCase):\n"
-                    "    def test_probe(self):\n"
-                    f"        Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='ascii')\n"
-                    "        time.sleep(0.5)\n"
-                    f"        Path({str(survived)!r}).write_text('survived\\n', encoding='utf-8')\n"
+                "output_exceeded": leader_prefix + source(
+                    f"os.write(1, b'x' * ({RESULT_OUTPUT_LIMIT} + 1))",
+                    "time.sleep(0.5)",
+                    f"Path({str(survived)!r}).write_text('survived\\n', encoding='utf-8')",
+                    "time.sleep(2)",
                 ),
+                "stream_failed": "print('ready')",
+                "remaining_group_after_exit": source(
+                    "import subprocess",
+                    "import sys",
+                    "import time",
+                    "from pathlib import Path",
+                    f"subprocess.Popen([sys.executable, '-c', {descendant!r}])",
+                    f"pid_path = Path({str(pid_path)!r})",
+                    "deadline = time.monotonic() + 2",
+                    "while not pid_path.exists() and time.monotonic() < deadline:",
+                    "    time.sleep(0.01)",
+                    "assert pid_path.exists()",
+                ),
+                "cleanup_not_proven": "pass",
+                "returncode 7": "raise SystemExit(7)",
+            }
+            manifest = load_manifest_bytes(read_bounded_regular(MANIFEST, MANIFEST_SIZE_LIMIT))
+            slot = "cleanup"
+            result_id = RESULT_IDS[slot]
+            evidence_path = ROOT / RESULT_EVIDENCE_DIR / f"{result_id}.json"
+            evidence = read_bounded_regular(evidence_path, RESULT_OUTPUT_LIMIT)
+            stored_candidate = json.loads(evidence.decode("utf-8"))["subject_candidate_sha256"]
+            cases = (
+                ("timed_out", "timed_out", 0.05, 0.6),
+                ("output_exceeded", "output_exceeded", 120, 0.65),
+                ("stream_failed", "stream_failed", 120, 0),
+                ("remaining_group_after_exit", "remaining_group_after_exit", 120, 0.9),
+                ("cleanup_not_proven", "cleanup_not_proven", 120, 0),
+                ("returncode 7", "returncode 7", 120, 0),
             )
-            try:
-                with mock.patch.object(
-                    sys.modules[__name__],
-                    "RESULT_TEST_TIMEOUT_SECONDS",
-                    0.05,
-                ):
-                    self.assertFalse(live_result_test_passes(root, test_id))
-                time.sleep(0.6)
-                self.assertFalse(
-                    survived.exists(),
-                    "a timed-out result process survived group termination",
-                )
-            finally:
-                self.stop_probe(pid_path)
+            for mode, expected, timeout, side_effect_wait in cases:
+                pid_path.unlink(missing_ok=True)
+                survived.unlink(missing_ok=True)
+                try:
+                    with mock.patch.object(sys.modules[__name__], "RESULT_TEST_TIMEOUT_SECONDS", timeout):
+                        if mode == "stream_failed":
+                            with mock.patch.object(
+                                sys.modules[__name__],
+                                "read_available_result_output",
+                                side_effect=OSError("forced stream failure"),
+                            ):
+                                completed = self.run_probe(root, scripts[mode])
+                        elif mode == "cleanup_not_proven":
+                            with mock.patch.object(
+                                sys.modules[__name__],
+                                "terminate_result_process_group",
+                                return_value=False,
+                            ):
+                                completed = self.run_probe(root, scripts[mode])
+                        else:
+                            completed = self.run_probe(root, scripts[mode])
+                    with self.subTest(reason=expected):
+                        self.assertEqual(completed.reason, expected)
+                        self.assertGreaterEqual(completed.elapsed_seconds, 0)
+                        self.assertLessEqual(len(completed.tail), RESULT_OUTPUT_TAIL_LIMIT)
+                    if side_effect_wait:
+                        time.sleep(side_effect_wait)
+                        self.assertFalse(survived.exists(), f"{expected} left its process group alive")
+                finally:
+                    self.stop_probe(pid_path)
 
+                marker = f"tail:{expected}".encode("ascii")
+                diagnostic = completed._replace(elapsed_seconds=1.2, tail=marker)
+                expected_issue = f"PASS result evidence is unresolved: {slot} ({expected}, 1.2s)"
+
+                def diagnostic_issues(result: StructuredResult) -> list[str]:
+                    _LIVE_RESULT_CACHE.clear()
+                    with mock.patch.object(
+                        sys.modules[__name__], "subject_candidate", return_value=stored_candidate
+                    ), mock.patch.object(
+                        sys.modules[__name__], "bounded_process_output", return_value=result
+                    ):
+                        issues = validate_manifest(ROOT, manifest)
+                        cached = resolve_live_result(ROOT, slot, result_id, stored_candidate)
+                    self.assertEqual(cached.tail, marker)
+                    return issues
+
+                self.assertIn(expected_issue, diagnostic_issues(diagnostic))
+                disabled_issues = diagnostic_issues(diagnostic._replace(reason=None))
+                _LIVE_RESULT_CACHE.clear()
+                self.assertNotIn(expected_issue, disabled_issues)
 
 class Phase34ManifestTests(unittest.TestCase):
     def payload(self) -> dict[str, object]:
-        return load_manifest_bytes(
-            read_bounded_regular(MANIFEST, MANIFEST_SIZE_LIMIT)
+        return load_manifest_bytes(read_bounded_regular(MANIFEST, MANIFEST_SIZE_LIMIT))
+
+    def manifest_issues(
+        self,
+        payload: dict[str, object],
+        previous_bytes: bytes | None,
+        resolver: Resolver = static_resolver,
+    ) -> list[str]:
+        return validate_manifest(
+            ROOT, payload, resolver=resolver, previous_bytes=previous_bytes
         )
 
     def current_predecessor(
@@ -1165,20 +1211,15 @@ class Phase34ManifestTests(unittest.TestCase):
             slot: str,
             result_id: str,
             current: str,
-        ) -> bytes | None:
+        ) -> StructuredResult:
             del root
             test_id = fictional_test if slot == "cleanup" else RESULT_TESTS[slot]
-            return result_evidence(slot, result_id, test_id, current)
+            return StructuredResult(result_evidence(slot, result_id, test_id, current), None)
 
         for label, mutant in mutants.items():
             with self.subTest(label=label):
                 self.assertTrue(
-                    validate_manifest(
-                        ROOT,
-                        mutant,
-                        resolver=known_only,
-                        previous_bytes=previous_bytes,
-                    ),
+                    self.manifest_issues(mutant, previous_bytes, known_only),
                     "invalid result binding was accepted",
                 )
 
@@ -1221,12 +1262,7 @@ class Phase34ManifestTests(unittest.TestCase):
         for label, mutant in mutants.items():
             with self.subTest(label=label):
                 self.assertTrue(
-                    validate_manifest(
-                        ROOT,
-                        mutant,
-                        resolver=static_resolver,
-                        previous_bytes=previous_bytes,
-                    ),
+                    self.manifest_issues(mutant, previous_bytes),
                     "invalid manifest layout was accepted",
                 )
 
@@ -1247,12 +1283,7 @@ class Phase34ManifestTests(unittest.TestCase):
             with mock.patch.object(
                 sys.modules[__name__], "sha256_path", side_effect=guarded_hash
             ):
-                issues = validate_manifest(
-                    ROOT,
-                    mutant,
-                    resolver=static_resolver,
-                    previous_bytes=previous_bytes,
-                )
+                issues = self.manifest_issues(mutant, previous_bytes)
             with self.subTest(path=malicious):
                 self.assertIn("artifact inventory or bytewise order is invalid", issues)
 
@@ -1273,12 +1304,7 @@ class Phase34ManifestTests(unittest.TestCase):
         generation_two["previous_manifest_sha256"] = hashlib.sha256(
             oversized_predecessor
         ).hexdigest()
-        issues = validate_manifest(
-            ROOT,
-            generation_two,
-            resolver=static_resolver,
-            previous_bytes=oversized_predecessor,
-        )
+        issues = self.manifest_issues(generation_two, oversized_predecessor)
         self.assertIn("generation 2 predecessor exceeds size limit", issues)
 
     def test_duplicate_json_member_is_rejected(self) -> None:
@@ -1383,12 +1409,7 @@ class Phase34ManifestTests(unittest.TestCase):
             generation_two = copy.deepcopy(current)
             candidate = subject_candidate(ROOT, generation_two["subjects"])
         self.assertEqual(
-            validate_manifest(
-                ROOT,
-                generation_two,
-                resolver=static_resolver,
-                previous_bytes=previous_bytes,
-            ),
+            self.manifest_issues(generation_two, previous_bytes),
             [],
         )
         # This candidate exists only in memory to exercise generation-aware
@@ -1409,12 +1430,7 @@ class Phase34ManifestTests(unittest.TestCase):
             wrong_binding["result_sha256"] = hashlib.sha256(
                 result_evidence(slot, recycled_id, expected_test, candidate)
             ).hexdigest()
-            wrong_id_issues = validate_manifest(
-                ROOT,
-                wrong_id,
-                resolver=static_resolver,
-                previous_bytes=previous_bytes,
-            )
+            wrong_id_issues = self.manifest_issues(wrong_id, previous_bytes)
             with self.subTest(slot=slot, mutation="recycled result ID"):
                 self.assertIn(
                     f"generation 2 PASS result ID is invalid: {slot}",
@@ -1439,23 +1455,23 @@ class Phase34ManifestTests(unittest.TestCase):
                 current_slot: str,
                 result_id: str,
                 current_candidate: str,
-            ) -> bytes | None:
+            ) -> StructuredResult:
                 if current_slot == slot and result_id == expected_id:
-                    return result_evidence(
-                        current_slot,
-                        result_id,
-                        recycled_test,
-                        current_candidate,
+                    return StructuredResult(
+                        result_evidence(
+                            current_slot,
+                            result_id,
+                            recycled_test,
+                            current_candidate,
+                        ),
+                        None,
                     )
                 return static_resolver(
                     root, current_slot, result_id, current_candidate
                 )
 
-            unrelated_issues = validate_manifest(
-                ROOT,
-                unrelated_command,
-                resolver=unrelated_resolver,
-                previous_bytes=previous_bytes,
+            unrelated_issues = self.manifest_issues(
+                unrelated_command, previous_bytes, unrelated_resolver
             )
             with self.subTest(slot=slot, mutation="recycled test command"):
                 self.assertIn(
@@ -1500,21 +1516,11 @@ class Phase34ManifestTests(unittest.TestCase):
         }.items():
             with self.subTest(label=label):
                 self.assertTrue(
-                    validate_manifest(
-                        ROOT,
-                        mutant,
-                        resolver=static_resolver,
-                        previous_bytes=previous_bytes,
-                    )
+                    self.manifest_issues(mutant, previous_bytes)
                 )
 
         self.assertTrue(
-            validate_manifest(
-                ROOT,
-                bad_predecessor,
-                resolver=static_resolver,
-                previous_bytes=reordered_predecessor_bytes,
-            )
+            self.manifest_issues(bad_predecessor, reordered_predecessor_bytes)
         )
 
 

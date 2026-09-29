@@ -247,6 +247,9 @@ def bind_merge_candidate_generation(
             names = candidate_repo.git(
                 [
                     "diff",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
                     "--name-only",
                     "-z",
                     "--diff-filter=ACDMRTUXB",

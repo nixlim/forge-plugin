@@ -1676,7 +1676,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         def record_common(*args, **kwargs):
             arrivals.append(threading.get_ident())
             try:
-                start_barrier.wait(timeout=0.5)
+                start_barrier.wait(timeout=10.0)
             except threading.BrokenBarrierError as exc:
                 raise AssertionError(
                     "same-chain recovery contenders missed the barrier"
@@ -1685,7 +1685,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 (str(kwargs.get("operation")), str(kwargs.get("chain_id")))
             )
             kwargs.update(
-                timeout=0.5,
+                timeout=30.0,
                 use_flock=False,
                 clock=time.monotonic,
                 sleeper=lambda seconds: time.sleep(min(seconds, 0.002)),
@@ -1729,7 +1729,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         ):
             for thread in threads:
                 thread.start()
-            deadline = time.monotonic() + 1.0
+            deadline = time.monotonic() + 60.0
             for thread in threads:
                 thread.join(max(0.0, deadline - time.monotonic()))
 

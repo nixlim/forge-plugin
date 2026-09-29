@@ -54,6 +54,19 @@ import os
 import datetime as dt
 
 
+def _landed_commit_names(
+    repository: Path, parent_sha: str, commit_sha: str
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            "git", "-C", str(repository), "diff", "--no-renames",
+            "--no-ext-diff", "--no-textconv", "--name-only", "-z",
+            parent_sha, commit_sha,
+        ],
+        check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+
+
 @dataclasses.dataclass
 class CLIOptions:
     json: bool = False
@@ -680,20 +693,8 @@ def _verify_and_build_ingest_records(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
-        names = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(canonical_repository),
-                "diff",
-                "--name-only",
-                "-z",
-                parent_sha,
-                commit_sha,
-            ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+        names = _landed_commit_names(
+            canonical_repository, parent_sha, commit_sha
         )
         try:
             changed_paths = tuple(

@@ -39,6 +39,18 @@ from forge_cli import runtime
 import subprocess
 
 
+def _landed_range_names(
+    repository: Path, revision_range: str
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            "git", "-C", str(repository), "diff", "--no-renames",
+            "--no-ext-diff", "--no-textconv", "--name-only", "-z", revision_range,
+        ],
+        check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+
+
 def _merge_ingest_binding(
     builders: Any,
     state: dict[str, object],
@@ -600,19 +612,8 @@ def _verify_and_build_merge_ingest_records(
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
-    names = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(canonical_repository),
-            "diff",
-            "--name-only",
-            "-z",
-            f"{remote_tip}...{candidate_head}",
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+    names = _landed_range_names(
+        canonical_repository, f"{remote_tip}...{candidate_head}"
     )
     if (
         diff.returncode != 0
