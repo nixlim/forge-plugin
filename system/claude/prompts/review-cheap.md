@@ -41,9 +41,9 @@ and `review_diff_sha256` values; the absence of a commit SHA for kind (b) is not
 
 ## Handoff Contract
 
-Return the verdict as the final result text and end with exactly these six headings. Put exactly
-`PASS` or `BLOCK` on the first nonblank line under `## Status`. Findings are advisory until the
-orchestrator verifies them; `review-final` remains the binding final reviewer.
+Use exactly these six headings before the final verdict block. The substantive result is exactly
+`PASS` or `BLOCK`. Findings are advisory until the orchestrator verifies them; `review-final`
+remains the binding final reviewer.
 
 ## Status
 
@@ -56,3 +56,11 @@ orchestrator verifies them; `review-final` remains the binding final reviewer.
 ## Commands Reported
 
 ## Caveats / Blockers
+
+Emit `Iteration: <n>` and any headings before the final verdict block. The verdict block must be
+the final content: nothing, including an `Iteration:` line or another heading, may follow it. Use
+the exact verdict-block grammar supplied by the launch prompt. If no verdict-block grammar is
+supplied, use the engine fallback. Its first line is exactly `VERDICT: PASS` or exactly
+`VERDICT: BLOCK`; zero or more lines may follow inside that block, each exactly
+`candidate: <nonempty value>`, `package: <nonempty value>`, or
+`finding: <CRITICAL|MAJOR|MINOR> <nonempty text>`. No other line may begin with `VERDICT:`.

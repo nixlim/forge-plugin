@@ -7,10 +7,16 @@ ROOT = Path(__file__).resolve().parents[1]
 CONSTITUTION = (ROOT / "rules/review-constitution.md").read_text(encoding="utf-8")
 REVIEW_FINAL = (ROOT / "agents/review-final.md").read_text(encoding="utf-8")
 CODEX_PLAN_BODY = (ROOT / "system/codex/prompts/plan.md").read_text(encoding="utf-8")
+CODEX_REVIEW_BODY = (
+    ROOT / "system/codex/prompts/review-cheap.md"
+).read_text(encoding="utf-8")
 UNTRUSTED_INPUT = (ROOT / "rules/untrusted-input.md").read_text(encoding="utf-8")
 RISK_AUTHORITY = (ROOT / "rules/risk-authority.md").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
 ORCHESTRATE = (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8")
+REVIEW_REFERENCE = (
+    ROOT / "skills/orchestrate/references/review.md"
+).read_text(encoding="utf-8")
 CLAUDE_ROLE_BODIES = {
     name: (ROOT / f"system/claude/prompts/{name}.md").read_text(encoding="utf-8")
     for name in ("implementer", "plan", "review-cheap")
@@ -149,6 +155,44 @@ def assert_final_reviewer_uses_coding_verification_method(
     )
 
 
+def assert_reviewer_verdict_is_final(
+    test_case: unittest.TestCase, text: str, *, has_handoff_headings: bool
+) -> None:
+    normalized = compact(text)
+    folded = normalized.casefold()
+    markers = (
+        "`iteration: <n>`",
+        "before the final verdict block",
+        "the verdict block must be the final content",
+        "nothing, including an `iteration:` line or another heading, may follow it",
+        "if no verdict-block grammar is supplied",
+        "use the engine fallback",
+        "its first line is exactly `verdict: pass` or exactly `verdict: block`",
+        "zero or more lines may follow inside that block",
+        "`candidate: <nonempty value>`",
+        "`package: <nonempty value>`",
+        "`finding: <critical|major|minor> <nonempty text>`",
+        "no other line may begin with `verdict:`",
+    )
+    assert_markers_are_load_bearing(test_case, folded, markers)
+    test_case.assertLess(
+        folded.index("`iteration: <n>`"),
+        folded.index("the verdict block must be the final content"),
+    )
+    if has_handoff_headings:
+        test_case.assertEqual(
+            [line for line in text.splitlines() if line.startswith("## ")][-6:],
+            HANDOFF_HEADINGS,
+        )
+        test_case.assertIn("six headings before the final verdict block", folded)
+    for stale in (
+        "end with exactly these six headings",
+        "Beside the verdict",
+        "first nonblank line under `## Status`",
+    ):
+        test_case.assertNotIn(stale.casefold(), folded)
+
+
 class ReviewConstitutionContentTests(unittest.TestCase):
     def test_six_core_axioms_are_preserved(self) -> None:
         axioms = (
@@ -233,6 +277,12 @@ class ReviewFinalContentTests(unittest.TestCase):
         self.assertEqual(values["model"], "fable")
         self.assertEqual(values["effort"], "high")
         self.assertEqual(tools, ["Read", "Bash", "Glob", "Grep", "LS"])
+        assert_markers_are_load_bearing(self, compact(REVIEW_FINAL), (
+            "model and effort are committed-default compatibility metadata, not launch",
+            "Forge passes the resolved route explicitly (FR-111/FR-246)",
+            "The Forge review engine launches this role for persisted chains",
+            "owning workflow explicitly retains an interactive Gate 3",
+        ))
 
     def test_instruction_bounded_execution_and_blind_spot_clauses_are_preserved(
         self,
@@ -281,6 +331,11 @@ class ReviewFinalContentTests(unittest.TestCase):
             AssertionError, "missing final-review verification requirements"
         ):
             assert_final_reviewer_uses_coding_verification_method(self, mutant)
+
+    def test_verdict_block_is_the_final_content(self) -> None:
+        assert_reviewer_verdict_is_final(
+            self, REVIEW_FINAL, has_handoff_headings=False
+        )
 
 
 class ClaudeRoleBodyContentTests(unittest.TestCase):
@@ -341,6 +396,16 @@ class ClaudeRoleBodyContentTests(unittest.TestCase):
             "authorization_id", "review_diff_sha256", "git cat-file -t <tree_oid>",
             "absence of a commit SHA for kind (b) is not a finding", "exactly `PASS` or `BLOCK`",
         ))
+
+    def test_each_review_body_puts_headings_and_iteration_before_final_block(self) -> None:
+        for name, body in (
+            ("claude", CLAUDE_ROLE_BODIES["review-cheap"]),
+            ("codex", CODEX_REVIEW_BODY),
+        ):
+            with self.subTest(provider=name):
+                assert_reviewer_verdict_is_final(
+                    self, body, has_handoff_headings=True
+                )
 
 
 class GovernanceRuleContentTests(unittest.TestCase):
@@ -452,6 +517,15 @@ class GovernanceDoctrineContentTests(unittest.TestCase):
         self.assertIn("from the integration baseline", orchestrate)
         self.assertIn("One session owns one worktree", orchestrate)
         self.assertIn("including `review-final`, share the orchestrator's worktree", orchestrate)
+
+    def test_manual_reviewer_lane_boundary_is_load_bearing(self) -> None:
+        assert_markers_are_load_bearing(self, compact(REVIEW_REFERENCE), (
+            "`forge launch` admits only fresh implementer and planner roles",
+            "manual reviewer-only path",
+            "use the committed Codex `review-cheap` values",
+            "do not substitute provider flags",
+            "do not substitute `forge launch`, `launch collect`, or `launch cancel`",
+        ))
 
     def test_shipped_governance_surfaces_omit_the_legacy_source_name(self) -> None:
         forbidden = "open" + "code"

@@ -52,14 +52,17 @@ units may be reintegrated incrementally; the diagram groups delivery for readabi
 |---|---|---|
 | User/operator | Supplies goals, resolves consequential choices, approves control changes, and controls halts | Approval must identify the actual reviewed candidate |
 | Claude main session | Plans, owns the run journal and worktrees, verifies evidence, coordinates gates, and reintegrates | An agent's handoff does not substitute for observed verification |
-| Fresh Codex implementer | Implements an assigned task in its dedicated worktree | May commit through Forge in its own worktree; must not push or operate on another branch |
-| Fresh Codex first-pass reviewer | Independently inspects the assigned candidate | Uses the native read-only sandbox and a separate session from the author |
+| Fresh routed implementer (shipped default Codex) | Implements an assigned task in its dedicated worktree | Starts only through `forge launch` on the run's frozen route; may commit through Forge in its own worktree, but must not push or operate on another branch |
+| Fresh routed planner (shipped default Codex) | Produces a bounded plan for one run task | Starts only through `forge launch` on the run's frozen route and remains read-only |
+| Fresh first-pass reviewer (shipped default Codex) | Independently inspects the assigned candidate | Uses a separate session from the author; Codex is OS-sandboxed read-only, while Claude is instruction-bounded and execution-capable |
 | `review-final` (resolved route; shipped default Claude) | Gives the binding final PASS/BLOCK where required | Must not edit; a Claude reviewer can execute checks and its no-write boundary is instruction-based, while a Codex reviewer runs read-only |
 | Forge scripts and CLI | Enforce mechanical preconditions, execute bounded checks, record evidence, and reject invalid transitions | They do not replace human approval or semantic review |
 
-The shipped role configuration assigns Codex implementation to `gpt-5.6-sol` with
-`ultra` effort and first-pass review to `gpt-5.6-sol` with `high` effort. Those are
-controlled routing values, not runtime cost suggestions. Consult the current
+The shipped defaults route implementation to Codex `gpt-5.6-sol` with `ultra` effort
+and first-pass review and planning to Codex `gpt-5.6-sol` with `high` effort. A run
+freezes the resolved provider, model, and effort for each role; typed launches and
+engine reviews record the route actually used. These are controlled routing values,
+not runtime cost suggestions. Consult the current
 [orchestration skill](skills/orchestrate/SKILL.md) before launching an execution.
 
 ## 2. Codebase design and logical boundaries

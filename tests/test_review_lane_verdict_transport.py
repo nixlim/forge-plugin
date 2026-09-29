@@ -72,6 +72,10 @@ PROMPT_CELLS = (
     ("merge", "codex", "review-final"),
     ("merge", "claude", "review-final"),
 )
+FIRST_LINE_DESCRIPTION = (
+    b"The block must start with a first line that is exactly VERDICT: PASS or exactly "
+    b"VERDICT: BLOCK."
+)
 
 
 def mutated_function(function, anchor: str, replacement: str):
@@ -89,6 +93,14 @@ def mutated_function(function, anchor: str, replacement: str):
     if not isinstance(mutant, FunctionType):
         raise AssertionError("mutation did not produce a function")
     return mutant
+
+
+def assert_no_copyable_verdict_line(prompt: bytes) -> None:
+    prefixed = [
+        line for line in prompt.splitlines() if line.strip().startswith(b"VERDICT:")
+    ]
+    if prefixed:
+        raise AssertionError(f"copyable verdict line in prompt: {prefixed!r}")
 
 
 class VerdictTransportTests(unittest.TestCase):
@@ -444,6 +456,25 @@ class VerdictTransportTests(unittest.TestCase):
             f"\ncandidate: {CANDIDATE}\npackage: {PACKAGE}\n".encode(),
             PROMPT_INSTRUCTION,
         )
+        assert_no_copyable_verdict_line(PROMPT_INSTRUCTION)
+
+    def test_output_contract_templates_describe_but_do_not_copy_verdict_line(self) -> None:
+        prompts = (
+            self._prompt("commit", "codex", "review-final", False),
+            self._prompt("merge", "codex", "review-final", False),
+            ENGINE._review_master_pointer_prompt(
+                "/fixture/package", 123, PACKAGE, CANDIDATE
+            ),
+        )
+        for index, prompt in enumerate(prompts):
+            with self.subTest(template=index):
+                self.assertIn(FIRST_LINE_DESCRIPTION, prompt)
+                assert_no_copyable_verdict_line(prompt)
+                mutant = prompt.replace(
+                    FIRST_LINE_DESCRIPTION, b"VERDICT: PASS|BLOCK", 1
+                )
+                with self.assertRaises(AssertionError):
+                    assert_no_copyable_verdict_line(mutant)
 
     def test_prompt_builders_append_exact_instruction_for_every_provider_role_cell(
         self,
@@ -457,6 +488,7 @@ class VerdictTransportTests(unittest.TestCase):
                     self.assertTrue(prompt.endswith(PROMPT_INSTRUCTION))
                     self.assertEqual(prompt.count(PROMPT_INSTRUCTION), 1)
                     self.assertEqual(prompt.count(REVIEW_SCOPE_PARAGRAPH), 1)
+                    assert_no_copyable_verdict_line(prompt)
 
     def test_prompt_scope_paragraph_disable_leg_fails_for_every_prompt_path(
         self,

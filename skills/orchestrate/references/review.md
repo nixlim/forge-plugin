@@ -42,9 +42,14 @@ For the first independent review:
 - In order, create the execution directory, save the exact prompt, create an empty `events.jsonl`,
   append the execution, and only then launch. Capture the event stream and exact handoff.
 
-Immediately before launch, require the forge halt checkpoint to exit 0. Run the reviewer with
-model `gpt-5.6-sol`, effort `high`, and sandbox `read-only` in a detached process group. All
-redirect targets are literal absolute paths:
+`forge launch` admits only fresh implementer and planner roles. This non-chain first-pass review
+therefore remains on the manual reviewer-only path; use the committed Codex `review-cheap` values
+below, do not substitute provider flags, and do not substitute `forge launch`, `launch collect`, or
+`launch cancel` for the procedure below.
+
+Immediately before launch, require the forge halt checkpoint to exit 0. Run the reviewer with model
+`gpt-5.6-sol`, effort `high`, and sandbox `read-only` in a detached process group. All redirect
+targets are literal absolute paths:
 
 ```bash
 set -m

@@ -10,11 +10,11 @@ the system exists to test claims rather than to produce more of them.
 
 It merges two systems — **forge** (gate chains, an adversarial review
 constitution, worktree discipline, a kill-switch, eval regressions) and
-**codex-orchestrator** (durable journal-based orchestration of headless Codex CLI
-agents) — into one arrangement for the **Claude + Codex pair**. Claude
-orchestrates, verifies, and holds the binding review verdict. Codex implements and
-performs the first-pass review. Support for other harnesses is deliberately out of
-scope.
+**codex-orchestrator** (durable journal-based orchestration of headless agents) —
+into one arrangement for the **Claude + Codex pair**. The Claude main session
+orchestrates and verifies; fresh agents implement and review on frozen routes. The
+shipped defaults use Codex for implementation and first-pass review and Claude for
+the binding verdict. Support for other harnesses is deliberately out of scope.
 
 Forge assumes that agents cooperate with the documented workflow. Its hooks,
 checks, and refusal messages make the intended sequence easier to follow and
@@ -23,14 +23,15 @@ with the operator's OS authority.
 
 ## How it works
 
-**Separate the author from the judge, across model families.** The implementer is
-a fresh Codex agent in an isolated worktree. The first-pass reviewer is a different
-Codex agent, OS-sandboxed read-only, that never sees the implementer's handoff or
-its claimed results. The binding verdict comes from an instruction-bounded,
-execution-capable Claude reviewer: Bash is deliberately available for gathering
-execution evidence, while its no-write rule is an instruction rather than an OS
-sandbox. Crossing model families reduces correlated mistakes; it cannot eliminate
-them.
+**Separate the author from the judge, and record the route.** Implementers and
+reviewers use distinct fresh sessions, and the binding reviewer remains distinct
+from the author. A run freezes each role's resolved Claude-or-Codex route, and Forge
+records the actual provider, model, and effort. Codex reviewers are OS-sandboxed
+read-only; Claude reviewers are instruction-bounded and execution-capable. Cross-model
+separation can reduce correlated mistakes when the routes differ, but it is recorded
+evidence rather than guaranteed by construction; a same-model binding review is
+surfaced as a historical-routing finding by `tests/test_repo_conformance.py::check_run`
+(routing-design decision 12).
 
 **Trust nothing that was merely reported.** Agent handoffs are claims, not
 evidence. Within a Forge workflow, the orchestrator re-runs each required gate in

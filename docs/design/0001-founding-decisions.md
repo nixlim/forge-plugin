@@ -61,6 +61,13 @@ sandbox. Cross-model separation of duties reduces correlated mistakes, but it ca
 eliminate them. This makes the heterogeneous-ensemble argument from
 codex-orchestrator's README structural without claiming independent blind spots.
 
+> **Routing note (Revision 15).** The role/provider rows above record the founding
+> defaults, not current launch authority. Each launched role now uses its resolved
+> Claude-or-Codex route, and Forge records the actual provider, model, and effort.
+> Cross-model separation is therefore recorded evidence rather than guaranteed by
+> construction; a same-model binding review is surfaced as a historical-routing finding
+> by `tests/test_repo_conformance.py::check_run` (routing-design decision 12).
+
 ## The Five Decisions — Resolutions
 
 ### D1 — Commit authority: RESOLVED

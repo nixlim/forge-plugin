@@ -159,8 +159,9 @@ def _review_prompt(
     else:
         prompt = package + (
             "\n--- BEGIN CONTROLLING OUTPUT CONTRACT ---\n"
-            "Remain read-only and return exactly this verdict grammar:\n"
-            "VERDICT: PASS|BLOCK\n"
+            "Remain read-only and return exactly one verdict block.\n"
+            "The block must start with a first line that is exactly VERDICT: PASS or exactly "
+            "VERDICT: BLOCK.\n"
             "Cite the package header's candidate exactly once in the verdict.\n"
             f"package: {package_digest}\n"
             "Optional repeated line: finding: <CRITICAL|MAJOR|MINOR> <text>\n"
