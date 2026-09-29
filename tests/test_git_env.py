@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from unittest import mock
 
-from tests import _git_env
+from tests import _git_env, _worker_quiescence
 from tests._git_env import (
     QUIET_GIT_SETTINGS,
     init_quiet_repository,
@@ -182,12 +182,60 @@ def _test_sources() -> dict[str, str]:
     }
 
 
-class GitEnvironmentTests(unittest.TestCase):
+def _drain_git_maintenance(root: Path) -> None:
+    if not root.is_dir():
+        raise AssertionError(f"git fixture root removed before maintenance drain: {root}")
+    _worker_quiescence.wait_for_quiescence(root)
+    residents = _worker_quiescence.resident_processes(root)
+    if residents:
+        raise AssertionError(
+            f"processes remain inside git fixture root after maintenance drain: {residents}"
+        )
+
+
+class _GitMaintenanceFixture(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="forge-git-env-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        self.addCleanup(_drain_git_maintenance, self.root)
 
+
+class GitMaintenanceDrainTests(_GitMaintenanceFixture):
+    def test_drain_runs_before_temporary_directory_cleanup(self) -> None:
+        root = self.root
+        original_wait = _worker_quiescence.wait_for_quiescence
+
+        def assert_root_present(selected: Path) -> None:
+            self.assertEqual(selected, root)
+            self.assertTrue(selected.is_dir())
+            original_wait(selected)
+
+        with mock.patch.object(
+            _worker_quiescence,
+            "wait_for_quiescence",
+            side_effect=assert_root_present,
+        ) as wait:
+            self.doCleanups()
+
+        wait.assert_called_once_with(root)
+        self.assertFalse(root.exists())
+
+    def test_drain_disable_leg_detects_resident_process(self) -> None:
+        sentinel_pid = 910001
+        with (
+            mock.patch.object(_worker_quiescence, "wait_for_quiescence"),
+            mock.patch.object(
+                _worker_quiescence,
+                "resident_processes",
+                return_value=[sentinel_pid],
+            ),
+            self.assertRaisesRegex(AssertionError, str(sentinel_pid)),
+        ):
+            _drain_git_maintenance(self.root)
+
+
+class GitEnvironmentTests(_GitMaintenanceFixture):
     def trace_environment(self) -> dict[str, str]:
         environment = {
             key: value

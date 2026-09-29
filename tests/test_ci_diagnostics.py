@@ -262,9 +262,10 @@ class RerunTests(DiagnosticsFixture, unittest.TestCase):
 
 
 class StubTests(DiagnosticsFixture, unittest.TestCase):
-    def install(self) -> tuple[Path, Path]:
-        stub_dir = self.base / "provider stubs"
-        log_path = self.base / "diagnostics with space" / "provider launches.log"
+    def install(self, name: str = "") -> tuple[Path, Path]:
+        base = self.base / name if name else self.base
+        stub_dir = base / "provider stubs"
+        log_path = base / "diagnostics with space" / "provider launches.log"
         self.assertEqual(DIAGNOSTICS.install_stubs(stub_dir, log_path), 0)
         return stub_dir, log_path
 
@@ -283,6 +284,9 @@ class StubTests(DiagnosticsFixture, unittest.TestCase):
         for provider in DIAGNOSTICS.PROVIDERS:
             mode = stat.S_IMODE((stub_dir / provider).stat().st_mode)
             self.assertEqual(mode, 0o755)
+        marker = stub_dir / DIAGNOSTICS.STUB_LOG_MARKER
+        self.assertTrue(stat.S_ISREG(marker.stat(follow_symlinks=False).st_mode))
+        self.assertEqual(marker.read_text(encoding="utf-8"), f"{log_path.resolve()}\n")
         result = self.invoke_stub(stub_dir / "claude")
         log = log_path.read_text(encoding="utf-8")
         self.assertEqual(result.returncode, 97)
@@ -296,20 +300,102 @@ class StubTests(DiagnosticsFixture, unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
 
-    def test_audit_accepts_missing_or_empty_log_and_rejects_missing_stubs(self) -> None:
+    def test_audit_accepts_empty_log_and_rejects_missing_stubs(self) -> None:
         stub_dir, log_path = self.install()
-        self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 0)
-        log_path.unlink()
         self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 0)
         with redirect_stderr(io.StringIO()):
             self.assertEqual(
-                DIAGNOSTICS.stub_audit(self.base / "missing-directory", log_path),
+                DIAGNOSTICS.stub_audit(self.base / "missing-stubs", log_path),
                 1,
             )
-        DIAGNOSTICS.install_stubs(stub_dir, log_path)
         (stub_dir / "codex").unlink()
         with redirect_stderr(io.StringIO()):
             self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+    def test_audit_rejects_missing_log(self) -> None:
+        stub_dir, log_path = self.install()
+        log_path.unlink()
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+    def test_audit_rejects_missing_log_directory(self) -> None:
+        stub_dir, log_path = self.install()
+        log_path.unlink()
+        log_path.parent.rmdir()
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+    def test_audit_rejects_log_replaced_by_directory(self) -> None:
+        stub_dir, log_path = self.install()
+        log_path.unlink()
+        log_path.mkdir()
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+    def test_audit_rejects_log_replaced_by_symlink(self) -> None:
+        stub_dir, log_path = self.install()
+        target = self.base / "empty-decoy.log"
+        target.touch()
+        log_path.unlink()
+        log_path.symlink_to(target)
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+    def test_audit_rejects_unreadable_log(self) -> None:
+        stub_dir, log_path = self.install()
+        original_open = DIAGNOSTICS.os.open
+
+        def deny_log(path: object, *args: object, **kwargs: object) -> int:
+            if Path(path) == log_path:
+                raise PermissionError("launch log denied")
+            return original_open(path, *args, **kwargs)
+
+        with (
+            mock.patch.object(DIAGNOSTICS.os, "open", side_effect=deny_log),
+            redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+    def test_audit_binds_log_to_installation_marker(self) -> None:
+        stub_dir, log_path = self.install()
+        marker = stub_dir / DIAGNOSTICS.STUB_LOG_MARKER
+        marker.unlink()
+
+        def assert_marker_required() -> None:
+            with redirect_stderr(io.StringIO()):
+                self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+        assert_marker_required()
+        with (
+            mock.patch.object(
+                DIAGNOSTICS,
+                "_installed_stub_log",
+                return_value=str(log_path.resolve()),
+            ),
+            self.assertRaises(AssertionError),
+        ):
+            assert_marker_required()
+
+        DIAGNOSTICS.install_stubs(stub_dir, log_path)
+        other_log = self.base / "other.log"
+        other_log.touch()
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, other_log), 1)
+
+    def test_missing_log_fail_closed_control_is_binding(self) -> None:
+        stub_dir, log_path = self.install()
+        log_path.unlink()
+
+        def assert_missing_log_rejected() -> None:
+            with redirect_stderr(io.StringIO()):
+                self.assertEqual(DIAGNOSTICS.stub_audit(stub_dir, log_path), 1)
+
+        assert_missing_log_rejected()
+        with (
+            mock.patch.object(DIAGNOSTICS, "_regular_file_size", return_value=0),
+            self.assertRaises(AssertionError),
+        ):
+            assert_missing_log_rejected()
 
     def test_audit_tail_is_bounded_prefixed_and_sanitized(self) -> None:
         stub_dir, log_path = self.install()

@@ -24,6 +24,8 @@ FINGERPRINT_OUTPUT_BYTES = 64 * 1024
 FINGERPRINT_FIELD_BYTES = 2 * 1024
 FINGERPRINT_TEMPLATE_BYTES = 12 * 1024
 AUDIT_LOG_BYTES = 4 * 1024
+STUB_MARKER_BYTES = 4 * 1024
+STUB_LOG_MARKER = ".forge-provider-launch-log"
 RERUN_LOG_BYTES = 4 * 1024
 RERUN_INPUT_BYTES = 1024 * 1024
 RERUN_MODULE_LIMIT = 3
@@ -300,18 +302,81 @@ def install_stubs(stub_directory: Path, log_path: Path) -> int:
         stub_path = stub_directory / provider
         stub_path.write_text(_stub_script(provider, resolved_log), encoding="utf-8")
         stub_path.chmod(0o755)
+    (stub_directory / STUB_LOG_MARKER).write_text(
+        f"{resolved_log}\n",
+        encoding="utf-8",
+    )
     return 0
 
 
-def _tail_bytes(path: Path, limit: int) -> bytes:
+def _open_regular_file(path: Path) -> int | None:
+    descriptor = None
     try:
-        with path.open("rb") as handle:
+        if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            return None
+        return descriptor
+    except OSError:
+        if descriptor is not None:
+            os.close(descriptor)
+        return None
+
+
+def _regular_file_payload(path: Path, limit: int) -> bytes | None:
+    descriptor = _open_regular_file(path)
+    if descriptor is None:
+        return None
+    with os.fdopen(descriptor, "rb") as handle:
+        try:
+            return handle.read(limit + 1)
+        except OSError:
+            return None
+
+
+def _regular_file_size(path: Path) -> int | None:
+    descriptor = _open_regular_file(path)
+    if descriptor is None:
+        return None
+    try:
+        return os.fstat(descriptor).st_size
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
+def _installed_stub_log(stub_directory: Path) -> str | None:
+    payload = _regular_file_payload(
+        stub_directory / STUB_LOG_MARKER,
+        STUB_MARKER_BYTES,
+    )
+    if payload is None or len(payload) > STUB_MARKER_BYTES:
+        return None
+    try:
+        marker = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if not marker.endswith("\n") or "\n" in marker[:-1]:
+        return None
+    return marker[:-1]
+
+
+def _tail_bytes(path: Path, limit: int) -> bytes:
+    descriptor = _open_regular_file(path)
+    if descriptor is None:
+        return b""
+    with os.fdopen(descriptor, "rb") as handle:
+        try:
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
             handle.seek(max(0, size - limit))
             return handle.read(limit)
-    except OSError:
-        return b""
+        except OSError:
+            return b""
 
 
 def _emit_prefixed_tail(
@@ -327,24 +392,47 @@ def _emit_prefixed_tail(
             print(prefix + line, file=target)
 
 
-def stub_audit(stub_directory: Path, log_path: Path) -> int:
+def _stub_directory_problems(stub_directory: Path) -> list[str]:
     problems = []
     if not stub_directory.is_dir():
         problems.append("stub directory missing")
     for provider in PROVIDERS:
         if not (stub_directory / provider).is_file():
             problems.append(f"{provider} stub missing")
+    return problems
+
+
+def _stub_log_problems(
+    stub_directory: Path,
+    log_path: Path,
+) -> tuple[list[str], int | None]:
+    problems = []
+    installed_log = _installed_stub_log(stub_directory)
+    if installed_log is None:
+        problems.append("stub installation marker missing, unreadable, or non-regular")
     try:
-        nonempty_log = log_path.exists() and log_path.stat().st_size > 0
-    except OSError:
-        nonempty_log = True
-    if nonempty_log:
+        selected_log = str(log_path.resolve())
+    except (OSError, RuntimeError):
+        selected_log = None
+    if installed_log is not None and installed_log != selected_log:
+        problems.append("provider launch log does not match installation marker")
+    log_size = _regular_file_size(log_path)
+    if log_size is None:
+        problems.append("provider launch log missing, unreadable, or non-regular")
+    elif log_size > 0:
         problems.append("provider launch log is non-empty")
+    return problems, log_size
+
+
+def stub_audit(stub_directory: Path, log_path: Path) -> int:
+    problems = _stub_directory_problems(stub_directory)
+    log_problems, log_size = _stub_log_problems(stub_directory, log_path)
+    problems.extend(log_problems)
     if not problems:
         return 0
     for problem in problems:
         print(f"forge-ci: provider audit failed: {problem}", file=sys.stderr)
-    if nonempty_log:
+    if log_size is not None and log_size > 0:
         _emit_prefixed_tail(
             log_path,
             "forge-ci: provider audit | ",
