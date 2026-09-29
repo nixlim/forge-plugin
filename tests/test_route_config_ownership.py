@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import errno
 import grp
+import inspect
 import os
 import pwd
 import stat
 import struct
+import textwrap
 import types
 import unittest
 from collections.abc import Callable, Iterator
@@ -45,6 +47,68 @@ def _default_acl_first(descriptor: int, metadata: os.stat_result) -> bool:
     ):
         return False
     return ownership.owner_only_writable(descriptor, metadata)
+
+
+def _mutated_function(
+    function: types.FunctionType,
+    anchor: str,
+    replacement: str,
+) -> types.FunctionType:
+    source = textwrap.dedent(inspect.getsource(function))
+    if source.count(anchor) != 1:
+        raise AssertionError(f"mutation anchor count differs: {anchor!r}")
+    namespace = dict(function.__globals__)
+    exec(
+        compile(
+            source.replace(anchor, replacement, 1),
+            function.__code__.co_filename,
+            "exec",
+        ),
+        namespace,
+    )
+    mutant = namespace[function.__name__]
+    if not isinstance(mutant, types.FunctionType):
+        raise AssertionError("mutation did not produce a function")
+    return mutant
+
+
+class DefaultAclRiskTests(unittest.TestCase):
+    def test_fstat_failure_refuses_without_consulting_xattrs(self) -> None:
+        anchor = "    except OSError:\n        return True"
+        mutant = _mutated_function(
+            ownership.default_acl_risk,
+            anchor,
+            "    except OSError:\n        return False",
+        )
+        for replacement_mode in (0, 0o600, 0o660):
+            with self.subTest(replacement_mode=oct(replacement_mode)):
+                xattrs = mock.Mock()
+                with (
+                    mock.patch.object(
+                        ownership.os,
+                        "fstat",
+                        side_effect=OSError(errno.EBADF, "bad descriptor"),
+                    ),
+                    mock.patch.object(ownership, "_may_have_acl", xattrs),
+                ):
+                    result = ownership.default_acl_risk(-1, replacement_mode)
+                self.assertTrue(result)
+                xattrs.assert_not_called()
+
+                with (
+                    mock.patch.object(
+                        ownership.os,
+                        "fstat",
+                        side_effect=OSError(errno.EBADF, "bad descriptor"),
+                    ),
+                    mock.patch.object(ownership, "_may_have_acl", xattrs),
+                    mock.patch.dict(mutant.__globals__, {"_may_have_acl": xattrs}),
+                ):
+                    mutant_result = mutant(-1, replacement_mode)
+                self.assertFalse(mutant_result)
+                xattrs.assert_not_called()
+                with self.assertRaises(AssertionError):
+                    self.assertTrue(mutant_result)
 
 
 class RouteOwnershipMixin:

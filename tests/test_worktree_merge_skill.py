@@ -12,6 +12,94 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = (ROOT / "skills/worktree-merge/SKILL.md").read_text(encoding="utf-8")
+RENAME_FLAGS = (" --no-renames ", " --no-ext-diff ", " --no-textconv ")
+FULL_PATCH_COMMANDS = (
+    'git diff "origin/${DEFAULT_BRANCH}...HEAD"',
+    'git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"',
+    'git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"',
+)
+
+
+def name_only_listings(text: str) -> list[str]:
+    return [
+        line
+        for line in text.splitlines()
+        if line.startswith("git diff") and "--name-only" in line
+    ]
+
+
+def assert_rename_listing_contract(case: unittest.TestCase, text: str) -> None:
+    listings = name_only_listings(text)
+    case.assertEqual(len(listings), 2)
+    for listing in listings:
+        for flag in RENAME_FLAGS:
+            case.assertIn(flag, listing)
+    lines = text.splitlines()
+    for patch in FULL_PATCH_COMMANDS:
+        patch_lines = [line for line in lines if patch in line]
+        case.assertEqual(len(patch_lines), 1)
+        for flag in RENAME_FLAGS:
+            case.assertNotIn(flag, patch_lines[0])
+
+
+def rename_listing_mutants(text: str) -> tuple[tuple[str, str], ...]:
+    removed_flags = tuple(
+        (
+            f"remove {flag} from {listing}",
+            text.replace(listing, listing.replace(flag, " ", 1), 1),
+        )
+        for listing in name_only_listings(text)
+        for flag in RENAME_FLAGS
+    )
+    added_flags = tuple(
+        (
+            f"add {flag} to {patch}",
+            text.replace(patch, f"{patch}{flag}", 1),
+        )
+        for patch in FULL_PATCH_COMMANDS
+        for flag in RENAME_FLAGS
+    )
+    return removed_flags + added_flags
+
+
+def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def seed_rename_repo(path: Path) -> None:
+    (path / "skills").mkdir()
+    (path / "skills/x.md").write_text("guarded\n", encoding="utf-8")
+    commands = (
+        ("init", "-q"),
+        ("add", "."),
+        (
+            "-c",
+            "user.name=Forge",
+            "-c",
+            "user.email=forge@example.invalid",
+            "commit",
+            "-qm",
+            "initial",
+        ),
+        ("mv", "skills/x.md", "docs-x.md"),
+        (
+            "-c",
+            "user.name=Forge",
+            "-c",
+            "user.email=forge@example.invalid",
+            "commit",
+            "-qm",
+            "rename",
+        ),
+    )
+    for command in commands:
+        run_git(path, *command)
 
 
 class WorktreeMergeSkillTests(unittest.TestCase):
@@ -505,28 +593,34 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("integration target, not in the agent's worktree", SKILL)
 
     def test_name_only_listings_disable_rename_detection(self) -> None:
-        flags = (" --no-renames ", " --no-ext-diff ", " --no-textconv ")
-        patches = ('git diff "origin/${DEFAULT_BRANCH}...HEAD"', 'git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"', 'git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"')
-        def assert_contract(text: str) -> None:
-            listings = [line for line in text.splitlines() if line.startswith("git diff") and "--name-only" in line]
-            self.assertEqual(len(listings), 2)
-            self.assertTrue(all(flag in listing for listing in listings for flag in flags))
-            self.assertTrue(all(sum(patch in line for line in text.splitlines()) == 1 and all(flag not in line for line in text.splitlines() if patch in line for flag in flags) for patch in patches))
-        assert_contract(SKILL)
-        mutants = tuple((f"remove {flag} from {listing}", SKILL.replace(listing, listing.replace(flag, " ", 1), 1)) for listing in SKILL.splitlines() if "--name-only" in listing for flag in flags) + tuple((f"add {flag} to {patch}", SKILL.replace(patch, f"{patch}{flag}", 1)) for patch in patches for flag in flags)
-        for label, mutant in mutants:
+        assert_rename_listing_contract(self, SKILL)
+        for label, mutant in rename_listing_mutants(SKILL):
             with self.subTest(control=label), self.assertRaises(AssertionError):
-                assert_contract(mutant)
-        self.addCleanup((scratch := tempfile.TemporaryDirectory(prefix="forge-wtm-renames-")).cleanup)
+                assert_rename_listing_contract(self, mutant)
+        scratch = tempfile.TemporaryDirectory(prefix="forge-wtm-renames-")
+        self.addCleanup(scratch.cleanup)
         repo = Path(scratch.name)
-        (repo / "skills").mkdir()
-        (repo / "skills/x.md").write_text("guarded\n", encoding="utf-8")
-        commands = (("init", "-q"), ("add", "."), ("-c", "user.name=Forge", "-c", "user.email=forge@example.invalid", "commit", "-qm", "initial"), ("mv", "skills/x.md", "docs-x.md"), ("-c", "user.name=Forge", "-c", "user.email=forge@example.invalid", "commit", "-qm", "rename"))
-        for command in commands:
-            subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True, text=True)
-        argv = ["git", "diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--name-only", "HEAD~1...HEAD"]
-        self.assertCountEqual(subprocess.run(argv, cwd=repo, check=True, capture_output=True, text=True).stdout.splitlines(), ["skills/x.md", "docs-x.md"])
-        self.assertEqual(subprocess.run(["git", "-c", "diff.renames=true", *argv[1:2], *argv[3:]], cwd=repo, check=True, capture_output=True, text=True).stdout.splitlines(), ["docs-x.md"])
+        seed_rename_repo(repo)
+        diff_args = (
+            "diff",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-only",
+            "HEAD~1...HEAD",
+        )
+        self.assertCountEqual(
+            run_git(repo, *diff_args).stdout.splitlines(),
+            ["skills/x.md", "docs-x.md"],
+        )
+        rename_enabled = run_git(
+            repo,
+            "-c",
+            "diff.renames=true",
+            diff_args[0],
+            *diff_args[2:],
+        )
+        self.assertEqual(rename_enabled.stdout.splitlines(), ["docs-x.md"])
 
     def test_unsafe_bulk_stage_commands_are_absent(self) -> None:
         self.assertNotIn("git add .", SKILL)
