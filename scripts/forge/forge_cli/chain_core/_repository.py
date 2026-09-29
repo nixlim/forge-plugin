@@ -12,6 +12,43 @@ from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, ReasonCode,
 from forge_cli.policy import sha256_bytes, Policy, PolicyError
 
 
+_DRIFT_NO_FSMONITOR: tuple[str, ...] = ("-c", "core.fsmonitor=false")
+_DRIFT_LITERAL_PATHSPECS: tuple[str, ...] = ("--literal-pathspecs",)
+
+
+def _flagged_index_labels(raw: bytes) -> list[str]:
+    labels: list[str] = []
+    seen_paths: set[str] = set()
+    seen_malformed: set[bytes] = set()
+    flag_names = {
+        "h": "assume-unchanged",
+        "m": "assume-unchanged",
+        "S": "skip-worktree",
+        "s": "assume-unchanged+skip-worktree",
+    }
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        if len(record) < 2 or record[1:2] != b" ":
+            if record not in seen_malformed:
+                seen_malformed.add(record)
+                labels.append(f"{os.fsdecode(record)} (unrecognised index flag)")
+            continue
+        tag = os.fsdecode(record[:1])
+        path = os.fsdecode(record[2:])
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        if tag in {"H", "M"}:
+            continue
+        name = flag_names.get(tag, f"unrecognised index flag {tag}")
+        labels.append(
+            f"{path} ({name} index flag: git diff cannot compare it; "
+            "clear the flag, then restage)"
+        )
+    return labels
+
+
 class Repository:
     def __init__(self, root: Path) -> None:
         self.root = Path(os.path.realpath(root))
@@ -162,8 +199,11 @@ class Repository:
     def tree_index_drift(self, paths: Sequence[str]) -> list[str]:
         if not paths:
             return []
-        result = self.git(["diff", "--name-only", "-z", "--", *paths])
-        return [os.fsdecode(item) for item in result.stdout.split(b"\0") if item]
+        options = [*_DRIFT_NO_FSMONITOR, *_DRIFT_LITERAL_PATHSPECS]
+        result = self.git([*options, "diff", "--name-only", "-z", "--", *paths])
+        drift = [os.fsdecode(item) for item in result.stdout.split(b"\0") if item]
+        listing = self.git([*options, "ls-files", "-v", "-z", "--", *paths])
+        return drift + _flagged_index_labels(listing.stdout)
 
     def normalize_paths(self, values: Sequence[str]) -> list[str]:
         normalized: list[str] = []
