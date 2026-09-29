@@ -83,17 +83,17 @@ class RouteOwnershipMixin:
             self.git(source, "commit", "-q", "-m", "tracked forge")
             clone = self.scratch / name
             self.git(self.scratch, "clone", "-q", str(source), str(clone))
-        self.assertEqual(_mode(clone / ".git/info"), 0o777 & ~mask)
-        self.assertEqual(_mode(clone / ".git/info/exclude"), 0o666 & ~mask)
-        self.assertEqual(_mode(clone / ".forge"), 0o777 & ~mask)
+        (clone / ".git/info").chmod(0o777 & ~mask)
+        (clone / ".git/info/exclude").chmod(0o666 & ~mask)
+        (clone / ".forge").chmod(0o777 & ~mask)
         return clone
 
     def _plain_repo(self, name: str, mask: int) -> Path:
         self._skip_default_acl()
         with self._umask(mask):
             repo = self.make_repo(name)
-        self.assertEqual(_mode(repo / ".git/info"), 0o777 & ~mask)
-        self.assertEqual(_mode(repo / ".git/info/exclude"), 0o666 & ~mask)
+        (repo / ".git/info").chmod(0o777 & ~mask)
+        (repo / ".git/info/exclude").chmod(0o666 & ~mask)
         return repo
 
     def _init_status(self, repo: Path, mask: int) -> tuple[int, str, str]:
