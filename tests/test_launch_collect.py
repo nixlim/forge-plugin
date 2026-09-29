@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import subprocess
 import sys
 import unittest
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -350,6 +353,128 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         self.assertEqual(result["files_changed"], ["notes.txt", "src/example.py"])
         self.assertEqual(result["caveats"], ["plan execution changed files"])
         self.assertIn("observed_model claude-fixture", str(result["summary"]))
+
+    def test_non_utf8_worktree_path_refusal_has_remediation_and_disable_leg(self) -> None:
+        record = self.seed()
+        self.publish(record)
+        raw_path = os.fsencode(self.linked_worktree) + b"/invalid-\xff-name"
+        try:
+            descriptor = os.open(
+                raw_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except OSError as exc:
+            if exc.errno == errno.EILSEQ:
+                self.skipTest("filesystem rejects non-UTF-8 path components")
+            raise
+        os.close(descriptor)
+        expected = (
+            "forge: launch collect refused — worktree paths are not UTF-8 for "
+            "execution-01; restore changed tracked paths or rename/remove untracked "
+            "paths, then retry launch collect"
+        )
+
+        def assertion() -> None:
+            self.assert_refusal(
+                record,
+                ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+                expected,
+            )
+
+        assertion()
+        with (
+            mock.patch.object(
+                LAUNCH_LANE,
+                "_decode_worktree_path",
+                side_effect=lambda value: value.decode("utf-8", "replace"),
+            ),
+            self.assertRaises(AssertionError),
+        ):
+            assertion()
+
+    def test_worktree_path_budget_is_cumulative_and_has_a_disable_leg(self) -> None:
+        record = self.seed()
+        self.publish(record)
+        first = b"a" * 600_000 + b"\0"
+        second = b"b" * 600_000 + b"\0"
+        expected = (
+            "forge: launch collect refused — worktree path list exceeds 1 MiB for "
+            "execution-01; reduce changed or untracked paths, then retry launch collect"
+        )
+
+        def assertion() -> None:
+            with mock.patch.object(
+                LAUNCH_LANE,
+                "git_bytes",
+                side_effect=(first, second),
+            ):
+                self.assert_refusal(
+                    record,
+                    ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+                    expected,
+                )
+
+        assertion()
+        with (
+            mock.patch.object(
+                LAUNCH_LANE,
+                "GIT_LIMIT_BYTES",
+                len(first) + len(second),
+            ),
+            self.assertRaises(AssertionError),
+        ):
+            assertion()
+
+    def test_git_output_limit_classification_is_load_bearing(self) -> None:
+        result = SimpleNamespace(
+            returncode=-15,
+            timed_out=False,
+            output_limit=True,
+            output=b"x" * LAUNCH_LANE.GIT_LIMIT_BYTES,
+        )
+        expected = (
+            "forge: launch collect refused — worktree path list exceeds 1 MiB for "
+            "execution-01; reduce changed or untracked paths, then retry launch collect"
+        )
+        original = LAUNCH_LANE.git_bytes
+
+        def assertion() -> None:
+            with (
+                mock.patch.object(
+                    LAUNCH_LANE.runtime,
+                    "run_bounded",
+                    return_value=result,
+                ) as bounded,
+                self.assertRaises(ENGINE.Refusal) as caught,
+            ):
+                LAUNCH_LANE.worktree_changes(
+                    self.linked_worktree,
+                    self.head,
+                    "execution-01",
+                )
+            self.assertEqual(caught.exception.message, expected)
+            self.assertEqual(
+                bounded.call_args.kwargs["cap"],
+                LAUNCH_LANE.GIT_LIMIT_BYTES,
+            )
+
+        def legacy_git_bytes(*args: Any, **kwargs: Any) -> bytes:
+            try:
+                return original(*args, **kwargs)
+            except LAUNCH_LANE.GitOutputLimitError as exc:
+                raise OSError("bounded Git read failed") from exc
+
+        assertion()
+        with (
+            mock.patch.object(
+                LAUNCH_LANE,
+                "git_bytes",
+                side_effect=legacy_git_bytes,
+            ),
+            self.assertRaises(AssertionError),
+        ):
+            assertion()
 
     def test_launch_record_replays_historically_and_journal_patterns_accepts_it(self) -> None:
         record = self.seed()

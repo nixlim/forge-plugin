@@ -58,9 +58,12 @@ SKILL_CONTROLS = (
     "Put this sentence verbatim in every implementer brief",
     "You may commit inside this worktree. You must NEVER push, never touch any "
     "branch other than your own, and never run destructive git commands.",
-    "an absolute path to a regular file you own (not a symlink), UTF-8 without "
-    "NUL bytes, at most 1 MiB",
-    "Keep it outside the target worktree",
+    "a canonical absolute owner-owned regular file writable only by its owner or "
+    "owner-private group, UTF-8 without NUL bytes, at most 1 MiB",
+    "Resolve it to its filesystem realpath after writing it and pass that exact "
+    "canonical spelling",
+    "forge: launch refused — brief path is not canonical; pass its absolute realpath",
+    "Keep the brief outside the target worktree",
     "collect reports every untracked worktree path in `files_changed`",
     '`forge` is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py"',
     "successful start receipt reads `launch started for execution-NN`",
@@ -71,7 +74,13 @@ SKILL_CONTROLS = (
     "implementer 14400 seconds, plan 1200 seconds",
     "non-blocking poll for that file, bounded at 60 minutes",
     'bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"',
+    "checks only the shared global `AGENT_HALT` sentinel before every start, "
+    "collect, and cancel",
+    "all three verbs refuse with reason code `halt-engaged`",
+    "on a halt do not invoke `forge launch collect` or `forge launch cancel`",
     "fresh implementer or planner only through `forge launch`",
+    "Write the brief, resolve it to its absolute filesystem realpath, then pass the "
+    "absolute worktree and canonical brief path to `forge launch`",
     "saves the exact prompt and appends `execution` before launch",
     "owner record carries no `branch` field",
     "git -C <worktree> branch --show-current",
@@ -117,6 +126,10 @@ WORKFLOW_CONTROLS = (
     "independently verify the result",
 )
 OUTCOME_RULES = (
+    (
+        "any typed-lane refusal with reason code `halt-engaged`",
+        "wait for the operator to clear global `AGENT_HALT`",
+    ),
     (
         "launch collect: complete` or `launch collect: failed",
         "Terminal; the one result exists",
@@ -307,6 +320,11 @@ class OrchestrateLaunchProseTests(unittest.TestCase):
         self.assertNotIn(
             "typed implementer and plan executions are observed only through",
             MONITORING.lower(),
+        )
+        self.assertNotIn("global or scoped halt", SKILL)
+        self.assertNotIn(
+            "read-only collection of an already-launched execution remains allowed",
+            SKILL,
         )
         for document, controls in (
             (SKILL, SKILL_CONTROLS),

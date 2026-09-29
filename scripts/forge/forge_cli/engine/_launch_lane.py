@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import dataclasses
+import errno
+import fcntl
 import json
 import os
 import re
 import secrets
 import stat
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import route_config
+from route_config_git import owner_only_writable
 
 from forge_cli import chain_core, policy, runtime
 from forge_cli.engine import _cli_options, _review_attempt, _review_lane_api, _review_launch
@@ -120,6 +124,23 @@ WRAPPER_BINDING_FIELDS = (
     "environment_names",
     "omitted_short",
 )
+
+BRIEF_REFUSAL_MESSAGE = (
+    "forge: launch refused — brief must be a canonical absolute owner-owned regular "
+    "UTF-8 file writable only by its owner or owner-private group, with no NUL byte "
+    "and size at most 1 MiB"
+)
+BRIEF_PATH_REFUSAL_MESSAGE = (
+    "forge: launch refused — brief path is not canonical; pass its absolute realpath"
+)
+BRIEF_PATH_BINDING_REFUSAL_MESSAGE = (
+    "forge: launch refused — opened brief path could not be verified against the "
+    "checked canonical path"
+)
+
+
+class GitOutputLimitError(OSError):
+    """A bounded Git read exceeded the caller's output budget."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -364,35 +385,125 @@ def read_private_record(path: Path) -> bytes:
     )
 
 
+def _brief_open_flags() -> int:
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    return flags | getattr(os, "O_NONBLOCK", 0)
+
+
+def _brief_path_is_canonical(path: Path) -> bool:
+    try:
+        return path == path.resolve(strict=True)
+    except RuntimeError:
+        return False
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return False
+        raise
+
+
+def _brief_descriptor_path(descriptor: int) -> Path:
+    if sys.platform.startswith("linux"):
+        return Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+    get_path = getattr(fcntl, "F_GETPATH", None)
+    if sys.platform == "darwin" and get_path is not None:
+        value = fcntl.fcntl(descriptor, get_path, b"\0" * 1024)
+        if isinstance(value, bytes):
+            encoded = value.split(b"\0", 1)[0]
+            if encoded:
+                return Path(os.fsdecode(encoded))
+    raise OSError(errno.ENOTSUP, "descriptor path lookup unavailable")
+
+
+def _brief_descriptor_matches_path(descriptor: int, path: Path) -> bool:
+    try:
+        return _brief_descriptor_path(descriptor) == path
+    except OSError:
+        return False
+
+
+def _brief_metadata_is_safe(descriptor: int, metadata: os.stat_result) -> bool:
+    return bool(
+        stat.S_ISREG(metadata.st_mode)
+        and metadata.st_uid == os.geteuid()
+        and metadata.st_size <= BRIEF_LIMIT_BYTES
+        and owner_only_writable(descriptor, metadata)
+    )
+
+
+def _read_brief_descriptor(descriptor: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = BRIEF_LIMIT_BYTES + 1
+    while remaining:
+        chunk = os.read(descriptor, min(65_536, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    data = b"".join(chunks)
+    if len(data) > BRIEF_LIMIT_BYTES:
+        raise OSError("brief exceeds its byte limit")
+    return data
+
+
+def _read_owner_brief(path: Path) -> bytes:
+    """Open and read the canonical brief through one no-follow descriptor."""
+
+    descriptor = os.open(path, _brief_open_flags())
+    try:
+        if not _brief_descriptor_matches_path(descriptor, path):
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                BRIEF_PATH_BINDING_REFUSAL_MESSAGE,
+            )
+        if not _brief_metadata_is_safe(descriptor, os.fstat(descriptor)):
+            raise OSError("brief is not owner-controlled")
+        return _read_brief_descriptor(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def read_brief(path: Path) -> bytes:
     """Read and validate the owner-controlled absolute launch brief."""
 
     try:
         if not path.is_absolute():
             raise OSError("brief path is not absolute")
-        data = read_bounded_regular(path, limit=BRIEF_LIMIT_BYTES, owned=True)
+        if not _brief_path_is_canonical(path):
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                BRIEF_PATH_REFUSAL_MESSAGE,
+            )
+        data = _read_owner_brief(path)
         data.decode("utf-8")
         if b"\0" in data:
             raise ValueError("brief contains NUL")
         return data
-    except (OSError, UnicodeError, ValueError) as exc:
+    except Refusal:
+        raise
+    except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
         raise Refusal(
             V2ReasonCode.STATE_PRECONDITION,
-            "forge: launch refused — brief must be an owner-controlled regular "
-            "UTF-8 file of at most 1 MiB",
+            BRIEF_REFUSAL_MESSAGE,
         ) from exc
 
 
-def git_bytes(worktree: Path, arguments: Sequence[str]) -> bytes:
+def git_bytes(
+    worktree: Path,
+    arguments: Sequence[str],
+    *,
+    limit: int = GIT_LIMIT_BYTES,
+) -> bytes:
     """Run a bounded Git read in one worktree."""
 
     result = runtime.run_bounded(
         ["git", "-C", str(worktree), *arguments],
         cwd=worktree,
         timeout=GIT_TIMEOUT_SECONDS,
-        cap=GIT_LIMIT_BYTES,
+        cap=limit,
     )
-    if result.returncode or result.timed_out or result.output_limit:
+    if result.output_limit:
+        raise GitOutputLimitError("bounded Git output exceeded its byte limit")
+    if result.returncode or result.timed_out:
         raise OSError("bounded Git read failed")
     return result.output
 
@@ -472,14 +583,24 @@ def git_text(worktree: Path, *arguments: str) -> str:
     return value
 
 
+def _decode_worktree_path(value: bytes) -> str:
+    """Decode one Git -z path for the journal's strict UTF-8 string schema."""
+
+    return value.decode("utf-8")
+
+
 def worktree_files(worktree: Path, head: str) -> tuple[str, ...]:
     paths: set[str] = set()
     commands = (("diff", "--name-only", "-z", "--no-renames", head, "--"),
                 ("ls-files", "--others", "--exclude-standard", "-z"))
+    remaining = GIT_LIMIT_BYTES
     for command in commands:
-        output = git_bytes(worktree, command)
+        output = git_bytes(worktree, command, limit=remaining)
+        if len(output) > remaining:
+            raise GitOutputLimitError("combined Git path output exceeded its byte limit")
+        remaining -= len(output)
         pieces = output.rstrip(b"\0").split(b"\0") if output else ()
-        paths.update(piece.decode("utf-8") for piece in pieces if piece)
+        paths.update(_decode_worktree_path(piece) for piece in pieces if piece)
     return tuple(sorted(paths))
 
 
@@ -810,7 +931,21 @@ def worktree_changes(worktree: Path, head: str, execution: str) -> tuple[str, ..
 
     try:
         return worktree_files(worktree, head)
-    except (OSError, UnicodeError) as exc:
+    except GitOutputLimitError as exc:
+        raise Refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            f"forge: launch collect refused — worktree path list exceeds 1 MiB "
+            f"for {execution}; reduce changed or untracked paths, then retry "
+            "launch collect",
+        ) from exc
+    except UnicodeError as exc:
+        raise Refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            f"forge: launch collect refused — worktree paths are not UTF-8 for "
+            f"{execution}; restore changed tracked paths or rename/remove untracked "
+            "paths, then retry launch collect",
+        ) from exc
+    except OSError as exc:
         raise Refusal(
             V2ReasonCode.EVIDENCE_INCOMPLETE,
             f"forge: launch collect refused — worktree facts unavailable for {execution}",

@@ -166,7 +166,7 @@ class LaunchLaneSupport(Revision9BuilderBatchSupport):
 
     def setUp(self) -> None:
         super().setUp()
-        self.scratch = Path(self.temporary.name)
+        self.scratch = Path(self.temporary.name).resolve(strict=True)
         self.bin_dir = self.scratch / "bin"
         self.logs = self.scratch / "logs"
         self.home = self.scratch / "home"
@@ -175,6 +175,7 @@ class LaunchLaneSupport(Revision9BuilderBatchSupport):
         for directory in (self.bin_dir, self.logs, self.home):
             directory.mkdir(parents=True, exist_ok=True)
         self.brief.write_text("fixture task assignment\n", encoding="utf-8")
+        self.brief.chmod(0o600)
         self._install_committed_launch_inputs()
         subprocess.run(
             ["git", "-C", str(self.repo), "worktree", "add", "--quiet", "--detach",

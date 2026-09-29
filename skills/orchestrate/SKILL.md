@@ -46,11 +46,14 @@ commands." The orchestrator alone performs reintegration.
 Resolve `<worktree>` to the same absolute execution worktree that Forge will record and use for the
 launch. For implementer and plan, write the concrete assignment (goal, acceptance criteria,
 constraints, owned files, the sentence above for an implementer, and the required handoff) to a
-brief file: an absolute path to a regular file you own (not a symlink), UTF-8 without NUL bytes, at
-most 1 MiB. Keep it outside the target worktree, for example in the session scratchpad, because
-collect reports every untracked worktree path in `files_changed`; `forge launch` preserves its bytes
-in `prompt.md`. The provider split is exact: for Codex, `prompt.md` and stdin start with the
-applicable plugin role template; for
+brief file: a canonical absolute owner-owned regular file writable only by its owner or
+owner-private group, UTF-8 without NUL bytes, at most 1 MiB. Resolve it to its filesystem realpath
+after writing it and pass that exact canonical spelling. A noncanonical spelling refuses with
+`forge: launch refused — brief path is not canonical; pass its absolute realpath`; follow that
+remediation and retry. Keep the brief outside the target worktree, for example in the session
+scratchpad, because collect reports every untracked worktree path in `files_changed`; `forge
+launch` preserves its bytes in `prompt.md`. The provider split is
+exact: for Codex, `prompt.md` and stdin start with the applicable plugin role template; for
 Claude, the applicable committed role body is passed only through the exact FR-245 argv flag and is
 not part of `prompt.md`. Claude `prompt.md` and stdin start with the exact bytes
 `\n--- committed agent-project-context ---\n`. The remaining prompt components keep this order:
@@ -98,11 +101,13 @@ forge launch --repo <repo> --run-id <run-id> --role implementer --task <task-id>
 forge launch --repo <repo> --run-id <run-id> --role plan --task <task-id> --worktree <absolute-worktree> --brief <absolute-brief>
 ```
 
-The lane runs the halt checkpoint first. If it reports a global or scoped halt, launch no new work,
-perform no reintegration, report the sentinel to the user, and wait. Agents must not create, delete,
-or bypass halt sentinels without explicit user direction. Forge then performs the task, registered
-worktree, committed HEAD, initialization, brief, frozen-route, executable, version-floor, and
-in-flight checks. An implementer worktree must be a dedicated linked worktree.
+The typed lane checks only the shared global `AGENT_HALT` sentinel before every start, collect, and
+cancel. While it is engaged, all three verbs refuse with reason code `halt-engaged`; launch no new
+work, perform no reintegration, report the sentinel to the user, and wait for the operator to clear
+it. Agents must not create, delete, or bypass halt sentinels without explicit user direction. Forge
+then performs the task, registered worktree, committed HEAD, initialization, brief, frozen-route,
+executable, version-floor, and in-flight checks. An implementer worktree must be a dedicated linked
+worktree.
 
 The typed lane performs the owner sequence; the session does not reproduce it:
 
@@ -164,12 +169,14 @@ have finished. The wrapper publishes `<run-dir>/<agent>/<execution-NN>/completio
 provider exits or hits its fixed timeout (implementer 14400 seconds, plan 1200 seconds), so wait
 with a non-blocking poll for that file, bounded at 60 minutes, then run `forge launch collect`
 whether or not it appeared. Before each observation run
-`bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"`; on a halt start no work and perform no
-reintegration, but read-only collection of an already-launched execution remains allowed. Collect,
-never a hand-written `execution_result`, is the lifecycle authority. Act on each result as follows:
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"`; on a halt do not invoke `forge launch
+collect` or `forge launch cancel`, perform no reintegration, report the diagnostic, and wait. Once
+the operator clears the global halt, collect the already-launched execution. Collect, never a
+hand-written `execution_result`, is the lifecycle authority. Act on each result as follows:
 
 | Result | Action |
 |---|---|
+| any typed-lane refusal with reason code `halt-engaged` | Stop; do not run `forge launch`, `forge launch collect`, or `forge launch cancel`; report the diagnostic and wait for the operator to clear global `AGENT_HALT`. |
 | `launch collect: complete` or `launch collect: failed` | Terminal; the one result exists. Inspect `handoff.md` and the worktree. A failed task stays active; a retry is a new `forge launch`. |
 | `is still launching; retry after the identity deadline` | Wait at least 60 seconds, then collect again. |
 | `is still running` | Append nothing, do not relaunch, keep waiting. |
@@ -251,8 +258,9 @@ when material output must be retained.
 4. Start a fresh implementer or planner only through `forge launch` (see Typed Implementer And Plan
    Launches). For an independent review, start a fresh agent and native session through
    `references/review.md`. Only a reviewer confirmation round may resume that same reviewer session.
-5. Write the brief, then pass the absolute worktree and brief to `forge launch`. Forge resolves the
-   full HEAD, saves the exact prompt and appends `execution` before launch; do not write
+5. Write the brief, resolve it to its absolute filesystem realpath, then pass the absolute worktree
+   and canonical brief path to `forge launch`. Forge resolves the full HEAD, saves the exact prompt
+   and appends `execution` before launch; do not write
    `prompt.md`, `events.jsonl`, `launch.json`, `pid`, or the `execution` record yourself. The typed
    owner record carries no `branch` field; read it with `git -C <worktree> branch --show-current`
    when you need it.

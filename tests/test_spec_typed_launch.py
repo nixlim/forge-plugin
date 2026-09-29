@@ -63,8 +63,30 @@ CONTROLS = {
         "worktree: <path>",
         "forge: forge initialization incomplete — run /forge:init",
         "forge: journal builder refused — task <task> is not active",
-        "forge: launch refused — brief must be an owner-controlled regular UTF-8 "
-        "file of at most 1 MiB",
+        "forge: launch refused — brief path is not canonical; pass its absolute "
+        "realpath",
+        "forge: launch refused — opened brief path could not be verified against "
+        "the checked canonical path",
+        "forge: launch refused — brief must be a canonical absolute owner-owned "
+        "regular UTF-8 file writable only by its owner or owner-private group, with "
+        "no NUL byte and size at most 1 MiB",
+        "the caller path is canonical only when it is absolute and equals its strict "
+        "filesystem realpath",
+        '"Owner-controlled" means a regular file whose `st_uid == os.geteuid()` and '
+        "whose world-write bit is unset",
+        "Group write is admitted only when the file GID is the owner's consistently "
+        "enumerable primary group",
+        "every explicit member name resolves to that same UID, no different UID has "
+        "that GID as its primary group, and no access ACL may widen writes",
+        "opens the canonical leaf with `O_NOFOLLOW` and `O_NONBLOCK`, obtains the "
+        "opened descriptor's real path through `/proc/self/fd/<fd>` on Linux or "
+        "`fcntl(F_GETPATH)` on macOS",
+        "requires exact equality with the already-checked canonical caller path",
+        "unavailable Linux procfs or macOS `F_GETPATH`, or any other platform fails "
+        "closed with the opened-brief-path refusal",
+        "does not claim an inode identity captured before `open`; same-path "
+        "replacement remains subject to the opened descriptor's owner, mode, type, "
+        "and size controls",
         "forge: execution refused — route diverges from run snapshot for <role>: "
         "<field>",
         "forge: execution refused — role <role> has no frozen route in the run snapshot",
@@ -103,6 +125,12 @@ CONTROLS = {
         "launch-failed: spawn error",
         "launch collect: <complete|failed>; returncode <n|none>; error <error|none>; "
         "timed_out <true|false>; handoff <n> bytes; observed_model <id|none>",
+        "The two NUL-delimited Git path listings share one 1-MiB output budget",
+        "forge: launch collect refused — worktree paths are not UTF-8 for "
+        "<execution-NN>; restore changed tracked paths or rename/remove untracked "
+        "paths, then retry launch collect",
+        "forge: launch collect refused — worktree path list exceeds 1 MiB for "
+        "<execution-NN>; reduce changed or untracked paths, then retry launch collect",
         "a repeat returns the recorded status without a second result",
         "forge: journal builder refused — execution result does not match one "
         "open execution",
@@ -216,7 +244,8 @@ ORDERED_CONTROLS = (
             "registered-worktree and dedicated linked-worktree check for an implementer",
             "HEAD and committed `init_completed: true` check",
             "active-task check",
-            "owner-controlled, no-follow, regular UTF-8, NUL-free, at-most-1-MiB brief check",
+            "canonical-realpath, owner-controlled, no-follow-leaf, regular UTF-8, "
+            "NUL-free, at-most-1-MiB brief check",
             "route resolution and sandbox selection",
             "committed-prompt-input read",
             "snapshot and proposed-record validation",
