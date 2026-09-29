@@ -9,6 +9,7 @@ exec python3 - "$repo_root" "$plugin_root" "$@" <<'PY'
 from __future__ import annotations
 
 import datetime as dt
+import fcntl
 import fnmatch
 import importlib.util
 import json
@@ -23,6 +24,8 @@ from typing import Any
 
 OUTPUT_LIMIT = 65_536
 NON_MUTATION_TIMEOUT = 1200
+DIAGNOSTIC_TAIL_BYTES = 8192
+DIAGNOSTIC_LINE_LIMIT = 64
 JOURNAL_PATTERNS_TIMEOUT_SECONDS = 30.0
 EVENT_RECOVERY_BYTES = 65_536
 EVENT_RECOVERY_CANDIDATES = 64
@@ -97,6 +100,54 @@ class Failure(RuntimeError):
         self.code = code
         self.check = check
         self.summary = summary
+
+
+def report_command_failure(label: str, outcome: Any | None) -> None:
+    try:
+        if sys.stderr is None:
+            return
+        descriptor = sys.stderr.fileno()
+        if fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY:
+            raise OSError("stderr is not writable")
+        safe_label = re.sub(r"[\x00-\x08\x0a-\x1f]", "?", label)
+        prefix = f"forge: drift {safe_label}"
+        disposition = outcome.outcome if outcome is not None else None
+        kind = {
+            "timed-out": "timeout",
+            "output-limit-exceeded": "output cap",
+            "completed": "failure",
+        }.get(disposition, "launch failure")
+        exit_code = outcome.exit_code if outcome is not None else None
+        rendered_outcome = disposition if disposition is not None else "none"
+        rendered_exit = exit_code if exit_code is not None else "none"
+        lines = [
+            f"{prefix} failed on clean tree: kind={kind} "
+            f"outcome={rendered_outcome} exit={rendered_exit}"
+        ]
+        output = outcome.output if outcome is not None else ""
+        gate_lines = (
+            line
+            for line in output.splitlines()
+            if re.fullmatch(
+                r"gate-1 \S+: exit -?\d+ ran -?\d+ in (?:[0-9.]+|\?)s FAILED",
+                line,
+            )
+            or line.startswith("gate-1: ")
+        )
+        for line in list(gate_lines)[:DIAGNOSTIC_LINE_LIMIT]:
+            sanitized = re.sub(r"[\x00-\x08\x0b-\x1f]", "?", line)
+            lines.append(f"{prefix} | {sanitized}")
+        tail = output.encode("utf-8", "replace")[-DIAGNOSTIC_TAIL_BYTES:].decode(
+            "utf-8", "replace"
+        )
+        for line in tail.split("\n"):
+            if line:
+                sanitized = re.sub(r"[\x00-\x08\x0b-\x1f]", "?", line)
+                lines.append(f"{prefix} | {sanitized}")
+        sys.stderr.write("\n".join(lines) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        return
 
 
 def utc_timestamp(value: dt.datetime) -> str:
@@ -1011,10 +1062,12 @@ def main() -> None:
         gate_one = parse_gate_one(gate_one_body)
         gate_result = execute_command(mutation, gate_one, NON_MUTATION_TIMEOUT, repo)
         if gate_result.result != "passed":
+            report_command_failure("gate-1", gate_result)
             raise Failure("gate-1-execution", "gate-1", "Gate 1 failed on clean tree")
         checks.append(check("gate-1", started, "passed", "Gate 1 passed on clean tree"))
     except Failure as failure:
         if failure.code == "command-launch":
+            report_command_failure("gate-1", None)
             failure = Failure("gate-1-execution", "gate-1", "Gate 1 failed on clean tree")
         checks.append(check("gate-1", started, "failed", failure.summary))
         emit(repo, now, policy_sha, checks, [], {"failure": failure.code, "state": "failed"}, telemetry, 2)
@@ -1025,13 +1078,15 @@ def main() -> None:
         if "forge-init:" in gate_two_body:
             raise Failure("gate-2-policy", "gate-2", "validation policy malformed")
         gate_two_commands = parse_fenced_commands(gate_two_body)
-        for command in gate_two_commands:
+        for index, command in enumerate(gate_two_commands, start=1):
             outcome = execute_command(mutation, command, NON_MUTATION_TIMEOUT, repo)
             if outcome.result != "passed":
+                report_command_failure(f"gate-2 cell {index}", outcome)
                 raise Failure("gate-2-execution", "gate-2", "Gate 2 failed on clean tree")
         checks.append(check("gate-2", started, "passed", f"{len(gate_two_commands)} validations passed"))
     except Failure as failure:
         if failure.code == "command-launch":
+            report_command_failure(f"gate-2 cell {index}", None)
             failure = Failure("gate-2-execution", "gate-2", "Gate 2 failed on clean tree")
         checks.append(check("gate-2", started, "failed", failure.summary))
         emit(repo, now, policy_sha, checks, [], {"failure": failure.code, "state": "failed"}, telemetry, 2)
@@ -1042,10 +1097,12 @@ def main() -> None:
         for name, command, _point in invariant_rows:
             outcome = execute_command(mutation, command, NON_MUTATION_TIMEOUT, repo)
             if outcome.result != "passed":
+                report_command_failure(f"invariant {name}", outcome)
                 raise Failure("invariant-execution", "invariant-sweep", "runner failed")
         checks.append(check("invariant-sweep", started, "passed", f"{len(invariant_rows)} invariants passed"))
     except Failure as failure:
         if failure.code == "command-launch":
+            report_command_failure(f"invariant {name}", None)
             failure = Failure("invariant-execution", "invariant-sweep", "runner failed")
         checks.append(check("invariant-sweep", started, "failed", failure.summary))
         emit(repo, now, policy_sha, checks, [], {"failure": failure.code, "state": "failed"}, telemetry, 2)

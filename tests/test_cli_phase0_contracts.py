@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import marshal
 import os
@@ -967,11 +968,8 @@ class AntiVacuityTests(unittest.TestCase):
 class EvaluatorSubcommandTests(unittest.TestCase):
     def run_eval(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, str(EVAL_SCRIPT), *arguments],
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
+            [sys.executable, str(EVAL_SCRIPT), *arguments], cwd=ROOT,
+            check=False, capture_output=True, text=True,
         )
 
     def seed_snapshot(self, repo: Path) -> None:
@@ -1042,7 +1040,7 @@ class EvaluatorSubcommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="forge-fr223-evidence-path-") as tmp:
             repo = Path(tmp)
             self.seed_snapshot(repo)
-            evidence, _current = valid_evidence()
+            evidence, current = valid_evidence()
             missing_script = "/no/such/fr223/probe.py"
             for leg in ("model", "bang"):
                 key = f"{leg}_command"
@@ -1082,19 +1080,21 @@ class EvaluatorSubcommandTests(unittest.TestCase):
                     + "\n"
                 ).encode("utf-8")
             ).hexdigest()
-            evidence_path = (
-                repo / ".forge/evals/tasks/fr223-bang-bypass-v1.evidence.json"
-            )
+            evidence_path = repo / ".forge/evals/tasks/fr223-bang-bypass-v1.evidence.json"
             evidence_path.write_text(
-                json.dumps(evidence, ensure_ascii=False) + "\n",
-                encoding="utf-8",
+                json.dumps(evidence, ensure_ascii=False) + "\n", encoding="utf-8",
             )
 
-            result = self.run_eval("verify", "--root", str(repo))
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with (
+                mock.patch.object(FR223_EVAL, "_current_claude", return_value=current),
+                mock.patch.multiple(sys, stdout=stdout, stderr=stderr),
+            ):
+                returncode = FR223_EVAL.main(("verify", "--root", str(repo)))
 
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("probe commands are not the exact paired", result.stdout)
-        self.assertNotIn("internal failure", result.stderr.lower())
+        self.assertEqual(returncode, 1, stdout.getvalue() + stderr.getvalue())
+        self.assertIn("probe commands are not the exact paired", stdout.getvalue())
+        self.assertNotIn("internal failure", stderr.getvalue().lower())
 
 
 class Phase1CorpusConsumptionTests(unittest.TestCase):

@@ -1,0 +1,83 @@
+name: forge-drift
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: forge drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+
+      - name: Install fail-loud provider stubs
+        run: |
+          python3 scripts/ci_diagnostics.py install-stubs "$RUNNER_TEMP/provider-stubs" "$RUNNER_TEMP/forge-diagnostics/provider-launches.log"
+          echo "$RUNNER_TEMP/provider-stubs" >> "$GITHUB_PATH"
+
+      - name: Fingerprint environment and verify provider stubs
+        run: python3 scripts/ci_diagnostics.py fingerprint --out "$RUNNER_TEMP/forge-diagnostics/environment-fingerprint.txt" --expect-stubs "$RUNNER_TEMP/provider-stubs"
+
+      - name: Snapshot pre-drift
+        run: python3 scripts/ci_diagnostics.py snapshot pre-drift --out-dir "$RUNNER_TEMP/forge-diagnostics"
+
+      - name: Drift check (mechanical pass, reduced-signal CI mode)
+        env:
+          CLAUDE_PLUGIN_ROOT: ${{ github.workspace }}
+        run: |
+          set -o pipefail
+          stderr_path="$RUNNER_TEMP/forge-diagnostics/drift-stderr.txt"
+          # errexit-safe capture: GitHub's default shell is `bash -e {0}`, so a
+          # bare nonzero pipeline would abort the step before any status check.
+          # Both outputs stay outside the checkout because drift-check starts by
+          # requiring a clean worktree, including all untracked files.
+          bash scripts/forge/drift-check.sh 2>"$stderr_path" | tee "$RUNNER_TEMP/drift-summary.json" && status=0 || status=$?
+          cat "$stderr_path" >&2
+          # exit 2 is a drift-check failure; 0/1 (clean/findings) both pass CI —
+          # findings are the drift skill's concern, not a PR gate.
+          if [ "$status" -eq 2 ]; then exit 2; fi
+          exit 0
+
+      - name: Snapshot post-drift
+        if: always()
+        run: python3 scripts/ci_diagnostics.py snapshot post-drift --out-dir "$RUNNER_TEMP/forge-diagnostics"
+
+      # The required post-drift snapshot is the only step between the failing
+      # command and its failure-only diagnostic rerun.
+      - name: Diagnose failed drift Gate 1 modules
+        if: failure()
+        run: python3 scripts/ci_diagnostics.py rerun "$RUNNER_TEMP/forge-diagnostics/drift-stderr.txt" --out-dir "$RUNNER_TEMP/forge-diagnostics"
+
+      - name: Audit provider stubs
+        if: always()
+        run: python3 scripts/ci_diagnostics.py stub-audit "$RUNNER_TEMP/provider-stubs" "$RUNNER_TEMP/forge-diagnostics/provider-launches.log"
+
+      - name: Upload drift summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: drift-summary
+          path: ${{ runner.temp }}/drift-summary.json
+          if-no-files-found: ignore
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: drift-diagnostics
+          path: ${{ runner.temp }}/forge-diagnostics
+          if-no-files-found: ignore
+          retention-days: 14

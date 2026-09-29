@@ -6,13 +6,14 @@ on:
   pull_request:
   schedule:
     - cron: "23 5 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   gates:
-    name: forge gates (tests, conformance, evals, drift)
+    name: forge gates (tests, conformance, evals)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -32,12 +33,23 @@ jobs:
       - name: Install gate tooling (mypy, pinned to the tracked type baseline's checker)
         run: python3 -m pip install --quiet mypy==2.3.1
 
-      - name: Install provider CLIs (pinned; no credentials)
+      - name: Verify provider CLI versions (pinned; no credentials)
         run: |
           # CI stays unauthenticated; hermetic tests never contact real providers.
-          npm install -g --no-fund --no-audit @anthropic-ai/claude-code@2.1.283 @openai/codex@0.155.1
-          claude --version
-          codex --version
+          npm install --prefix "$RUNNER_TEMP/provider-cli" --no-fund --no-audit @anthropic-ai/claude-code@2.1.283 @openai/codex@0.155.1
+          "$RUNNER_TEMP/provider-cli/node_modules/.bin/claude" --version
+          "$RUNNER_TEMP/provider-cli/node_modules/.bin/codex" --version
+
+      - name: Install fail-loud provider stubs
+        run: |
+          python3 scripts/ci_diagnostics.py install-stubs "$RUNNER_TEMP/provider-stubs" "$RUNNER_TEMP/forge-diagnostics/provider-launches.log"
+          echo "$RUNNER_TEMP/provider-stubs" >> "$GITHUB_PATH"
+
+      - name: Fingerprint environment and verify provider stubs
+        run: python3 scripts/ci_diagnostics.py fingerprint --out "$RUNNER_TEMP/forge-diagnostics/environment-fingerprint.txt" --expect-stubs "$RUNNER_TEMP/provider-stubs"
+
+      - name: Snapshot pre-gate1
+        run: python3 scripts/ci_diagnostics.py snapshot pre-gate1 --out-dir "$RUNNER_TEMP/forge-diagnostics"
 
       - name: Gate 1 — committed gate-1 policy cell (work-queue full discovery)
         run: |
@@ -46,6 +58,7 @@ jobs:
           # timeout, 65,536-byte output cap, fixed 1200 s bound) with `forge` as $0, so CI
           # exercises the same work-queue discovery the commit, merge, and drift gates run.
           python3 - <<'PY'
+          import os
           import subprocess
           import sys
           from pathlib import Path
@@ -60,6 +73,10 @@ jobs:
           result = run_bounded(["bash", "-c", cell, "forge"], cwd=Path.cwd(), timeout=1200)
           sys.stdout.buffer.write(result.output)
           sys.stdout.flush()
+          try:
+              (Path(os.environ["RUNNER_TEMP"]) / "forge-diagnostics/gate1-output.txt").write_bytes(result.output)
+          except OSError as exc:
+              print(f"gate-1: could not write diagnostic output: {exc}", file=sys.stderr)
           if result.timed_out:
               print("gate-1: cell exceeded the 1200-second fail-closed timeout", file=sys.stderr)
               raise SystemExit(2)
@@ -68,6 +85,14 @@ jobs:
               raise SystemExit(2)
           raise SystemExit(result.returncode)
           PY
+
+      - name: Diagnose failed Gate 1 modules
+        if: failure()
+        run: python3 scripts/ci_diagnostics.py rerun "$RUNNER_TEMP/forge-diagnostics/gate1-output.txt" --out-dir "$RUNNER_TEMP/forge-diagnostics"
+
+      - name: Snapshot post-gate1
+        if: always()
+        run: python3 scripts/ci_diagnostics.py snapshot post-gate1 --out-dir "$RUNNER_TEMP/forge-diagnostics"
 
       - name: Stack validations — every committed cell, python category (conformance and type baseline)
         run: |
@@ -94,29 +119,26 @@ jobs:
                   raise SystemExit(2)
           PY
 
+      - name: Snapshot post-stack
+        if: always()
+        run: python3 scripts/ci_diagnostics.py snapshot post-stack --out-dir "$RUNNER_TEMP/forge-diagnostics"
+
       - name: STRICT evals
         run: STRICT=1 bash scripts/forge/run-evals.sh
 
-      - name: Drift check (mechanical pass, reduced-signal CI mode)
-        env:
-          CLAUDE_PLUGIN_ROOT: ${{ github.workspace }}
-        run: |
-          set -o pipefail
-          # errexit-safe capture: GitHub's default shell is `bash -e {0}`, so a
-          # bare nonzero pipeline would abort the step before any status check.
-          # The summary is written outside the checkout: drift-check's
-          # worktree-clean check runs `git status --untracked-files=all`, so a
-          # tee target inside the worktree would dirty the tree it is auditing.
-          bash scripts/forge/drift-check.sh | tee "$RUNNER_TEMP/drift-summary.json" && status=0 || status=$?
-          # exit 2 is a drift-check failure; 0/1 (clean/findings) both pass CI —
-          # findings are the drift skill's concern, not a PR gate.
-          if [ "$status" -eq 2 ]; then exit 2; fi
-          exit 0
+      - name: Snapshot post-evals
+        if: always()
+        run: python3 scripts/ci_diagnostics.py snapshot post-evals --out-dir "$RUNNER_TEMP/forge-diagnostics"
 
-      - name: Upload drift summary
+      - name: Audit provider stubs
+        if: always()
+        run: python3 scripts/ci_diagnostics.py stub-audit "$RUNNER_TEMP/provider-stubs" "$RUNNER_TEMP/forge-diagnostics/provider-launches.log"
+
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: drift-summary
-          path: ${{ runner.temp }}/drift-summary.json
+          name: forge-diagnostics
+          path: ${{ runner.temp }}/forge-diagnostics
           if-no-files-found: ignore
+          retention-days: 14

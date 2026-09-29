@@ -19,6 +19,7 @@ JOURNAL_PATTERNS = ROOT / "scripts/forge/journal-patterns.py"
 NOW = "2026-08-11T12:00:00Z"
 CONFIG_WARNING = "forge: malformed drift-config — using defaults (cadence: 14d, retention: forever, event-retention: 400d)"
 STALE_WARNING = "forge: drift report stale — run /forge:drift"
+SUMMARY_KEYS = set("checks findings generated_at journal_patterns policy_sha schema_version status telemetry".split())
 REVIEWER_EVAL_TRIGGER_TABLE = """| control | path patterns |
 |---|---|
 | constitution | rules/** |
@@ -27,6 +28,23 @@ REVIEWER_EVAL_TRIGGER_TABLE = """| control | path patterns |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
 | model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |
 | commit-review-prompt | skills/commit/SKILL.md |"""
+
+
+def expected_telemetry(**overrides: object) -> dict[str, object]:
+    count_names = (
+        "assertion_advisory assertion_blocking assertion_waived eligible_commits "
+        "fast_allowed fast_denied_eligibility fast_denied_policy guard_denies "
+        "halt_events review_blocks review_cheap_findings review_final_findings user_skips"
+    ).split()
+    result: dict[str, object] = dict.fromkeys(count_names, 0)
+    result.update({
+        "available": False,
+        "event_prune": {"entries_removed": 0, "failure": "", "new_oldest_at": ""},
+        "window_end": "",
+        "window_start": "",
+    })
+    result.update(overrides)
+    return result
 
 
 def region(name: str, body: str) -> str:
@@ -172,18 +190,30 @@ rm -f -- "$lock_file"
         extra_env: dict[str, str] | None = None,
         script: Path = DRIFT_CHECK,
     ):
-        env = {
-            **os.environ,
-            "CLAUDE_PLUGIN_ROOT": str(self.plugin),
-            "FORGE_DRIFT_NOW": now,
-            "FORGE_EVAL_LOG": str(self.eval_log),
-        }
+        env = self.environment(now)
         if extra_env:
             env.update(extra_env)
         return subprocess.run(
             ["bash", str(script)],
             cwd=self.repo,
             env=env,
+            capture_output=True,
+            check=False,
+        )
+
+    def environment(self, now: str = NOW) -> dict[str, str]:
+        return {
+            **os.environ,
+            "CLAUDE_PLUGIN_ROOT": str(self.plugin),
+            "FORGE_DRIFT_NOW": now,
+            "FORGE_EVAL_LOG": str(self.eval_log),
+        }
+
+    def invoke_closed_stderr(self, script: Path = DRIFT_CHECK):
+        return subprocess.run(
+            ["bash", "-c", 'exec 2>&-; exec bash "$0"', str(script)],
+            cwd=self.repo,
+            env=self.environment(),
             capture_output=True,
             check=False,
         )
@@ -226,6 +256,13 @@ class DriftCheckTests(unittest.TestCase):
     def fixture(self, **kwargs: str) -> DriftFixture:
         return DriftFixture(self.temp, **kwargs)
 
+    def controlled_script(self, old: str, new: str, name: str) -> Path:
+        source = DRIFT_CHECK.read_text(encoding="utf-8")
+        self.assertEqual(source.count(old), 1)
+        target = self.temp / name
+        target.write_text(source.replace(old, new, 1), encoding="utf-8")
+        return target
+
     def assert_canonical(self, fixture: DriftFixture, result, now: str = NOW) -> dict:
         self.assertTrue(result.stdout.endswith(b"\n"), result.stdout)
         self.assertEqual(result.stdout.count(b"\n"), 1, result.stdout)
@@ -236,19 +273,7 @@ class DriftCheckTests(unittest.TestCase):
         )
         target = fixture.repo / ".forge/tmp/drift" / f"{now[:10]}.json"
         self.assertEqual(target.read_bytes(), result.stdout)
-        self.assertEqual(
-            set(parsed),
-            {
-                "checks",
-                "findings",
-                "generated_at",
-                "journal_patterns",
-                "policy_sha",
-                "schema_version",
-                "status",
-                "telemetry",
-            },
-        )
+        self.assertEqual(set(parsed), SUMMARY_KEYS)
         self.assertEqual(parsed["schema_version"], 1)
         for item in parsed["checks"]:
             self.assertEqual(set(item), {"check", "duration_ms", "outcome", "summary"})
@@ -256,29 +281,21 @@ class DriftCheckTests(unittest.TestCase):
             self.assertGreaterEqual(item["duration_ms"], 0)
         return parsed
 
+    def assert_command_failure(
+        self, fixture: DriftFixture, result,
+        failure: str = "gate-1-execution", check_name: str = "gate-1",
+        summary: str = "Gate 1 failed on clean tree",
+    ) -> dict:
+        self.assertEqual(result.returncode, 2, f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        parsed = self.assert_canonical(fixture, result)
+        self.assertEqual(parsed["status"], {"failure": failure, "state": "failed"})
+        failed = parsed["checks"][-1]
+        self.assertEqual((failed["check"], failed["outcome"], failed["summary"]),
+                         (check_name, "failed", summary))
+        return parsed
+
     def assert_empty_telemetry(self, value: dict) -> None:
-        self.assertEqual(
-            value,
-            {
-                "assertion_advisory": 0,
-                "assertion_blocking": 0,
-                "assertion_waived": 0,
-                "available": False,
-                "eligible_commits": 0,
-                "event_prune": {"entries_removed": 0, "failure": "", "new_oldest_at": ""},
-                "fast_allowed": 0,
-                "fast_denied_eligibility": 0,
-                "fast_denied_policy": 0,
-                "guard_denies": 0,
-                "halt_events": 0,
-                "review_blocks": 0,
-                "review_cheap_findings": 0,
-                "review_final_findings": 0,
-                "user_skips": 0,
-                "window_end": "",
-                "window_start": "",
-            },
-        )
+        self.assertEqual(value, expected_telemetry())
 
     def assert_empty_journal_patterns(
         self, value: dict, *, available: bool, failure: str
@@ -303,6 +320,19 @@ class DriftCheckTests(unittest.TestCase):
         for item in normalized["checks"]:
             item["duration_ms"] = 0
         return normalized
+
+    def assert_literal_summary(
+        self, summary: dict, checks: list[tuple[str, str, str]], status: dict) -> None:
+        expected_checks = [
+            {"check": name, "duration_ms": 0, "outcome": outcome, "summary": text}
+            for name, outcome, text in checks
+        ]
+        self.assertEqual(self.normalized_summary(summary), {
+            "checks": expected_checks, "findings": [],
+            "generated_at": NOW, "journal_patterns": summary["journal_patterns"],
+            "policy_sha": "<policy-sha>", "schema_version": 1, "status": status,
+            "telemetry": summary["telemetry"],
+        })
 
     def test_exit_zero_literal_shape_canonical_output_and_strict_inventory(self) -> None:
         for block_present in (False, True):
@@ -345,34 +375,101 @@ class DriftCheckTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     summary["telemetry"],
-                    {
-                        "assertion_advisory": 0,
-                        "assertion_blocking": 0,
-                        "assertion_waived": 0,
-                        "available": True,
-                        "eligible_commits": 0,
-                        "event_prune": {
-                            "entries_removed": 0,
-                            "failure": "",
-                            "new_oldest_at": "",
-                        },
-                        "fast_allowed": 0,
-                        "fast_denied_eligibility": 0,
-                        "fast_denied_policy": 0,
-                        "guard_denies": 0,
-                        "halt_events": 0,
-                        "review_blocks": 0,
-                        "review_cheap_findings": 0,
-                        "review_final_findings": 0,
-                        "user_skips": 0,
-                        "window_end": NOW,
-                        "window_start": "2026-07-01T00:00:00Z",
-                    },
+                    expected_telemetry(
+                        available=True,
+                        window_end=NOW,
+                        window_start="2026-07-01T00:00:00Z",
+                    ),
                 )
                 if block_present:
                     self.assertEqual(block.read_bytes(), marker)
                 else:
                     self.assertFalse(block.exists())
+
+    def test_gate_one_failure_reports_attributable_stderr_and_disabled_call_fails(self) -> None:
+        command = (
+            "printf 'tail-noise\\n'\n"
+            "printf 'gate-1 test_alpha: exit 1 ran 3 in 0.5s FAILED\\n'\n"
+            "printf 'gate-1: 2 modules, 3 tests, 1 workers, slot held, 1s running, 0s waiting for host pressure, FAILED\\n'\n"
+            "exit 1"
+        )
+        fixture = self.fixture(gate_one=f"```bash\n{command}\n```")
+
+        def assert_diagnostic(result: subprocess.CompletedProcess[bytes]) -> None:
+            self.assert_command_failure(fixture, result)
+            self.assertIn(b"kind=failure outcome=completed exit=1", result.stderr)
+            self.assertIn(b"gate-1 test_alpha: exit 1 ran 3 in 0.5s FAILED", result.stderr)
+            self.assertIn(b"gate-1: 2 modules,", result.stderr)
+            self.assertIn(b"tail-noise", result.stderr)
+            self.assertNotIn(b"gate-1 test_alpha", result.stdout)
+            self.assertNotIn(b"tail-noise", result.stdout)
+
+        assert_diagnostic(fixture.invoke())
+        call = '            report_command_failure("gate-1", gate_result)\n'
+        mutant = self.controlled_script(call, "", "drift-gate1-diagnostic-disabled.sh")
+        with self.assertRaises(AssertionError):
+            assert_diagnostic(fixture.invoke(script=mutant))
+
+    def test_gate_one_timeout_and_output_cap_report_distinct_kinds(self) -> None:
+        timeout_fixture = self.fixture(gate_one="```bash\nsleep 30\n```")
+        timeout_script = self.controlled_script(
+            "NON_MUTATION_TIMEOUT = 1200", "NON_MUTATION_TIMEOUT = 1",
+            "drift-command-timeout-controlled.sh")
+        timeout = timeout_fixture.invoke(script=timeout_script)
+        self.assert_command_failure(timeout_fixture, timeout)
+        self.assertIn(b"kind=timeout outcome=timed-out exit=none", timeout.stderr)
+
+        cap_fixture = DriftFixture(self.temp / "output-cap",
+            gate_one="```bash\npython3 -c 'import os; os.write(1, b\"x\" * 70000)'\n```")
+        capped = cap_fixture.invoke()
+        self.assert_command_failure(cap_fixture, capped)
+        self.assertIn(b"kind=output cap outcome=output-limit-exceeded exit=none", capped.stderr)
+        self.assertLess(len(capped.stderr), 12_288)
+
+    def test_gate_two_failure_reports_cell_and_tail(self) -> None:
+        fixture = self.fixture(
+            stack_validations="Fixture validation:\n\n```bash\necho broken-cell; exit 3\n```"
+        )
+        result = fixture.invoke()
+        self.assert_command_failure(
+            fixture, result, "gate-2-execution", "gate-2", "Gate 2 failed on clean tree"
+        )
+        self.assertIn(b"forge: drift gate-2 cell 1 failed on clean tree: kind=failure outcome=completed exit=3", result.stderr)
+        self.assertIn(b"forge: drift gate-2 cell 1 | broken-cell", result.stderr)
+
+    def test_hostile_failure_output_is_prefixed_sanitized_and_prefix_is_binding(self) -> None:
+        fixture = self.fixture(
+            gate_one="```bash\nprintf '::error::forged\\n\\033[2J\\n'; exit 1\n```"
+        )
+
+        def assert_safe(result: subprocess.CompletedProcess[bytes]) -> None:
+            self.assert_command_failure(fixture, result)
+            self.assertTrue(all(line.startswith(b"forge: drift gate-1")
+                                for line in result.stderr.splitlines()))
+            self.assertFalse(any(line.startswith(b"::") for line in result.stderr.splitlines()))
+            self.assertNotIn(b"\x1b", result.stderr)
+            self.assertIn(b"| ::error::forged", result.stderr)
+            self.assertIn(b"| ?[2J", result.stderr)
+
+        assert_safe(fixture.invoke())
+        mutant = self.controlled_script(
+            '        prefix = f"forge: drift {safe_label}"', '        prefix = ""',
+            "drift-prefix-disabled.sh")
+        with self.assertRaises(AssertionError):
+            assert_safe(fixture.invoke(script=mutant))
+
+    def test_closed_stderr_preserves_failure_and_exception_guard_is_binding(self) -> None:
+        fixture = self.fixture(gate_one="```bash\necho gate-one-failed; exit 1\n```")
+
+        def assert_preserved(result: subprocess.CompletedProcess[bytes]) -> None:
+            self.assert_command_failure(fixture, result)
+
+        assert_preserved(fixture.invoke_closed_stderr())
+        mutant = self.controlled_script(
+            "    except Exception:\n        return\n", "    except Exception:\n        raise\n",
+            "drift-stderr-guard-disabled.sh")
+        with self.assertRaises(AssertionError):
+            assert_preserved(fixture.invoke_closed_stderr(mutant))
 
     def test_recorded_baseline_pair_failure_is_labeled_without_fresh_review_claim(self) -> None:
         fixture = self.fixture()
@@ -755,27 +852,10 @@ class DriftCheckTests(unittest.TestCase):
         self.assert_empty_journal_patterns(
             summary["journal_patterns"], available=False, failure="not-run"
         )
-        self.assertEqual(
-            self.normalized_summary(summary),
-            {
-                "checks": [{
-                    "check": "worktree-clean",
-                    "duration_ms": 0,
-                    "outcome": "failed",
-                    "summary": "dirty worktree",
-                }],
-                "findings": [],
-                "generated_at": NOW,
-                "journal_patterns": summary["journal_patterns"],
-                "policy_sha": "<policy-sha>",
-                "schema_version": 1,
-                "status": {
-                    "dirty_paths": ["docs/spec.md", "scratch.txt"],
-                    "failure": "dirty-worktree",
-                    "state": "failed",
-                },
-                "telemetry": summary["telemetry"],
-            },
+        self.assert_literal_summary(
+            summary,
+            [("worktree-clean", "failed", "dirty worktree")],
+            {"dirty_paths": ["docs/spec.md", "scratch.txt"], "failure": "dirty-worktree", "state": "failed"},
         )
 
     def test_deleted_tracked_manifest_is_dirty_precondition_and_skips_evals(self) -> None:
@@ -791,27 +871,10 @@ class DriftCheckTests(unittest.TestCase):
         self.assert_empty_journal_patterns(
             summary["journal_patterns"], available=False, failure="not-run"
         )
-        self.assertEqual(
-            self.normalized_summary(summary),
-            {
-                "checks": [{
-                    "check": "worktree-clean",
-                    "duration_ms": 0,
-                    "outcome": "failed",
-                    "summary": "dirty worktree",
-                }],
-                "findings": [],
-                "generated_at": NOW,
-                "journal_patterns": summary["journal_patterns"],
-                "policy_sha": "<policy-sha>",
-                "schema_version": 1,
-                "status": {
-                    "dirty_paths": [".forge-manifest"],
-                    "failure": "dirty-worktree",
-                    "state": "failed",
-                },
-                "telemetry": summary["telemetry"],
-            },
+        self.assert_literal_summary(
+            summary,
+            [("worktree-clean", "failed", "dirty worktree")],
+            {"dirty_paths": [".forge-manifest"], "failure": "dirty-worktree", "state": "failed"},
         )
         self.assert_empty_telemetry(summary["telemetry"])
 
@@ -937,6 +1000,11 @@ class DriftCheckTests(unittest.TestCase):
             {"check": "invariant-sweep", "outcome": "failed", "summary": "runner failed"},
         )
         self.assertEqual(summary["status"], {"failure": "invariant-execution", "state": "failed"})
+        self.assertIn(
+            b"forge: drift invariant fixture invariant failed on clean tree: "
+            b"kind=failure outcome=completed exit=1",
+            result.stderr,
+        )
         self.assert_empty_telemetry(summary["telemetry"])
         self.assert_empty_journal_patterns(
             summary["journal_patterns"], available=False, failure="not-run"
@@ -948,21 +1016,10 @@ class DriftCheckTests(unittest.TestCase):
             ("gate-2", "passed", "1 validations passed"),
             ("invariant-sweep", "failed", "runner failed"),
         ]
-        self.assertEqual(
-            self.normalized_summary(summary),
-            {
-                "checks": [
-                    {"check": name, "duration_ms": 0, "outcome": outcome, "summary": text}
-                    for name, outcome, text in expected_checks
-                ],
-                "findings": [],
-                "generated_at": NOW,
-                "journal_patterns": summary["journal_patterns"],
-                "policy_sha": "<policy-sha>",
-                "schema_version": 1,
-                "status": {"failure": "invariant-execution", "state": "failed"},
-                "telemetry": summary["telemetry"],
-            },
+        self.assert_literal_summary(
+            summary,
+            expected_checks,
+            {"failure": "invariant-execution", "state": "failed"},
         )
 
     def test_direct_event_aggregation_dedupes_window_and_prunes_by_retention(self) -> None:
@@ -997,25 +1054,20 @@ class DriftCheckTests(unittest.TestCase):
         self.assertNotIn(b"telemetry.csv", result.stdout)
         self.assertEqual(
             summary["telemetry"],
-            {
-                "assertion_advisory": 0,
-                "assertion_blocking": 0,
-                "assertion_waived": 0,
-                "available": True,
-                "eligible_commits": 1,
-                "event_prune": {"entries_removed": 2, "failure": "", "new_oldest_at": "2025-08-12T00:00:00Z"},
-                "fast_allowed": 1,
-                "fast_denied_eligibility": 2,
-                "fast_denied_policy": 1,
-                "guard_denies": 4,
-                "halt_events": 2,
-                "review_blocks": 1,
-                "review_cheap_findings": 0,
-                "review_final_findings": 0,
-                "user_skips": 1,
-                "window_end": NOW,
-                "window_start": "2026-07-01T00:00:00Z",
-            },
+            expected_telemetry(
+                available=True,
+                eligible_commits=1,
+                event_prune={"entries_removed": 2, "failure": "", "new_oldest_at": "2025-08-12T00:00:00Z"},
+                fast_allowed=1,
+                fast_denied_eligibility=2,
+                fast_denied_policy=1,
+                guard_denies=4,
+                halt_events=2,
+                review_blocks=1,
+                user_skips=1,
+                window_end=NOW,
+                window_start="2026-07-01T00:00:00Z",
+            ),
         )
         retained = [json.loads(line) for line in event_path.read_text().splitlines()]
         self.assertEqual(retained[0]["at"], "2025-08-12T00:00:00Z")
@@ -1331,29 +1383,13 @@ class DriftCheckTests(unittest.TestCase):
                 self.assertEqual(summary["status"], {"state": "ok"})
                 self.assertEqual(
                     summary["telemetry"],
-                    {
-                        "assertion_advisory": 0,
-                        "assertion_blocking": 0,
-                        "assertion_waived": 0,
-                        "available": True,
-                        "eligible_commits": 1,
-                        "event_prune": {
-                            "entries_removed": 0,
-                            "failure": "event-prune-config",
-                            "new_oldest_at": "",
-                        },
-                        "fast_allowed": 0,
-                        "fast_denied_eligibility": 0,
-                        "fast_denied_policy": 0,
-                        "guard_denies": 0,
-                        "halt_events": 0,
-                        "review_blocks": 0,
-                        "review_cheap_findings": 0,
-                        "review_final_findings": 0,
-                        "user_skips": 0,
-                        "window_end": NOW,
-                        "window_start": "2026-07-01T00:00:00Z",
-                    },
+                    expected_telemetry(
+                        available=True,
+                        eligible_commits=1,
+                        event_prune={"entries_removed": 0, "failure": "event-prune-config", "new_oldest_at": ""},
+                        window_end=NOW,
+                        window_start="2026-07-01T00:00:00Z",
+                    ),
                 )
                 self.assertEqual(event_path.read_bytes(), original)
 
@@ -1484,6 +1520,11 @@ class DriftCheckTests(unittest.TestCase):
         result = fixture.invoke()
         self.assertEqual(result.returncode, 2, result.stderr.decode())
         self.assertNotIn(b"Traceback", result.stdout + result.stderr)
+        self.assertIn(
+            b"forge: drift gate-1 failed on clean tree: "
+            b"kind=launch failure outcome=none exit=none",
+            result.stderr,
+        )
         summary = self.assert_canonical(fixture, result)
         self.assertEqual(summary["status"], {"failure": "gate-1-execution", "state": "failed"})
         self.assertEqual(summary["findings"], [])
@@ -1620,29 +1661,9 @@ class DriftStalenessTests(unittest.TestCase):
         self.assertEqual(list(self.temp.iterdir()), [])
 
     def test_inert_in_git_repository_without_manifest(self) -> None:
-        for args in (
-            ("init", "-q"),
-            ("config", "user.name", "Drift Fixture"),
-            ("config", "user.email", "drift@example.invalid"),
-            ("config", "commit.gpgsign", "false"),
-        ):
-            result = subprocess.run(
-                ["git", *args],
-                cwd=self.temp,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-        (self.temp / "tracked.txt").write_text("committed\n", encoding="utf-8")
-        for args in (("add", "tracked.txt"), ("commit", "-qm", "initial")):
-            result = subprocess.run(
-                ["git", *args],
-                cwd=self.temp,
-                capture_output=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
-        nested = self.temp / "nested"
+        fixture = DriftFixture(self.temp)
+        (fixture.repo / ".forge-manifest").unlink()
+        nested = fixture.repo / "nested"
         nested.mkdir()
         result = subprocess.run(
             ["bash", str(DRIFT_STALENESS)],
@@ -1651,7 +1672,7 @@ class DriftStalenessTests(unittest.TestCase):
             capture_output=True,
             check=False,
         )
-        self.assertFalse((self.temp / ".forge-manifest").exists())
+        self.assertFalse((fixture.repo / ".forge-manifest").exists())
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, b"")
         self.assertEqual(result.stderr, b"")
