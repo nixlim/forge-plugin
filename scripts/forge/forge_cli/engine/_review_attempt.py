@@ -46,7 +46,7 @@ COMPLETION_KEYS = set(
 COMPLETION_ERRORS = frozenset(
     "events cap|stderr cap|not-logged-in|claude result error|verdict missing|verdict empty|"
     "verdict cap|verdict invalid|wrapper failure|abandoned|wrapper-lost|"
-    "cancelled".split("|")
+    "cancelled|claude init mismatch".split("|")
 )
 _COMPLETION_KEYS = COMPLETION_KEYS
 _COMPLETION_ERRORS = COMPLETION_ERRORS

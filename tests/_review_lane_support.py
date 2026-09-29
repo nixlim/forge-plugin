@@ -150,6 +150,48 @@ def _fake_source(
                   f"candidate: {{candidate}}\\n"
                   f"package: {{package}}\\n" + finding)
 
+        if mode == "bad-line":
+            print("this is not json", flush=True)
+            raise SystemExit(0)
+        if provider == "claude":
+            if mode == "missing-init":
+                raise SystemExit(0)
+            if mode == "result-first":
+                print(json.dumps({{"type": "result", "is_error": False,
+                                  "result": result}}), flush=True)
+                raise SystemExit(0)
+            permission_modes = [
+                sys.argv[index + 1]
+                for index, argument in enumerate(sys.argv[:-1])
+                if argument == "--permission-mode"
+                and sys.argv[index + 1]
+                and not sys.argv[index + 1].startswith("-")
+            ]
+            permission_mode = "bypassPermissions" \
+                if "--dangerously-skip-permissions" in sys.argv else "default"
+            if permission_mode == "default" and permission_modes:
+                position = -1 if mode == "permission-mode-last" else 0
+                permission_mode = permission_modes[position]
+            tools = sys.argv[sys.argv.index("--tools") + 1].split(",")
+            init = {{"type": "system", "subtype": "init", "model": "claude-init",
+                    "agents": ["fixture"], "permissionMode": permission_mode,
+                    "tools": tools}}
+            if mode == "wrong-mode":
+                init["permissionMode"] = (
+                    "default" if permission_mode != "default" else "bypassPermissions"
+                )
+            elif mode == "missing-mode":
+                del init["permissionMode"]
+            elif mode == "missing-tool":
+                init["tools"] = tools[:-1]
+            elif mode == "extra-tool":
+                init["tools"] = tools + ["UnexpectedTool"]
+            elif mode == "duplicate-tool":
+                init["tools"] = tools + tools[:1]
+            elif mode == "reordered-tools":
+                init["tools"] = list(reversed(tools))
+            print(json.dumps(init), flush=True)
+
         if mode in {{"fork-sleeper", "drop-descriptors"}}:
             child = subprocess.Popen(
                 [sys.executable, "-c", "import time; time.sleep(300)"],
@@ -164,9 +206,6 @@ def _fake_source(
         if mode == "nonzero":
             print("fake provider failed", file=sys.stderr)
             raise SystemExit(9)
-        if mode == "bad-line":
-            print("this is not json", flush=True)
-            raise SystemExit(0)
 
         if provider == "codex":
             if mode == "auth":
@@ -181,8 +220,6 @@ def _fake_source(
             print(json.dumps({{"type": "turn.completed"}}), flush=True)
             raise SystemExit(0)
 
-        print(json.dumps({{"type": "system", "subtype": "init",
-                           "model": "claude-init", "agents": ["fixture"]}}), flush=True)
         print(json.dumps({{"type": "assistant",
                            "message": {{"model": "claude-message"}}}}), flush=True)
         if mode == "auth":
@@ -215,7 +252,7 @@ def install_fake_provider(
 
     if provider not in {"codex", "claude"}:
         raise ValueError(f"unsupported fake provider: {provider}")
-    versions = {"codex": "codex-cli 0.155.0", "claude": "2.1.278 (Claude Code)"}
+    versions = {"codex": "codex-cli 0.155.0", "claude": "2.1.283 (Claude Code)"}
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (executable_name or provider)
     path.write_text(

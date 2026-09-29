@@ -276,7 +276,7 @@ class ReviewFinalContentTests(unittest.TestCase):
 
         self.assertEqual(values["model"], "fable")
         self.assertEqual(values["effort"], "high")
-        self.assertEqual(tools, ["Read", "Bash", "Glob", "Grep", "LS"])
+        self.assertEqual(tools, ["Read", "Bash", "Glob", "Grep"])
         assert_markers_are_load_bearing(self, compact(REVIEW_FINAL), (
             "model and effort are committed-default compatibility metadata, not launch",
             "Forge passes the resolved route explicitly (FR-111/FR-246)",
@@ -378,7 +378,7 @@ class ClaudeRoleBodyContentTests(unittest.TestCase):
         ))
         planner = compact(CLAUDE_ROLE_BODIES["plan"])
         assert_markers_are_load_bearing(self, planner, (
-            "Read, Grep, Glob, and LS", "no Bash or write tool", "`read-only` sandbox",
+            "Read, Grep, and Glob", "no Bash or write tool", "`read-only` sandbox",
             "only in a run context", "never a commit-chain-bound planning pass", "exact file ownership",
             "required grammars and interfaces",
         ))
@@ -391,7 +391,7 @@ class ClaudeRoleBodyContentTests(unittest.TestCase):
         self.assertEqual(actual, expected)
         normalized = compact(reviewer)
         assert_markers_are_load_bearing(self, normalized, (
-            "Read, Grep, Glob, LS, and Bash", "`instruction-bounded` sandbox",
+            "Read, Grep, Glob, and Bash", "`instruction-bounded` sandbox",
             "full commit SHA", "forge-commit-candidate/2", "base_commit_oid", "tree_oid",
             "authorization_id", "review_diff_sha256", "git cat-file -t <tree_oid>",
             "absence of a commit SHA for kind (b) is not a finding", "exactly `PASS` or `BLOCK`",

@@ -518,7 +518,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         timed_out: bool = False,
         handoff: bytes | None = None,
         unsafe_handoff: bool = False,
-    ) -> None:
+    ) -> dict[str, object]:
         record = self.seed()
         self.publish(
             record,
@@ -535,6 +535,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         self.assertEqual(self.marker(record)["collected_status"], "failed")
         if error is not None:
             self.assertIn(error, result["caveats"])
+        return result
 
 
 def _failed_test(
@@ -543,14 +544,17 @@ def _failed_test(
     timed_out: bool = False,
     handoff: bytes | None = None,
     unsafe_handoff: bool = False,
+    summary: str | None = None,
 ):
     def test(self: LaunchCollectTests) -> None:
-        self.assert_failed_mapping(
+        result = self.assert_failed_mapping(
             error=error,
             timed_out=timed_out,
             handoff=handoff,
             unsafe_handoff=unsafe_handoff,
         )
+        if summary is not None:
+            self.assertEqual(result["summary"], summary)
 
     return test
 
@@ -561,6 +565,11 @@ for _name, _arguments in {
     "bad_line": {"error": "bad line 3"},
     "provider_exit": {"error": "provider exit 9"},
     "claude_result_error": {"error": "claude result error"},
+    "claude_init_mismatch": {
+        "error": "claude init mismatch",
+        "summary": "launch collect: failed; returncode none; error claude init "
+        "mismatch; timed_out false; handoff 0 bytes; observed_model none",
+    },
     "redaction_damage": {"error": "redaction damaged HOME"},
     "wrapper_failure": {"error": "wrapper failure"},
     "verdict_missing": {"error": "verdict missing"},

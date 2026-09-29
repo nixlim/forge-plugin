@@ -3,7 +3,7 @@
   "result_id": "fr230-phase-3-merge-transition",
   "slot": "merge-transition",
   "status": "PASS",
-  "subject_candidate_sha256": "645abc1d72d6a09fe152515bd1049c2a6bca204807b4fb7056edc56601936d51",
+  "subject_candidate_sha256": "00aaf79ca823880bbc4f0ca311169a61e6d706d40baa664d07a3b8b6a6e79d43",
   "command": [
     "python3",
     "-m",

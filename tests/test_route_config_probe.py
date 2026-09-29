@@ -129,7 +129,7 @@ printf '%s\\n' '{{"type":"result","is_error":false,"subtype":"success",\
                 "--system-prompt-file",
                 str(ROOT / "system/claude/prompts/plan.md"),
                 "--tools",
-                "Read,Grep,Glob,LS",
+                "Read,Grep,Glob",
                 "--permission-prompts",
                 "none",
             ],

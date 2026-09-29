@@ -474,6 +474,30 @@ class CommitReviewRecoveryAuditTests(unittest.TestCase):
         self.assertEqual(read.call_args.args[3], COLLECT.sha256_bytes(content))
         self.assertEqual(read.call_args.args[2], fake._apply_verdict.call_args.args[2])
 
+    def test_claude_init_mismatch_has_the_exact_synthetic_block_finding(self) -> None:
+        request, store = new_request(), _Store()
+        state, sentinel = reviewing(request), object()
+        fake = fake_engine(state, store)
+        fake._apply_verdict = mock.Mock(return_value=sentinel)
+        with mock.patch.object(
+            COLLECT, "_write_artifact", return_value="synthetic-verdict"
+        ) as write:
+            outcome = COLLECT._synthetic_block(
+                fake, state, request, "claude init mismatch"
+            )
+        expected = (
+            "no reviewer verdict — claude init mismatch; completion "
+            f"{request['completion_path']}"
+        )
+        self.assertIs(outcome, sentinel)
+        verdict = fake._apply_verdict.call_args.args[1]
+        self.assertEqual(
+            verdict["findings"], [{"severity": "MAJOR", "text": expected}]
+        )
+        self.assertIn(
+            f"finding: MAJOR {expected}\n".encode(), write.call_args.args[3]
+        )
+
 
 class _LockStore:
     def __init__(self, root: Path, order: list[str]) -> None:

@@ -235,6 +235,7 @@ class ReviewProcessGroupTests(unittest.TestCase):
     def prepare_wrapper(
         self, name: str, provider_argv: list[str], timeout: float = 5.0
     ) -> tuple[Path, int, dict[str, object]]:
+        provider_argv = [*provider_argv, "--tools", "Read"]
         attempt_dir = self.root / name
         attempt_dir.mkdir(mode=0o700)
         prompt = b"candidate: " + b"1" * 64 + b"\npackage: " + b"2" * 64 + b"\n"
@@ -379,7 +380,8 @@ if not (attempt / 'identity.json').is_file():
     raise SystemExit(23)
 pathlib.Path(sys.argv[2]).write_text('identity-first', encoding='ascii')
 sys.stdin.read()
-print(json.dumps({'type':'system','subtype':'init','model':'test-model'}), flush=True)
+print(json.dumps({'type':'system','subtype':'init','model':'test-model',
+                  'permissionMode':'default','tools':['Read']}), flush=True)
 print(json.dumps({'type':'result','is_error':False,'result':'VERDICT: PASS'}), flush=True)
 """
         provider_argv = [
@@ -447,7 +449,8 @@ print(json.dumps({'type':'result','is_error':False,'result':'VERDICT: PASS'}), f
         source = """
 import sys
 sys.stdin.read()
-print('{"type":"system","subtype":"init","model":"test-model"}', flush=True)
+print('{"type":"system","subtype":"init","model":"test-model",'
+      '"permissionMode":"default","tools":["Read"]}', flush=True)
 print('{"type":"result","is_error":false,"result":"VERDICT: PASS"}', flush=True)
 """
         provider_argv = [sys.executable, "-I", "-c", source]

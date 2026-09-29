@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 
-FLOORS = {"claude": (2, 1, 278), "codex": (0, 155, 0)}
+FLOORS = {"claude": (2, 1, 283), "codex": (0, 155, 0)}
 _VERSION_RE = re.compile(rb"(?<!\d)(\d+)\.(\d+)\.(\d+)(?!\d)")
 FloorRefusalKind = Literal[
     "unavailable", "timeout", "limit", "exit", "unparseable", "below"

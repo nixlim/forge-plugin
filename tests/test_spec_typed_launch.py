@@ -154,8 +154,9 @@ CONTROLS = {
         "forge: launch collect refused — wrapper-dead / child-alive for "
         "<execution-NN>; run launch cancel --repo <repo> --run-id <run> --execution "
         "<execution-NN>",
-        "`events cap`, `stderr cap`, `bad line N`, `provider exit N`, `claude result "
-        "error`, `redaction damaged <field>`, `wrapper failure`, `verdict missing`, "
+        "`events cap`, `stderr cap`, `bad line N`, `claude init mismatch`, `provider "
+        "exit N`, `claude result error`, `redaction damaged <field>`, `wrapper failure`, "
+        "`verdict missing`, "
         "`verdict empty`, `verdict cap`, `verdict invalid`",
         "`not-logged-in`",
         "forge: launch cancel refused — execution <execution-NN> has no launch_marker",
@@ -231,6 +232,16 @@ CONTROLS = {
         IMPLEMENTER_CELL,
         PLAN_CELL,
         PROFILE_SENTENCE,
+        "Attempt and completion records carry only the sorted admitted variable names, "
+        "never their values",
+        "Persisted provider output leaves passed values of `USER`, `LANG`, `LC_ALL`, "
+        "and `TERM` unchanged",
+        "the measured floors are Claude Code `>= 2.1.283` and codex-cli `>= 0.155.0`",
+        "Claude effort is not observable in the stream—the `init` event exposes only "
+        "`per_turn_effort_active`",
+        "the CLI does not reject an unknown `--effort` value; FR-244's route grammar "
+        "therefore closes the accepted effort set at resolution time",
+        "The lack of post-launch effort attestation is an accepted out-of-scope tradeoff",
         "Fixed profile timeouts are review 2400 seconds, implementer 14400 seconds, "
         "and plan 1200 seconds",
     ),

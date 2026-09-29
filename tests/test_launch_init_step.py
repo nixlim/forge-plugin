@@ -148,7 +148,7 @@ class LaunchInitStepTests(RouteConfigSupport, unittest.TestCase):
 
     def _install_passing_providers(self) -> None:
         self._install_provider("codex", version="codex-cli 0.155.0")
-        self._install_provider("claude", version="2.1.278 (Claude Code)")
+        self._install_provider("claude", version="2.1.283 (Claude Code)")
 
     def _provider_calls(self, provider: str) -> list[list[str]]:
         path = self.scratch / "provider-logs" / f"{provider}.jsonl"
@@ -221,7 +221,7 @@ class LaunchInitStepTests(RouteConfigSupport, unittest.TestCase):
 
     def test_probe_failure_stops_with_the_provider_diagnostic(self) -> None:
         self._install_provider("codex", version="codex-cli 0.155.0", mode="auth")
-        self._install_provider("claude", version="2.1.278 (Claude Code)")
+        self._install_provider("claude", version="2.1.283 (Claude Code)")
         manifest = self.repo / ".forge-manifest"
         manifest.write_bytes(b"init_completed: true\n")
         results = self._run_step5(self.repo)
@@ -258,7 +258,7 @@ class LaunchInitStepTests(RouteConfigSupport, unittest.TestCase):
 
     def test_below_floor_stops_before_any_provider_probe(self) -> None:
         self._install_provider("codex", version="codex-cli 0.154.9")
-        self._install_provider("claude", version="2.1.278 (Claude Code)")
+        self._install_provider("claude", version="2.1.283 (Claude Code)")
         results = self._run_step5(self.repo)
         self.assertEqual([result.returncode for result in results], [0, 0, 1])
         self.assertEqual(

@@ -187,7 +187,7 @@ def _claude_argv(spec: ProbeSpec, plugin_root: Path) -> tuple[str, ...]:
         "--output-format", "stream-json", "--verbose", "--model", spec.model,
         "--effort", spec.effort, "--system-prompt-file",
         str(plugin_root / "system" / "claude" / "prompts" / "plan.md"),
-        "--tools", "Read,Grep,Glob,LS", "--permission-prompts", "none",
+        "--tools", "Read,Grep,Glob", "--permission-prompts", "none",
     )
 
 

@@ -234,6 +234,11 @@ def _consume_stdout(state: dict[str, Any], chunk: bytes, *, final: bool = False)
         raw = bytes(buffer)
         buffer.clear()
         _persist_stdout_line(state, raw, False)
+    if final and state["error"] is None:
+        error = state["capture"].final_error()
+        if error is not None:
+            state["error"] = error
+            state["persisting"] = False
 
 
 def _consume_stderr(state: dict[str, Any], chunk: bytes, *, final: bool = False) -> None:
@@ -569,9 +574,8 @@ def _finalize(state: dict[str, Any]) -> None:
                 state.get("leaves", _DEFAULT_LEAVES)["staging"],
             )
         verdict, error, observed_model = captured
-    if error in {"timeout", "events cap", "stderr cap"} or (error or "").startswith(
-        "bad line "
-    ):
+    early_stop = {"timeout", "events cap", "stderr cap", "claude init mismatch"}
+    if error in early_stop or (error or "").startswith("bad line "):
         state["returncode"] = None
     if not _publish_result(state, error, verdict, observed_model):
         return

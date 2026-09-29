@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -30,6 +31,14 @@ def _alive(pid: int) -> bool:
     except OSError:
         return False
     return WRAPPER.parse_proc_stat(data)[0] != "Z"
+
+
+@dataclass(frozen=True)
+class WrapperLaunchOptions:
+    wrapper_source: str | None = None
+    emit_claude_init: bool = True
+    claude_init: dict[str, object] | None = None
+    claude_options: tuple[str, ...] = ("--tools", "Read,Grep")
 
 
 class WrapperHarness(unittest.TestCase):
@@ -61,8 +70,9 @@ class WrapperHarness(unittest.TestCase):
         settings: tuple[str, float] = ("claude", 5.0),
         arguments: tuple[str, ...] = (),
         environment: dict[str, str] | None = None,
-        wrapper_source: str | None = None,
+        options: WrapperLaunchOptions | None = None,
     ) -> tuple[subprocess.Popen[bytes], Path]:
+        selected = options or WrapperLaunchOptions()
         provider, timeout = settings
         attempt = self.root / name
         attempt.mkdir(mode=0o700)
@@ -71,6 +81,32 @@ class WrapperHarness(unittest.TestCase):
         prompt_path.write_bytes(prompt)
         prompt_path.chmod(0o600)
         argv = [sys.executable, "-I", "-c", source, *arguments]
+        if provider == "claude":
+            if not selected.claude_options:
+                raise ValueError("Claude harness needs a --tools profile")
+            event = selected.claude_init if selected.claude_init is not None else {
+                "type": "system",
+                "subtype": "init",
+                "model": "fixture-model",
+                "permissionMode": "default",
+                "tools": ["Read", "Grep"],
+            }
+            prelude = (
+                "import json as _forge_json, sys as _forge_sys\n"
+                f"_forge_sys.argv = _forge_sys.argv[:-{len(selected.claude_options)}]\n"
+            )
+            if selected.emit_claude_init:
+                prelude += (
+                    f"print(_forge_json.dumps({event!r}), flush=True)\n"
+                )
+            argv = [
+                sys.executable,
+                "-I",
+                "-c",
+                prelude + source,
+                *arguments,
+                *selected.claude_options,
+            ]
         child_environment = environment or {}
         config = {
             "attempt": f"attempt-{len(self.processes) + 1:016x}",
@@ -93,7 +129,7 @@ class WrapperHarness(unittest.TestCase):
                     sys.executable,
                     "-I",
                     "-c",
-                    wrapper_source or WRAPPER.wrapper_source(),
+                    selected.wrapper_source or WRAPPER.wrapper_source(),
                     str(descriptor),
                     json.dumps(config, sort_keys=True, separators=(",", ":")),
                 ],
@@ -316,6 +352,7 @@ class ReviewLaunchStreamTests(WrapperHarness):
                     source,
                     settings=(provider, 5.0),
                     environment={"CANARY": "not-json"},
+                    options=WrapperLaunchOptions(emit_claude_init=False),
                 )
                 completion = self.completion(process, attempt)
                 self.assertEqual(completion["error"], "bad line 1")
@@ -323,6 +360,237 @@ class ReviewLaunchStreamTests(WrapperHarness):
                 self.assertEqual(
                     (attempt / "events.jsonl").read_bytes(), b"<redacted:CANARY>\n"
                 )
+
+    def test_claude_init_mismatches_stop_early_with_the_closed_error(self) -> None:
+        valid = {
+            "type": "system",
+            "subtype": "init",
+            "model": "fixture-model",
+            "permissionMode": "default",
+            "tools": ["Read", "Grep"],
+        }
+        result_first = (
+            "import json,sys;sys.stdin.read();"
+            "print(json.dumps({'type':'result','is_error':False,"
+            "'result':'VERDICT: PASS'}),flush=True)"
+        )
+        cases = (
+            (
+                "wrong-mode",
+                "import time; time.sleep(300)",
+                True,
+                {**valid, "permissionMode": "default"},
+                ("--tools", "Read,Grep", "--dangerously-skip-permissions"),
+            ),
+            (
+                "missing-tool",
+                "import time; time.sleep(300)",
+                True,
+                {**valid, "tools": ["Read"]},
+                ("--tools", "Read,Grep"),
+            ),
+            (
+                "missing-init",
+                "pass",
+                False,
+                None,
+                ("--tools", "Read,Grep"),
+            ),
+            (
+                "result-first",
+                result_first,
+                False,
+                None,
+                ("--tools", "Read,Grep"),
+            ),
+        )
+        for label, source, emit, event, options in cases:
+            with self.subTest(case=label):
+                started = time.monotonic()
+                process, attempt = self.launch(
+                    f"init-{label}",
+                    source,
+                    options=WrapperLaunchOptions(
+                        emit_claude_init=emit,
+                        claude_init=event,
+                        claude_options=options,
+                    ),
+                )
+                completion = self.completion(process, attempt)
+                self.assertEqual(completion["error"], "claude init mismatch")
+                self.assertIsNone(completion["returncode"])
+                self.assertEqual(completion["verdict_size"], 0)
+                self.assertLess(time.monotonic() - started, 3.0)
+
+    def test_claude_init_checks_are_load_bearing_in_composed_source(self) -> None:
+        source = """
+import json, sys
+sys.stdin.read()
+print(json.dumps({'type':'result','is_error':False,
+                  'result':'VERDICT: PASS'}), flush=True)
+"""
+        invalid = {
+            "type": "system",
+            "subtype": "init",
+            "permissionMode": "default",
+            "tools": ["Read", "Grep"],
+        }
+
+        def assert_rejected(label: str, wrapper_source: str | None = None) -> None:
+            process, attempt = self.launch(
+                label,
+                source,
+                options=WrapperLaunchOptions(
+                    wrapper_source=wrapper_source,
+                    claude_init=invalid,
+                    claude_options=(
+                        "--tools",
+                        "Read,Grep",
+                        "--dangerously-skip-permissions",
+                    ),
+                ),
+            )
+            completion = self.completion(process, attempt)
+            self.assertEqual(completion["error"], "claude init mismatch")
+
+        assert_rejected("init-composed")
+        wrapper_source = WRAPPER.wrapper_source()
+        anchor = "    return None if valid else CLAUDE_INIT_MISMATCH\n"
+        self.assertEqual(wrapper_source.count(anchor), 1)
+        disabled = wrapper_source.replace(anchor, "    return None\n", 1)
+        with self.assertRaises(AssertionError):
+            assert_rejected("init-composed-disabled", disabled)
+
+    def test_claude_argv_guards_are_load_bearing_in_composed_source(self) -> None:
+        cases = (
+            (
+                "duplicate-permission-same",
+                ("--permission-mode", "acceptEdits", "--permission-mode",
+                 "acceptEdits", "--tools", "Read,Grep"),
+            ),
+            (
+                "duplicate-permission-different",
+                ("--permission-mode", "acceptEdits", "--permission-mode",
+                 "default", "--tools", "Read,Grep"),
+            ),
+            (
+                "missing-permission-value",
+                ("--tools", "Read,Grep", "--permission-mode"),
+            ),
+            (
+                "empty-permission-value",
+                ("--permission-mode", "", "--tools", "Read,Grep"),
+            ),
+            (
+                "short-flag-permission-value",
+                ("--permission-mode", "-p", "--tools", "Read,Grep"),
+            ),
+            ("missing-tools-value", ("--tools",)),
+            ("empty-tools-value", ("--tools", "")),
+            ("short-flag-tools-value", ("--tools", "-p")),
+        )
+
+        def assert_configuration_failure(
+            label: str,
+            claude_options: tuple[str, ...],
+            wrapper_source: str | None = None,
+        ) -> None:
+            process, attempt = self.launch(
+                label,
+                "pass",
+                options=WrapperLaunchOptions(
+                    wrapper_source=wrapper_source,
+                    claude_options=claude_options,
+                ),
+            )
+            completion = self.completion(process, attempt)
+            identity = json.loads(
+                (attempt / "identity.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(completion["error"], "wrapper failure")
+            self.assertIsNone(identity["reviewer_pid"])
+
+        wrapper_source = WRAPPER.wrapper_source()
+        anchor = '''def _claude_flag_value(
+    argv: list[str], flag: str, *, required: bool
+) -> str | None:
+    count = argv.count(flag)
+    if count > 1 or (required and count != 1):
+        raise ValueError("launch configuration")
+    if count == 0:
+        return None
+    index = argv.index(flag) + 1
+    if index >= len(argv) or not argv[index] or argv[index].startswith("-"):
+        raise ValueError("launch configuration")
+    return argv[index]
+'''
+        replacement = '''def _claude_flag_value(
+    argv: list[str], flag: str, *, required: bool
+) -> str | None:
+    if flag not in argv:
+        return None
+    index = argv.index(flag) + 1
+    if index >= len(argv) or not argv[index] or argv[index].startswith("-"):
+        return "Read,Grep" if flag == "--tools" else "acceptEdits"
+    return argv[index]
+'''
+        self.assertEqual(wrapper_source.count(anchor), 1)
+        disabled = wrapper_source.replace(anchor, replacement, 1)
+        for label, claude_options in cases:
+            with self.subTest(case=label):
+                assert_configuration_failure(label, claude_options)
+                with self.assertRaises(AssertionError):
+                    assert_configuration_failure(
+                        f"{label}-disabled", claude_options, disabled
+                    )
+
+    def test_missing_claude_init_check_is_load_bearing_in_memory(self) -> None:
+        expectation = ("default", ("Read",))
+
+        def assert_missing() -> None:
+            self.assertEqual(
+                WRAPPER._EventCapture([], expectation).final_error(),
+                "claude init mismatch",
+            )
+
+        assert_missing()
+        with (
+            mock.patch.object(WRAPPER._EventCapture, "final_error", return_value=None),
+            self.assertRaises(AssertionError),
+        ):
+            assert_missing()
+
+    def test_missing_claude_init_check_is_load_bearing_in_composed_source(self) -> None:
+        def assert_missing_rejected(
+            label: str, wrapper_source: str | None = None
+        ) -> None:
+            process, attempt = self.launch(
+                label,
+                "pass",
+                options=WrapperLaunchOptions(
+                    wrapper_source=wrapper_source,
+                    emit_claude_init=False,
+                ),
+            )
+            completion = self.completion(process, attempt)
+            self.assertEqual(completion["error"], "claude init mismatch")
+
+        assert_missing_rejected("init-missing-composed")
+        wrapper_source = WRAPPER.wrapper_source()
+        anchor = (
+            "    def final_error(self) -> str | None:\n"
+            "        if self.claude_init is not None and self.line == 0:\n"
+            "            return CLAUDE_INIT_MISMATCH\n"
+            "        return None\n"
+        )
+        replacement = (
+            "    def final_error(self) -> str | None:\n"
+            "        return None\n"
+        )
+        self.assertEqual(wrapper_source.count(anchor), 1)
+        disabled = wrapper_source.replace(anchor, replacement, 1)
+        with self.assertRaises(AssertionError):
+            assert_missing_rejected("init-missing-composed-disabled", disabled)
 
     def test_valid_json_precedes_raw_redaction_when_value_is_false(self) -> None:
         source = """
@@ -336,7 +604,7 @@ print(json.dumps({'type':'result','is_error':False,
         )
         completion = self.completion(process, attempt)
         self.assertIsNone(completion["error"])
-        event = json.loads((attempt / "events.jsonl").read_bytes())
+        event = json.loads((attempt / "events.jsonl").read_bytes().splitlines()[-1])
         self.assertIs(event["is_error"], False)
         self.assertEqual(event["result"], "VERDICT: PASS <redacted:CANARY>")
 

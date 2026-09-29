@@ -120,8 +120,8 @@ class RouteFloorTests(unittest.TestCase):
             ("codex", "0.154.9", "below", None),
             ("codex", "codex-cli 0.155.0", "at", "0.155.0"),
             ("codex", "0.155.1", "above", "0.155.1"),
-            ("claude", "2.1.277", "below", None),
-            ("claude", "2.1.278 (Claude Code)", "at", "2.1.278"),
+            ("claude", "2.1.282", "below", None),
+            ("claude", "2.1.283 (Claude Code)", "at", "2.1.283"),
             ("claude", "2.2.0", "above", "2.2.0"),
         )
         for index, (provider, output, relation, expected) in enumerate(cases):
@@ -141,6 +141,26 @@ class RouteFloorTests(unittest.TestCase):
                         ),
                         expected,
                     )
+
+    def test_claude_floor_refusal_and_control_are_load_bearing(self) -> None:
+        executable = self._version_executable(
+            "claude-immediate-below-floor", "2.1.282 (Claude Code)"
+        )
+        expected = (
+            "forge: launch refused — claude version 2.1.282 "
+            "is below required 2.1.283"
+        )
+
+        def assert_refusal() -> None:
+            refusal = self._refusal("claude", executable)
+            self.assertEqual(str(refusal), expected)
+
+        assert_refusal()
+        with (
+            mock.patch.dict(ROUTE_FLOOR.FLOORS, {"claude": (2, 1, 282)}),
+            self.assertRaises(AssertionError),
+        ):
+            assert_refusal()
 
     def test_limit_rejects_a_noninteger_value(self) -> None:
         arguments = ("codex", str(self.bin / "unused"), self.environment)
@@ -359,7 +379,7 @@ class RouteFloorTests(unittest.TestCase):
         self._executable(
             "claude",
             "import os\nassert os.environ['LANG'] == 'C'\n"
-            f"open({str(log)!r}, 'a').write('claude\\n')\nprint('2.1.278')",
+            f"open({str(log)!r}, 'a').write('claude\\n')\nprint('2.1.283')",
         )
         module, load, allowed = self._fake_route_config(
             ("codex", "claude", "codex"), environment

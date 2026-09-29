@@ -31,6 +31,7 @@ IDENTITY_SCHEMA = "forge-review-identity/1"
 EVENTS_LIMIT_BYTES, STDERR_LIMIT_BYTES = 16 * 1024 * 1024, 1024 * 1024
 VERDICT_LIMIT_BYTES, STREAM_DRAIN_SECONDS = 65_536, 1.0
 _TOP_EXTRACTOR_KEYS = frozenset("type subtype is_error result message modelUsage".split())
+CLAUDE_INIT_MISMATCH = "claude init mismatch"
 _EXTERNAL_TERM = False
 
 
@@ -183,9 +184,12 @@ def atomic_replace_json(directory: int, name: str, record: dict[str, object]) ->
     _publish(directory, name, (text + "\n").encode(), False)
 
 
+REDACTION_EXEMPT_NAMES = frozenset({"USER", "LANG", "LC_ALL", "TERM"})
+
+
 def _redaction_patterns(names: list[str]) -> Patterns:
     unique: dict[bytes, bytes] = {}
-    for name in sorted(names):
+    for name in sorted(set(names) - REDACTION_EXEMPT_NAMES):
         value = os.environ[name]
         replacement = f"<redacted:{name}>".encode()
         encoded = (json.dumps(value, ensure_ascii=True), json.dumps(value, ensure_ascii=False))
@@ -237,17 +241,29 @@ def _original_key(value: str, patterns: Patterns) -> str:
     return original
 
 
+def _protected_json_field(
+    scope: str, key: object, container: dict[object, object]
+) -> str | None:
+    field = None
+    if scope == "modelUsage":
+        field = "modelUsage"
+    elif scope == "message" and key == "model":
+        field = "model"
+    elif scope == "top":
+        if key in _TOP_EXTRACTOR_KEYS:
+            field = str(key)
+        elif container.get("subtype") == "init":
+            if key == "model":
+                field = "model"
+            elif key in {"permissionMode", "tools"}:
+                field = f"init.{key}"
+    return field
+
+
 def _protected_json_key(
     scope: str, key: object, container: dict[object, object]
 ) -> bool:
-    if scope == "modelUsage":
-        return True
-    if scope == "message":
-        return key == "model"
-    return scope == "top" and (
-        key in _TOP_EXTRACTOR_KEYS
-        or (key == "model" and container.get("subtype") == "init")
-    )
+    return _protected_json_field(scope, key, container) is not None
 
 
 def _redact_json(
@@ -256,7 +272,10 @@ def _redact_json(
     scope: str = "top",
 ) -> tuple[object, str | None]:
     if isinstance(value, str):
-        return _redact_text(value, patterns), None
+        redacted_text = _redact_text(value, patterns)
+        damaged = scope if scope in {"init.permissionMode", "init.tools"} \
+            and redacted_text != value else None
+        return redacted_text, damaged
     if isinstance(value, list):
         values = [_redact_json(item, patterns, scope) for item in value]
         return [item for item, _damage in values], next(
@@ -270,21 +289,24 @@ def _redact_json(
     for key, item in value.items():
         new_key = _redact_text(key, patterns) if isinstance(key, str) else key
         original_key = _original_key(key, patterns) if isinstance(key, str) else key
-        protected = _protected_json_key(scope, original_key, value)
+        protected_field = _protected_json_field(scope, original_key, value)
+        protected = protected_field is not None
         if protected and new_key != original_key:
-            damage = damage or (
-                "modelUsage" if scope == "modelUsage" else str(original_key)
-            )
+            damage = damage or protected_field
         if new_key in transformed and (
             protected or _protected_json_key(scope, origins[new_key], value)
         ):
             damaged_key = original_key if protected else origins[new_key]
-            damage = damage or str(damaged_key)
-        child_scope = (
-            str(original_key)
-            if scope == "top" and original_key in {"message", "modelUsage"}
-            else ""
-        )
+            damage = damage or _protected_json_field(scope, damaged_key, value)
+        child_scope = ""
+        if scope == "top" and original_key in {"message", "modelUsage"}:
+            child_scope = str(original_key)
+        elif (
+            scope == "top"
+            and value.get("subtype") == "init"
+            and original_key in {"permissionMode", "tools"}
+        ):
+            child_scope = f"init.{original_key}"
         transformed_item, child_damage = _redact_json(item, patterns, child_scope)
         transformed[new_key] = transformed_item
         origins[new_key] = original_key
@@ -292,9 +314,71 @@ def _redact_json(
     return transformed, damage
 
 
+def _claude_flag_value(
+    argv: list[str], flag: str, *, required: bool
+) -> str | None:
+    count = argv.count(flag)
+    if count > 1 or (required and count != 1):
+        raise ValueError("launch configuration")
+    if count == 0:
+        return None
+    index = argv.index(flag) + 1
+    if index >= len(argv) or not argv[index] or argv[index].startswith("-"):
+        raise ValueError("launch configuration")
+    return argv[index]
+
+
+def _claude_permission_mode(argv: list[str]) -> str:
+    bypass_count = argv.count("--dangerously-skip-permissions")
+    if bypass_count > 1:
+        raise ValueError("launch configuration")
+    explicit = _claude_flag_value(argv, "--permission-mode", required=False)
+    if bypass_count and explicit is not None:
+        raise ValueError("launch configuration")
+    if bypass_count:
+        return "bypassPermissions"
+    return explicit or "default"
+
+
+def _claude_init_expectation(argv: list[str]) -> tuple[str, tuple[str, ...]]:
+    permission_mode = _claude_permission_mode(argv)
+    tools_value = _claude_flag_value(argv, "--tools", required=True)
+    if tools_value is None:
+        raise ValueError("launch configuration")
+    tools = tuple(sorted(tools_value.split(",")))
+    if not tools or any(not tool for tool in tools) or len(tools) != len(set(tools)):
+        raise ValueError("launch configuration")
+    return permission_mode, tools
+
+
+def _claude_init_error(
+    event: dict[str, object], expectation: tuple[str, tuple[str, ...]]
+) -> str | None:
+    permission_mode, expected_tools = expectation
+    tools = event.get("tools")
+    valid_tools = (
+        isinstance(tools, list)
+        and all(isinstance(tool, str) for tool in tools)
+        and len(tools) == len(set(tools))
+        and set(tools) == set(expected_tools)
+    )
+    valid = (
+        event.get("type") == "system"
+        and event.get("subtype") == "init"
+        and event.get("permissionMode") == permission_mode
+        and valid_tools
+    )
+    return None if valid else CLAUDE_INIT_MISMATCH
+
+
 class _EventCapture:
-    def __init__(self, patterns: Patterns) -> None:
+    def __init__(
+        self,
+        patterns: Patterns,
+        claude_init: tuple[str, tuple[str, ...]] | None = None,
+    ) -> None:
         self.patterns = patterns
+        self.claude_init = claude_init
         self.line = 0
         self.result: dict[str, object] | None = None
         self.observed_model: str | None = None
@@ -339,16 +423,26 @@ class _EventCapture:
                 raise ValueError
         except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
             return raw + b"\n", f"bad line {self.line}"
+        init_error = (
+            _claude_init_error(event, self.claude_init)
+            if self.line == 1 and self.claude_init is not None
+            else None
+        )
         redacted, damaged = _redact_json(event, self.patterns)
         assert isinstance(redacted, dict)
         damaged = damaged or self._structural_damage(redacted)
         self._observe(redacted)
         text = json.dumps(redacted, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         too_long = self.observed_model and len(self.observed_model.encode()) > 4096
-        error = f"redaction damaged {damaged}" if damaged else (
+        error = init_error or (f"redaction damaged {damaged}" if damaged else (
             "verdict invalid" if too_long else None
-        )
+        ))
         return (text + "\n").encode(), error
+
+    def final_error(self) -> str | None:
+        if self.claude_init is not None and self.line == 0:
+            return CLAUDE_INIT_MISMATCH
+        return None
 
 
 def _read_leaf(directory: int, name: str, limit: int | None = None) -> bytes:
@@ -462,6 +556,9 @@ def _run(directory: int, config: dict[str, object]) -> None:
     if identity is None or identity["wrapper_birth"] is None:
         return
     argv, names, prompt, prompt_digest, leaves, events_existing = _launch_inputs(directory, config)
+    claude_init = (
+        _claude_init_expectation(argv) if config["provider"] == "claude" else None
+    )
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if config["provider"] == "codex":
         os.close(open_owner_regular(directory, leaves["staging"], flags))
@@ -483,7 +580,7 @@ def _run(directory: int, config: dict[str, object]) -> None:
         "child": None,
         "returncode": None,
         "error": None,
-        "capture": _EventCapture(patterns),
+        "capture": _EventCapture(patterns, claude_init),
         "stderr_raw": b"",
         "birth_identity": birth_identity,
         "replace_json": atomic_replace_json,

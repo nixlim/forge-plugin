@@ -46,6 +46,8 @@ marker = pathlib.Path(sys.argv[1])
 temporary = marker.with_name(marker.name + '.tmp')
 temporary.write_text(json.dumps([os.getpid(), child.pid]), encoding='ascii')
 os.replace(temporary, marker)
+print(json.dumps({"type": "system", "subtype": "init", "model": "guard-model",
+                  "permissionMode": "default", "tools": ["Read"]}), flush=True)
 if len(sys.argv) > 2 and sys.argv[2] == 'wrapper-crash':
     print('{"nested":' * 10000 + '0' + '}' * 10000, flush=True)
 time.sleep(300)
@@ -193,7 +195,15 @@ class ReviewLaneProcessGuardTests(unittest.TestCase):
         prompt_path = attempt / "prompt.txt"
         prompt_path.write_bytes(prompt)
         prompt_path.chmod(0o600)
-        argv = [sys.executable, "-I", "-c", provider_source, *provider_arguments]
+        argv = [
+            sys.executable,
+            "-I",
+            "-c",
+            provider_source,
+            *provider_arguments,
+            "--tools",
+            "Read",
+        ]
         config = {
             "attempt": f"attempt-{hashlib.sha256(label.encode()).hexdigest()[:16]}",
             "argv": argv,

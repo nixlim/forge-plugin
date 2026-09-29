@@ -12,6 +12,7 @@ import shutil
 import stat
 import subprocess
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -280,6 +281,60 @@ class LaunchVerbPreflightTests(_LaunchVerbSupport, unittest.TestCase):
 
 
 class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
+    def test_launch_fake_can_emit_either_duplicate_permission_precedence(self) -> None:
+        for mode, expected in (
+            ("permission-mode-first", "acceptEdits"),
+            ("permission-mode-last", "default"),
+        ):
+            with self.subTest(mode=mode):
+                executable = self.install_mode_provider("claude", mode)
+                process = subprocess.run(
+                    [
+                        str(executable),
+                        "--permission-mode", "",
+                        "--permission-mode", "-p",
+                        "--permission-mode", "acceptEdits",
+                        "--permission-mode", "default",
+                        "--tools", "Read,Grep",
+                        "--permission-mode",
+                    ],
+                    input=b"",
+                    capture_output=True,
+                    env=self.environment(),
+                    check=True,
+                )
+                init = json.loads(process.stdout.splitlines()[0])
+                self.assertEqual(init["permissionMode"], expected)
+                self.assertEqual(init["tools"], ["Read", "Grep"])
+
+    def test_claude_launch_handoff_preserves_user_paths_and_redacts_secrets(self) -> None:
+        home = "/home/agents/launch-fixture"
+        planted = "anthropic-launch-secret"
+        self.install_provider("claude", mode="redaction-handoff")
+        self.configure_route("plan", "claude")
+        with mock.patch.dict(
+            os.environ,
+            {"USER": "agents", "HOME": home, "ANTHROPIC_API_KEY": planted},
+        ):
+            self.launch_direct(
+                role="plan", engine=self.ready_engine(), worktree=self.repo
+            )
+        record = self.execution_records()[0]
+        completion_path = self.attempt_dir(record) / "completion.json"
+        deadline = time.monotonic() + 10
+        while not completion_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(completion_path.exists())
+        completion = json.loads(completion_path.read_text(encoding="utf-8"))
+        handoff = (self.attempt_dir(record) / "handoff.md").read_text(encoding="utf-8")
+        self.assertIsNone(completion["error"])
+        self.assertIn("agents/review-final.md", handoff)
+        self.assertIn("user=agents", handoff)
+        self.assertIn("home=<redacted:HOME>", handoff)
+        self.assertIn("planted=<redacted:ANTHROPIC_API_KEY>", handoff)
+        self.assertNotIn(home, handoff)
+        self.assertNotIn(planted, handoff)
+
     def test_owner_files_precede_record_and_record_binds_marker(self) -> None:
         engine = self.ready_engine()
         original = builders.execution_start

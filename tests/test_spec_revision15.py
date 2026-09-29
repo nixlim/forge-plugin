@@ -218,6 +218,13 @@ class SpecificationRevision15Tests(unittest.TestCase):
             "merge Option A",
             "CLAUDE_CODE_USE_BEDROCK=1",
             "base64, hex, split strings",
+            "The redaction-name set is exactly `environment_names` minus `USER`, "
+            "`LANG`, `LC_ALL`, and `TERM`",
+            "init.permissionMode",
+            "init.tools",
+            "Only after `_launch_inputs` has verified `argv_digest`",
+            "claude init mismatch",
+            "finding: MAJOR no reviewer verdict — claude init mismatch; completion <path>",
             "FR-060's Revision-15 headless-review amendment is likewise deferred for "
             "the legacy `/forge:worktree-merge` skill, which owns no Forge CLI merge "
             "chain and keeps its interactive review-final until it does; FR-234's CLI "
@@ -282,6 +289,57 @@ class SpecificationRevision15Tests(unittest.TestCase):
             "`--no-session-persistence` means the session is not persisted."
         )
         self.assertEqual(block.count(sentence), 1)
+
+    def test_fr245_floor_redaction_and_effort_gap_are_load_bearing(self) -> None:
+        literals = (
+            "Attempt and completion records carry only the sorted admitted variable "
+            "names, never their values.",
+            "Persisted provider output leaves passed values of `USER`, `LANG`, `LC_ALL`, "
+            "and `TERM` unchanged",
+            "the measured floors are Claude Code `>= 2.1.283` and codex-cli `>= 0.155.0`",
+            "Claude effort is not observable in the stream—the `init` event exposes "
+            "only `per_turn_effort_active`",
+            "the CLI does not reject an unknown `--effort` value; FR-244's route grammar "
+            "therefore closes the accepted effort set at resolution time",
+            "The lack of post-launch effort attestation is an accepted out-of-scope "
+            "tradeoff",
+        )
+
+        def assert_literals(text: str) -> None:
+            block = requirement_block(text, "FR-245")
+            for literal in literals:
+                self.assertIn(literal, block)
+
+        assert_literals(SPEC)
+        for literal in literals:
+            with self.subTest(literal=literal), self.assertRaises(AssertionError):
+                assert_literals(SPEC.replace(literal, "", 1))
+
+    def test_fr246_redaction_and_init_contracts_are_load_bearing(self) -> None:
+        literals = (
+            "The redaction-name set is exactly `environment_names` minus `USER`, "
+            "`LANG`, `LC_ALL`, and `TERM`",
+            "unless one equals a redacted-name value, in which case the redacted-name "
+            "pattern still redacts it",
+            "Only after `_launch_inputs` has verified `argv_digest`",
+            "Exactly one `--tools` and at most one `--permission-mode` may occur",
+            "`--dangerously-skip-permissions` may occur at most once and MUST NOT "
+            "coexist with `--permission-mode`",
+            "fails closed as `wrapper failure` before the reviewer starts",
+            "reordering is accepted, while a missing, extra, or duplicate tool is rejected",
+            "completes exactly with `claude init mismatch`",
+            "finding: MAJOR no reviewer verdict — claude init mismatch; completion <path>",
+        )
+
+        def assert_literals(text: str) -> None:
+            block = requirement_block(text, "FR-246")
+            for literal in literals:
+                self.assertIn(literal, block)
+
+        assert_literals(SPEC)
+        for literal in literals:
+            with self.subTest(literal=literal), self.assertRaises(AssertionError):
+                assert_literals(SPEC.replace(literal, "", 1))
 
     def test_dm018_new_lane_route_is_mandatory(self) -> None:
         block = requirement_block(SPEC, "DM-018")
@@ -350,6 +408,7 @@ class SpecificationRevision15Tests(unittest.TestCase):
             "<scratch>/last-message.txt -s read-only",
             "claude -p --safe-mode --strict-mcp-config --output-format "
             "stream-json --verbose",
+            '--tools "Read,Grep,Glob" --permission-prompts none',
             "Confirm that this model route is available and reply briefly.\\n",
             "only the FR-245 allowlisted environment",
             "<common-root>/.forge/tmp/route-probe/",

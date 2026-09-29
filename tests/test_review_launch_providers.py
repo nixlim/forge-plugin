@@ -6,18 +6,62 @@ import hashlib
 import importlib
 import json
 import stat
+import subprocess
 import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from tests._review_lane_support import ENGINE, ReviewLaneSupport
+from tests._review_lane_support import ENGINE, ReviewLaneSupport, review_prompt
 from tests.test_review_launch_streams import WrapperHarness
 
 LAUNCH = importlib.import_module("forge_cli.engine._review_launch")
+LAUNCH_LANE = importlib.import_module("forge_cli.engine._launch_lane")
 WRAPPER = importlib.import_module("forge_cli.engine._review_wrapper")
 WRAPPER_IO = importlib.import_module("forge_cli.engine._review_wrapper_io")
 ROUTE_CONFIG = LAUNCH.route_config
+
+CLAUDE_VALUE_FLAG_REFUSALS = (
+    (
+        "duplicate-permission-same",
+        ("claude", "--permission-mode", "acceptEdits", "--permission-mode",
+         "acceptEdits", "--tools", "Read"),
+    ),
+    (
+        "duplicate-permission-different",
+        ("claude", "--permission-mode", "acceptEdits", "--permission-mode",
+         "default", "--tools", "Read"),
+    ),
+    ("permission-value-at-end", ("claude", "--tools", "Read", "--permission-mode")),
+    ("permission-value-is-flag", ("claude", "--permission-mode", "--tools", "Read")),
+    (
+        "permission-value-empty",
+        ("claude", "--permission-mode", "", "--tools", "Read"),
+    ),
+    (
+        "permission-value-is-short-flag",
+        ("claude", "--permission-mode", "-p", "--tools", "Read"),
+    ),
+    ("tools-value-at-end", ("claude", "--tools")),
+    ("tools-value-empty", ("claude", "--tools", "")),
+    ("tools-value-is-short-flag", ("claude", "--tools", "-p")),
+    (
+        "tools-value-is-flag",
+        ("claude", "--tools", "--permission-mode", "acceptEdits"),
+    ),
+)
+CLAUDE_PERMISSION_FLAG_REFUSALS = (
+    (
+        "mixed-permission-controls",
+        ("claude", "--dangerously-skip-permissions", "--permission-mode",
+         "acceptEdits", "--tools", "Read"),
+    ),
+    (
+        "duplicate-bypass",
+        ("claude", "--dangerously-skip-permissions",
+         "--dangerously-skip-permissions", "--tools", "Read"),
+    ),
+)
 
 
 class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
@@ -241,6 +285,145 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
                         ],
                     )
 
+    def test_claude_init_contract_and_digest_order_cover_all_profiles(self) -> None:
+        paths = self.paths()
+        profiles = {
+            "review-cheap": (
+                LAUNCH.reviewer_argv("claude", "review-cheap", "fable", "high", paths),
+                "bypassPermissions",
+                {"Read", "Grep", "Glob", "Bash"},
+            ),
+            "review-final": (
+                LAUNCH.reviewer_argv("claude", "review-final", "fable", "high", paths),
+                "bypassPermissions",
+                {"Read", "Bash", "Glob", "Grep"},
+            ),
+            "implementer": (
+                list(
+                    LAUNCH_LANE.launch_argv(
+                        "claude",
+                        "implementer",
+                        "fable",
+                        "high",
+                        worktree=self.worktree,
+                        plugin_root=self.plugin_root,
+                        staging=self.attempt_dir / "handoff.staging",
+                    )
+                ),
+                "acceptEdits",
+                {"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
+            ),
+            "plan": (
+                list(
+                    LAUNCH_LANE.launch_argv(
+                        "claude",
+                        "plan",
+                        "fable",
+                        "high",
+                        worktree=self.worktree,
+                        plugin_root=self.plugin_root,
+                        staging=self.attempt_dir / "handoff.staging",
+                    )
+                ),
+                "default",
+                {"Read", "Grep", "Glob"},
+            ),
+        }
+        for role, (argv, expected_mode, expected_tools) in profiles.items():
+            with self.subTest(role=role):
+                expectation = WRAPPER._claude_init_expectation(argv)
+                self.assertEqual(expectation, (expected_mode, tuple(sorted(expected_tools))))
+                valid = {
+                    "type": "system",
+                    "subtype": "init",
+                    "permissionMode": expected_mode,
+                    "tools": list(reversed(sorted(expected_tools))),
+                }
+                _persisted, error = WRAPPER._EventCapture(
+                    [], expectation
+                ).line_bytes(json.dumps(valid).encode(), terminated=True)
+                self.assertIsNone(error)
+
+                invalid = (
+                    {"type": "result", "is_error": False, "result": "too early"},
+                    {**valid, "permissionMode": "wrong"},
+                    {key: value for key, value in valid.items() if key != "permissionMode"},
+                    {**valid, "tools": sorted(expected_tools)[:-1]},
+                    {**valid, "tools": [*sorted(expected_tools), "UnexpectedTool"]},
+                    {**valid, "tools": [*sorted(expected_tools), sorted(expected_tools)[0]]},
+                )
+                for event in invalid:
+                    capture = WRAPPER._EventCapture([], expectation)
+                    _persisted, error = capture.line_bytes(
+                        json.dumps(event).encode(), terminated=True
+                    )
+                    self.assertEqual(error, "claude init mismatch")
+                self.assertEqual(
+                    WRAPPER._EventCapture([], expectation).final_error(),
+                    "claude init mismatch",
+                )
+
+        argv, _mode, _tools = profiles["review-final"]
+        expectation = WRAPPER._claude_init_expectation(argv)
+        bad = {
+            "type": "system",
+            "subtype": "init",
+            "permissionMode": "default",
+            "tools": list(expectation[1]),
+        }
+
+        def assert_rejected() -> None:
+            _persisted, error = WRAPPER._EventCapture([], expectation).line_bytes(
+                json.dumps(bad).encode(), terminated=True
+            )
+            self.assertEqual(error, "claude init mismatch")
+
+        assert_rejected()
+        with (
+            mock.patch.object(WRAPPER, "_claude_init_error", return_value=None),
+            self.assertRaises(AssertionError),
+        ):
+            assert_rejected()
+        self._assert_claude_init_expectation_uses_only_digest_verified_argv()
+
+    def _assert_claude_init_expectation_uses_only_digest_verified_argv(self) -> None:
+        config = {"provider": "claude", "argv": ["unverified-config-argv"]}
+        identity = {"wrapper_birth": ("fixture-boot", 1)}
+        with (
+            mock.patch.object(WRAPPER, "_claim_identity", return_value=identity),
+            mock.patch.object(
+                WRAPPER,
+                "_launch_inputs",
+                side_effect=ValueError("argv digest"),
+            ),
+            mock.patch.object(WRAPPER, "_claude_init_expectation") as expectation,
+            self.assertRaisesRegex(ValueError, "argv digest"),
+        ):
+            WRAPPER._run(-1, config)
+        expectation.assert_not_called()
+
+        verified_argv = ["claude", "--tools", "Read"]
+        verified_inputs = (
+            verified_argv,
+            [],
+            b"prompt",
+            "a" * 64,
+            {},
+            False,
+        )
+        with (
+            mock.patch.object(WRAPPER, "_claim_identity", return_value=identity),
+            mock.patch.object(WRAPPER, "_launch_inputs", return_value=verified_inputs),
+            mock.patch.object(
+                WRAPPER,
+                "_claude_init_expectation",
+                side_effect=RuntimeError("expectation reached"),
+            ) as expectation,
+            self.assertRaisesRegex(RuntimeError, "expectation reached"),
+        ):
+            WRAPPER._run(-1, config)
+        expectation.assert_called_once_with(verified_argv)
+
     def test_review_final_body_is_derived_owner_only_and_digest_bound(self) -> None:
         source = self.plugin_root / "agents/review-final.md"
         source.parent.mkdir(parents=True)
@@ -353,7 +536,7 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
     def test_provider_version_probe_accepts_both_exact_floors(self) -> None:
         cases = (
             ("codex", "codex-cli 0.155.0", "0.155.0"),
-            ("claude", "2.1.278 (Claude Code)", "2.1.278"),
+            ("claude", "2.1.283 (Claude Code)", "2.1.283"),
         )
         for provider, output, expected in cases:
             with self.subTest(provider=provider):
@@ -384,9 +567,9 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
             ),
             (
                 "claude",
-                "2.1.277 (Claude Code)",
-                "forge: review request refused — claude version 2.1.277 "
-                "is below required 2.1.278",
+                "2.1.282 (Claude Code)",
+                "forge: review request refused — claude version 2.1.282 "
+                "is below required 2.1.283",
             ),
         )
         for provider, output, diagnostic in cases:
@@ -495,6 +678,126 @@ class ProviderAuthWrapperTests(WrapperHarness):
         with mock.patch.object(WRAPPER_IO, "_status_401", return_value=False):
             with self.assertRaises(AssertionError):
                 self.assertTrue(WRAPPER_IO._codex_auth_event(event.encode()))
+
+
+class ClaudeInitArgvTests(ReviewLaneSupport, unittest.TestCase):
+    def assert_launch_configuration_refused(self, argv: tuple[str, ...]) -> None:
+        with self.assertRaisesRegex(ValueError, "^launch configuration$"):
+            WRAPPER._claude_init_expectation(list(argv))
+
+    def test_expectation_refuses_ambiguous_and_missing_values(self) -> None:
+        cases = (*CLAUDE_VALUE_FLAG_REFUSALS, *CLAUDE_PERMISSION_FLAG_REFUSALS)
+        for label, argv in cases:
+            with self.subTest(case=label):
+                self.assert_launch_configuration_refused(argv)
+
+    def test_value_flag_guards_are_load_bearing_in_memory(self) -> None:
+        def unchecked_value(
+            argv: list[str], flag: str, *, required: bool
+        ) -> str | None:
+            del required
+            if flag not in argv:
+                return None
+            index = argv.index(flag) + 1
+            if index >= len(argv) or not argv[index] or argv[index].startswith("-"):
+                return "Read" if flag == "--tools" else "acceptEdits"
+            return argv[index]
+
+        for label, argv in CLAUDE_VALUE_FLAG_REFUSALS:
+            with self.subTest(case=label):
+                self.assert_launch_configuration_refused(argv)
+                with (
+                    mock.patch.object(
+                        WRAPPER, "_claude_flag_value", side_effect=unchecked_value
+                    ),
+                    self.assertRaises(AssertionError),
+                ):
+                    self.assert_launch_configuration_refused(argv)
+
+    def test_value_shape_checks_are_independently_load_bearing(self) -> None:
+        real_value = WRAPPER._claude_flag_value
+
+        def replacement(flag: str) -> str:
+            return "Read" if flag == "--tools" else "acceptEdits"
+
+        def allow_empty(
+            argv: list[str], flag: str, *, required: bool
+        ) -> str | None:
+            if flag in argv:
+                index = argv.index(flag) + 1
+                if index < len(argv) and not argv[index]:
+                    return replacement(flag)
+            return real_value(argv, flag, required=required)
+
+        def allow_short_flag(
+            argv: list[str], flag: str, *, required: bool
+        ) -> str | None:
+            if flag in argv:
+                index = argv.index(flag) + 1
+                if index < len(argv) and argv[index].startswith("-"):
+                    return replacement(flag)
+            return real_value(argv, flag, required=required)
+
+        cases = (
+            ("empty", allow_empty),
+            ("short-flag", allow_short_flag),
+        )
+        for marker, mutant in cases:
+            selected = (
+                (label, argv)
+                for label, argv in CLAUDE_VALUE_FLAG_REFUSALS
+                if marker in label
+            )
+            for label, argv in selected:
+                with self.subTest(case=label):
+                    self.assert_launch_configuration_refused(argv)
+                    with (
+                        mock.patch.object(
+                            WRAPPER, "_claude_flag_value", side_effect=mutant
+                        ),
+                        self.assertRaises(AssertionError),
+                    ):
+                        self.assert_launch_configuration_refused(argv)
+
+    def test_permission_ambiguity_guard_is_load_bearing_in_memory(self) -> None:
+        for label, argv in CLAUDE_PERMISSION_FLAG_REFUSALS:
+            with self.subTest(case=label):
+                self.assert_launch_configuration_refused(argv)
+                with (
+                    mock.patch.object(
+                        WRAPPER,
+                        "_claude_permission_mode",
+                        return_value="bypassPermissions",
+                    ),
+                    self.assertRaises(AssertionError),
+                ):
+                    self.assert_launch_configuration_refused(argv)
+
+    def test_review_fake_can_emit_either_duplicate_permission_precedence(self) -> None:
+        for mode, expected in (
+            ("permission-mode-first", "acceptEdits"),
+            ("permission-mode-last", "default"),
+        ):
+            with self.subTest(mode=mode):
+                executable = self.install_mode_provider("claude", mode)
+                process = subprocess.run(
+                    [
+                        str(executable),
+                        "--permission-mode", "",
+                        "--permission-mode", "-p",
+                        "--permission-mode", "acceptEdits",
+                        "--permission-mode", "default",
+                        "--tools", "Read,Grep",
+                        "--permission-mode",
+                    ],
+                    input=review_prompt(),
+                    capture_output=True,
+                    env=self.environment(),
+                    check=True,
+                )
+                init = json.loads(process.stdout.splitlines()[0])
+                self.assertEqual(init["permissionMode"], expected)
+                self.assertEqual(init["tools"], ["Read", "Grep"])
 
 
 class ReviewLaunchBoundaryTests(ReviewLaneSupport, unittest.TestCase):

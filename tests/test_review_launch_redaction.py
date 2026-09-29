@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 from tests._cli_loader import package_module
-from tests.test_review_launch_streams import WrapperHarness
+from tests.test_review_launch_streams import WrapperHarness, WrapperLaunchOptions
 
 LAUNCH = package_module("engine._review_launch")
 WRAPPER = package_module("engine._review_wrapper")
@@ -20,24 +20,87 @@ class ReviewLaunchRedactionTests(WrapperHarness):
         with mock.patch.dict(os.environ, values, clear=True):
             return WRAPPER._redaction_patterns(sorted(values))
 
-    def test_raw_and_every_json_escaped_split_offset_are_redacted(self) -> None:
-        values = {"CANARY": 'quote"line\nslash\\snow-雪'}
-        patterns = self.patterns(values)
-        replacement = b"<redacted:CANARY>"
-        expected_patterns = {pattern for pattern, marker in patterns if marker == replacement}
-        self.assertGreaterEqual(len(expected_patterns), 2)
-        redactor = WRAPPER._StreamRedactor(patterns)
-        self.assertEqual(
-            redactor.carry_limit,
-            max(len(pattern) for pattern in expected_patterns) - 1,
+    def test_credential_raw_and_json_forms_are_redacted_at_every_split(self) -> None:
+        values = {
+            "HOME": "/home/agents",
+            "ANTHROPIC_API_KEY": 'quote"line\nslash\\snow-雪',
+            "USER": "agents",
+        }
+
+        def assert_credential_redaction() -> None:
+            patterns = self.patterns(values)
+            self.assertNotIn(b"agents", {pattern for pattern, _marker in patterns})
+            for name in ("HOME", "ANTHROPIC_API_KEY"):
+                replacement = f"<redacted:{name}>".encode()
+                actual_patterns = {
+                    pattern for pattern, marker in patterns if marker == replacement
+                }
+                value = values[name]
+                expected_patterns = {
+                    value.encode(),
+                    json.dumps(value, ensure_ascii=True)[1:-1].encode(),
+                    json.dumps(value, ensure_ascii=False)[1:-1].encode(),
+                }
+                self.assertTrue(expected_patterns <= actual_patterns)
+                for pattern in expected_patterns:
+                    for offset in range(len(pattern) + 1):
+                        with self.subTest(name=name, pattern=pattern, offset=offset):
+                            redactor = WRAPPER._StreamRedactor(patterns)
+                            output = redactor.feed(b"left:" + pattern[:offset])
+                            output += redactor.feed(
+                                pattern[offset:] + b":right", final=True
+                            )
+                            self.assertEqual(
+                                output, b"left:" + replacement + b":right"
+                            )
+            self.assertEqual(
+                WRAPPER._StreamRedactor(patterns).carry_limit,
+                max(len(pattern) for pattern, _marker in patterns) - 1,
+            )
+
+        assert_credential_redaction()
+        exempt = WRAPPER.REDACTION_EXEMPT_NAMES | {"ANTHROPIC_API_KEY"}
+        with (
+            mock.patch.object(WRAPPER, "REDACTION_EXEMPT_NAMES", exempt),
+            self.assertRaises(AssertionError),
+        ):
+            assert_credential_redaction()
+
+    def test_exempt_value_equal_to_credential_value_is_still_redacted(self) -> None:
+        patterns = self.patterns(
+            {"USER": "shared-secret", "ANTHROPIC_API_KEY": "shared-secret"}
         )
-        for pattern in expected_patterns:
-            for offset in range(len(pattern) + 1):
-                with self.subTest(pattern=pattern, offset=offset):
-                    redactor = WRAPPER._StreamRedactor(patterns)
-                    output = redactor.feed(b"left:" + pattern[:offset])
-                    output += redactor.feed(pattern[offset:] + b":right", final=True)
-                    self.assertEqual(output, b"left:" + replacement + b":right")
+        output = WRAPPER._StreamRedactor(patterns).feed(b"shared-secret", final=True)
+        self.assertEqual(output, b"<redacted:ANTHROPIC_API_KEY>")
+
+    def test_exact_four_noncredential_values_survive_and_are_load_bearing(self) -> None:
+        values = {
+            "USER": "fixture-user",
+            "LANG": "en_US.UTF-8",
+            "LC_ALL": "en_GB.UTF-8",
+            "TERM": "xterm-fixture",
+        }
+        payload = "|".join(values.values()).encode()
+        expected = frozenset(values)
+        self.assertEqual(WRAPPER.REDACTION_EXEMPT_NAMES, expected)
+
+        def assert_survives() -> None:
+            patterns = self.patterns(values)
+            output = WRAPPER._StreamRedactor(patterns).feed(payload, final=True)
+            self.assertEqual(output, payload)
+
+        assert_survives()
+        for name in values:
+            with self.subTest(name=name):
+                with (
+                    mock.patch.object(
+                        WRAPPER,
+                        "REDACTION_EXEMPT_NAMES",
+                        expected - {name},
+                    ),
+                    self.assertRaises(AssertionError),
+                ):
+                    assert_survives()
 
     def test_longest_first_prevents_prefix_leakage(self) -> None:
         values = {"LONG": "shared-prefix-secret", "SHORT": "shared-prefix"}
@@ -47,25 +110,36 @@ class ReviewLaunchRedactionTests(WrapperHarness):
         self.assertEqual(output, b"<redacted:LONG> <redacted:SHORT>")
         self.assertNotIn(b"shared-prefix", output)
 
-    def test_recorded_agents_key_passes_but_extractor_key_fails_closed(self) -> None:
-        agents_patterns = [(b"agents", b"<redacted:USER>")]
-        capture = WRAPPER._EventCapture(agents_patterns)
+    def test_user_value_preserves_agents_path_but_extractor_key_fails_closed(self) -> None:
         event = {
             "type": "system",
             "subtype": "init",
             "model": "fixture-model",
             "agents": ["fixture"],
+            "path": "agents/review-final.md",
         }
         serialized = json.dumps(event).encode()
-        redacted = WRAPPER._StreamRedactor(agents_patterns).feed(serialized, final=True)
-        persisted, error = capture.line_bytes(redacted, terminated=True)
-        self.assertIsNone(error)
-        self.assertIn(b'"<redacted:USER>":["fixture"]', persisted)
+
+        def assert_survives() -> None:
+            patterns = self.patterns({"USER": "agents"})
+            persisted, error = WRAPPER._EventCapture(patterns).line_bytes(
+                serialized, terminated=True
+            )
+            self.assertIsNone(error)
+            self.assertIn(b'"agents":["fixture"]', persisted)
+            self.assertIn(b'"path":"agents/review-final.md"', persisted)
+
+        assert_survives()
+        without_user = WRAPPER.REDACTION_EXEMPT_NAMES - {"USER"}
+        with (
+            mock.patch.object(WRAPPER, "REDACTION_EXEMPT_NAMES", without_user),
+            self.assertRaises(AssertionError),
+        ):
+            assert_survives()
 
         type_patterns = [(b"type", b"<redacted:CANARY>")]
         capture = WRAPPER._EventCapture(type_patterns)
-        redacted = WRAPPER._StreamRedactor(type_patterns).feed(serialized, final=True)
-        _persisted, error = capture.line_bytes(redacted, terminated=True)
+        _persisted, error = capture.line_bytes(serialized, terminated=True)
         self.assertEqual(error, "redaction damaged type")
 
     def test_secret_inside_init_model_is_structural_damage_in_process(self) -> None:
@@ -92,6 +166,43 @@ class ReviewLaunchRedactionTests(WrapperHarness):
         ):
             assert_damage()
 
+    def test_claude_init_fields_are_validated_raw_then_protected_from_redaction(self) -> None:
+        expectation = ("default", ("Read", "Grep"))
+        event = {
+            "type": "system",
+            "subtype": "init",
+            "permissionMode": "default",
+            "tools": ["Grep", "Read"],
+        }
+        raw = json.dumps(event).encode()
+        value_cases = (
+            ([(b"default", b"<redacted:MODE>")], "init.permissionMode"),
+            ([(b"Read", b"<redacted:TOOL>")], "init.tools"),
+        )
+        for patterns, field in value_cases:
+            with self.subTest(field=field, shape="value"):
+                persisted, error = WRAPPER._EventCapture(
+                    patterns, expectation
+                ).line_bytes(raw, terminated=True)
+                self.assertEqual(error, f"redaction damaged {field}")
+                self.assertIn(b"<redacted:", persisted)
+
+        def assert_key_damage(key: str) -> None:
+            patterns = [(key.encode(), b"<redacted:KEY>")]
+            _persisted, error = WRAPPER._EventCapture(
+                patterns, expectation
+            ).line_bytes(raw, terminated=True)
+            self.assertEqual(error, f"redaction damaged init.{key}")
+
+        for key in ("permissionMode", "tools"):
+            with self.subTest(field=key, shape="key"):
+                assert_key_damage(key)
+        with (
+            mock.patch.object(WRAPPER, "_protected_json_field", return_value=None),
+            self.assertRaises(AssertionError),
+        ):
+            assert_key_damage("tools")
+
     def test_secret_inside_init_model_is_structural_damage_in_wrapper_source(self) -> None:
         secret = "admitted-model-secret"
         provider = """
@@ -106,7 +217,7 @@ print(json.dumps({'type':'system','subtype':'init',
                 name,
                 provider,
                 environment={"CANARY": secret},
-                wrapper_source=source,
+                options=WrapperLaunchOptions(wrapper_source=source),
             )
             completion = self.completion(process, attempt)
             events = (attempt / "events.jsonl").read_bytes()
@@ -122,8 +233,8 @@ print(json.dumps({'type':'system','subtype':'init',
         with self.assertRaises(AssertionError):
             assert_damage("damaged-model-source-disabled", disabled)
 
-    def test_non_extractor_key_collision_does_not_fail_closed(self) -> None:
-        patterns = [(b"agents", b"<redacted:USER>")]
+    def test_user_value_does_not_create_a_non_extractor_key_collision(self) -> None:
+        patterns = self.patterns({"USER": "agents"})
         event = {
             "type": "system",
             "subtype": "init",
@@ -132,12 +243,13 @@ print(json.dumps({'type':'system','subtype':'init',
             "<redacted:USER>": ["existing-key"],
         }
         serialized = json.dumps(event).encode()
-        redacted = WRAPPER._StreamRedactor(patterns).feed(serialized, final=True)
         persisted, error = WRAPPER._EventCapture(patterns).line_bytes(
-            redacted, terminated=True
+            serialized, terminated=True
         )
         self.assertIsNone(error)
-        self.assertEqual(json.loads(persisted)["<redacted:USER>"], ["existing-key"])
+        decoded = json.loads(persisted)
+        self.assertEqual(decoded["agents"], ["redacted-key"])
+        self.assertEqual(decoded["<redacted:USER>"], ["existing-key"])
 
     def test_json_escaped_value_inside_result_remains_extractable(self) -> None:
         secret = 'line\nquote"slash\\snow'

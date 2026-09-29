@@ -342,6 +342,24 @@ class AttemptFieldBindingTests(unittest.TestCase):
         ):
             assert_refused()
 
+    def test_claude_init_mismatch_is_a_load_bearing_completion_term(self) -> None:
+        completion = ATTEMPT.make_terminal_completion(
+            request(),
+            "claude init mismatch",
+            completed_at="2026-09-27T12:00:00Z",
+        )
+
+        def assert_admitted() -> None:
+            ATTEMPT._validate_completion_values(completion)
+
+        assert_admitted()
+        without_term = ATTEMPT._COMPLETION_ERRORS - {"claude init mismatch"}
+        with (
+            mock.patch.object(ATTEMPT, "_COMPLETION_ERRORS", without_term),
+            self.assertRaisesRegex(ATTEMPT.AttemptRecordError, "invalid error"),
+        ):
+            assert_admitted()
+
     def test_binding_rejects_foreign_attempt_even_after_unbound_read(self) -> None:
         completion = ATTEMPT.read_completion(self.descriptor)
         self.assertIsNotNone(completion)
