@@ -10,6 +10,8 @@ import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+from tests._git_env import quiet_repository, with_quiet_git
+
 ROOT = Path(__file__).resolve().parents[1]
 FORGE_SCRIPTS = ROOT / "scripts/forge"
 if str(FORGE_SCRIPTS) not in sys.path:
@@ -63,6 +65,7 @@ class RouteConfigSupport:
     ) -> subprocess.CompletedProcess[bytes]:
         environment = dict(os.environ)
         environment.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
+        environment = with_quiet_git(environment)
         return subprocess.run(
             ["git", "-C", str(repo), *arguments],
             env=environment,
@@ -74,6 +77,7 @@ class RouteConfigSupport:
         repo = self.scratch / name
         repo.mkdir()
         self.git(repo, "init", "-q")
+        quiet_repository(repo)
         self.git(repo, "config", "user.name", "Forge Tests")
         self.git(repo, "config", "user.email", "forge-tests@example.invalid")
         (repo / "README.md").write_text("fixture\n", encoding="utf-8")

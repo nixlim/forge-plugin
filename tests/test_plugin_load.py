@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests._git_env import init_quiet_repository
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -243,8 +245,9 @@ class PluginLoadContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             cwd = Path(temporary_directory)
+            result = init_quiet_repository(cwd)
+            self.assertEqual(result.returncode, 0, result.stderr)
             for args in (
-                ("init",),
                 ("config", "user.name", "Forge Tests"),
                 ("config", "user.email", "forge-tests@example.invalid"),
                 ("config", "commit.gpgsign", "false"),

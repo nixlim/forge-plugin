@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
+from tests._git_env import init_quiet_repository
 from tests._revision8_constants import RECORDED_AT, TOOLS
 
 from codex_orchestrator import batch, journal
@@ -24,7 +25,7 @@ class Revision8Support:
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.repo = self.root / "repo"
-        subprocess.run(["git", "init", "--quiet", str(self.repo)], check=True)
+        init_quiet_repository(self.repo, "--quiet").check_returncode()
         subprocess.run(
             [
                 "git",

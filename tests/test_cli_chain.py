@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 from tests import _review_lane_support as REVIEW_SUPPORT
+from tests._git_env import init_quiet_repository, with_quiet_git
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -360,10 +361,11 @@ class ForgeCLIFixture(unittest.TestCase):
         self.repo = self.temp_root / "repo"
         self.helpers = self.temp_root / "helpers"
         self.gate_log = self.temp_root / "gate.log"
-        self.repo.mkdir()
         self.helpers.mkdir()
         self._write_helpers()
-        self.git("init", "--quiet")
+        init_quiet_repository(
+            self.repo, "--quiet", environment=self.environment()
+        ).check_returncode()
         self.git("symbolic-ref", "HEAD", "refs/heads/fixture-main")
         (self.repo / "src").mkdir()
         (self.repo / "scripts").mkdir()
@@ -445,7 +447,7 @@ class ForgeCLIFixture(unittest.TestCase):
             "LC_ALL": "C",
         }
         environment.update(overrides)
-        return environment
+        return with_quiet_git(environment)
 
     def git(self, *args: str, input_text: str | None = None) -> str:
         return self.git_at(self.repo, *args, input_text=input_text)

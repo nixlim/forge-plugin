@@ -14,6 +14,7 @@ import threading
 from typing import Mapping
 
 from tests._cli_loader import package_module
+from tests._git_env import init_quiet_repository
 
 
 CANDIDATE = package_module("candidate")
@@ -94,7 +95,7 @@ class FreshEvalRepo:
     def __init__(self, *, fenced_oracle: bool = False) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="forge-fresh-test-repo-")
         self.root = Path(self.temporary.name)
-        self.git("init", "-q")
+        init_quiet_repository(self.root, "-q").check_returncode()
         self.git("config", "user.email", "forge@example.invalid")
         self.git("config", "user.name", "Forge Fresh Eval Test")
 

@@ -532,10 +532,12 @@ class RepoConformanceTests(unittest.TestCase):
     def fixture_repo(self) -> Path:
         import tempfile
 
+        from tests._git_env import init_quiet_repository
+
         temporary = tempfile.TemporaryDirectory()
         self._temporary_directories.append(temporary)
         repo = Path(temporary.name)
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        init_quiet_repository(repo, "--quiet").check_returncode()
         subprocess.run(
             ["git", "config", "user.name", "Forge Tests"], cwd=repo, check=True
         )

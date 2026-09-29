@@ -16,6 +16,9 @@ from pathlib import Path
 from types import ModuleType
 from unittest import mock
 
+from tests._git_env import init_quiet_repository
+from tests._worker_quiescence import wait_for_quiescence
+
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT_GUARD = ROOT / "scripts" / "forge" / "commit-guard.sh"
 MARKER_REASON = "forge: commit not authorized — run /forge:commit"
@@ -58,15 +61,7 @@ class CommitGuardTests(unittest.TestCase):
         self.init_repo(self.repo)
 
     def tearDown(self) -> None:
-        # Guard telemetry is deliberately detached from the primary denial.
-        # Do not remove a scratch checkout while its advisory worker is using it.
-        pending_dir = self.repo / ".forge/tmp"
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            pending = list(pending_dir.glob("decision-event-pending.*"))
-            if not pending:
-                break
-            time.sleep(0.01)
+        wait_for_quiescence(self.scratch)
         super().tearDown()
 
     def wait_for_decision_workers(self, *, timeout: float = 5) -> None:
@@ -99,12 +94,7 @@ class CommitGuardTests(unittest.TestCase):
         self.fail("decision-event worker did not write events.jsonl")
 
     def init_repo(self, path: Path) -> None:
-        subprocess.run(
-            ["git", "init", "--quiet", str(path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        init_quiet_repository(path, "--quiet").check_returncode()
         self.git("config", "user.name", "Forge Tests", cwd=path)
         self.git("config", "user.email", "forge-tests@example.invalid", cwd=path)
         self.git("symbolic-ref", "HEAD", "refs/heads/main", cwd=path)
@@ -1075,7 +1065,7 @@ class CommitGuardTests(unittest.TestCase):
         )
 
         unborn = self.scratch / "unborn"
-        self.git("init", "--quiet", str(unborn))
+        init_quiet_repository(unborn, "--quiet").check_returncode()
         self.git("symbolic-ref", "HEAD", "refs/heads/main", cwd=unborn)
         self.assert_allowed(
             self.invoke("printf '%s\\n' harmless", cwd=unborn)
@@ -2492,12 +2482,7 @@ class CommitGuardTests(unittest.TestCase):
         bare_parent = self.scratch / "bare parent"
         bare_parent.mkdir()
         bare_repo = bare_parent / "origin.git"
-        subprocess.run(
-            ["git", "init", "--bare", "--quiet", str(bare_repo)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        init_quiet_repository(bare_repo, "--bare", "--quiet").check_returncode()
         (bare_parent / "AGENT_HALT").write_text("bare pause\n", encoding="utf-8")
         self.assert_denied(
             self.invoke(f"git -C {shlex_quote(bare_repo)} push", cwd=self.scratch),

@@ -12,6 +12,7 @@ from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
 from unittest import mock
 
+from tests._git_env import init_quiet_repository
 from tests._revision9_coord_constants import TOOLS, key
 
 from codex_orchestrator import batch, builders, journal
@@ -27,7 +28,7 @@ class Revision9BuilderBatchSupport:
 
     def _new_repo(self, name: str) -> tuple[Path, str]:
         repo = Path(self.temporary.name) / name
-        subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+        init_quiet_repository(repo, "--quiet").check_returncode()
         subprocess.run(
             [
                 "git",

@@ -18,6 +18,8 @@ from pathlib import Path
 from types import ModuleType
 from unittest import mock
 
+from tests._git_env import init_quiet_repository
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
@@ -163,13 +165,12 @@ class MergeAdapterFixture(FIXTURE_SUPPORT.ForgeCLIFixture):
         self.git("commit", "--quiet", "-m", "configure merge fixture")
 
         self.origin = self.temp_root / "origin.git"
-        result = subprocess.run(
-            ["git", "init", "--bare", "--quiet", str(self.origin)],
+        result = init_quiet_repository(
+            self.origin,
+            "--bare",
+            "--quiet",
             cwd=self.temp_root,
-            env=self.environment(),
-            capture_output=True,
-            text=True,
-            check=False,
+            environment=self.environment(),
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.git("remote", "add", "origin", str(self.origin))
