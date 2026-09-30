@@ -13,9 +13,9 @@ import sys
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Sequence
+from typing import Callable, Iterable, Iterator, NoReturn, Sequence, cast
 
-from . import batch, journal
+from . import batch, close_law, journal
 from .chain_paths import chain_storage_root
 
 route_vocab = journal.route_vocab
@@ -6142,9 +6142,7 @@ def _verify_receipted_batch(
     """Bind an acknowledgement to the one durable FR-019 receipt and suffix."""
 
     run_binding = state.get("run_binding")
-    if not isinstance(run_binding, dict):
-        raise _binding_replay_refusal()
-    run_id = run_binding.get("run_id")
+    run_id = run_binding.get("run_id") if isinstance(run_binding, dict) else None
     if not isinstance(run_id, str) or not run_id:
         raise _binding_replay_refusal()
     run_dir = (
@@ -6155,51 +6153,71 @@ def _verify_receipted_batch(
     )
     try:
         with batch.batch_lock(run_dir, create=False) as locked:
-            receipts, _raw, _observation = (
-                batch._load_receipts_for_chain_replay(locked)
-            )
-            matches = [
-                receipt
-                for receipt in receipts
-                if receipt.get("idempotency_key")
-                == pending.get("idempotency_key")
-            ]
-            if len(matches) != 1:
-                raise _binding_replay_refusal()
-            receipt = matches[0]
-            batch.validate_pending_outbox_receipt(pending, receipt)
-            _, request_digest = batch.normalized_request(
+            _verify_receipted_batch_locked(
+                locked,
                 repository,
-                run_id,
-                "chain outbox-drain",
-                {
-                    "chain_id": chain_id,
-                    "source_event_digest": pending["source_event_digest"],
-                    "batch_digest": pending["batch_digest"],
-                    "record_count": pending["record_count"],
-                },
+                chain_id,
+                state,
+                pending,
+                carried_records,
+                acknowledgement,
             )
-            journal_records = batch._verify_receipt_journal(locked, receipt)
-            if (
-                receipt.get("request_sha256") != request_digest
-                or b"".join(
-                    journal._journal_line(record) for record in journal_records
-                )
-                != b"".join(
-                    journal._journal_line(record) for record in carried_records
-                )
-                or acknowledgement.get("receipt_digest")
-                != journal._sha256(
-                    journal._canonical_json_bytes(receipt) + b"\n"
-                )
-            ):
-                raise _binding_replay_refusal()
-    except journal.CoordinationRefusal as exc:
+    except (journal.CoordinationRefusal, OSError) as exc:
+        _raise_receipt_replay_error(exc)
+
+
+def _raise_receipt_replay_error(exc: BaseException) -> NoReturn:
+    if isinstance(exc, journal.CoordinationRefusal):
         if str(exc) == str(_binding_replay_refusal()):
-            raise
-        raise _binding_replay_refusal() from exc
-    except OSError as exc:
-        raise _binding_replay_refusal() from exc
+            raise exc
+    raise _binding_replay_refusal() from exc
+
+
+def _verify_receipted_batch_locked(
+    locked: batch.BatchLock,
+    repository: Path,
+    chain_id: str,
+    state: dict[str, object],
+    pending: dict[str, object],
+    carried_records: tuple[dict[str, object], ...],
+    acknowledgement: dict[str, object],
+) -> None:
+    try:
+        run_binding = state.get("run_binding")
+        run_id = run_binding.get("run_id") if isinstance(run_binding, dict) else None
+        if not isinstance(run_id, str) or run_id != locked.run_dir.name:
+            raise _binding_replay_refusal()
+        receipts, _raw, _observation = batch._load_receipts_for_chain_replay(locked)
+        matches = [
+            receipt for receipt in receipts
+            if receipt.get("idempotency_key") == pending.get("idempotency_key")
+        ]
+        if len(matches) != 1:
+            raise _binding_replay_refusal()
+        receipt = matches[0]
+        batch.validate_pending_outbox_receipt(pending, receipt)
+        _, request_digest = batch.normalized_request(
+            repository,
+            run_id,
+            "chain outbox-drain",
+            {
+                "chain_id": chain_id,
+                "source_event_digest": pending["source_event_digest"],
+                "batch_digest": pending["batch_digest"],
+                "record_count": pending["record_count"],
+            },
+        )
+        journal_records = batch._verify_receipt_journal(locked, receipt)
+        if (
+            receipt.get("request_sha256") != request_digest
+            or b"".join(journal._journal_line(record) for record in journal_records)
+            != b"".join(journal._journal_line(record) for record in carried_records)
+            or acknowledgement.get("receipt_digest")
+            != journal._sha256(journal._canonical_json_bytes(receipt) + b"\n")
+        ):
+            raise _binding_replay_refusal()
+    except (journal.CoordinationRefusal, OSError) as exc:
+        _raise_receipt_replay_error(exc)
 
 
 ReceiptVerifier = Callable[
@@ -8004,7 +8022,7 @@ def _optional_chain_lock(
     root_observation: journal.FileObservation | None = None,
 ) -> Iterator[None]:
     if "lock" in TERMINAL_CHAIN_CONTROLS:
-        with _chain_event_lock(
+        with close_law.chain_lock(_chain_event_lock)(
             chains_root,
             chain_id,
             root_descriptor=root_descriptor,
@@ -8591,7 +8609,8 @@ def _terminal_chain_guard(
             | bound_journal_chain_ids,
             key=os.fsencode,
         )
-        for chain_id in chain_ids:
+        receipt_check = close_law.receipt_verifier()
+        for chain_id in close_law.guard_chain_ids(chain_ids):
             with _optional_chain_lock(
                 chains_root,
                 chain_id,
@@ -8652,7 +8671,7 @@ def _terminal_chain_guard(
                             expected_run_id=None,
                             expected_task_id=None,
                             replay_only=True,
-                            allow_pending=True,
+                            allow_pending=True, receipt_verifier=receipt_check,
                         )
                     except journal.CoordinationRefusal as exc:
                         if str(exc) == JOURNAL_OUTBOX_PENDING:
@@ -8731,7 +8750,7 @@ def _terminal_chain_guard(
                                 },
                                 expected_run_id=run_id,
                                 expected_task_id=bound_task,
-                                allow_pending=True,
+                                allow_pending=True, receipt_verifier=receipt_check,
                             )
                         except journal.CoordinationRefusal as exc:
                             if str(exc) == JOURNAL_OUTBOX_PENDING:
@@ -8775,7 +8794,7 @@ def _terminal_chain_guard(
                             },
                             expected_run_id=run_id,
                             expected_task_id=bound_task,
-                            allow_pending=True,
+                            allow_pending=True, receipt_verifier=receipt_check,
                         )
                     except journal.CoordinationRefusal as exc:
                         if str(exc) == JOURNAL_OUTBOX_PENDING:
@@ -9667,34 +9686,9 @@ def run_close(
         return None
 
     def build(state: journal.RunState, _repository: Path) -> Sequence[dict[str, object]]:
-        validation = journal.validate_run(state.run_dir, gates=False)
-        projected = []
-        for line, prior in enumerate(state.records, start=1):
-            projected.append({**prior, "_line": line})
-        projected.append(
-            {
-                "type": "run_closed",
-                "judgment": judgment,
-                "_line": len(projected) + 1,
-            }
-        )
-        declaration = journal._legacy_compatibility_declaration(projected)
-        declaration_line = (
-            int(declaration["_line"])
-            if declaration is not None
-            and isinstance(declaration.get("_line"), int)
-            else None
-        )
-        journal.check_gate_profile(
-            projected,
-            validation["issues"],
-            validation["warnings"],
-            declaration_line,
-        )
-        validation["profile"] = "gates"
-        validation["ok"] = not validation["issues"]
+        validation = close_law.project_close(state.run_dir, state.records, judgment)
         if judgment == "passed" and not validation["ok"]:
-            raise journal.CoordinationRefusal(RUN_CLOSE_VALIDATION_REFUSAL)
+            raise journal.CoordinationRefusal(close_law.refusal_text(RUN_CLOSE_VALIDATION_REFUSAL, cast(Sequence[str], validation["issues"])))
         record = {
             "type": "run_closed",
             "judgment": judgment,

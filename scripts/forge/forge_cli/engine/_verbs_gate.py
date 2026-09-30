@@ -29,6 +29,9 @@ from forge_cli.engine._core import _record_process_step as _record_process_step
 from forge_cli.engine._core import _transition_state as _transition_state
 from forge_cli.engine._gate_checks import _current_test_paths as _current_test_paths
 from forge_cli.engine._gate_checks import (
+    _docs_class_skip_admitted as _docs_class_skip_admitted,
+)
+from forge_cli.engine._gate_checks import (
     _record_docs_class_gate_one_skip as _record_docs_class_gate_one_skip,
 )
 from forge_cli.engine._gate_checks import scan_added_secrets as scan_added_secrets
@@ -196,7 +199,7 @@ def gate_run(self, gate_id: str) -> Outcome:
         return self.scan_secrets(state=state, preflight=False)
     if gate_id == chain_core.FRESH_REVIEWER_EVALS_GATE:
         return self._run_fresh_reviewer_evals(state)
-    if gate_id == "gate-1" and chain_core._docs_class_candidate(state):
+    if gate_id == "gate-1" and _docs_class_skip_admitted(state):
         # A candidate whose every classified path is docs-class (the same
         # test the changelog gate applies) runs no test process; the skip is
         # recorded under the gate-1 ID so the chain evidence stays complete.

@@ -1099,17 +1099,17 @@ class Revision9IngestPredicateNegativeTests(
             journal.CoordinationRefusal
         ) as raised:
             builders.run_close(
-                self.repo,
-                prepared.run_id,
+                self.repo, prepared.run_id,
                 idempotency_key=key(f"{prepared.run_id}-passed-close"),
                 judgment="passed",
                 summary="This close must fail validation",
-                risks=[],
-                follow_ups=[],
+                risks=[], follow_ups=[],
             )
-        self.assertEqual(
-            str(raised.exception), builders.RUN_CLOSE_VALIDATION_REFUSAL
+        expected = builders.RUN_CLOSE_VALIDATION_REFUSAL + (
+            ": task 'task-01' has inconsistent bound candidate across gate "
+            "and landing records"
         )
+        self.assertEqual(str(raised.exception), expected)
         self.assertEqual(journal_path.read_bytes(), journal_before_close)
         self.assertEqual(receipts_path.read_bytes(), receipts_before_close)
         self.assertFalse(intent_path.exists())

@@ -361,11 +361,12 @@ The CLI path proceeds as follows:
    causes classification to run again.
 3. **Execute mechanical verification.** Run Gate 1 once for the candidate. When
    the classifier's own per-path evidence shows every staged path with exactly
-   the `docs` category, no control floor, and no trigger-path match, `verify`
-   instead records a `gate-1` skip with reason `docs-class candidate` and
-   launches no test process; that skip is not gate proof for a run-bound task,
-   and the docs-contract stack validation still runs. Then run the relevant
-   stack validations, the assertion sensor, commit invariants, and a secret
+   the `docs` category, no control floor, and no trigger-path match, a chain with
+   no run binding records a `gate-1` skip with reason `docs-class candidate` and
+   launches no test process. A run-bound chain instead runs Gate 1 once, including
+   for a docs-class candidate; the docs-contract stack validation still runs.
+   Then run the relevant stack validations, the assertion sensor, commit
+   invariants, and a secret
    scan of the exact review artifact. Control candidates additionally require
    strict baseline integrity and any applicable candidate-bound fresh reviewer
    evaluations. The two-consecutive-passes rule in Step 6 governs run-level

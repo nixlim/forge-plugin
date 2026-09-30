@@ -14,6 +14,18 @@ import hashlib
 import re
 
 
+RUN_BOUND_GATE_ONE_CONTROLS = frozenset({"run-bound-gate-one"})
+
+
+def _docs_class_skip_admitted(state: Mapping[str, Any]) -> bool:
+    """Whether this chain may replace Gate 1 with the docs-class skip."""
+
+    return chain_core._docs_class_candidate(state) and not (
+        "run-bound-gate-one" in RUN_BOUND_GATE_ONE_CONTROLS
+        and isinstance(state.get("run_binding"), Mapping)
+    )
+
+
 def _current_test_paths(
     ctx: chain_core.CommandContext, state: Mapping[str, Any] | None = None
 ) -> list[str]:
@@ -49,6 +61,17 @@ def _record_docs_class_gate_one_skip(
             "gate-1 docs-class skip refused: candidate is not docs-class",
             expected="every classified path carries only the docs category",
             observed=", ".join(str(path) for path in state.get("paths", [])),
+            remediation=chain_core._forge_command(state, "gate run gate-1"),
+            chain=state,
+        )
+    if (
+        "run-bound-gate-one" in RUN_BOUND_GATE_ONE_CONTROLS
+        and isinstance(state.get("run_binding"), Mapping)
+    ):
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            "gate-1 docs-class skip refused: a run-bound chain runs Gate 1",
+            expected="a chain with no run binding",
             remediation=chain_core._forge_command(state, "gate run gate-1"),
             chain=state,
         )

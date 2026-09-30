@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from codex_orchestrator.cli import main as upstream_main
-from codex_orchestrator import batch, builders
+from codex_orchestrator import batch, builders, close_law, close_preflight
 from codex_orchestrator.journal import (
     CoordinationRefusal,
     INVALID_JOURNAL_RECORD,
@@ -86,6 +86,7 @@ TYPED_SINGLETON_OPTIONS = frozenset(
         "--outcome",
         "--binding-chain",
         "--binding-id",
+        "--chain",
     }
 )
 
@@ -264,6 +265,11 @@ def _typed_parser() -> argparse.ArgumentParser:
     recovered = journal_subparsers.add_parser("batch-recover")
     recovered.add_argument("--repo", required=True)
     recovered.add_argument("--run-id", required=True)
+
+    preflight = journal_subparsers.add_parser("close-preflight")
+    preflight.add_argument("--repo", required=True)
+    preflight.add_argument("--run-id", required=True)
+    preflight.add_argument("--chain")
     return parser
 
 
@@ -274,7 +280,10 @@ def _typed_identity(parser: argparse.ArgumentParser) -> None:
 
 
 def _typed_main(argv: list[str]) -> int:
-    recovery = len(argv) >= 2 and argv[:2] == ["journal", "batch-recover"]
+    recovery = len(argv) >= 2 and argv[:2] in (
+        ["journal", "batch-recover"],
+        ["journal", "close-preflight"],
+    )
     refusal = _typed_singleton_refusal(argv, recovery=recovery)
     if refusal is not None:
         print(refusal, file=sys.stderr)
@@ -293,6 +302,8 @@ def _typed_main(argv: list[str]) -> int:
         from forge_cli import chain_core
 
         chain_core.register_coordination_seams()
+        if getattr(args, "journal_command", None) == "close-preflight":
+            return close_preflight.main(repo, args.run_id, chain=args.chain)
         if args.command == "run-open":
             outcome = builders.run_open(
                 repo,
@@ -407,6 +418,23 @@ def _typed_main(argv: list[str]) -> int:
                 binding_id=args.binding_id,
             )
         print(json.dumps(outcome.payload(), sort_keys=True, separators=(",", ":")))
+        if (
+            args.command == "run-close"
+            and args.judgment == "blocked"
+            and not outcome.repeated
+        ):
+            passed_issues = close_law.blocked_close_passed_issues()
+            for issue in passed_issues[:50]:
+                print(
+                    f"forge: notice — passed close would be refused: {issue}",
+                    file=sys.stderr,
+                )
+            if len(passed_issues) > 50:
+                print(
+                    "forge: notice — passed close would be refused: "
+                    f"(+{len(passed_issues) - 50} more; run journal close-preflight)",
+                    file=sys.stderr,
+                )
     except CoordinationRefusal as exc:
         print(str(exc), file=sys.stderr)
         return 1

@@ -276,8 +276,9 @@ inside one cell: each module is its own unittest process, pulled longest-first b
 300 seconds; both guards are no-ops where those paths do not exist. Measured on the
 shared twelve-core host at load 3 to 5: 102 modules, 2,031 tests, 335 to 350 seconds
 wall; it is not a promised speedup. A candidate whose every classified path is
-docs-class records a `gate-1` skip instead of running the cell (Revision 17); the
-docs-contract stack validation still runs the prose-contract modules for it.
+docs-class records a `gate-1` skip instead of running the cell only outside a run
+(Revision 18: a run-bound chain runs Gate 1); the docs-contract stack validation
+still runs the prose-contract modules for it.
 
 The Python entry point `scripts/forge/cli.py` is a compatibility shim over the
 implementation modules under `scripts/forge/forge_cli/`.
