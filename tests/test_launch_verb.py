@@ -307,14 +307,20 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
                 self.assertEqual(init["permissionMode"], expected)
                 self.assertEqual(init["tools"], ["Read", "Grep"])
 
-    def test_claude_launch_handoff_preserves_user_paths_and_redacts_secrets(self) -> None:
+    def test_claude_plan_redacts_handoff_and_validated_init_value_matches(self) -> None:
         home = "/home/agents/launch-fixture"
         planted = "anthropic-launch-secret"
         self.install_provider("claude", mode="redaction-handoff")
         self.configure_route("plan", "claude")
         with mock.patch.dict(
             os.environ,
-            {"USER": "agents", "HOME": home, "ANTHROPIC_API_KEY": planted},
+            {
+                "USER": "agents",
+                "HOME": home,
+                "ANTHROPIC_API_KEY": planted,
+                "AWS_PROFILE": "default",
+                "AWS_REGION": "Read",
+            },
         ):
             self.launch_direct(
                 role="plan", engine=self.ready_engine(), worktree=self.repo
@@ -327,7 +333,15 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
         self.assertTrue(completion_path.exists())
         completion = json.loads(completion_path.read_text(encoding="utf-8"))
         handoff = (self.attempt_dir(record) / "handoff.md").read_text(encoding="utf-8")
+        events = [
+            json.loads(line)
+            for line in (self.attempt_dir(record) / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
         self.assertIsNone(completion["error"])
+        self.assertEqual(events[0]["permissionMode"], "<redacted:AWS_PROFILE>")
+        self.assertIn("<redacted:AWS_REGION>", events[0]["tools"])
         self.assertIn("agents/review-final.md", handoff)
         self.assertIn("user=agents", handoff)
         self.assertIn("home=<redacted:HOME>", handoff)

@@ -270,14 +270,29 @@ def _redact_json(
     value: object,
     patterns: Patterns,
     scope: str = "top",
+    *,
+    validated_init: bool = False,
 ) -> tuple[object, str | None]:
     if isinstance(value, str):
         redacted_text = _redact_text(value, patterns)
-        damaged = scope if scope in {"init.permissionMode", "init.tools"} \
-            and redacted_text != value else None
+        damaged = (
+            scope
+            if scope in {"init.permissionMode", "init.tools"}
+            and redacted_text != value
+            and not validated_init
+            else None
+        )
         return redacted_text, damaged
     if isinstance(value, list):
-        values = [_redact_json(item, patterns, scope) for item in value]
+        values = [
+            _redact_json(
+                item,
+                patterns,
+                scope,
+                validated_init=validated_init,
+            )
+            for item in value
+        ]
         return [item for item, _damage in values], next(
             (damage for _item, damage in values if damage), None
         )
@@ -307,7 +322,12 @@ def _redact_json(
             and original_key in {"permissionMode", "tools"}
         ):
             child_scope = f"init.{original_key}"
-        transformed_item, child_damage = _redact_json(item, patterns, child_scope)
+        transformed_item, child_damage = _redact_json(
+            item,
+            patterns,
+            child_scope,
+            validated_init=validated_init,
+        )
         transformed[new_key] = transformed_item
         origins[new_key] = original_key
         damage = damage or child_damage
@@ -428,7 +448,16 @@ class _EventCapture:
             if self.line == 1 and self.claude_init is not None
             else None
         )
-        redacted, damaged = _redact_json(event, self.patterns)
+        validated_init = (
+            self.line == 1
+            and self.claude_init is not None
+            and init_error is None
+        )
+        redacted, damaged = _redact_json(
+            event,
+            self.patterns,
+            validated_init=validated_init,
+        )
         assert isinstance(redacted, dict)
         damaged = damaged or self._structural_damage(redacted)
         self._observe(redacted)

@@ -9,6 +9,7 @@ import stat
 import subprocess
 import time
 import unittest
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest import mock
 
@@ -61,6 +62,10 @@ CLAUDE_PERMISSION_FLAG_REFUSALS = (
         ("claude", "--dangerously-skip-permissions",
          "--dangerously-skip-permissions", "--tools", "Read"),
     ),
+)
+CLAUDE_TOOLS_ENTRY_REFUSALS = (
+    ("tools-entry-empty", ("claude", "--tools", "Read,")),
+    ("tools-entry-duplicate", ("claude", "--tools", "Read,Read")),
 )
 
 
@@ -648,6 +653,75 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
         )
 
 
+class ClaudeInitEventTests(unittest.TestCase):
+    def test_shape_checks_are_independently_load_bearing(self) -> None:
+        expectation = ("default", ("Grep", "Read"))
+        valid = {
+            "type": "system",
+            "subtype": "init",
+            "permissionMode": "default",
+            "tools": ["Read", "Grep"],
+        }
+
+        def accept_type(event: dict[str, object]) -> dict[str, object]:
+            return {**event, "type": "system"}
+
+        def accept_subtype(event: dict[str, object]) -> dict[str, object]:
+            return {**event, "subtype": "init"}
+
+        def accept_dict_tools(event: dict[str, object]) -> dict[str, object]:
+            tools = event["tools"]
+            self.assertIsInstance(tools, dict)
+            return {**event, "tools": list(tools)}
+
+        cases = (
+            ("type", {**valid, "type": "assistant"}, accept_type),
+            ("subtype", {**valid, "subtype": "status"}, accept_subtype),
+            (
+                "tools-type",
+                {**valid, "tools": {"Read": True, "Grep": True}},
+                accept_dict_tools,
+            ),
+        )
+        init_error = WRAPPER._claude_init_error
+
+        def assert_rejected(event: dict[str, object]) -> None:
+            _persisted, error = WRAPPER._EventCapture(
+                [], expectation
+            ).line_bytes(json.dumps(event).encode(), terminated=True)
+            self.assertEqual(error, "claude init mismatch")
+
+        def without_shape_check(
+            accept_invalid_shape: Callable[
+                [dict[str, object]], dict[str, object]
+            ],
+        ) -> Callable[
+            [dict[str, object], tuple[str, tuple[str, ...]]], str | None
+        ]:
+            def mutant(
+                candidate: dict[str, object],
+                selected_expectation: tuple[str, tuple[str, ...]],
+            ) -> str | None:
+                return init_error(
+                    accept_invalid_shape(candidate), selected_expectation
+                )
+
+            return mutant
+
+        for label, event, accept_invalid_shape in cases:
+            with self.subTest(check=label):
+                assert_rejected(event)
+                with (
+                    mock.patch.object(
+                        WRAPPER,
+                        "_claude_init_error",
+                        side_effect=without_shape_check(accept_invalid_shape),
+                    ),
+                    self.assertRaises(AssertionError),
+                ):
+                    assert_rejected(event)
+
+
 class ProviderAuthWrapperTests(WrapperHarness):
     def test_claude_nonzero_auth_result_is_not_logged_in(self) -> None:
         cases = (
@@ -686,10 +760,50 @@ class ClaudeInitArgvTests(ReviewLaneSupport, unittest.TestCase):
             WRAPPER._claude_init_expectation(list(argv))
 
     def test_expectation_refuses_ambiguous_and_missing_values(self) -> None:
-        cases = (*CLAUDE_VALUE_FLAG_REFUSALS, *CLAUDE_PERMISSION_FLAG_REFUSALS)
+        cases = (
+            *CLAUDE_VALUE_FLAG_REFUSALS,
+            *CLAUDE_PERMISSION_FLAG_REFUSALS,
+            *CLAUDE_TOOLS_ENTRY_REFUSALS,
+        )
         for label, argv in cases:
             with self.subTest(case=label):
                 self.assert_launch_configuration_refused(argv)
+
+    def test_tools_entry_guards_are_independently_load_bearing(self) -> None:
+        def expectation_without_guard(
+            argv: list[str], disabled: str
+        ) -> tuple[str, tuple[str, ...]]:
+            permission_mode = WRAPPER._claude_permission_mode(argv)
+            tools_value = WRAPPER._claude_flag_value(
+                argv, "--tools", required=True
+            )
+            if tools_value is None:
+                raise ValueError("launch configuration")
+            tools = tuple(sorted(tools_value.split(",")))
+            if disabled != "empty" and any(not tool for tool in tools):
+                raise ValueError("launch configuration")
+            if disabled != "duplicate" and len(tools) != len(set(tools)):
+                raise ValueError("launch configuration")
+            return permission_mode, tools
+
+        cases = (
+            ("empty", CLAUDE_TOOLS_ENTRY_REFUSALS[0][1]),
+            ("duplicate", CLAUDE_TOOLS_ENTRY_REFUSALS[1][1]),
+        )
+        for disabled, argv in cases:
+            with self.subTest(check=disabled):
+                self.assert_launch_configuration_refused(argv)
+                with (
+                    mock.patch.object(
+                        WRAPPER,
+                        "_claude_init_expectation",
+                        side_effect=lambda candidate, guard=disabled: (
+                            expectation_without_guard(candidate, guard)
+                        ),
+                    ),
+                    self.assertRaises(AssertionError),
+                ):
+                    self.assert_launch_configuration_refused(argv)
 
     def test_value_flag_guards_are_load_bearing_in_memory(self) -> None:
         def unchecked_value(

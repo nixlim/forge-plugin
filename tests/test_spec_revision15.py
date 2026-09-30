@@ -321,10 +321,16 @@ class SpecificationRevision15Tests(unittest.TestCase):
             "`LANG`, `LC_ALL`, and `TERM`",
             "unless one equals a redacted-name value, in which case the redacted-name "
             "pattern still redacts it",
+            "The exemption covers only the first, validated Claude `init` event",
+            "a value-only redaction match within that event's `init.permissionMode` or "
+            "`init.tools` remains redacted in persistence but is not damage",
+            "Any later event with subtype `init` retains the damage rule",
             "Only after `_launch_inputs` has verified `argv_digest`",
             "Exactly one `--tools` and at most one `--permission-mode` may occur",
             "`--dangerously-skip-permissions` may occur at most once and MUST NOT "
             "coexist with `--permission-mode`",
+            "The `--tools` value MUST contain only nonempty, pairwise-distinct "
+            "comma-separated entries",
             "fails closed as `wrapper failure` before the reviewer starts",
             "reordering is accepted, while a missing, extra, or duplicate tool is rejected",
             "completes exactly with `claude init mismatch`",

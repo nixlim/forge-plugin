@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
+import textwrap
 import unittest
+from types import FunctionType
 from unittest import mock
 
 from tests._cli_loader import package_module
@@ -13,6 +16,29 @@ from tests.test_review_launch_streams import WrapperHarness, WrapperLaunchOption
 LAUNCH = package_module("engine._review_launch")
 WRAPPER = package_module("engine._review_wrapper")
 COLLECT = package_module("engine._verbs_review_collect")
+
+
+def mutated_function(
+    function: FunctionType, anchor: str, replacement: str
+) -> FunctionType:
+    """Compile one exact in-memory mutation with the function's globals."""
+
+    source = textwrap.dedent(inspect.getsource(function))
+    if source.count(anchor) != 1:
+        raise AssertionError(f"mutation anchor drifted for {function.__name__}")
+    namespace = dict(function.__globals__)
+    exec(
+        compile(
+            source.replace(anchor, replacement, 1),
+            function.__code__.co_filename,
+            "exec",
+        ),
+        namespace,
+    )
+    mutant = namespace[function.__name__]
+    if not isinstance(mutant, FunctionType):
+        raise AssertionError(f"mutation did not define {function.__name__}")
+    return mutant
 
 
 class ReviewLaunchRedactionTests(WrapperHarness):
@@ -166,7 +192,7 @@ class ReviewLaunchRedactionTests(WrapperHarness):
         ):
             assert_damage()
 
-    def test_claude_init_fields_are_validated_raw_then_protected_from_redaction(self) -> None:
+    def test_validated_claude_init_value_matches_are_redacted_without_damage(self) -> None:
         expectation = ("default", ("Read", "Grep"))
         event = {
             "type": "system",
@@ -175,17 +201,52 @@ class ReviewLaunchRedactionTests(WrapperHarness):
             "tools": ["Grep", "Read"],
         }
         raw = json.dumps(event).encode()
-        value_cases = (
-            ([(b"default", b"<redacted:MODE>")], "init.permissionMode"),
-            ([(b"Read", b"<redacted:TOOL>")], "init.tools"),
+        patterns = self.patterns({"AWS_PROFILE": "default", "AWS_REGION": "Read"})
+
+        def assert_validated_values_pass() -> None:
+            persisted, error = WRAPPER._EventCapture(
+                patterns, expectation
+            ).line_bytes(raw, terminated=True)
+            self.assertIsNone(error)
+            decoded = json.loads(persisted)
+            self.assertEqual(decoded["permissionMode"], "<redacted:AWS_PROFILE>")
+            self.assertEqual(decoded["tools"], ["Grep", "<redacted:AWS_REGION>"])
+
+        assert_validated_values_pass()
+
+        _persisted, error = WRAPPER._EventCapture(patterns).line_bytes(
+            raw, terminated=True
         )
-        for patterns, field in value_cases:
-            with self.subTest(field=field, shape="value"):
-                persisted, error = WRAPPER._EventCapture(
-                    patterns, expectation
-                ).line_bytes(raw, terminated=True)
-                self.assertEqual(error, f"redaction damaged {field}")
-                self.assertIn(b"<redacted:", persisted)
+        self.assertEqual(error, "redaction damaged init.permissionMode")
+
+        nonconforming = {**event, "permissionMode": "acceptEdits"}
+        _persisted, error = WRAPPER._EventCapture(
+            patterns, expectation
+        ).line_bytes(json.dumps(nonconforming).encode(), terminated=True)
+        self.assertEqual(error, "claude init mismatch")
+
+        redact_json = WRAPPER._redact_json
+
+        def old_damage_rule(
+            value: object,
+            selected_patterns: list[tuple[bytes, bytes]],
+            scope: str = "top",
+            *,
+            validated_init: bool = False,
+        ) -> tuple[object, str | None]:
+            del validated_init
+            return redact_json(
+                value,
+                selected_patterns,
+                scope,
+                validated_init=False,
+            )
+
+        with (
+            mock.patch.object(WRAPPER, "_redact_json", side_effect=old_damage_rule),
+            self.assertRaises(AssertionError),
+        ):
+            assert_validated_values_pass()
 
         def assert_key_damage(key: str) -> None:
             patterns = [(key.encode(), b"<redacted:KEY>")]
@@ -202,6 +263,76 @@ class ReviewLaunchRedactionTests(WrapperHarness):
             self.assertRaises(AssertionError),
         ):
             assert_key_damage("tools")
+
+    def test_validated_claude_init_exemption_is_limited_to_first_event(self) -> None:
+        expectation = ("default", ("Read", "Grep"))
+        event = {
+            "type": "system",
+            "subtype": "init",
+            "permissionMode": "default",
+            "tools": ["Grep", "Read"],
+        }
+        raw = json.dumps(event).encode()
+
+        def assert_later_init_damage(values: dict[str, str], field: str) -> None:
+            capture = WRAPPER._EventCapture(self.patterns(values), expectation)
+            first, first_error = capture.line_bytes(raw, terminated=True)
+            self.assertIsNone(first_error)
+            self.assertIn(b"<redacted:", first)
+            second, second_error = capture.line_bytes(raw, terminated=True)
+            self.assertEqual(second_error, f"redaction damaged {field}")
+            self.assertIn(b"<redacted:", second)
+
+        anchor = (
+            "    validated_init = (\n"
+            "        self.line == 1\n"
+            "        and self.claude_init is not None\n"
+            "        and init_error is None\n"
+            "    )\n"
+        )
+        mutant = mutated_function(
+            WRAPPER._EventCapture.line_bytes,
+            anchor,
+            "    validated_init = (\n"
+            "        self.claude_init is not None\n"
+            "        and init_error is None\n"
+            "    )\n",
+        )
+        cases = (
+            ({"AWS_PROFILE": "default"}, "init.permissionMode"),
+            ({"AWS_REGION": "Read"}, "init.tools"),
+        )
+        for values, field in cases:
+            with self.subTest(field=field):
+                assert_later_init_damage(values, field)
+                with (
+                    mock.patch.object(WRAPPER._EventCapture, "line_bytes", mutant),
+                    self.assertRaises(AssertionError),
+                ):
+                    assert_later_init_damage(values, field)
+
+    def test_validated_claude_init_value_matches_pass_through_wrapper(self) -> None:
+        source = """
+import json, sys
+sys.stdin.read()
+print(json.dumps({'type':'result','is_error':False,
+                  'result':'VERDICT: PASS'}), flush=True)
+"""
+        process, attempt = self.launch(
+            "validated-init-value-redaction",
+            source,
+            environment={"AWS_PROFILE": "default", "AWS_REGION": "Read"},
+        )
+        completion = self.completion(process, attempt)
+        events = [
+            json.loads(line)
+            for line in (attempt / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertIsNone(completion["error"])
+        self.assertEqual(events[0]["permissionMode"], "<redacted:AWS_PROFILE>")
+        self.assertEqual(
+            events[0]["tools"], ["<redacted:AWS_REGION>", "Grep"]
+        )
 
     def test_secret_inside_init_model_is_structural_damage_in_wrapper_source(self) -> None:
         secret = "admitted-model-secret"
@@ -250,6 +381,56 @@ print(json.dumps({'type':'system','subtype':'init',
         decoded = json.loads(persisted)
         self.assertEqual(decoded["agents"], ["redacted-key"])
         self.assertEqual(decoded["<redacted:USER>"], ["existing-key"])
+
+    def test_non_extractor_key_collision_does_not_fail_closed(self) -> None:
+        patterns = self.patterns({"HOME": "agents"})
+        event = {
+            "type": "system",
+            "subtype": "init",
+            "model": "fixture-model",
+            "agents": ["redacted-key"],
+            "<redacted:HOME>": ["existing-key"],
+        }
+
+        def assert_collision_survives() -> None:
+            persisted, error = WRAPPER._EventCapture(patterns).line_bytes(
+                json.dumps(event).encode(), terminated=True
+            )
+            self.assertIsNone(error)
+            self.assertEqual(
+                json.loads(persisted)["<redacted:HOME>"], ["existing-key"]
+            )
+
+        assert_collision_survives()
+        redact_json = WRAPPER._redact_json
+
+        def fail_any_key_collision(
+            value: object,
+            selected_patterns: list[tuple[bytes, bytes]],
+            scope: str = "top",
+            *,
+            validated_init: bool = False,
+        ) -> tuple[object, str | None]:
+            transformed, damage = redact_json(
+                value,
+                selected_patterns,
+                scope,
+                validated_init=validated_init,
+            )
+            collided = (
+                isinstance(value, dict)
+                and isinstance(transformed, dict)
+                and len(transformed) < len(value)
+            )
+            return transformed, damage or ("non-extractor" if collided else None)
+
+        with (
+            mock.patch.object(
+                WRAPPER, "_redact_json", side_effect=fail_any_key_collision
+            ),
+            self.assertRaises(AssertionError),
+        ):
+            assert_collision_survives()
 
     def test_json_escaped_value_inside_result_remains_extractable(self) -> None:
         secret = 'line\nquote"slash\\snow'

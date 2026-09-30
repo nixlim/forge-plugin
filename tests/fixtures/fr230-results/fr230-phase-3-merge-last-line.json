@@ -3,7 +3,7 @@
   "result_id": "fr230-phase-3-merge-last-line",
   "slot": "merge-last-line",
   "status": "PASS",
-  "subject_candidate_sha256": "00aaf79ca823880bbc4f0ca311169a61e6d706d40baa664d07a3b8b6a6e79d43",
+  "subject_candidate_sha256": "71013b0cf0e5708fbc5058bf55b6a33d5041706d967d2b28415b34598334ec5a",
   "command": [
     "python3",
     "-m",
