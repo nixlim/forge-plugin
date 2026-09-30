@@ -8139,6 +8139,8 @@ def _check_binding_correlation(
 ) -> None:
     """Apply activated FR-021 correlation without consulting chain state."""
 
+    from . import landed_evidence
+
     if (
         "journal-only" not in BINDING_CORRELATION_CONTROLS
         or not _writer_contract_active(records)
@@ -8196,16 +8198,7 @@ def _check_binding_correlation(
         )
 
     superseded = _superseded_binding_ids(records)
-    aborted_chains_by_task: dict[str, set[str]] = {}
-    for record in records:
-        task = record.get("task")
-        if (
-            record.get("type") == "decision"
-            and record.get("outcome") == "chain-abort"
-            and isinstance(task, str)
-            and (bound := _binding_chain_and_candidate(record)) is not None
-        ):
-            aborted_chains_by_task.setdefault(task, set()).add(bound[0])
+    retired = landed_evidence.retirement_predicate(records)
     bound_records = [
         record
         for record in records
@@ -8222,9 +8215,7 @@ def _check_binding_correlation(
             continue
         bound = _binding_chain_and_candidate(record)
         assert bound is not None
-        if bound[2] in superseded or bound[0] in aborted_chains_by_task.get(
-            task, set()
-        ):
+        if retired(record):
             continue
         last_result = last_mutating_result_by_task.get(task, 0)
         if int(record.get("_line", 0)) <= last_result:
@@ -8390,6 +8381,8 @@ def check_gate_profile(
         tuple[str, str], dict[str, object]
     ] | None = None,
 ) -> None:
+    from . import landed_evidence
+
     verifications = [record for record in records if record.get("type") == "verification"]
     passed_close = any(
         record.get("type") == "run_closed" and record.get("judgment") == "passed"
@@ -8455,33 +8448,14 @@ def check_gate_profile(
             ):
                 terminal_result_lines.append(int(record.get("_line", 0)))
         last_mutating_result_line = max(terminal_result_lines, default=0)
-        required_gates = (
-            (
-                "gate-1",
-                lambda criterion: criterion.startswith("gate-1: "),
-            ),
-            (
-                "gate-2",
-                lambda criterion: criterion.startswith("gate-2: "),
-            ),
-            (
-                GATE_3_CRITERION,
-                lambda criterion: criterion == GATE_3_CRITERION,
-            ),
-        )
-        for gate_name, criterion_matches in required_gates:
-            has_passing_gate = not has_unterminated_mutation and any(
-                verification.get("result") == "passed"
-                and isinstance((criterion := verification.get("criterion")), str)
-                and criterion_matches(criterion)
-                and int(verification.get("_line", 0)) > last_mutating_result_line
-                for verification in verifications
+        issues.extend(
+            landed_evidence.missing_gate_issues(
+                records,
+                verifications,
+                last_mutating_result_line,
+                has_unterminated_mutation,
             )
-            if not has_passing_gate:
-                issues.append(
-                    "run closed as passed without a passing "
-                    f"'{gate_name}' verification after the last mutating execution"
-                )
+        )
 
     _check_binding_correlation(
         records, issues, authoritative_results=authoritative_results
