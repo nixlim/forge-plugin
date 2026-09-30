@@ -11,6 +11,7 @@ import io
 import re
 import sys
 import tokenize
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -38,6 +39,28 @@ STACK_ALIASES = {
 NODE_SUFFIXES = {".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"}
 MAX_HELPER_DEPTH = 8
 BUILTIN_NAMES = frozenset(dir(builtins))
+
+GO_TEST_PARAMETER_RE = re.compile(r"(?P<name>[A-Za-z_]\w*)\s+(?:\*testing\.T|testing\.TB)")
+GO_TEST_DECLARATION_RE = re.compile(
+    r"(?m)^\s*(?P<declaration>func)\s+(?P<name>Test\w*)\s*\("
+)
+GO_HELPER_MARKER_RE = re.compile(
+    r"(?<![\w.])(?P<name>[A-Za-z_]\w*)\.Helper\s*\(\s*\)"
+)
+GO_IDENTIFIER_RE = re.compile(r"(?:[^\W\d]|_)\w*")
+GO_SIGNATURE_TOKEN_RE = re.compile(r"\n|(?:[^\W\d]|_)\w*|[^\s]")
+GO_HORIZONTAL_SPACE_RE = re.compile(r"[ \t\r]*")
+GO_KEYWORDS = frozenset(
+    "break case chan const continue default defer else fallthrough for func go goto "
+    "if import interface map package range return select struct switch type var".split()
+)
+GO_NON_CODE_RE = re.compile(
+    r"//[^\n]*"
+    r"|/\*(?:[^*]|\*(?!/))*(?:\*/|\Z)"
+    r'|"(?:\\[^\n]|[^"\\\n])*(?:"|\\?(?=\n|\Z))'
+    r"|`[^`]*(?:`|\Z)"
+    r"|'(?:\\[^\n]|[^'\\\n])*(?:'|\\?(?=\n|\Z))"
+)
 
 FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -79,12 +102,8 @@ class StackRuleBuilder:
             except re.error as exc:
                 raise CheckFailure("invalid assertion heuristic regex") from exc
         return StackRule(
-            name=self.name,
-            patterns=self.patterns,
-            heuristic_kind=self.heuristic_kind,
-            heuristic_value=self.heuristic_value,
-            compiled_regex=compiled,
-            explicit_absence=self.explicit_absence,
+            self.name, self.patterns, self.heuristic_kind,
+            self.heuristic_value, compiled, self.explicit_absence,
         )
 
 
@@ -96,6 +115,16 @@ class Finding:
 
     def render(self) -> str:
         return FINDING_TEMPLATE.format(path=self.path, line=self.line, name=self.name)
+
+
+@dataclass(frozen=True)
+class GoFunctionSpan:
+    name: str
+    declaration_start: int
+    line: int
+    parameters: str
+    has_receiver: bool
+    body: slice | None
 
 
 class AssertionStatus(Enum):
@@ -123,25 +152,13 @@ class AssertionVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     # Nested bodies are considered separately only when a call resolves to them.
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+    def _ignore_nested_scope(self, node: ast.AST) -> None:
         return
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
-        return
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
-        return
-
-    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
-        return
-
-
-def _call_name(node: ast.expr) -> str:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return ""
+    visit_FunctionDef = _ignore_nested_scope  # noqa: N815
+    visit_AsyncFunctionDef = _ignore_nested_scope  # noqa: N815
+    visit_ClassDef = _ignore_nested_scope  # noqa: N815
+    visit_Lambda = _ignore_nested_scope  # noqa: N815
 
 
 def _qualified_call_name(node: ast.expr) -> str:
@@ -154,7 +171,7 @@ def _qualified_call_name(node: ast.expr) -> str:
 
 
 def _is_intrinsic_assertion_call(node: ast.Call) -> bool:
-    name = _call_name(node.func)
+    name = getattr(node.func, "id", getattr(node.func, "attr", ""))
     return (
         re.match(r"^assert(?:_|[A-Z])", name) is not None
         or (
@@ -185,6 +202,15 @@ class FunctionScopeVisitor(ast.NodeVisitor):
         self.non_import_bindings.add(name)
         self.assigned_bindings.add(name)
 
+    def _add_import_binding(
+        self, name: str, pytest_bindings: set[str] | None
+    ) -> None:
+        self.other_bindings.add(name)
+        self.non_class_bindings.add(name)
+        self.imported_bindings.add(name)
+        target = self.non_import_bindings if pytest_bindings is None else pytest_bindings
+        target.add(name)
+
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         self.calls.append(node)
         self.generic_visit(node)
@@ -192,11 +218,8 @@ class FunctionScopeVisitor(ast.NodeVisitor):
     def _visit_function(self, node: FunctionNode) -> None:
         self.helpers.setdefault(node.name, []).append(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
-        self._visit_function(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
-        self._visit_function(node)
+    visit_FunctionDef = _visit_function  # noqa: N815
+    visit_AsyncFunctionDef = _visit_function  # noqa: N815
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
         self.classes.setdefault(node.name, []).append(node)
@@ -212,32 +235,22 @@ class FunctionScopeVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         for alias in node.names:
             name = alias.asname or alias.name.split(".", 1)[0]
-            self.other_bindings.add(name)
-            self.non_class_bindings.add(name)
-            self.imported_bindings.add(name)
-            if alias.name == "pytest":
-                self.pytest_module_imports.add(name)
-            else:
-                self.non_import_bindings.add(name)
+            pytest_bindings = self.pytest_module_imports if alias.name == "pytest" else None
+            self._add_import_binding(name, pytest_bindings)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
         for alias in node.names:
             name = alias.asname or alias.name
-            self.other_bindings.add(name)
-            self.non_class_bindings.add(name)
-            self.imported_bindings.add(name)
-            if node.module == "pytest" and alias.name in {"fail", "raises"}:
-                self.pytest_call_imports.add(name)
-            else:
-                self.non_import_bindings.add(name)
+            is_pytest_call = node.module == "pytest" and alias.name in {"fail", "raises"}
+            pytest_bindings = self.pytest_call_imports if is_pytest_call else None
+            self._add_import_binding(name, pytest_bindings)
 
-    def visit_Global(self, node: ast.Global) -> None:  # noqa: N802
+    def _visit_names(self, node: ast.Global | ast.Nonlocal) -> None:
         for name in node.names:
             self._add_non_import_binding(name)
 
-    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:  # noqa: N802
-        for name in node.names:
-            self._add_non_import_binding(name)
+    visit_Global = _visit_names  # noqa: N815
+    visit_Nonlocal = _visit_names  # noqa: N815
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:  # noqa: N802
         if node.name is not None:
@@ -274,11 +287,8 @@ class TestFunctionCollector(ast.NodeVisitor):
         # A function nested inside another function is a helper, not a
         # separately collected test. Never descend into function bodies here.
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
-        self._visit_function(node)
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
-        self._visit_function(node)
+    visit_FunctionDef = _visit_function  # noqa: N815
+    visit_AsyncFunctionDef = _visit_function  # noqa: N815
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
         self.classes.append(node)
@@ -291,9 +301,7 @@ class TestFunctionCollector(ast.NodeVisitor):
 def _canonical_heading(raw_heading: str) -> str | None:
     heading = raw_heading.split(" (", 1)[0].strip()
     heading = STACK_ALIASES.get(heading, heading)
-    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", heading):
-        return heading
-    return None
+    return heading if re.fullmatch(r"[a-z0-9][a-z0-9-]*", heading) else None
 
 
 def parse_stack_rules(path: Path) -> dict[str, StackRule]:
@@ -332,19 +340,15 @@ def parse_stack_rules(path: Path) -> dict[str, StackRule]:
             continue
 
         heuristic_match = ASSERTION_HEURISTIC_RE.fullmatch(raw_line)
-        if heuristic_match:
-            if current.saw_assertion_declaration:
-                raise CheckFailure("duplicate assertion heuristic")
-            current.heuristic_kind = heuristic_match.group(1)
-            current.heuristic_value = heuristic_match.group(2)
-            current.saw_assertion_declaration = True
-            continue
-
         absence = f"No seeded assertion heuristic for {current.name}."
-        if raw_line == absence:
+        if heuristic_match is not None or raw_line == absence:
             if current.saw_assertion_declaration:
                 raise CheckFailure("duplicate assertion heuristic")
-            current.explicit_absence = True
+            if heuristic_match is None:
+                current.explicit_absence = True
+            else:
+                current.heuristic_kind = heuristic_match.group(1)
+                current.heuristic_value = heuristic_match.group(2)
             current.saw_assertion_declaration = True
             continue
 
@@ -435,19 +439,15 @@ def _scope_for_statements(
 
 def _parameter_names(node: FunctionNode) -> tuple[str, ...]:
     arguments = node.args
-    names = [
+    return tuple(
         argument.arg
         for argument in (
             *arguments.posonlyargs,
             *arguments.args,
             *arguments.kwonlyargs,
+            *(argument for argument in (arguments.vararg, arguments.kwarg) if argument),
         )
-    ]
-    if arguments.vararg is not None:
-        names.append(arguments.vararg.arg)
-    if arguments.kwarg is not None:
-        names.append(arguments.kwarg.arg)
-    return tuple(names)
+    )
 
 
 def _unique_helper(scope: FunctionScopeVisitor, name: str) -> FunctionNode | None:
@@ -494,39 +494,25 @@ class AssertionResolver:
 
     @staticmethod
     def _has_pytest_call_import(scope: FunctionScopeVisitor, name: str) -> bool:
-        return (
-            name in scope.pytest_call_imports
-            and name not in scope.pytest_module_imports
-            and name not in scope.non_import_bindings
-            and name not in scope.helpers
-            and name not in scope.classes
-        )
+        shadowed = scope.pytest_module_imports | scope.non_import_bindings
+        shadowed |= scope.helpers.keys() | scope.classes.keys()
+        return name in scope.pytest_call_imports and name not in shadowed
 
     @staticmethod
     def _has_pytest_module_import(scope: FunctionScopeVisitor, name: str) -> bool:
-        return (
-            name in scope.pytest_module_imports
-            and name not in scope.pytest_call_imports
-            and name not in scope.non_import_bindings
-            and name not in scope.helpers
-            and name not in scope.classes
-        )
+        shadowed = scope.pytest_call_imports | scope.non_import_bindings
+        shadowed |= scope.helpers.keys() | scope.classes.keys()
+        return name in scope.pytest_module_imports and name not in shadowed
 
     def _binding_scope(
         self, local_scope: FunctionScopeVisitor, name: str
     ) -> FunctionScopeVisitor:
-        if _scope_binds(local_scope, name):
-            return local_scope
-        return self.module_scope
+        return local_scope if _scope_binds(local_scope, name) else self.module_scope
 
     @staticmethod
     def _has_unshadowed_import(scope: FunctionScopeVisitor, name: str) -> bool:
-        return (
-            name in scope.imported_bindings
-            and name not in scope.assigned_bindings
-            and name not in scope.helpers
-            and name not in scope.classes
-        )
+        shadowed = scope.assigned_bindings | scope.helpers.keys() | scope.classes.keys()
+        return name in scope.imported_bindings and name not in shadowed
 
     def _is_assertion_call(
         self, call: ast.Call, local_scope: FunctionScopeVisitor
@@ -537,11 +523,11 @@ class AssertionResolver:
             name = call.func.id
             scope = self._binding_scope(local_scope, name)
             return self._has_pytest_call_import(scope, name)
-        if not isinstance(call.func, ast.Attribute):
-            return False
-        if call.func.attr not in {"fail", "raises"}:
-            return False
-        if not isinstance(call.func.value, ast.Name):
+        if not (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr in {"fail", "raises"}
+            and isinstance(call.func.value, ast.Name)
+        ):
             return False
         name = call.func.value.id
         scope = self._binding_scope(local_scope, name)
@@ -555,14 +541,10 @@ class AssertionResolver:
     ) -> tuple[FunctionNode, ast.ClassDef | None] | None:
         if name in local_scope.helpers or name in local_scope.other_bindings:
             local_helper = _unique_helper(local_scope, name)
-            if local_helper is None:
-                return None
-            return local_helper, owner
+            return (local_helper, owner) if local_helper is not None else None
 
         module_helper = _unique_helper(self.module_scope, name)
-        if module_helper is None:
-            return None
-        return module_helper, None
+        return (module_helper, None) if module_helper is not None else None
 
     def _method_receiver_names(
         self, node: FunctionNode, owner: ast.ClassDef | None
@@ -587,9 +569,10 @@ class AssertionResolver:
         if isinstance(call.func, ast.Name):
             return self._resolve_named_call(call.func.id, local_scope, owner)
 
-        if not isinstance(call.func, ast.Attribute):
-            return None
-        if not isinstance(call.func.value, ast.Name):
+        if not (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+        ):
             return None
         receiver = call.func.value.id
         target_class: ast.ClassDef | None = None
@@ -602,9 +585,7 @@ class AssertionResolver:
 
         class_scope = self.class_scopes[id(target_class)]
         method = _unique_helper(class_scope, call.func.attr)
-        if method is None:
-            return None
-        return method, target_class
+        return (method, target_class) if method is not None else None
 
     def _is_plausible_external_delegate(
         self,
@@ -661,12 +642,11 @@ class AssertionResolver:
             )
             if status is AssertionStatus.FOUND:
                 return AssertionStatus.FOUND
-            if status is AssertionStatus.INCONCLUSIVE:
-                inconclusive = True
+            inconclusive = inconclusive or status is AssertionStatus.INCONCLUSIVE
 
-        if inconclusive:
-            return AssertionStatus.INCONCLUSIVE
-        return AssertionStatus.MISSING
+        return (
+            AssertionStatus.INCONCLUSIVE if inconclusive else AssertionStatus.MISSING
+        )
 
 
 def _python_diagnostics(path_label: str, source: str) -> tuple[list[str], bool]:
@@ -689,16 +669,13 @@ def _python_diagnostics(path_label: str, source: str) -> tuple[list[str], bool]:
         if status is AssertionStatus.FOUND:
             continue
         if status is AssertionStatus.INCONCLUSIVE:
-            output.append(
-                INCONCLUSIVE_TEMPLATE.format(
-                    path=path_label,
-                    line=node.lineno,
-                    name=node.name,
-                )
+            message = INCONCLUSIVE_TEMPLATE.format(
+                path=path_label, line=node.lineno, name=node.name
             )
-            continue
-        output.append(Finding(path_label, node.lineno, node.name).render())
-        blocking = True
+        else:
+            message = Finding(path_label, node.lineno, node.name).render()
+            blocking = True
+        output.append(message)
     return output, blocking
 
 
@@ -784,13 +761,7 @@ def _infer_stack(path: Path, rules: dict[str, StackRule], override: str | None) 
 def _heuristic_matches(rule: StackRule, source: str) -> bool:
     if rule.heuristic_kind == "literal":
         return (rule.heuristic_value or "") in source
-    if rule.heuristic_kind == "regex" and rule.compiled_regex is not None:
-        return rule.compiled_regex.search(source) is not None
-    return False
-
-
-def _line_number(source: str, offset: int) -> int:
-    return source.count("\n", 0, offset) + 1
+    return bool(rule.compiled_regex and rule.compiled_regex.search(source))
 
 
 def _non_python_test_spans(
@@ -804,8 +775,6 @@ def _non_python_test_spans(
                 r"(?P<quote>['\"])(?P<name>.+?)(?P=quote)"
             ),
         )
-    elif stack == "go":
-        patterns = (re.compile(r"(?m)^\s*func\s+(?P<name>Test\w*)\s*\("),)
     elif stack == "rust":
         patterns = (re.compile(r"(?m)^\s*(?:pub\s+)?(?:async\s+)?fn\s+(?P<name>test\w*)\s*\("),)
     elif stack in {"java-maven", "java-gradle-kotlin"}:
@@ -824,7 +793,7 @@ def _non_python_test_spans(
     for pattern in patterns:
         for match in pattern.finditer(source):
             locations.append(
-                (match.start(), _line_number(source, match.start()), match.group("name"))
+                (match.start(), source.count("\n", 0, match.start()) + 1, match.group("name"))
             )
     locations.sort()
     if not locations:
@@ -835,6 +804,244 @@ def _non_python_test_spans(
         end = locations[index + 1][0] if index + 1 < len(locations) else len(source)
         spans.append((start, end, line, name))
     return spans
+
+
+def _go_skip_space(source: str, index: int) -> int:
+    while index < len(source) and source[index].isspace():
+        index += 1
+    return index
+
+
+def _go_group_end(source: str, start: int) -> int | None:
+    opening = source[start]
+    closing = {"(": ")", "[": "]", "{": "}"}[opening]
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == opening:
+            depth += 1
+        elif source[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _go_body_open(source: str, index: int) -> tuple[int | None, int]:
+    last_word = ""
+    can_end = True
+    while (match := GO_SIGNATURE_TOKEN_RE.search(source, index)) is not None:
+        lexeme = match.group()
+        index = match.end()
+        if lexeme == "\n":
+            if can_end:
+                return None, match.start()
+            continue
+        if GO_IDENTIFIER_RE.fullmatch(lexeme) is not None:
+            last_word = lexeme
+            # Defensive for non-gofmt source: these result keywords continue.
+            can_end = last_word not in {"chan", "func", "interface", "map", "struct"}
+            continue
+        is_type_body = lexeme == "{" and last_word in {"interface", "struct"}
+        if lexeme in "([" or is_type_body:
+            group_end = _go_group_end(source, match.start())
+            if group_end is None:
+                return None, len(source)
+            last_word = ""
+            can_end = True
+            index = group_end + 1
+            continue
+        if lexeme == "{":
+            return match.start(), index
+        # Defensive for non-gofmt source: a semicolon ends a bodiless declaration.
+        if lexeme == ";":
+            return None, match.start()
+        last_word = ""
+        can_end = False
+    return None, index
+
+
+def _go_declaration(
+    source: str, start: int, line: int
+) -> tuple[GoFunctionSpan | None, int]:
+    index = _go_skip_space(source, start + len("func"))
+    has_receiver = source[index : index + 1] == "("
+    if has_receiver:
+        receiver_end = _go_group_end(source, index)
+        if receiver_end is None:
+            return None, len(source)
+        # Defensive for malformed source: a receiver newline inserts a semicolon.
+        index = GO_HORIZONTAL_SPACE_RE.match(source, receiver_end + 1).end()
+    name_match = GO_IDENTIFIER_RE.match(source, index)
+    if name_match is None or name_match.group() in GO_KEYWORDS:
+        return None, start + len("func")
+    name = name_match.group()
+    index = GO_HORIZONTAL_SPACE_RE.match(source, name_match.end()).end()
+    if source[index : index + 1] == "[":
+        type_end = _go_group_end(source, index)
+        if type_end is None:
+            return None, len(source)
+        index = GO_HORIZONTAL_SPACE_RE.match(source, type_end + 1).end()
+    if source[index : index + 1] != "(":
+        return None, index
+    parameters_end = _go_group_end(source, index)
+    if parameters_end is None:
+        return None, len(source)
+    body_open, resume = _go_body_open(source, parameters_end + 1)
+    body_end = _go_group_end(source, body_open) if body_open is not None else None
+    span = GoFunctionSpan(
+        name, start, line, source[index + 1 : parameters_end], has_receiver,
+        slice(body_open + 1, body_end) if body_end is not None else None,
+    )
+    return span, (
+        body_end + 1 if body_end is not None else (len(source) if body_open is not None else resume)
+    )
+
+
+def _go_function_spans(masked_source: str) -> list[GoFunctionSpan]:
+    spans: list[GoFunctionSpan] = []
+    index = depth = 0
+    line = 1
+    while index < len(masked_source):
+        # Defensive for malformed source: named Go functions are top-level.
+        word = GO_IDENTIFIER_RE.match(masked_source, index) if depth == 0 else None
+        if word is not None and word.group() != "func":
+            index = word.end()
+            continue
+        if word is not None and word.group() == "func":
+            span, resume = _go_declaration(masked_source, index, line)
+            if resume > index:
+                if span is not None:
+                    spans.append(span)
+                line += masked_source.count("\n", index, resume)
+                index = resume
+                continue
+        character = masked_source[index]
+        if character in "([{":
+            depth += 1
+        elif character in ")]}" and depth:
+            depth -= 1
+        if character == "\n":
+            line += 1
+        index += 1
+    return spans
+
+
+def _mask_go_non_code(source: str) -> str:
+    return GO_NON_CODE_RE.sub(
+        lambda match: re.sub(r"[^\r\n]", " ", match.group()), source
+    )
+
+
+def _go_is_assertion_helper(params: str, body: str) -> bool:
+    parameters: set[str] = set()
+    pending: list[str] = []
+    for segment in map(str.strip, params.split(",")):
+        if match := GO_TEST_PARAMETER_RE.fullmatch(segment):
+            parameters.update((*pending, match.group("name")))
+            pending.clear()
+        elif GO_IDENTIFIER_RE.fullmatch(segment):
+            pending.append(segment)
+        else:
+            pending.clear()
+    return any(match.group("name") in parameters for match in GO_HELPER_MARKER_RE.finditer(body))
+
+
+def _go_call_names(source: str) -> set[str]:
+    names: set[str] = set()
+    index = 0
+    declaration_name = False
+    while (match := GO_IDENTIFIER_RE.search(source, index)) is not None:
+        name = match.group()
+        qualified = source[index : match.start()].rstrip().endswith(".")
+        index = _go_skip_space(source, match.end())
+        if source[index : index + 1] == "[":
+            type_end = _go_group_end(source, index)
+            if type_end is None:
+                break
+            index = _go_skip_space(source, type_end + 1)
+        is_call = source[index : index + 1] == "("
+        if is_call and name != "func" and not (qualified or declaration_name):
+            names.add(name)
+        declaration_name = name == "func" and not is_call
+    return names
+
+
+def _go_assertion_helpers(
+    rule: StackRule, masked_source: str, functions: Sequence[GoFunctionSpan]
+) -> set[str]:
+    free_functions = [function for function in functions if not function.has_receiver]
+    counts = Counter(function.name for function in free_functions)
+    bodies: dict[str, str] = {}
+    for function in free_functions:
+        if function.body is None or counts[function.name] != 1:
+            continue
+        body = masked_source[function.body]
+        if _go_is_assertion_helper(function.parameters, body):
+            bodies[function.name] = body
+    resolved = {
+        name for name, body in bodies.items() if _heuristic_matches(rule, body)
+    }
+    calls = {name: _go_call_names(body) for name, body in bodies.items()}
+    for _depth in range(MAX_HELPER_DEPTH):
+        newly_resolved = {
+            name for name in bodies if name not in resolved and calls[name] & resolved
+        }
+        if not newly_resolved:
+            break
+        resolved.update(newly_resolved)
+    return resolved
+
+
+def _go_direct_test_spans(source: str) -> dict[int, slice]:
+    matches = list(GO_TEST_DECLARATION_RE.finditer(source))
+    if not matches:
+        return {}
+    ends = [*(match.start() for match in matches[1:]), len(source)]
+    return {
+        match.start("declaration"): slice(match.start(), end)
+        for match, end in zip(matches, ends, strict=True)
+    }
+
+
+def _go_findings(
+    rule: StackRule, source: str, masked_source: str,
+    functions: Sequence[GoFunctionSpan], path_label: str, fallback_name: str,
+) -> list[str]:
+    tests = [f for f in functions if not f.has_receiver and f.name.startswith("Test")]
+    if not tests:
+        fallback = Finding(path_label, 1, fallback_name).render()
+        return [] if _heuristic_matches(rule, source) else [fallback]
+    helpers = _go_assertion_helpers(rule, masked_source, functions)
+    legacy_spans = _go_direct_test_spans(source)
+    structural_ends = [*(test.declaration_start for test in tests[1:]), len(source)]
+    direct_spans = [
+        legacy_spans.get(test.declaration_start, slice(test.declaration_start, end))
+        for test, end in zip(tests, structural_ends, strict=True)
+    ]
+    return [
+        Finding(path_label, function.line, function.name).render()
+        for function, direct_span in zip(tests, direct_spans, strict=True)
+        if not _heuristic_matches(rule, source[direct_span])
+        and not _go_call_names(masked_source[function.body or slice(0)]) & helpers
+    ]
+
+
+def _non_python_findings(
+    rule: StackRule, stack: str, source: str, path_label: str, fallback_name: str
+) -> list[str]:
+    if stack == "go":
+        masked_source = _mask_go_non_code(source)
+        functions = _go_function_spans(masked_source)
+        return _go_findings(
+            rule, source, masked_source, functions, path_label, fallback_name
+        )
+    return [
+        Finding(path_label, line, name).render()
+        for start, end, line, name in _non_python_test_spans(
+            stack, source, fallback_name
+        )
+        if not _heuristic_matches(rule, source[start:end])
+    ]
 
 
 def check_files(
@@ -860,6 +1067,8 @@ def check_files(
                     output.append(DELETED_TEMPLATE.format(path=path_label))
                     continue
             raise CheckFailure("test path is not a file")
+        if not path_label.isprintable():
+            raise CheckFailure("test path label is not printable")
         is_python = path.suffix.lower() == ".py"
         if is_python:
             waiver = _waiver_reason(_read_python_waiver_source(path), True)
@@ -895,34 +1104,25 @@ def check_files(
             output.append(NO_HEURISTIC_TEMPLATE.format(stack=stack))
             continue
 
-        for start, end, line, name in _non_python_test_spans(stack, source, path.name):
-            if not _heuristic_matches(rule, source[start:end]):
-                output.append(Finding(path_label, line, name).render())
+        output.extend(
+            _non_python_findings(rule, stack, source, path_label, path.name)
+        )
 
     return output, blocking
 
 
 def build_parser() -> ContractArgumentParser:
-    default_stacks_file = (
-        Path(__file__).resolve().parents[2] / "system/seeds/validation-snippets/stacks.md"
+    default_stacks_file = Path(__file__).resolve().parents[2] / (
+        "system/seeds/validation-snippets/stacks.md"
     )
     parser = ContractArgumentParser(
-        description=(
-            "Detect assertion-free touched test files. Python findings block; "
-            "seeded non-Python heuristic findings are advisory."
-        )
+        description="Detect assertion-free touched test files. Python findings block; "
+        "seeded non-Python heuristic findings are advisory."
     )
     parser.add_argument(
-        "--stacks-file",
-        type=Path,
-        default=default_stacks_file,
-        help=argparse.SUPPRESS,
+        "--stacks-file", type=Path, default=default_stacks_file, help=argparse.SUPPRESS
     )
-    parser.add_argument(
-        "--stack",
-        dest="stack_override",
-        help=argparse.SUPPRESS,
-    )
+    parser.add_argument("--stack", dest="stack_override", help=argparse.SUPPRESS)
     parser.add_argument("files", nargs="*", help="touched test file paths")
     return parser
 
@@ -934,11 +1134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             r"[a-z0-9][a-z0-9-]*", args.stack_override
         ):
             raise CheckFailure("invalid stack override")
-        output, blocking = check_files(
-            args.files,
-            args.stacks_file,
-            args.stack_override,
-        )
+        output, blocking = check_files(args.files, args.stacks_file, args.stack_override)
     except Exception:  # CheckFailure included
         # FR-144 requires tool failures to have one stable, fail-closed diagnostic.
         print(FAILURE_MESSAGE, file=sys.stderr)
