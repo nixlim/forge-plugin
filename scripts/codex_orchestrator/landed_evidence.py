@@ -4,7 +4,9 @@ from collections.abc import Callable
 
 from . import journal
 
-LANDED_EVIDENCE_CONTROLS = frozenset({"landed-candidate-evidence"})
+LANDED_EVIDENCE_CONTROLS = frozenset(
+    {"landed-candidate-evidence", "landed-recheck-source"}
+)
 
 
 def retirement_predicate(
@@ -48,6 +50,50 @@ def landed_keys(records: list[dict[str, object]]) -> set[tuple[str, bytes]]:
         and record.get("outcome") == "chain-landing"
         and (bound := journal._binding_chain_and_candidate(record)) is not None
     }
+
+
+def recheck_source(
+    records: list[dict[str, object]],
+) -> Callable[[list[dict[str, object]], int], bool]:
+    """Return the FR-022 passing-recheck rule for this journal."""
+
+    def current_rule(verifications: list[dict[str, object]], index: int) -> bool:
+        criterion = verifications[index].get("criterion")
+        return any(
+            later.get("criterion") == criterion and later.get("result") == "passed"
+            for later in verifications[index + 1 :]
+        )
+
+    if (
+        "landed-recheck-source" not in LANDED_EVIDENCE_CONTROLS
+        or not journal._writer_contract_active(records)
+    ):
+        return current_rule
+    retired = retirement_predicate(records)
+    landed = landed_keys(records)
+
+    def has_passing_recheck(
+        verifications: list[dict[str, object]], index: int
+    ) -> bool:
+        failed = verifications[index]
+        failed_bound = journal._binding_chain_and_candidate(failed)
+        failed_key = (
+            (failed_bound[0], failed_bound[1]) if failed_bound is not None else None
+        )
+        for later in verifications[index + 1 :]:
+            if (
+                later.get("criterion") != failed.get("criterion")
+                or later.get("result") != "passed"
+                or (bound := journal._binding_chain_and_candidate(later)) is None
+                or retired(later)
+            ):
+                continue
+            key = (bound[0], bound[1])
+            if key == failed_key or key in landed:
+                return True
+        return False
+
+    return has_passing_recheck
 
 
 def _counting_predicate(

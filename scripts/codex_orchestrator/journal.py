@@ -8461,6 +8461,7 @@ def check_gate_profile(
         records, issues, authoritative_results=authoritative_results
     )
 
+    recheck = landed_evidence.recheck_source(records)
     for index, verification in enumerate(verifications):
         criterion = verification.get("criterion")
         if not isinstance(criterion, str):
@@ -8480,10 +8481,7 @@ def check_gate_profile(
                 issues.append(f"unknown gate criterion: {criterion}")
         if verification.get("result") != "failed" or not known_gate:
             continue
-        has_passing_recheck = any(
-            later.get("criterion") == criterion and later.get("result") == "passed"
-            for later in verifications[index + 1 :]
-        )
+        has_passing_recheck = recheck(verifications, index)
         if not has_passing_recheck:
             message = (
                 f"failed gate verification '{verification.get('id')}' "
