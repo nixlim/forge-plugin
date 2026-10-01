@@ -6,11 +6,13 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import shutil
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from tests import test_result_before_gate as RESULT_BEFORE_GATE
 from tests._revision9_coord_constants import key
 from tests._revision9_coord_support import Revision9BuilderBatchSupport
 
@@ -29,6 +31,13 @@ MISSING_GATE_ISSUES = (
     "the last mutating execution",
     "run closed as passed without a passing 'gate-3: review-final verdict' "
     "verification after the last mutating execution",
+)
+BOUND_GATE_CASES = (
+    ("commit restage", ("commit", "restage", "--paths", "src/app.py")),
+    ("commit rebase", ("commit", "rebase")),
+    ("verify", ("verify",)),
+    ("gate run", ("gate", "run", "gate-1")),
+    ("review request", ("review", "request")),
 )
 
 
@@ -449,6 +458,310 @@ class CloseProjectionWarningTests(
             lines[-1],
             WARNING_PREFIX + "(+3 more; run journal close-preflight)",
         )
+
+    def test_pending_task_diagnostics_escape_an_embedded_newline(self) -> None:
+        task = "task-02\nforge: injected"
+        pending = result_gate.Pending("execution-05", task, "agent", False)
+
+        def assert_single_line() -> None:
+            warning = result_gate.warning_message(pending)
+            refusal = result_gate.refusal_message("verify", pending)
+            self.assertEqual(len(warning.splitlines()), 1)
+            self.assertEqual(len(refusal.splitlines()), 1)
+            self.assertIn(r"task-02\nforge: injected", warning)
+            self.assertIn(r"task-02\nforge: injected", refusal)
+
+        assert_single_line()
+        command = result_gate.remediation(pending, "run-example")
+        argv = shlex.split(command)
+        self.assertEqual(argv[argv.index("--task") + 1], task)
+        with mock.patch.object(
+            result_gate, "_diagnostic_word", side_effect=lambda value: value
+        ), self.assertRaises(AssertionError):
+            assert_single_line()
+
+
+class PendingInspectionFollowupTests(
+    RESULT_BEFORE_GATE.FIXTURE.ForgeCLIFixture
+):
+    """Pin FR-249 status classification and inspection-failure handling."""
+
+    cli_process_context = RESULT_BEFORE_GATE.ResultBeforeGateIntegrationTests.cli_process_context
+    invoke_cli = RESULT_BEFORE_GATE.ResultBeforeGateIntegrationTests.invoke_cli
+    open_run = RESULT_BEFORE_GATE.ResultBeforeGateIntegrationTests.open_run
+    append_execution = RESULT_BEFORE_GATE.ResultBeforeGateIntegrationTests.append_execution
+    start_chain = RESULT_BEFORE_GATE.ResultBeforeGateIntegrationTests.start_chain
+    assert_pending_refusal = (
+        RESULT_BEFORE_GATE.ResultBeforeGateIntegrationTests.assert_pending_refusal
+    )
+
+    def _append_unvalidated_result(
+        self, run_id: str, execution: dict[str, object], status: object
+    ) -> None:
+        record = {
+            "type": "execution_result",
+            "execution": execution["execution"],
+            "agent": execution["agent"],
+            "task": execution["task"],
+            "status": status,
+        }
+        path = self.repo / ".codex-orchestrator" / "runs" / run_id / "journal.jsonl"
+        path.write_bytes(
+            path.read_bytes() + RESULT_BEFORE_GATE.journal._journal_line(record)
+        )
+
+    @staticmethod
+    def _remediation(run_id: str, execution: object) -> str:
+        return (
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" '
+            "journal execution-result "
+            f"--repo <repo> --run-id {run_id} --idempotency-key <64-hex> "
+            f"--execution {execution} --agent <agent> --task task-01 "
+            "--status <complete|blocked|failed> --summary <text>"
+        )
+
+    def _assert_inspection_refusal(
+        self,
+        *argv: str,
+        verb: str,
+        chain_id: str | None = None,
+        exception_classes: tuple[str, ...] = (),
+    ) -> None:
+        if chain_id is not None:
+            state_before = self.state_path(chain_id).read_bytes()
+            events_before = self.events_path(chain_id).read_bytes()
+        exit_code, envelope, stderr = self.invoke_cli(*argv)
+        message = (
+            f"forge: {verb} refused — pending execution_result inspection is unavailable"
+        )
+        self.assertEqual((exit_code, stderr), (1, ""))
+        self.assertEqual(envelope["reason_code"], "run-task-binding-invalid")
+        self.assertEqual(envelope["message"], message)
+        self.assertEqual(envelope["expected"], "readable committed policy and run journal")
+        self.assertEqual(
+            envelope["remediation"],
+            "inspect the run journal and committed policy, then retry",
+        )
+        observed = message
+        if exception_classes:
+            observed += "; causes " + " <- ".join(exception_classes)
+        self.assertEqual(envelope["observed"], observed)
+        rendered = json.dumps(envelope)
+        for detail in ("inspection detail", "nested detail", "not a string"):
+            self.assertNotIn(detail, rendered)
+        if not exception_classes:
+            for class_name in ("KeyError", "LookupError", "RuntimeError", "OSError"):
+                self.assertNotIn(class_name, rendered)
+        if chain_id is not None:
+            self.assertEqual(self.state_path(chain_id).read_bytes(), state_before)
+            self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+
+    def test_nonterminal_status_shapes_match_close_law_and_control(self) -> None:
+        absent = object()
+        cases = (
+            ("missing", absent),
+            ("null", None),
+            ("integer", 7),
+            ("list", ["complete"]),
+            ("nonterminal-string", "running"),
+        )
+
+        def assert_pending(status: object) -> None:
+            results = []
+            for number, task in ((1, "task-01"), (2, "task-02")):
+                record: dict[str, object] = {
+                    "type": "execution_result",
+                    "execution": f"execution-{number:02d}",
+                    "agent": "codex-impl-01",
+                    "task": task,
+                }
+                if status is not absent:
+                    record["status"] = status
+                results.append(record)
+            records = RESULT_BEFORE_GATE.activated_records(
+                RESULT_BEFORE_GATE.task_record("task-01", "src/app.py"),
+                RESULT_BEFORE_GATE.task_record("task-02", "docs/guide.md"),
+                RESULT_BEFORE_GATE.execution_record(1, "task-01"),
+                RESULT_BEFORE_GATE.execution_record(2, "task-02"),
+                *results,
+            )
+            blocking, advisory = result_gate.pending_mutations(
+                records,
+                chain_task="task-01",
+                chain_paths=("src/app.py",),
+                exempt_paths=(),
+            )
+            self.assertEqual(
+                (
+                    [item.execution for item in blocking],
+                    [item.execution for item in advisory],
+                ),
+                (["execution-01"], ["execution-02"]),
+            )
+
+        for label, status in cases:
+            with self.subTest(label=label):
+                assert_pending(status)
+        with mock.patch.object(
+            result_gate, "_result_is_terminal", return_value=True
+        ), self.assertRaises(AssertionError):
+            assert_pending(["complete"])
+
+    def test_commit_start_treats_malformed_result_as_pending(self) -> None:
+        start_run = "run-20260930-result-start-malformed"
+        start_opening = self.open_run(start_run)
+        start_execution = self.append_execution(start_run, start_opening)
+        self._append_unvalidated_result(start_run, start_execution, ["complete"])
+        self.change("src/app.py", "VALUE = 2\n")
+
+        def assert_start_pending() -> None:
+            exit_code, envelope, stderr = self.invoke_cli(
+                "--run-id", start_run, "commit", "start", "--paths", "src/app.py",
+                "--task", "task-01",
+            )
+            self.assertEqual((exit_code, stderr), (1, ""))
+            self.assert_pending_refusal(
+                envelope,
+                verb="commit start",
+                run_id=start_run,
+                execution=str(start_execution["execution"]),
+                remediation=self._remediation(
+                    start_run, start_execution["execution"]
+                ),
+            )
+
+        assert_start_pending()
+        with mock.patch.object(
+            result_gate,
+            "_result_is_terminal",
+            side_effect=ValueError("disabled non-terminal classification"),
+        ), self.assertRaises(AssertionError):
+            assert_start_pending()
+
+    def test_bound_verbs_treat_malformed_result_as_pending(self) -> None:
+        bound_run = "run-20260930-result-bound-malformed"
+        bound_opening = self.open_run(bound_run)
+        chain_id = self.start_chain(bound_run)
+        bound_execution = self.append_execution(bound_run, bound_opening)
+        self._append_unvalidated_result(bound_run, bound_execution, ["complete"])
+
+        def assert_bound_pending(verb: str, argv: tuple[str, ...]) -> None:
+            state_before = self.state_path(chain_id).read_bytes()
+            events_before = self.events_path(chain_id).read_bytes()
+            exit_code, envelope, stderr = self.invoke_cli(
+                "--chain-id", chain_id, *argv
+            )
+            self.assertEqual((exit_code, stderr), (1, ""))
+            self.assert_pending_refusal(
+                envelope,
+                verb=verb,
+                run_id=bound_run,
+                execution=str(bound_execution["execution"]),
+                remediation=self._remediation(
+                    bound_run, bound_execution["execution"]
+                ),
+            )
+            self.assertEqual(self.state_path(chain_id).read_bytes(), state_before)
+            self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+
+        for verb, argv in BOUND_GATE_CASES:
+            with self.subTest(verb=verb):
+                assert_bound_pending(verb, argv)
+                with mock.patch.object(
+                    result_gate,
+                    "_result_is_terminal",
+                    side_effect=ValueError("disabled non-terminal classification"),
+                ), self.assertRaises(AssertionError):
+                    assert_bound_pending(verb, argv)
+
+    def test_commit_start_inspection_failures_use_bound_reason(self) -> None:
+        start_run = "run-20260930-result-start-inspection-error"
+        start_opening = self.open_run(start_run)
+        self.append_execution(start_run, start_opening)
+        self.change("src/app.py", "VALUE = 2\n")
+        for patcher in (
+            mock.patch.object(
+                RESULT_BEFORE_GATE.journal,
+                "_scan_run",
+                side_effect=OSError("inspection detail"),
+            ),
+            mock.patch.object(
+                result_gate,
+                "pending_mutations",
+                side_effect=KeyError("inspection detail"),
+            ),
+        ):
+            with patcher:
+                self._assert_inspection_refusal(
+                    "--run-id", start_run, "commit", "start", "--paths", "src/app.py",
+                    "--task", "task-01", verb="commit start",
+                )
+
+    def test_bound_inspection_failures_are_safe_and_verbose_only(self) -> None:
+        bound_run = "run-20260930-result-bound-inspection-error"
+        self.open_run(bound_run)
+        chain_id = self.start_chain(bound_run)
+
+        def fail_policy(*_args, **_kwargs):
+            try:
+                raise LookupError("nested detail")
+            except LookupError as exc:
+                raise KeyError("inspection detail") from exc
+
+        def policy_failure():
+            return mock.patch.object(
+                RESULT_BEFORE_GATE.COMMAND_LOCK.chain_core,
+                "_policy_for_state",
+                side_effect=fail_policy,
+            )
+
+        def disabled_mapping(*_args, **_kwargs):
+            return RuntimeError("disabled inspection mapping")
+
+        original_refusal = (
+            RESULT_BEFORE_GATE.COMMAND_LOCK._pending_result_inspection_refusal
+        )
+
+        def always_verbose(verb, state, exc, **_kwargs):
+            return original_refusal(verb, state, exc, verbose=True)
+
+        for verb, argv in BOUND_GATE_CASES:
+            with self.subTest(verb=verb), policy_failure():
+                self._assert_inspection_refusal(
+                    "--chain-id", chain_id, *argv, verb=verb, chain_id=chain_id
+                )
+            with self.subTest(verb=verb, mode="verbose"), policy_failure():
+                self._assert_inspection_refusal(
+                    "--verbose", "--chain-id", chain_id, *argv,
+                    verb=verb, chain_id=chain_id,
+                    exception_classes=("KeyError", "LookupError"),
+                )
+            with (
+                self.subTest(verb=verb, control="exception-mapping"),
+                policy_failure(),
+                mock.patch.object(
+                    RESULT_BEFORE_GATE.COMMAND_LOCK,
+                    "_pending_result_inspection_refusal",
+                    side_effect=disabled_mapping,
+                ),
+                self.assertRaises(AssertionError),
+            ):
+                self._assert_inspection_refusal(
+                    "--chain-id", chain_id, *argv, verb=verb, chain_id=chain_id
+                )
+
+        with (
+            policy_failure(),
+            mock.patch.object(
+                RESULT_BEFORE_GATE.COMMAND_LOCK,
+                "_pending_result_inspection_refusal",
+                side_effect=always_verbose,
+            ),
+            self.assertRaises(AssertionError),
+        ):
+            self._assert_inspection_refusal(
+                "--chain-id", chain_id, "verify", verb="verify", chain_id=chain_id
+            )
 
 
 if __name__ == "__main__":

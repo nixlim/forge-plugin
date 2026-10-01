@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shlex
 from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
@@ -72,6 +73,16 @@ def _tasks_overlap(
     )
 
 
+def _result_is_terminal(result: dict[str, object]) -> bool:
+    """Match the close law: every non-string status is non-terminal."""
+
+    status = result.get("status")
+    return (
+        isinstance(status, str)
+        and status in journal.TERMINAL_EXECUTION_STATUSES
+    )
+
+
 def pending_mutations(
     records: Sequence[dict[str, object]],
     *,
@@ -105,7 +116,7 @@ def pending_mutations(
         if key is None or not isinstance(task, str) or not task:
             continue
         result = authoritative.get(key)
-        if result is not None and result.get("status") in journal.TERMINAL_EXECUTION_STATUSES:
+        if result is not None and _result_is_terminal(result):
             continue
         if journal._legacy_allows(
             "missing-execution-result", declaration_line, record
@@ -139,19 +150,27 @@ def remediation(pending: Pending, run_id: str) -> str:
         )
     quoted_task = shlex.quote(pending.task)
     return (
-        "python3 scripts/codex_orch_tools.py journal execution-result "
+        'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" '
+        "journal execution-result "
         f"--repo <repo> --run-id {quoted_run} --idempotency-key <64-hex> "
         f"--execution {quoted_execution} --agent <agent> --task {quoted_task} "
         "--status <complete|blocked|failed> --summary <text>"
     )
 
 
+def _diagnostic_word(value: str) -> str:
+    """Return a quoted, single-line display spelling for an identifier."""
+
+    escaped = json.dumps(value, ensure_ascii=True)[1:-1]
+    return shlex.quote(escaped)
+
+
 def refusal_message(verb: str, pending: Pending) -> str:
     """Return the pinned refusal diagnostic for one command."""
 
     return (
-        f"forge: {verb} refused — execution {shlex.quote(pending.execution)} "
-        f"(task {shlex.quote(pending.task)}) has no terminal execution_result; "
+        f"forge: {verb} refused — execution {_diagnostic_word(pending.execution)} "
+        f"(task {_diagnostic_word(pending.task)}) has no terminal execution_result; "
         "journal it before gating this candidate"
     )
 
@@ -160,7 +179,8 @@ def warning_message(pending: Pending) -> str:
     """Return the advisory diagnostic for a non-overlapping execution."""
 
     return (
-        f"forge: warning — execution {pending.execution} (task {pending.task}) "
+        f"forge: warning — execution {_diagnostic_word(pending.execution)} "
+        f"(task {_diagnostic_word(pending.task)}) "
         "has no terminal execution_result; its result will move the run-level "
         "gate boundary past this chain's gates"
     )

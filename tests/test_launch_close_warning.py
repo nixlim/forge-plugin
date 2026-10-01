@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import io
 import json
 import shutil
@@ -204,6 +203,18 @@ class LaunchCloseWarningTests(LaunchLaneSupport, unittest.TestCase):
         shutil.rmtree(target)
         shutil.copytree(snapshot, target)
 
+    def _append_then_repeat(self, reported_repeat: bool):
+        append_result = LAUNCH_LANE.append_execution_result
+
+        def crash_window(*args: object, **kwargs: object):
+            _record, first_repeat = append_result(*args, **kwargs)
+            self.assertFalse(first_repeat)
+            record, actual_repeat = append_result(*args, **kwargs)
+            self.assertTrue(actual_repeat)
+            return record, reported_repeat
+
+        return crash_window
+
     @staticmethod
     def _envelope_bytes(outcome: Any) -> bytes:
         return json.dumps(
@@ -247,90 +258,81 @@ class LaunchCloseWarningTests(LaunchLaneSupport, unittest.TestCase):
         self.assertEqual(observed["envelope"], enabled_envelope)
         self.assertEqual(observed["exit"], enabled_exit)
 
-    def test_launch_spawns_before_bounded_warning_lock_wait(self) -> None:
+    def test_launch_spawns_and_publishes_pid_before_warning_lock(self) -> None:
         self._add_landed_gate_set()
-        snapshot = self._run_snapshot("lock-contention")
+        holder: subprocess.Popen[str] | None = None
+        events: list[str] = []
+        real_owner_record = VERBS_LAUNCH._owner_record
+        real_write_pid = LAUNCH_LANE.write_pid
+        real_take_shared_lock = result_gate.close_preflight._take_shared_lock
 
-        def assert_prompt_return() -> None:
-            holder: subprocess.Popen[str] | None = None
-            spawned = False
-            real_owner_record = VERBS_LAUNCH._owner_record
-
-            def owner_with_foreign_lock(*args: object, **kwargs: object) -> Any:
-                nonlocal holder
-                owner = real_owner_record(*args, **kwargs)
-                lock_path = owner.facts.run_dir / self.journal.BATCH_LOCK_NAME
-                holder = subprocess.Popen(
-                    [
-                        sys.executable,
-                        "-c",
-                        (
-                            "import fcntl,os,sys,time;"
-                            "fd=os.open(sys.argv[1],os.O_RDONLY);"
-                            "fcntl.flock(fd,fcntl.LOCK_EX);"
-                            "print('locked',flush=True);time.sleep(1)"
-                        ),
-                        str(lock_path),
-                    ],
-                    stdout=subprocess.PIPE,
-                    text=True,
-                )
-                assert holder.stdout is not None
-                self.assertEqual(holder.stdout.readline(), "locked\n")
-                return owner
-
-            def capture_spawn(*_args: object, **_kwargs: object) -> mock.Mock:
-                nonlocal spawned
-                spawned = True
-                self.assertIsNotNone(holder)
-                assert holder is not None
-                self.assertIsNone(holder.poll())
-                return mock.Mock(pid=424_242)
-
-            stderr = io.StringIO()
-            started = time.monotonic()
-            try:
-                with (
-                    mock.patch.object(
-                        VERBS_LAUNCH,
-                        "_owner_record",
-                        side_effect=owner_with_foreign_lock,
+        def owner_with_foreign_lock(*args: object, **kwargs: object) -> Any:
+            nonlocal holder
+            owner = real_owner_record(*args, **kwargs)
+            lock_path = owner.facts.run_dir / self.journal.BATCH_LOCK_NAME
+            holder = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import fcntl,os,sys,time;"
+                        "fd=os.open(sys.argv[1],os.O_RDONLY);"
+                        "fcntl.flock(fd,fcntl.LOCK_EX);"
+                        "print('locked',flush=True);time.sleep(60)"
                     ),
-                    patch_engine("spawn_wrapper", side_effect=capture_spawn),
-                    mock.patch.object(
-                        result_gate.close_law,
-                        "CHAIN_LOCK_WAIT_SECONDS",
-                        0.05,
-                    ),
-                    contextlib.redirect_stderr(stderr),
-                ):
-                    outcome = self.launch_direct(engine=self.engine)
-                elapsed = time.monotonic() - started
-                self.assertTrue(spawned)
-                self.assertEqual(outcome.exit_code, 0)
-                self.assertEqual(stderr.getvalue(), "")
-                self.assertLess(elapsed, 0.6)
-                assert holder is not None
-                self.assertIsNone(holder.poll())
-            finally:
-                if holder is not None and holder.poll() is None:
-                    holder.terminate()
-                    holder.wait(timeout=5)
-                if holder is not None and holder.stdout is not None:
-                    holder.stdout.close()
+                    str(lock_path),
+                ],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            assert holder.stdout is not None
+            self.assertEqual(holder.stdout.readline(), "locked\n")
+            return owner
 
-        assert_prompt_return()
-        self._restore_run(snapshot)
+        def capture_spawn(*_args: object, **_kwargs: object) -> mock.Mock:
+            events.append("spawn")
+            return mock.Mock(pid=424_242)
 
-        def blocking_shared_lock(descriptor: int) -> None:
-            fcntl.flock(descriptor, fcntl.LOCK_SH)
+        def publish_pid(*args: object, **kwargs: object) -> None:
+            real_write_pid(*args, **kwargs)
+            events.append("pid-published")
 
-        with mock.patch.object(
-            result_gate.close_preflight,
-            "_take_shared_lock",
-            side_effect=blocking_shared_lock,
-        ), self.assertRaises(AssertionError):
-            assert_prompt_return()
+        def attempt_warning_lock(*args: object, **kwargs: object) -> None:
+            events.append("warning-lock-attempt")
+            real_take_shared_lock(*args, **kwargs)
+
+        stderr = io.StringIO()
+        started = time.monotonic()
+        try:
+            with (
+                mock.patch.object(
+                    VERBS_LAUNCH, "_owner_record", side_effect=owner_with_foreign_lock
+                ),
+                patch_engine("spawn_wrapper", side_effect=capture_spawn),
+                mock.patch.object(LAUNCH_LANE, "write_pid", side_effect=publish_pid),
+                mock.patch.object(
+                    result_gate.close_preflight,
+                    "_take_shared_lock",
+                    side_effect=attempt_warning_lock,
+                ),
+                mock.patch.object(
+                    result_gate.close_law, "CHAIN_LOCK_WAIT_SECONDS", 0.05
+                ),
+                contextlib.redirect_stderr(stderr),
+            ):
+                outcome = self.launch_direct(engine=self.engine)
+            elapsed = time.monotonic() - started
+            self.assertEqual(events, ["spawn", "pid-published", "warning-lock-attempt"])
+            self.assertEqual((outcome.exit_code, stderr.getvalue()), (0, ""))
+            self.assertLess(elapsed, 30, "launch exceeded the hang guard")
+            assert holder is not None
+            self.assertIsNone(holder.poll())
+        finally:
+            if holder is not None and holder.poll() is None:
+                holder.terminate()
+                holder.wait(timeout=5)
+            if holder is not None and holder.stdout is not None:
+                holder.stdout.close()
 
     def test_collect_warns_after_append_and_repeat_is_silent(self) -> None:
         record = self._seed_silently()
@@ -378,6 +380,70 @@ class LaunchCloseWarningTests(LaunchLaneSupport, unittest.TestCase):
         self.assertEqual((repeated.exit_code, repeated.state), (0, "complete"))
         self.assertEqual(repeated_stderr.getvalue(), "")
         repeated_spy.assert_not_called()
+
+    def test_collect_crash_window_repeat_skips_result_warning(self) -> None:
+        record = self._seed_silently()
+        self._publish_completion(record)
+        snapshot = self._run_snapshot("collect-crash-window")
+
+        def assert_guard(reported_repeat: bool) -> None:
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    LAUNCH_LANE,
+                    "append_execution_result",
+                    side_effect=self._append_then_repeat(reported_repeat),
+                ),
+                mock.patch.object(
+                    VERBS_LAUNCH_COLLECT,
+                    "_print_record_warnings",
+                    side_effect=AssertionError("repeat must not warn"),
+                ) as warning_spy,
+                contextlib.redirect_stderr(stderr),
+            ):
+                outcome = self._collect(record)
+            self.assertEqual((outcome.exit_code, outcome.state), (0, "complete"))
+            self.assertEqual(stderr.getvalue(), "")
+            warning_spy.assert_not_called()
+
+        assert_guard(True)
+        self._restore_run(snapshot)
+        with self.assertRaises(AssertionError):
+            assert_guard(False)
+
+    def test_spawn_failure_crash_window_repeat_skips_result_warning(self) -> None:
+        snapshot = self._run_snapshot("spawn-failure-crash-window")
+
+        def assert_guard(reported_repeat: bool) -> None:
+            def reject_result_warning(
+                _repository: Path, _run_id: str, record: dict[str, object]
+            ) -> None:
+                if record.get("type") == "execution_result":
+                    raise AssertionError("repeated spawn failure must not warn")
+
+            with (
+                patch_engine(
+                    "spawn_wrapper", side_effect=OSError("fixture spawn failure")
+                ),
+                mock.patch.object(
+                    LAUNCH_LANE,
+                    "append_execution_result",
+                    side_effect=self._append_then_repeat(reported_repeat),
+                ),
+                mock.patch.object(
+                    VERBS_LAUNCH,
+                    "_print_record_warnings",
+                    side_effect=reject_result_warning,
+                ) as warning_spy,
+            ):
+                outcome = self.launch_direct(engine=self.engine)
+            self.assertEqual((outcome.exit_code, outcome.state), (0, "failed"))
+            warning_spy.assert_called_once()
+
+        assert_guard(True)
+        self._restore_run(snapshot)
+        with self.assertRaises(AssertionError):
+            assert_guard(False)
 
     def test_cancel_warns_once_through_collect(self) -> None:
         record = self._seed_silently()

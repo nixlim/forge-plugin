@@ -105,6 +105,13 @@ sole keyless recovery command and never starts a new batch. A different live own
 missing/malformed owner after `run_started`, is a hard refusal and leaves the journal
 byte-identical.
 
+A commit-family `execution-result-pending` refusal means an overlapping mutating execution has no
+authoritative terminal `execution_result`. For a typed launch, clear it only with `forge launch
+collect`; for another execution, journal its real terminal result through the typed builder. Never
+invent a result to clear the refusal. Lines beginning `forge: journal warning — this append makes a
+passed close impossible as recorded:` are advisory close projections: the owning command's stdout
+and exit status are unchanged, and the named issue must be resolved honestly before close.
+
 If immutable journal damage requires a successor, never rewrite journal history: retain the run,
 stop all mutation, and use `run-retire --repo "$REPO" --run-id <predecessor>` first. Then start the
 user-designated successor with `run-open ... --successor-of <predecessor>`. Scope reuse is legal

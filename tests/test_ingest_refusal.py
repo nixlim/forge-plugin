@@ -5,22 +5,27 @@ from __future__ import annotations
 import contextlib
 import copy
 import hashlib
+import inspect
 import io
 import json
+import re
 import sys
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 from tests import test_revision9_ingest_negatives as NEGATIVE
 from tests import test_revision9_matrix as MATRIX
-from tests._cli_loader import patch_chain_core
+from tests._cli_loader import package_module, patch_chain_core
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from codex_orchestrator import ingest_refusal  # noqa: E402
 
+STATUS = package_module("engine._verbs_status")
+SPEC = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
 _BareRefusal = type("CoordinationRefusal", (Exception,), {})
 _FrozenCause = type("FrozenError", (Exception,), {})
 
@@ -30,6 +35,33 @@ def _caused_refusal(base: str, cause: BaseException | None) -> BaseException:
     if cause is not None:
         refusal.__cause__ = cause
     return refusal
+
+
+def _without_verbose_gate():
+    function = STATUS._legible_ingest_refusal
+    source = textwrap.dedent(inspect.getsource(function))
+    anchor = "        ctx.options.verbose\n        and "
+    if source.count(anchor) != 1:
+        raise AssertionError("verbose-gate mutation anchor count differs")
+    namespace = dict(function.__globals__)
+    exec(
+        compile(source.replace(anchor, "        "), function.__code__.co_filename, "exec"),
+        namespace,
+    )
+    return namespace[function.__name__]
+
+
+def _assert_spec_proof_names(specification: str) -> None:
+    match = re.search(
+        r"The sixteen ordered proof-name tokens for those positions are exactly: "
+        r"(?P<names>[^\n]+)\.",
+        specification,
+    )
+    if match is None:
+        raise AssertionError("ordered proof-name tokens are absent")
+    proof_names = tuple(re.findall(r"`([a-z0-9-]+)`", match.group("names")))
+    if proof_names != tuple(NEGATIVE.CLI.INGEST_PROOF_ORDER):
+        raise AssertionError("ordered proof-name tokens differ from code")
 
 
 class IngestRefusalTests(NEGATIVE.CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
@@ -88,10 +120,11 @@ class IngestRefusalTests(NEGATIVE.CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         return tuple(argv)
 
     def _assert_named_proof_zero(
-        self, prepared, argv: tuple[str, ...]
+        self, prepared, argv: tuple[str, ...], *, verbose: bool = True
     ) -> dict[str, object]:
         _batch, builders, _journal = NEGATIVE.CLI._coordination_modules()
-        exit_code, envelope = self.invoke_cli("--verbose", *argv)
+        invocation = ("--verbose", *argv) if verbose else argv
+        exit_code, envelope = self.invoke_cli(*invocation)
         expected = (
             builders.INGEST_PROOF_INVALID
             + ": proof 0 inputs: malformed chain bytes"
@@ -144,6 +177,32 @@ class IngestRefusalTests(NEGATIVE.CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
             "repair the authoritative chain proof and retry",
         )
         self.assert_snapshot_unchanged(prepared, snapshot)
+
+    def test_nonverbose_proof_refusal_has_no_exception_detail(self) -> None:
+        prepared = self.prepare_terminal_ingest(
+            "run-20260930-ingest-proof-zero-nonverbose"
+        )
+        argv = self._malformed_state_argv(prepared, "nonverbose-marker")
+
+        def assert_bare_observation() -> None:
+            envelope = self._assert_named_proof_zero(prepared, argv, verbose=False)
+            observed = str(envelope["observed"])
+            self.assertEqual(observed, envelope["message"])
+            self.assertNotIn("raise site", observed)
+            self.assertNotIn("CoordinationRefusal", observed)
+            self.assertNotIn("JSONDecodeError", observed)
+
+        assert_bare_observation()
+        with mock.patch.object(
+            STATUS, "_legible_ingest_refusal", _without_verbose_gate()
+        ), self.assertRaises(AssertionError):
+            assert_bare_observation()
+
+    def test_spec_pins_the_ordered_proof_names_to_code(self) -> None:
+        _assert_spec_proof_names(SPEC)
+        mutant = SPEC.replace("`chain-schema-and-digest-replay`, ", "", 1)
+        with self.assertRaisesRegex(AssertionError, "differ from code"):
+            _assert_spec_proof_names(mutant)
 
     def test_verbose_unclassified_nonproof_refusal_has_no_augmentation(self) -> None:
         prepared = self.prepare_terminal_ingest(

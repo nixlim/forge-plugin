@@ -23,7 +23,7 @@ ARTIFACT_SHA256 = {
         "09a6c264d3c4abdcb411b1659573ef239dad5df6f71760e7f44d8b36d73bf387"
     ),
     ".forge/evals/tasks/fr230-phase3-4-v2.manifest.json": (
-        "b0f301ad1f41715edbddeeb6b84eddb6eaef67799804f63acf8e2a5781691280"
+        "8d4d0da80a832a760e0afaa9a8e01081d681b03f03d2615f9b163fef26ba326e"
     ),
     "system/fr223/hook-argv-cases-v2.json": (
         "310bfda5efdbfe3c99a1d189c8ff336782f90a79af741c4098ada4ae579bde27"

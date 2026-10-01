@@ -3,7 +3,7 @@
   "result_id": "fr230-phase-3-cleanup",
   "slot": "cleanup",
   "status": "PASS",
-  "subject_candidate_sha256": "cb9747e47a9a5bc22c7369c6b75dcaa4a24d92f77ffd9205203038b829a6aba2",
+  "subject_candidate_sha256": "8c8cfa8795ef816de06eec30f5416910880f634357269ca5d4328c356d7f469c",
   "command": [
     "python3",
     "-m",

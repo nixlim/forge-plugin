@@ -187,6 +187,13 @@ hand-written `execution_result`, is the lifecycle authority. Act on each result 
 | any refusal naming `journal batch-recover` | Run the named recovery before anything else. |
 | start refused: initialization, version floor, not logged in, or route | Stop and report the diagnostic verbatim; never switch provider or model. |
 
+A commit-family `execution-result-pending` refusal means an overlapping mutating execution has no
+authoritative terminal `execution_result`. For a typed launch, clear it only with `forge launch
+collect`; for another execution, journal its real terminal result through the typed builder. Never
+invent a result to clear the refusal. Lines beginning `forge: journal warning — this append makes a
+passed close impossible as recorded:` are advisory close projections: the owning command's stdout
+and exit status are unchanged, and the named issue must be resolved honestly before close.
+
 The legacy `codex_agent_stale`, `codex_agent_unknown`, and `state --dump-event-types` protocol
 applies only to reviewer-specific prose sessions outside the typed lane. There, an events file mtime,
 PID, PGID, and process-group check remain required; never conclude failure from staleness alone. A

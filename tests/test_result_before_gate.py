@@ -219,7 +219,7 @@ class ResultGateUnitTests(unittest.TestCase):
         )
         self.assertEqual(
             result_gate.remediation(prose, "run-example"),
-            "python3 scripts/codex_orch_tools.py journal execution-result "
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" journal execution-result '
             "--repo <repo> --run-id run-example --idempotency-key <64-hex> "
             "--execution execution-05 --agent <agent> --task task-01 "
             "--status <complete|blocked|failed> --summary <text>",
@@ -551,6 +551,30 @@ class ResultBeforeGateIntegrationTests(FIXTURE.ForgeCLIFixture):
         )
         self.assertEqual(envelope["remediation"], remediation)
 
+    def assert_inspection_refusal(
+        self, *argv: str, verb: str, chain_id: str | None = None
+    ) -> None:
+        if chain_id is not None:
+            state_before = self.state_path(chain_id).read_bytes()
+            events_before = self.events_path(chain_id).read_bytes()
+        exit_code, envelope, stderr = self.invoke_cli(*argv)
+        self.assertEqual((exit_code, stderr), (1, ""))
+        self.assertEqual(envelope["reason_code"], "run-task-binding-invalid")
+        self.assertEqual(
+            envelope["message"],
+            f"forge: {verb} refused — pending execution_result inspection is unavailable",
+        )
+        self.assertEqual(envelope["expected"], "readable committed policy and run journal")
+        self.assertEqual(
+            envelope["remediation"], "inspect the run journal and committed policy, then retry"
+        )
+        rendered = json.dumps(envelope)
+        for detail in ("unhashable", "inspection detail", "not a string"):
+            self.assertNotIn(detail, rendered)
+        if chain_id is not None:
+            self.assertEqual(self.state_path(chain_id).read_bytes(), state_before)
+            self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
+
     def test_commit_start_refuses_before_chain_creation_then_retry_succeeds(self) -> None:
         run_id = "run-20260930-result-start"
         opening = self.open_run(run_id)
@@ -571,7 +595,8 @@ class ResultBeforeGateIntegrationTests(FIXTURE.ForgeCLIFixture):
             run_id=run_id,
             execution=str(execution["execution"]),
             remediation=(
-                "python3 scripts/codex_orch_tools.py journal execution-result "
+                'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" journal '
+                "execution-result "
                 f"--repo <repo> --run-id {run_id} --idempotency-key <64-hex> "
                 f"--execution {execution['execution']} --agent <agent> --task task-01 "
                 "--status <complete|blocked|failed> --summary <text>"
@@ -648,7 +673,7 @@ class ResultBeforeGateIntegrationTests(FIXTURE.ForgeCLIFixture):
             ("review request", ("review", "request")),
         )
         remediation = (
-            "python3 scripts/codex_orch_tools.py journal execution-result "
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" journal execution-result '
             f"--repo <repo> --run-id {run_id} --idempotency-key <64-hex> "
             f"--execution {execution['execution']} --agent <agent> --task task-01 "
             "--status <complete|blocked|failed> --summary <text>"
@@ -816,27 +841,25 @@ class ResultBeforeGateIntegrationTests(FIXTURE.ForgeCLIFixture):
             with self.subTest(path=path):
                 assert_refused(path)
 
-        def raw_paths(
-            _engine: object, method_name: str, args: tuple[object, ...]
-        ) -> tuple[str, ...]:
-            if method_name != "restage" or not args:
-                return ()
-            values = args[0]
-            if not isinstance(values, (list, tuple)):
-                return ()
-            return tuple(value for value in values if isinstance(value, str))
+        original_restage = CLI.Engine.restage
 
-        with mock.patch.object(
-            COMMAND_LOCK, "_requested_restage_paths", side_effect=raw_paths
-        ), self.assertRaises(AssertionError):
-            assert_refused("./docs/guide.md")
+        def keyword_restage(engine, paths):
+            return original_restage(engine, paths=paths)
+
+        def positional_only(_engine, _method_name, args, _kwargs) -> tuple[str, ...]:
+            return tuple(value for value in args[0] if isinstance(value, str)) if args else ()
+
+        with mock.patch.object(CLI.Engine, "restage", keyword_restage):
+            assert_refused("docs/guide.md")
+            with mock.patch.object(
+                COMMAND_LOCK, "_requested_restage_paths", side_effect=positional_only
+            ), self.assertRaises(AssertionError):
+                assert_refused("docs/guide.md")
 
     def test_pending_inspection_read_errors_have_the_bound_reason(self) -> None:
         run_id = "run-20260930-result-read-error"
         self.open_run(run_id)
         chain_id = self.start_chain(run_id)
-        state_before = self.state_path(chain_id).read_bytes()
-        events_before = self.events_path(chain_id).read_bytes()
 
         cases = (
             (
@@ -858,27 +881,9 @@ class ResultBeforeGateIntegrationTests(FIXTURE.ForgeCLIFixture):
         )
         for name, patcher in cases:
             with self.subTest(name=name), patcher():
-                exit_code, envelope, stderr = self.invoke_cli(
-                    "--chain-id", chain_id, "verify"
+                self.assert_inspection_refusal(
+                    "--chain-id", chain_id, "verify", verb="verify", chain_id=chain_id
                 )
-            self.assertEqual((exit_code, stderr), (1, ""))
-            self.assertEqual(
-                envelope["reason_code"], "run-task-binding-invalid"
-            )
-            self.assertEqual(
-                envelope["message"],
-                "forge: verify refused — pending execution_result inspection "
-                "is unavailable",
-            )
-            self.assertEqual(
-                envelope["expected"], "readable committed policy and run journal"
-            )
-            self.assertEqual(
-                envelope["remediation"],
-                "inspect the run journal and committed policy, then retry",
-            )
-            self.assertEqual(self.state_path(chain_id).read_bytes(), state_before)
-            self.assertEqual(self.events_path(chain_id).read_bytes(), events_before)
 
     def test_pending_execution_does_not_intercept_review_cancel(self) -> None:
         run_id = "run-20260930-result-review-cancel"
@@ -1039,7 +1044,7 @@ class SerializationPlacementTests(unittest.TestCase):
         def verify(current_engine):
             return wrapped_gate_run(current_engine)
 
-        def enforce(_engine, _method_name, _run_id, _args) -> None:
+        def enforce(_engine, _method_name, _run_id, _args, _kwargs) -> None:
             COMMAND_LOCK._enforce_pending_result(records, request)
 
         engine = self.fake_engine()

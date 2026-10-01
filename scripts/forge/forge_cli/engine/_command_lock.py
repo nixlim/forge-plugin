@@ -164,6 +164,25 @@ def _enforce_pending_result(
         _record_pending_result_warning(result_gate.warning_message(pending))
 
 
+def _inspect_pending_result(
+    records: Sequence[dict[str, object]],
+    request: _ResultGateRequest,
+    *,
+    verbose: bool,
+) -> None:
+    try:
+        _enforce_pending_result(records, request)
+    except (Refusal, FrozenError):
+        raise
+    except Exception as exc:
+        raise _pending_result_inspection_refusal(
+            request.verb,
+            request.state,
+            exc,
+            verbose=verbose,
+        ) from exc
+
+
 def _prove_run_task_binding(
     ctx: chain_core.CommandContext,
     run_id: str,
@@ -218,7 +237,7 @@ def _prove_run_task_binding(
                     for admitted in run_state.scope
                 ):
                     raise ValueError(f"path {path} is outside admitted scope")
-            _enforce_pending_result(
+            _inspect_pending_result(
                 run_state.records,
                 _ResultGateRequest(
                     run_id,
@@ -228,9 +247,26 @@ def _prove_run_task_binding(
                     frozenset(mechanical_outputs),
                     None,
                 ),
+                verbose=ctx.options.verbose,
             )
-    except (OSError, RuntimeError, ValueError, journal.CoordinationRefusal) as exc:
+    except (Refusal, FrozenError):
+        raise
+    except (OSError, journal.CoordinationRefusal) as exc:
+        raise _pending_result_inspection_refusal(
+            "commit start",
+            None,
+            exc,
+            verbose=ctx.options.verbose,
+        ) from exc
+    except (RuntimeError, ValueError) as exc:
         raise _commit_start_binding_refusal(exc) from exc
+    except Exception as exc:
+        raise _pending_result_inspection_refusal(
+            "commit start",
+            None,
+            exc,
+            verbose=ctx.options.verbose,
+        ) from exc
     return {
         "run_id": run_id,
         "task_id": task_id,
@@ -397,31 +433,61 @@ def abort_disposition_refusal(
 
 
 def _requested_restage_paths(
-    engine: "Engine", method_name: str, args: Sequence[object]
+    engine: "Engine",
+    method_name: str,
+    args: Sequence[object],
+    kwargs: Mapping[str, object],
 ) -> tuple[str, ...]:
-    if method_name != "restage" or not args:
+    if method_name != "restage":
         return ()
-    values = args[0]
+    values = args[0] if args else kwargs.get("paths")
     if not isinstance(values, (list, tuple)):
         return ()
     requested = [value for value in values if isinstance(value, str)]
     return tuple(engine.ctx.repo.normalize_paths(requested))
 
 
+def _verbose_inspection_observed(message: str, exc: BaseException) -> str:
+    classes: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        classes.append(type(current).__name__)
+        current = (
+            current.__cause__
+            if current.__cause__ is not None
+            else current.__context__
+        )
+    return f"{message}; causes {' <- '.join(classes)}"
+
+
 def _pending_result_inspection_refusal(
-    verb: str, state: Mapping[str, Any] | None
+    verb: str,
+    state: Mapping[str, Any] | None,
+    exc: BaseException,
+    *,
+    verbose: bool,
 ) -> Refusal:
+    message = (
+        f"forge: {verb} refused — pending execution_result inspection is unavailable"
+    )
     return Refusal(
         V2ReasonCode.RUN_TASK_BINDING_INVALID,
-        f"forge: {verb} refused — pending execution_result inspection is unavailable",
+        message,
         expected="readable committed policy and run journal",
+        observed=_verbose_inspection_observed(message, exc) if verbose else message,
         remediation="inspect the run journal and committed policy, then retry",
         chain=state,
     )
 
 
 def _refuse_pending_result(
-    engine: "Engine", method_name: str, run_id: str, args: Sequence[object]
+    engine: "Engine",
+    method_name: str,
+    run_id: str,
+    args: Sequence[object],
+    kwargs: Mapping[str, object],
 ) -> None:
     verb = _RESULT_GATED_METHODS.get(method_name)
     if verb is None:
@@ -453,7 +519,7 @@ def _refuse_pending_result(
                 journal.JOURNAL_READ_TRANSACTION_REFUSAL
             )
         paths = tuple(path for path in stored_paths if isinstance(path, str))
-        paths += _requested_restage_paths(engine, method_name, args)
+        paths += _requested_restage_paths(engine, method_name, args, kwargs)
         run_dir = (
             engine.ctx.store.common_root
             / ".codex-orchestrator"
@@ -462,27 +528,40 @@ def _refuse_pending_result(
         )
         with batch.batch_lock(run_dir, create=False):
             records = journal._scan_run(run_dir).records
+        _inspect_pending_result(
+            records,
+            _ResultGateRequest(
+                run_id,
+                verb,
+                str(binding["task_id"]),
+                paths,
+                frozenset(exempt_paths),
+                state,
+            ),
+            verbose=engine.ctx.options.verbose,
+        )
     except Refusal as exc:
         if exc.reason_code.value != V2ReasonCode.POLICY_UNREADABLE.value:
             raise
-        raise _pending_result_inspection_refusal(verb, state) from exc
+        raise _pending_result_inspection_refusal(
+            verb, state, exc, verbose=engine.ctx.options.verbose
+        ) from exc
     except OSError as exc:
-        raise _pending_result_inspection_refusal(verb, state) from exc
+        raise _pending_result_inspection_refusal(
+            verb, state, exc, verbose=engine.ctx.options.verbose
+        ) from exc
     except journal.CoordinationRefusal as exc:
         if str(exc) == journal.BATCH_DIVERGED:
             raise
-        raise _pending_result_inspection_refusal(verb, state) from exc
-    _enforce_pending_result(
-        records,
-        _ResultGateRequest(
-            run_id,
-            verb,
-            str(binding["task_id"]),
-            paths,
-            frozenset(exempt_paths),
-            state,
-        ),
-    )
+        raise _pending_result_inspection_refusal(
+            verb, state, exc, verbose=engine.ctx.options.verbose
+        ) from exc
+    except FrozenError:
+        raise
+    except Exception as exc:
+        raise _pending_result_inspection_refusal(
+            verb, state, exc, verbose=engine.ctx.options.verbose
+        ) from exc
 
 
 def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[..., Outcome]:
@@ -530,7 +609,7 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
                         else:
                             if method.__name__ in _RESULT_GATED_METHODS:
                                 _refuse_pending_result(
-                                    self, method.__name__, run_id, args
+                                    self, method.__name__, run_id, args, kwargs
                                 )
                             return method(self, *args, **kwargs)
                 if retry:

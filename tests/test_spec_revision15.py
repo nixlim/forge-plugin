@@ -6,6 +6,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
+RESULT_GUIDANCE = {
+    name: (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+    for name in ("orchestrate", "workflow")
+}
 POLICIES = {
     "root": (ROOT / "forge-project.md").read_text(encoding="utf-8"),
     "template": (ROOT / "system/template/forge-project.md").read_text(
@@ -133,6 +137,46 @@ def assert_trigger_controls(specification: str, policies: dict[str, str]) -> Non
                 )
 
 
+def assert_result_guidance(document: str) -> None:
+    normalized = re.sub(r"\s+", " ", document)
+    required = (
+        "`execution-result-pending` refusal means",
+        "journal its real terminal result through the typed builder",
+        "Never invent a result to clear the refusal",
+        "forge: journal warning — this append makes a passed close impossible as recorded:",
+        "are advisory close projections",
+        "stdout and exit status are unchanged",
+    )
+    for clause in required:
+        if clause not in normalized:
+            raise AssertionError(f"result guidance lacks {clause}")
+
+
+def assert_fr249_followup(specification: str) -> None:
+    block = requirement_block(specification, "FR-249")
+    required = (
+        'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py"',
+        "JSON-style escaping is applied before POSIX shell-word quoting",
+        "Operators are responsible for journaling only the real terminal outcome",
+        "nonempty task IDs already recorded by `task-start`",
+        "not syntax-validated beyond being nonempty",
+        "If the required pending-result inspection on any of the six surfaces",
+        "`OSError` while reading the committed policy or run journal",
+        "or another unexpected exception, the command fails closed",
+        "A missing, null, non-string, or otherwise non-terminal authoritative status",
+        "Without `--verbose`, the inspection-unavailable refusal's structured `observed`",
+        "exception class names in cause/context order",
+        "never exception messages",
+        "for the FR-249 inspection-unavailable refusal only",
+        "Pending-result inspection raises an `OSError`",
+    )
+    for clause in required:
+        if clause not in specification:
+            raise AssertionError(f"FR-249 follow-up lacks {clause}")
+    if "python3 scripts/codex_orch_tools.py journal execution-result" in block:
+        raise AssertionError("FR-249 retains the repository-relative builder spelling")
+
+
 class SpecificationRevision15Tests(unittest.TestCase):
     def test_revision_and_deferral_state_are_explicit(self) -> None:
         self.assertIn("**Status**: Draft (Revision 18)", SPEC)
@@ -141,6 +185,32 @@ class SpecificationRevision15Tests(unittest.TestCase):
         )
         self.assertIn("Revision 15", intent)
         assert_deferred_authority(SPEC)
+
+    def test_revision18_result_followup_and_skill_guidance_are_load_bearing(self) -> None:
+        assert_fr249_followup(SPEC)
+        for name, document in RESULT_GUIDANCE.items():
+            with self.subTest(skill=name):
+                assert_result_guidance(document)
+                mutant = document.replace("are advisory close projections", "are projections", 1)
+                with self.assertRaisesRegex(AssertionError, "advisory close projections"):
+                    assert_result_guidance(mutant)
+        for clause in (
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py"',
+            "JSON-style escaping is applied before POSIX shell-word quoting",
+            "Operators are responsible for journaling only the real terminal outcome",
+            "nonempty task IDs already recorded by `task-start`",
+            "If the required pending-result inspection on any of the six surfaces",
+            "`OSError` while reading the committed policy or run journal",
+            "or another unexpected exception, the command fails closed",
+            "A missing, null, non-string, or otherwise non-terminal authoritative status",
+            "Without `--verbose`, the inspection-unavailable refusal's structured `observed`",
+            "exception class names in cause/context order",
+            "never exception messages",
+            "for the FR-249 inspection-unavailable refusal only",
+            "Pending-result inspection raises an `OSError`",
+        ):
+            with self.subTest(clause=clause), self.assertRaises(AssertionError):
+                assert_fr249_followup(SPEC.replace(clause, ""))
 
     def test_fr244_deferral_assertion_detects_its_reinsertion(self) -> None:
         block = requirement_block(SPEC, "FR-244")
