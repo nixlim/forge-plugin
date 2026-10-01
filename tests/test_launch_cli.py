@@ -18,6 +18,26 @@ from tests._launch_support import (
 
 CLI = load_cli("forge_launch_cli_tests")
 
+MUTATING_LAUNCH_WARNINGS = (
+    "forge: journal warning — this append makes a passed close impossible as "
+    "recorded: execution codex-implementer-01/execution-01 has no terminal "
+    "execution_result\n"
+    "forge: journal warning — this append makes a passed close impossible as "
+    "recorded: run closed as passed without a passing 'gate-1' verification "
+    "after the last mutating execution\n"
+    "forge: journal warning — this append makes a passed close impossible as "
+    "recorded: run closed as passed without a passing 'gate-2' verification "
+    "after the last mutating execution\n"
+    "forge: journal warning — this append makes a passed close impossible as "
+    "recorded: run closed as passed without a passing 'gate-3: review-final "
+    "verdict' verification after the last mutating execution\n"
+)
+PLAN_LAUNCH_WARNING = (
+    "forge: journal warning — this append makes a passed close impossible as "
+    "recorded: execution claude-plan-01/execution-02 has no terminal "
+    "execution_result\n"
+)
+
 
 class LaunchCLIParsingTests(LaunchLaneSupport, unittest.TestCase):
     def _dispatch(self, argv: list[str]) -> tuple[object, mock.Mock]:
@@ -201,15 +221,19 @@ class LaunchCLIParsingTests(LaunchLaneSupport, unittest.TestCase):
 
 
 class LaunchCLIIntegrationTests(LaunchLaneSupport, unittest.TestCase):
-    def _invoke(self, argv: list[str]) -> tuple[int, dict[str, object]]:
+    def _invoke(
+        self, argv: list[str], *, expected_stderr: str
+    ) -> tuple[int, dict[str, object]]:
         stdout = io.StringIO()
         stderr = io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             status = CLI.main(["--json", *argv])
-        self.assertEqual(stderr.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), expected_stderr)
         return status, json.loads(stdout.getvalue())
 
-    def _launch_and_collect(self, role: str) -> None:
+    def _launch_and_collect(
+        self, role: str, *, expected_launch_stderr: str
+    ) -> None:
         common = ["--repo", str(self.repo), "--run-id", self.run_id]
         status, launched = self._invoke(
             [
@@ -223,7 +247,8 @@ class LaunchCLIIntegrationTests(LaunchLaneSupport, unittest.TestCase):
                 str(self.linked_worktree),
                 "--brief",
                 str(self.brief),
-            ]
+            ],
+            expected_stderr=expected_launch_stderr,
         )
         self.assertEqual(status, 0, launched)
         record = self.execution_records()[-1]
@@ -236,7 +261,8 @@ class LaunchCLIIntegrationTests(LaunchLaneSupport, unittest.TestCase):
                 "collect",
                 "--execution",
                 str(record["execution"]),
-            ]
+            ],
+            expected_stderr="",
         )
         self.assertEqual(status, 0, collected)
         self.assertEqual(collected["state"], "complete")
@@ -253,8 +279,13 @@ class LaunchCLIIntegrationTests(LaunchLaneSupport, unittest.TestCase):
             patch_engine("CODEX_EXECUTABLE", str(codex)),
             patch_engine("CLAUDE_EXECUTABLE", str(claude)),
         ):
-            self._launch_and_collect("implementer")
-            self._launch_and_collect("plan")
+            self._launch_and_collect(
+                "implementer",
+                expected_launch_stderr=MUTATING_LAUNCH_WARNINGS,
+            )
+            self._launch_and_collect(
+                "plan", expected_launch_stderr=PLAN_LAUNCH_WARNING
+            )
         results = [row for row in self.records() if row.get("type") == "execution_result"]
         self.assertEqual([row["status"] for row in results], ["complete", "complete"])
         self.assertTrue((self.logs / "codex.argv.json").is_file())

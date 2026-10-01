@@ -3,7 +3,9 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import os
-from typing import TYPE_CHECKING, Any, Mapping, Sequence, Collection, Callable
+import sys
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, Callable, Collection, Mapping, NamedTuple, Sequence
 from forge_cli import chain_core, runtime, candidate as candidate_module
 if TYPE_CHECKING:
     from forge_cli.engine._engine import Engine
@@ -11,7 +13,7 @@ from forge_cli.engine._core import _run_halt as _run_halt, _commit_start_binding
 from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES, ABORT_DISPOSITION_PRECONDITIONS as ABORT_DISPOSITION_PRECONDITIONS
 from forge_cli.policy import Policy
 from pathlib import Path
-from forge_cli.envelope import FrozenError, OUTPUT_SCHEMA, Outcome, REVISION9_OUTPUT_SCHEMA
+from forge_cli.envelope import FrozenError, OUTPUT_SCHEMA, Outcome, Refusal, REVISION9_OUTPUT_SCHEMA, V2ReasonCode
 import functools
 
 _TERMINAL_SELECTION_METHODS = frozenset({
@@ -21,6 +23,55 @@ _TERMINAL_SELECTION_METHODS = frozenset({
     "operator_tombstone",
     "review_cancel",
 })
+
+_RESULT_GATED_METHODS = {
+    "restage": "commit restage",
+    "rebase": "commit rebase",
+    "verify": "verify",
+    "gate_run": "gate run",
+    "review_request": "review request",
+}
+
+_PENDING_RESULT_WARNINGS: ContextVar[dict[str, None] | None] = ContextVar(
+    "pending_result_warnings", default=None
+)
+
+
+class _ResultGateRequest(NamedTuple):
+    run_id: str
+    verb: str
+    task: str
+    paths: tuple[str, ...]
+    exempt_paths: frozenset[str]
+    state: Mapping[str, Any] | None
+
+
+def _record_pending_result_warning(message: str) -> None:
+    warnings = _PENDING_RESULT_WARNINGS.get()
+    if warnings is None:
+        print(message, file=sys.stderr)
+        return
+    warnings[message] = None
+
+
+def _scope_pending_result_warnings(
+    method: Callable[..., Outcome],
+) -> Callable[..., Outcome]:
+    @functools.wraps(method)
+    def scoped(*args: Any, **kwargs: Any) -> Outcome:
+        if _PENDING_RESULT_WARNINGS.get() is not None:
+            return method(*args, **kwargs)
+        warnings: dict[str, None] = {}
+        warnings_reset = _PENDING_RESULT_WARNINGS.set(warnings)
+        try:
+            result = method(*args, **kwargs)
+            for warning in warnings:
+                print(warning, file=sys.stderr)
+            return result
+        finally:
+            _PENDING_RESULT_WARNINGS.reset(warnings_reset)
+
+    return scoped
 
 
 def _new_state(
@@ -86,6 +137,33 @@ def _new_state(
     return chain_core.validate_state(state, chain_id)
 
 
+def _enforce_pending_result(
+    records: Sequence[dict[str, object]], request: _ResultGateRequest
+) -> None:
+    from codex_orchestrator import result_gate
+
+    blocking, advisory = result_gate.pending_mutations(
+        records,
+        chain_task=request.task,
+        chain_paths=request.paths,
+        exempt_paths=request.exempt_paths,
+    )
+    if blocking:
+        pending = blocking[0]
+        raise Refusal(
+            V2ReasonCode.EXECUTION_RESULT_PENDING,
+            result_gate.refusal_message(request.verb, pending),
+            expected=(
+                "every overlapping mutating execution of run "
+                f"{request.run_id} has a terminal execution_result"
+            ),
+            remediation=result_gate.remediation(pending, request.run_id),
+            chain=request.state,
+        )
+    for pending in advisory:
+        _record_pending_result_warning(result_gate.warning_message(pending))
+
+
 def _prove_run_task_binding(
     ctx: chain_core.CommandContext,
     run_id: str,
@@ -140,6 +218,17 @@ def _prove_run_task_binding(
                     for admitted in run_state.scope
                 ):
                     raise ValueError(f"path {path} is outside admitted scope")
+            _enforce_pending_result(
+                run_state.records,
+                _ResultGateRequest(
+                    run_id,
+                    "commit start",
+                    task_id,
+                    tuple(paths),
+                    frozenset(mechanical_outputs),
+                    None,
+                ),
+            )
     except (OSError, RuntimeError, ValueError, journal.CoordinationRefusal) as exc:
         raise _commit_start_binding_refusal(exc) from exc
     return {
@@ -307,6 +396,95 @@ def abort_disposition_refusal(
     return None
 
 
+def _requested_restage_paths(
+    engine: "Engine", method_name: str, args: Sequence[object]
+) -> tuple[str, ...]:
+    if method_name != "restage" or not args:
+        return ()
+    values = args[0]
+    if not isinstance(values, (list, tuple)):
+        return ()
+    requested = [value for value in values if isinstance(value, str)]
+    return tuple(engine.ctx.repo.normalize_paths(requested))
+
+
+def _pending_result_inspection_refusal(
+    verb: str, state: Mapping[str, Any] | None
+) -> Refusal:
+    return Refusal(
+        V2ReasonCode.RUN_TASK_BINDING_INVALID,
+        f"forge: {verb} refused — pending execution_result inspection is unavailable",
+        expected="readable committed policy and run journal",
+        remediation="inspect the run journal and committed policy, then retry",
+        chain=state,
+    )
+
+
+def _refuse_pending_result(
+    engine: "Engine", method_name: str, run_id: str, args: Sequence[object]
+) -> None:
+    verb = _RESULT_GATED_METHODS.get(method_name)
+    if verb is None:
+        return
+    batch, _builders, journal = runtime._coordination_modules()
+    from codex_orchestrator import result_gate
+
+    if "result-before-gate" not in result_gate.RESULT_GATE_CONTROLS:
+        return
+    state: dict[str, Any] | None = None
+    try:
+        state = _peek_selected_chain(engine, include_terminal=False)
+        if state is None:
+            raise journal.CoordinationRefusal(
+                journal.JOURNAL_READ_TRANSACTION_REFUSAL
+            )
+        binding = state.get("run_binding")
+        if not isinstance(binding, Mapping) or not isinstance(
+            binding.get("task_id"), str
+        ):
+            raise journal.CoordinationRefusal(
+                journal.JOURNAL_READ_TRANSACTION_REFUSAL
+            )
+        policy = chain_core._policy_for_state(engine.ctx, state)
+        exempt_paths = chain_core._committed_changelog_output_paths(policy)
+        stored_paths = state.get("paths")
+        if not isinstance(stored_paths, list):
+            raise journal.CoordinationRefusal(
+                journal.JOURNAL_READ_TRANSACTION_REFUSAL
+            )
+        paths = tuple(path for path in stored_paths if isinstance(path, str))
+        paths += _requested_restage_paths(engine, method_name, args)
+        run_dir = (
+            engine.ctx.store.common_root
+            / ".codex-orchestrator"
+            / "runs"
+            / run_id
+        )
+        with batch.batch_lock(run_dir, create=False):
+            records = journal._scan_run(run_dir).records
+    except Refusal as exc:
+        if exc.reason_code.value != V2ReasonCode.POLICY_UNREADABLE.value:
+            raise
+        raise _pending_result_inspection_refusal(verb, state) from exc
+    except OSError as exc:
+        raise _pending_result_inspection_refusal(verb, state) from exc
+    except journal.CoordinationRefusal as exc:
+        if str(exc) == journal.BATCH_DIVERGED:
+            raise
+        raise _pending_result_inspection_refusal(verb, state) from exc
+    _enforce_pending_result(
+        records,
+        _ResultGateRequest(
+            run_id,
+            verb,
+            str(binding["task_id"]),
+            paths,
+            frozenset(exempt_paths),
+            state,
+        ),
+    )
+
+
 def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[..., Outcome]:
     """Hold journal-outer then worktree serialization across each command."""
 
@@ -350,6 +528,10 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
                         if _command_run_lock_id(self, method.__name__) != run_id:
                             retry = True
                         else:
+                            if method.__name__ in _RESULT_GATED_METHODS:
+                                _refuse_pending_result(
+                                    self, method.__name__, run_id, args
+                                )
                             return method(self, *args, **kwargs)
                 if retry:
                     continue
@@ -370,4 +552,4 @@ def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[...,
             ),
         )
 
-    return wrapped
+    return _scope_pending_result_warnings(wrapped)

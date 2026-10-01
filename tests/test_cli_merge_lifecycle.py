@@ -4986,9 +4986,11 @@ class MergeLifecycleStatusTests(ADAPTERS.MergeAdapterFixture):
 
 
 class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
-    def test_lifecycle_adds_only_the_run_scope_reason_enum_member(self) -> None:
-        self.assertEqual(len(CLI.V2ReasonCode), 54)
-        self.assertIn("run-scope-exceeded", {item.value for item in CLI.V2ReasonCode})
+    def test_revision18_reason_union_has_55_members(self) -> None:
+        self.assertEqual(len(CLI.V2ReasonCode), 55)
+        values = {item.value for item in CLI.V2ReasonCode}
+        self.assertIn("run-scope-exceeded", values)
+        self.assertIn("execution-result-pending", values)
 
     def test_activation_flag_false_hides_merge_and_true_exposes_exact_slice(self) -> None:
         self.assertIs(CLI.MERGE_LIFECYCLE_ACTIVE, False)

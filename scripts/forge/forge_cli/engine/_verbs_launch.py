@@ -6,6 +6,7 @@ import dataclasses
 import os
 import shutil
 import stat
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -512,6 +513,21 @@ def _owner_record(ctx: chain_core.CommandContext, facts: StartFacts) -> OwnerLau
         return _append_draft(run.builders, run.journal, facts, draft)
 
 
+def _print_record_warnings(
+    repository: Path, run_id: str, record: dict[str, object]
+) -> None:
+    """Emit best-effort close-projection warnings after a typed append."""
+
+    try:
+        from codex_orchestrator import result_gate
+
+        result_gate.print_record_warnings(
+            repository, run_id, record, stream=sys.stderr
+        )
+    except Exception:
+        return
+
+
 def _clear_spawn_failure(
     ctx: chain_core.CommandContext, owner: OwnerLaunch, cause: str
 ) -> tuple[dict[str, object], bool]:
@@ -547,6 +563,8 @@ def _clear_spawn_failure(
         result=result,
         completion_raw=raw,
     )
+    if not repeated:
+        _print_record_warnings(owner.facts.repository, owner.facts.run_id, record)
     _launch_lane.mark_collected(paths, owner.draft.marker, record.get("status"))
     return record, repeated
 
@@ -586,6 +604,11 @@ def launch(
     facts = _preflight(self.ctx, role, task, worktree, brief)
     owner = _owner_record(self.ctx, facts)
     draft = owner.draft
+    warning_record: dict[str, object] = {
+        "type": "execution",
+        "execution": draft.paths.execution,
+        "agent": draft.paths.agent,
+    }
     try:
         try:
             process = _review_lane_api.spawn_wrapper(
@@ -595,6 +618,9 @@ def launch(
                 attempt_fd=draft.attempt_fd,
             )
         except Exception as exc:
+            _print_record_warnings(
+                facts.repository, facts.run_id, warning_record
+            )
             return _spawn_failure_outcome(self, owner, exc)
     finally:
         os.close(draft.attempt_fd)
@@ -606,6 +632,7 @@ def launch(
             f"forge: launch refused — pid sidecar unavailable for "
             f"{draft.paths.execution}; run launch collect",
         ) from exc
+    _print_record_warnings(facts.repository, facts.run_id, warning_record)
     return Outcome(
         ok=True,
         reason_code=V2ReasonCode.OK,

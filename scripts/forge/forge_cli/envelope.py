@@ -41,7 +41,7 @@ class ReasonCode(str, Enum):
 
 
 class V2ReasonCode(str, Enum):
-    """The complete additive 54-member ``forge-cli/2`` reason union."""
+    """The complete additive 55-member ``forge-cli/2`` reason union."""
 
     AMBIGUOUS_TARGET = "ambiguous-target"
     APPROVAL_REQUIRED = "approval-required"
@@ -57,6 +57,7 @@ class V2ReasonCode(str, Enum):
     DIRTY_WORKTREE = "dirty-worktree"
     DRIFT_TREE_INDEX = "drift-tree-index"
     EVIDENCE_INCOMPLETE = "evidence-incomplete"
+    EXECUTION_RESULT_PENDING = "execution-result-pending"
     FETCH_FAILED = "fetch-failed"
     FROZEN_CHAIN = "frozen-chain"
     HALT_ENGAGED = "halt-engaged"

@@ -13,7 +13,13 @@ import sys
 from pathlib import Path
 
 from codex_orchestrator.cli import main as upstream_main
-from codex_orchestrator import batch, builders, close_law, close_preflight
+from codex_orchestrator import (
+    batch,
+    builders,
+    close_law,
+    close_preflight,
+    result_gate,
+)
 from codex_orchestrator.journal import (
     CoordinationRefusal,
     INVALID_JOURNAL_RECORD,
@@ -279,6 +285,24 @@ def _typed_identity(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--idempotency-key", required=True)
 
 
+def _print_append_warnings(
+    args: argparse.Namespace, repo: Path, outcome: batch.BatchOutcome
+) -> None:
+    if (
+        getattr(args, "journal_command", None)
+        not in {"execution-start", "execution-result", "task-finish"}
+        or outcome.repeated
+    ):
+        return
+    try:
+        for warning in result_gate.append_warnings(
+            repo, args.run_id, outcome.receipt
+        ):
+            print(warning, file=sys.stderr)
+    except Exception:
+        return
+
+
 def _typed_main(argv: list[str]) -> int:
     recovery = len(argv) >= 2 and argv[:2] in (
         ["journal", "batch-recover"],
@@ -418,6 +442,7 @@ def _typed_main(argv: list[str]) -> int:
                 binding_id=args.binding_id,
             )
         print(json.dumps(outcome.payload(), sort_keys=True, separators=(",", ":")))
+        _print_append_warnings(args, repo, outcome)
         if (
             args.command == "run-close"
             and args.judgment == "blocked"

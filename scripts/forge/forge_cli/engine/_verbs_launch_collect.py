@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -307,6 +308,21 @@ def _validated_completion(
     return completion
 
 
+def _print_record_warnings(
+    repository: Path, run_id: str, record: dict[str, object]
+) -> None:
+    """Emit best-effort close-projection warnings after a typed append."""
+
+    try:
+        from codex_orchestrator import result_gate
+
+        result_gate.print_record_warnings(
+            repository, run_id, record, stream=sys.stderr
+        )
+    except Exception:
+        return
+
+
 def launch_collect(self: Engine, execution: str) -> Outcome:
     """Collect one typed execution without synthesizing terminal evidence."""
 
@@ -336,7 +352,7 @@ def launch_collect(self: Engine, execution: str) -> Outcome:
     except OSError as exc:
         raise _attempt_refusal("collect", execution, exc) from exc
     mapped = _launch_lane.map_completion(bound.record, bound.paths, completion)
-    result, _repeated = _launch_lane.append_execution_result(
+    result, repeated = _launch_lane.append_execution_result(
         bound.run,
         bound.paths,
         task=str(bound.record["task"]),
@@ -344,6 +360,12 @@ def launch_collect(self: Engine, execution: str) -> Outcome:
         completion_raw=raw,
     )
     _launch_lane.mark_collected(bound.paths, bound.marker, result.get("status"))
+    if not repeated:
+        _print_record_warnings(
+            bound.run.repository,
+            str(bound.marker["run_id"]),
+            result,
+        )
     return _launch_lane.terminal_outcome(bound.paths, result, message=mapped.message)
 
 
