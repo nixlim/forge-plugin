@@ -215,10 +215,14 @@ def _coordination_refusal(exc: BaseException) -> Refusal | FrozenError:
             message,
             remediation="supply an owner-controlled repository-relative ingest input",
         )
-    if message in {builders.INGEST_PROOF_INVALID, builders.TERMINAL_CHAIN_INVALID}:
+    ingest_proof_invalid = (
+        message == builders.INGEST_PROOF_INVALID
+        or message.startswith(builders.INGEST_PROOF_INVALID + ": proof ")
+    )
+    if ingest_proof_invalid or message == builders.TERMINAL_CHAIN_INVALID:
         return Refusal(
             V2ReasonCode.INGEST_PROOF_INVALID
-            if message == builders.INGEST_PROOF_INVALID
+            if ingest_proof_invalid
             else V2ReasonCode.BINDING_INVALID,
             message,
             remediation="repair the authoritative chain proof and retry",

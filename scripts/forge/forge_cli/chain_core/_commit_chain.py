@@ -813,6 +813,9 @@ def _verify_and_build_ingest_records(
             )
         ):
             raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    from codex_orchestrator import ingest_refusal
+
+    ingest_refusal.close_progress(completed_proofs)
 
     assert isinstance(outcome_map, dict)
     if (
@@ -883,9 +886,7 @@ def _verify_and_build_ingest_records(
     if selected_digests != outcome_map["event_digests"]:
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
 
-    projected = _ingest_allocation_records(
-        canonical_repository, run_state
-    )
+    projected = _ingest_allocation_records(canonical_repository, run_state)
     records: list[dict[str, object]] = []
     captured_citations = [
         captured_paths["state_file"],

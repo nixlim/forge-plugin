@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
 from forge_cli import chain_core, runtime
 from forge_cli.engine._approval import _success as _success
 from forge_cli.engine._candidate_ops import (
@@ -19,6 +23,57 @@ from forge_cli.envelope import (
     Refusal,
     V2ReasonCode,
 )
+
+
+def _legible_ingest_refusal(
+    ctx: Any,
+    builders: Any,
+    journal: Any,
+    exc: BaseException,
+    stage: str,
+    completed: Sequence[str],
+) -> Refusal | FrozenError:
+    from codex_orchestrator import ingest_refusal
+
+    message = str(exc)
+    is_ingest_proof_refusal = message == builders.INGEST_PROOF_INVALID
+    if is_ingest_proof_refusal and stage == "verifier":
+        message = ingest_refusal.legible_message(
+            builders.INGEST_PROOF_INVALID,
+            builders._INGEST_PROOF_ORDER,
+            exc,
+        )
+    elif is_ingest_proof_refusal and stage == "completeness":
+        message = ingest_refusal.legible_message(
+            builders.INGEST_PROOF_INVALID,
+            builders._INGEST_PROOF_ORDER,
+            exc,
+            first_missing=len(completed),
+        )
+    elif (
+        is_ingest_proof_refusal
+        and stage == "builder"
+        and exc.__cause__ is not None
+    ):
+        message = ingest_refusal.legible_message(
+            builders.INGEST_PROOF_INVALID,
+            builders._INGEST_PROOF_ORDER,
+            exc,
+        )
+    refusal = chain_core._coordination_refusal(
+        journal.CoordinationRefusal(message)
+    )
+    if (
+        ctx.options.verbose
+        and isinstance(refusal, Refusal)
+        and message.startswith(builders.INGEST_PROOF_INVALID + ": proof ")
+    ):
+        refusal.observed = ingest_refusal.verbose_observed(
+            message,
+            exc,
+            Path(runtime.PLUGIN_ROOT) / "scripts",
+        )
+    return refusal
 
 
 def journal_batch_recover(self) -> Outcome:
@@ -57,6 +112,9 @@ def journal_ingest_chain(
     idempotency_key: str,
 ) -> Outcome:
     chain_core.register_coordination_seams()
+    from codex_orchestrator import ingest_refusal
+
+    ingest_refusal.reset_progress()
     batch, builders, journal = runtime._coordination_modules()
     run_id = self.ctx.options.run_id
     if run_id is None:
@@ -65,6 +123,8 @@ def journal_ingest_chain(
             "forge: journal operation refused — explicit --run-id is required",
             remediation="rerun with the exact --repo and --run-id",
         )
+    ingest_stage = "inputs"
+    completed: Sequence[str] = ()
     try:
         key = batch.validate_idempotency_key(idempotency_key)
         (
@@ -111,13 +171,16 @@ def journal_ingest_chain(
                     source_data,
                     digests,
                 )
+                ingest_stage = "verifier"
                 records, completed = chain_core._verify_and_build_ingest_records(
                     self.ctx.repo.root, run_id, verifier_inputs
                 )
+                ingest_stage = "completeness"
                 if completed != chain_core.INGEST_PROOF_ORDER:
                     raise journal.CoordinationRefusal(
                         builders.INGEST_PROOF_INVALID
                     )
+                ingest_stage = "builder"
                 ingested = builders.ingest_chain_records(
                     self.ctx.repo.root,
                     run_id,
@@ -134,7 +197,14 @@ def journal_ingest_chain(
                     records=records,
                 )
     except journal.CoordinationRefusal as exc:
-        raise chain_core._coordination_refusal(exc) from exc
+        raise _legible_ingest_refusal(
+            self.ctx,
+            builders,
+            journal,
+            exc,
+            ingest_stage,
+            completed,
+        ) from exc
     landing = next(
         (
             record

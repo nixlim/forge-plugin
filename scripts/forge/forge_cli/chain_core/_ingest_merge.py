@@ -809,6 +809,9 @@ def _verify_and_build_merge_ingest_records(
             for admitted in run_state.scope
         ):
             raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
+    from codex_orchestrator import ingest_refusal
+
+    ingest_refusal.close_progress(completed_proofs)
 
     assert isinstance(outcome_map, dict)
     if (

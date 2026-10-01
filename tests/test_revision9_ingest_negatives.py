@@ -601,27 +601,27 @@ class Revision9IngestPredicateNegativeTests(
         original_require = authority_globals["_require_ingest_proof"]
         observed: list[str] = []
 
-        def track(
-            name: str, completed_proofs: list[str] | None = None
-        ) -> None:
+        def track(name: str, completed_proofs: list[str] | None = None) -> None:
             observed.append(name)
             original_require(name, completed_proofs)
 
-        with mock.patch.dict(
-            authority_globals, {"_require_ingest_proof": track}
-        ):
-            exit_code, envelope = self.invoke_cli(
-                *(argv or prepared.ingest_argv)
-            )
+        with mock.patch.dict(authority_globals, {"_require_ingest_proof": track}):
+            exit_code, envelope = self.invoke_cli(*(argv or prepared.ingest_argv))
         self.assertEqual(exit_code, 1, envelope)
         self.assertFalse(envelope["ok"])
         self.assertEqual(envelope["schema"], "forge-cli/2")
         self.assertEqual(envelope["reason_code"], "ingest-proof-invalid")
-        self.assertEqual(envelope["message"], builders.INGEST_PROOF_INVALID)
+        self.assertEqual(envelope["remediation"], "repair the authoritative chain proof and retry")
         position = CLI.INGEST_PROOF_ORDER.index(boundary)
-        self.assertEqual(
-            observed, list(CLI.INGEST_PROOF_ORDER[: position + 1])
+        prefix = f"{builders.INGEST_PROOF_INVALID}: proof {position + 1} {boundary}: "
+        message = str(envelope["message"])
+        self.assertTrue(message.startswith(prefix), message)
+        failure_classes = (
+            "chain state invalid", "malformed chain bytes", "filesystem read failed",
+            "internal proof error", "predicate not satisfied",
         )
+        self.assertIn(message.removeprefix(prefix), failure_classes)
+        self.assertEqual(observed, list(CLI.INGEST_PROOF_ORDER[: position + 1]))
         self.assert_snapshot_unchanged(prepared, snapshot)
         return envelope, observed
 

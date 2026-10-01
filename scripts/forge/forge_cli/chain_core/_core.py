@@ -74,6 +74,10 @@ def _require_ingest_proof(
     """Fail closed when a named proof is disabled or reached out of order."""
 
     _batch, builders, journal = runtime._coordination_modules()
+    from codex_orchestrator import ingest_refusal
+
+    if completed is not None and not completed:
+        ingest_refusal.reset_progress()
     if (
         name not in _REQUIRED_INGEST_PROOF_CONTROLS
         or name not in INGEST_PROOF_CONTROLS
@@ -88,6 +92,7 @@ def _require_ingest_proof(
         raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
     if completed is not None:
         completed.append(name)
+        ingest_refusal.record_progress(completed)
 
 
 def iso_z(value: dt.datetime | None = None) -> str:
