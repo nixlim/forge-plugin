@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import sys
+import textwrap
 import unittest
 from pathlib import Path
+from types import FunctionType
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +23,31 @@ RECHECK_ISSUE = (
 
 def digest(seed: str) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()
+
+
+def mutated_function(
+    function: FunctionType,
+    anchor: str,
+    replacement: str,
+) -> FunctionType:
+    """Compile one exact in-memory mutant with production globals."""
+
+    source = textwrap.dedent(inspect.getsource(function))
+    if source.count(anchor) != 1:
+        raise AssertionError(f"mutation anchor drifted for {function.__name__}")
+    namespace = dict(function.__globals__)
+    exec(
+        compile(
+            source.replace(anchor, replacement, 1),
+            function.__code__.co_filename,
+            "exec",
+        ),
+        namespace,
+    )
+    mutant = namespace[function.__name__]
+    if not isinstance(mutant, FunctionType):
+        raise AssertionError(f"mutation did not define {function.__name__}")
+    return mutant
 
 
 class LandedRecheckSourceTests(unittest.TestCase):
@@ -140,6 +168,17 @@ class LandedRecheckSourceTests(unittest.TestCase):
                 task=task,
             ),
         )
+
+    def assert_recheck_rejected(
+        self,
+        records: list[dict[str, object]],
+        failed: dict[str, object],
+        passed: dict[str, object],
+    ) -> None:
+        self.assertFalse(
+            landed_evidence.recheck_source(records)([failed, passed], 0)
+        )
+        self.assertEqual(self.profile_issues(records), [RECHECK_ISSUE])
 
     def test_aborted_chain_recheck_does_not_clear_failure_and_disable_restores_rule(
         self,
@@ -283,6 +322,83 @@ class LandedRecheckSourceTests(unittest.TestCase):
             ]
         )
         self.assertEqual(self.profile_issues(landed), [])
+
+    def test_unbound_later_pass_does_not_clear_bound_failure(self) -> None:
+        failed, passed = self.failed_and_passed(
+            failed_chain=self.chain_a,
+            failed_candidate=self.candidate_a,
+        )
+        records = self.relined([self.activated_start(), failed, passed])
+
+        def assert_rejected() -> None:
+            self.assert_recheck_rejected(records, failed, passed)
+
+        assert_rejected()
+        mutant = mutated_function(
+            landed_evidence.recheck_source,
+            "                or (bound := "
+            "journal._binding_chain_and_candidate(later)) is None\n",
+            "                or (bound := "
+            "journal._binding_chain_and_candidate(later) or failed_bound) is None\n",
+        )
+        with mock.patch.object(landed_evidence, "recheck_source", mutant):
+            with self.assertRaises(AssertionError):
+                assert_rejected()
+            self.assertEqual(self.profile_issues(records), [])
+
+    def test_invalid_binding_later_pass_does_not_clear_bound_failure(self) -> None:
+        failed, passed = self.failed_and_passed(
+            failed_chain=self.chain_a,
+            failed_candidate=self.candidate_a,
+            passed_chain=self.chain_a,
+            passed_candidate=self.candidate_a,
+        )
+        binding = passed["binding"]
+        assert isinstance(binding, dict)
+        binding["binding_id"] = digest("invalid-binding-id")
+        records = self.relined([self.activated_start(), failed, passed])
+
+        def assert_rejected() -> None:
+            self.assert_recheck_rejected(records, failed, passed)
+
+        assert_rejected()
+        mutant = mutated_function(
+            landed_evidence.recheck_source,
+            "                or (bound := "
+            "journal._binding_chain_and_candidate(later)) is None\n",
+            "                or (bound := "
+            "journal._binding_chain_and_candidate(later) or failed_bound) is None\n",
+        )
+        with mock.patch.object(landed_evidence, "recheck_source", mutant):
+            with self.assertRaises(AssertionError):
+                assert_rejected()
+            self.assertEqual(self.profile_issues(records), [])
+
+    def test_same_chain_different_candidate_pass_does_not_clear_failure(
+        self,
+    ) -> None:
+        failed, passed = self.failed_and_passed(
+            failed_chain=self.chain_a,
+            failed_candidate=self.candidate_a,
+            passed_chain=self.chain_a,
+            passed_candidate=self.candidate_b,
+        )
+        records = self.relined([self.activated_start(), failed, passed])
+
+        def assert_rejected() -> None:
+            self.assert_recheck_rejected(records, failed, passed)
+
+        assert_rejected()
+        mutant = mutated_function(
+            landed_evidence.recheck_source,
+            "            if key == failed_key or key in landed:\n",
+            "            if (failed_bound is not None and "
+            "bound[0] == failed_bound[0]) or key in landed:\n",
+        )
+        with mock.patch.object(landed_evidence, "recheck_source", mutant):
+            with self.assertRaises(AssertionError):
+                assert_rejected()
+            self.assertEqual(self.profile_issues(records), [])
 
     def test_abort_retirement_remains_task_scoped(self) -> None:
         failed, passed = self.failed_and_passed(

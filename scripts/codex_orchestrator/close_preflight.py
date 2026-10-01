@@ -13,6 +13,16 @@ from . import batch, builders, close_law, journal
 _OUTPUT_SCHEMA = "forge-close-preflight/1"
 _OUTPUT_LIMIT = 65_536
 _LOCK_POLL_SECONDS = 0.1
+_SUMMARY_ISSUE_LIMIT_BYTES = 4_096
+_SUMMARY_TRUNCATION = "..."
+_SUMMARY_ESCAPES = {
+    "\b": r"\b",
+    "\t": r"\t",
+    "\n": r"\n",
+    "\v": r"\v",
+    "\f": r"\f",
+    "\r": r"\r",
+}
 _RUN_NOT_OPEN = "forge: close preflight — run is not open"
 _INVALID_CHAIN = "forge: close preflight — invalid chain id"
 _NO_BOUND_GATES = (
@@ -36,7 +46,7 @@ def _take_shared_lock(descriptor: int) -> None:
             time.sleep(min(_LOCK_POLL_SECONDS, remaining))
 
 
-def _open_shared_batch_lock(run_dir: Path) -> batch.BatchLock:
+def _open_shared_batch_lock(run_dir: Path) -> batch.BatchLock | None:
     run_descriptor: int | None = None
     lock_descriptor: int | None = None
     try:
@@ -57,6 +67,12 @@ def _open_shared_batch_lock(run_dir: Path) -> batch.BatchLock:
         )
         batch._validate_batch_lock(locked)
         return locked
+    except FileNotFoundError:
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
+        if run_descriptor is not None:
+            os.close(run_descriptor)
+        return None
     except (OSError, journal.CoordinationRefusal) as exc:
         if lock_descriptor is not None:
             os.close(lock_descriptor)
@@ -67,9 +83,89 @@ def _open_shared_batch_lock(run_dir: Path) -> batch.BatchLock:
         ) from exc
 
 
+def _batch_sidecars_absent_at(descriptor: int) -> bool:
+    return not any(
+        journal._name_exists_at(descriptor, name)
+        for name in (
+            journal.BATCH_LOCK_NAME,
+            journal.BATCH_INTENT_NAME,
+            journal.BATCH_RECEIPTS_NAME,
+        )
+    )
+
+
+def _batch_sidecars_absent(run_dir: Path) -> bool:
+    descriptor: int | None = None
+    try:
+        descriptor, _ = journal._open_strict_batch_directory(
+            run_dir, refusal=journal.JOURNAL_READ_TRANSACTION_REFUSAL
+        )
+        return _batch_sidecars_absent_at(descriptor)
+    except FileNotFoundError:
+        return True
+    except (OSError, journal.CoordinationRefusal) as exc:
+        raise journal.CoordinationRefusal(
+            journal.JOURNAL_READ_TRANSACTION_REFUSAL
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _lockless_journal_snapshot(path: Path) -> bytes:
+    descriptor: int | None = None
+    try:
+        descriptor, _ = journal._open_strict_batch_directory(
+            path.parent, refusal=journal.JOURNAL_READ_TRANSACTION_REFUSAL
+        )
+        if not _batch_sidecars_absent_at(descriptor):
+            raise journal.CoordinationRefusal(
+                journal.JOURNAL_READ_TRANSACTION_REFUSAL
+            )
+        raw = journal._read_journal_descriptor_snapshot(descriptor, path.name)
+        if (
+            not _batch_sidecars_absent_at(descriptor)
+            or journal._snapshot_activates_writer(raw)
+        ):
+            raise journal.CoordinationRefusal(
+                journal.JOURNAL_READ_TRANSACTION_REFUSAL
+            )
+        return raw
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _read_preflight_journal(
+    path: Path, shared_lock: batch.BatchLock | None
+) -> tuple[list[dict[str, object]], list[str]]:
+    if shared_lock is not None:
+        return journal.read_journal(path)
+    try:
+        raw = _lockless_journal_snapshot(path)
+        return journal._decode_journal_snapshot(
+            raw, allow_partial_final_line=False
+        )
+    except journal.CoordinationRefusal as exc:
+        if str(exc) == journal.JOURNAL_READ_TRANSACTION_REFUSAL:
+            return [], [journal.JOURNAL_READ_TRANSACTION_REFUSAL]
+        return [], [f"could not read journal: {exc}"]
+    except FileNotFoundError:
+        return [], [f"missing journal: {path}"]
+    except (OSError, RuntimeError, ValueError) as exc:
+        return [], [f"could not read journal: {exc}"]
+
+
 @contextmanager
-def _shared_batch_lock(run_dir: Path) -> Iterator[batch.BatchLock]:
+def _shared_batch_lock(run_dir: Path) -> Iterator[batch.BatchLock | None]:
     locked = _open_shared_batch_lock(run_dir)
+    if locked is None:
+        yield None
+        if not _batch_sidecars_absent(run_dir):
+            raise journal.CoordinationRefusal(
+                journal.JOURNAL_READ_TRANSACTION_REFUSAL
+            )
+        return
     marked = False
     try:
         try:
@@ -146,23 +242,28 @@ def _project_records(
 
 def _projected_issues(
     repository: Path,
-    run_id: str,
     run_dir: Path,
+    base_validation: dict[str, object],
     records: list[dict[str, object]],
     chain_id: str | None,
-    shared_lock: batch.BatchLock,
+    shared_lock: batch.BatchLock | None,
 ) -> list[str]:
     projection_input = tuple(
         {name: value for name, value in record.items() if name != "_line"}
         for record in records
     )
-    validation = close_law.project_close(run_dir, projection_input, "passed")
+    validation = close_law.project_close(
+        run_dir,
+        projection_input,
+        "passed",
+        base_validation=base_validation,
+    )
     issues_value = validation.get("issues")
     issues = list(issues_value) if isinstance(issues_value, list) else []
     try:
         with close_law.report_mode(chain_id, shared_lock):
             builders._terminal_chain_guard(
-                repository, run_id, records, task_id=None
+                repository, run_dir.name, records, task_id=None
             )
     except journal.CoordinationRefusal as exc:
         issues.append(str(exc))
@@ -178,6 +279,40 @@ def _projected_issues(
 def _summary_prefix(projecting_chain: str | None) -> str:
     suffix = f", projecting {projecting_chain}" if projecting_chain else ""
     return f"close preflight (journal-only{suffix})"
+
+
+def _summary_issue_fragment(character: str) -> str:
+    escaped = _SUMMARY_ESCAPES.get(character)
+    if escaped is not None:
+        return escaped
+    if character.isprintable():
+        return character
+    value = ord(character)
+    if value <= 0xFF:
+        return f"\\x{value:02x}"
+    if value <= 0xFFFF:
+        return f"\\u{value:04x}"
+    return f"\\U{value:08x}"
+
+
+def _summary_issue(issue: str) -> str:
+    """Escape one untrusted issue and cap its human rendering."""
+
+    fragments = [_summary_issue_fragment(character) for character in issue]
+    if sum(len(fragment.encode("utf-8")) for fragment in fragments) <= (
+        _SUMMARY_ISSUE_LIMIT_BYTES
+    ):
+        return "".join(fragments)
+    budget = _SUMMARY_ISSUE_LIMIT_BYTES - len(_SUMMARY_TRUNCATION)
+    retained: list[str] = []
+    used = 0
+    for fragment in fragments:
+        size = len(fragment.encode("utf-8"))
+        if used + size > budget:
+            break
+        retained.append(fragment)
+        used += size
+    return "".join(retained) + _SUMMARY_TRUNCATION
 
 
 def _summary_records(run_dir: Path) -> list[dict[str, object]]:
@@ -237,7 +372,10 @@ def summary_line(
             issues.extend(line for line in str(exc).splitlines() if line)
         if not issues:
             return f"{prefix}: no issue found; terminal chain guard not run"
-        return f"{prefix}: {len(issues)} issue(s), first: {issues[0]}"
+        return (
+            f"{prefix}: {len(issues)} issue(s), first: "
+            f"{_summary_issue(issues[0])}"
+        )
     except Exception:
         return f"{prefix}: unavailable"
 
@@ -285,10 +423,12 @@ def _preflight_under_lock(
     run_id: str,
     run_dir: Path,
     chain: str | None,
-    shared_lock: batch.BatchLock,
+    shared_lock: batch.BatchLock | None,
 ) -> dict[str, object]:
     reported_chain = _reported_chain(chain)
-    records, read_issues = journal.read_journal(run_dir / "journal.jsonl")
+    records, read_issues = _read_preflight_journal(
+        run_dir / "journal.jsonl", shared_lock
+    )
     if read_issues:
         return _bounded_payload(run_id, len(records), reported_chain, read_issues)
     if any(record.get("type") == "run_closed" for record in records):
@@ -301,8 +441,18 @@ def _preflight_under_lock(
         return _bounded_payload(
             run_id, len(records), reported_chain, [projection_issue]
         )
+    base_validation = journal.validate_run(
+        run_dir,
+        gates=False,
+        snapshot_records=records,
+    )
     issues = _projected_issues(
-        repository, run_id, run_dir, projected, chain, shared_lock
+        repository,
+        run_dir,
+        base_validation,
+        projected,
+        chain,
+        shared_lock,
     )
     return _bounded_payload(run_id, len(records), reported_chain, issues)
 

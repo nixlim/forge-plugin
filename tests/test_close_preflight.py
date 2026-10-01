@@ -9,6 +9,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from contextlib import contextmanager, redirect_stdout
@@ -344,6 +345,122 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
         self.assertEqual(report_call.args[1], builder_call.args[1])
         self.assertEqual(report_call.args[2], builder_call.args[2], "passed")
 
+    def test_lockless_legacy_and_missing_runs_use_reader_diagnostics(self) -> None:
+        with self.api_environment():
+            repo, _head = self._repository("lockless-reader")
+            run_id = "run-20260930-preflight-lockless-reader"
+            self._open_legacy_run(repo, run_id)
+            run_dir = self.run_dir(repo, run_id)
+            self.assertFalse((run_dir / journal.BATCH_LOCK_NAME).exists())
+            before = self._snapshot(run_dir)
+
+            payload = close_preflight.preflight(repo, run_id)
+
+            self.assertEqual(self._snapshot(run_dir), before)
+            self.assertTrue(payload["would_close_passed"], payload)
+            self.assertEqual(payload["issues"], [])
+            self.assertEqual(payload["journal_lines"], 1)
+            accepted, refusal = self._close(repo, run_id)
+            self.assertTrue(accepted, refusal)
+
+            missing_id = "run-20260930-preflight-does-not-exist"
+            missing_dir = self.run_dir(repo, missing_id)
+            missing = close_preflight.preflight(repo, missing_id)
+
+        self.assertFalse(missing_dir.exists())
+        self.assertEqual(missing["journal_lines"], 0)
+        self.assertEqual(
+            missing["issues"],
+            [f"missing journal: {missing_dir / 'journal.jsonl'}"],
+        )
+        self.assertNotIn(
+            journal.JOURNAL_READ_TRANSACTION_REFUSAL, missing["issues"]
+        )
+
+    def test_lock_appearing_after_snapshot_never_enters_blocking_reader(self) -> None:
+        with self.api_environment():
+            repo, _head = self._repository("lockless-race")
+            run_id = "run-20260930-preflight-lockless-race"
+            self._open_legacy_run(repo, run_id)
+            run_dir = self.run_dir(repo, run_id)
+            lock_path = run_dir / journal.BATCH_LOCK_NAME
+            read_snapshot = close_preflight._read_preflight_journal
+
+            def exercise() -> dict[str, object]:
+                snapshot_done = threading.Event()
+                lock_ready = threading.Event()
+                payloads: list[dict[str, object]] = []
+                failures: list[BaseException] = []
+
+                def pause_after_snapshot(
+                    path: Path, shared_lock: batch.BatchLock | None
+                ) -> tuple[list[dict[str, object]], list[str]]:
+                    self.assertIsNone(shared_lock)
+                    result = read_snapshot(path, shared_lock)
+                    snapshot_done.set()
+                    if not lock_ready.wait(timeout=15):
+                        raise AssertionError("late-lock fixture did not resume")
+                    return result
+
+                def reject_blocking_reread(_path: Path) -> bytes:
+                    raise AssertionError("entered blocking journal reread")
+
+                def invoke() -> None:
+                    try:
+                        payloads.append(close_preflight.preflight(repo, run_id))
+                    except BaseException as exc:
+                        failures.append(exc)
+
+                worker = threading.Thread(target=invoke, daemon=True)
+                try:
+                    with mock.patch.object(
+                        close_preflight,
+                        "_read_preflight_journal",
+                        side_effect=pause_after_snapshot,
+                    ), mock.patch.object(
+                        journal,
+                        "_stable_journal_read",
+                        side_effect=reject_blocking_reread,
+                    ):
+                        worker.start()
+                        self.assertTrue(snapshot_done.wait(timeout=15))
+                        lock_path.write_bytes(b"")
+                        with self._process_lock(lock_path, fcntl.LOCK_EX):
+                            lock_ready.set()
+                            worker.join(timeout=15)
+                finally:
+                    lock_ready.set()
+                    worker.join(timeout=5)
+                    if lock_path.exists():
+                        lock_path.unlink()
+                self.assertFalse(worker.is_alive(), "preflight did not stop")
+                if failures:
+                    raise failures[0]
+                return payloads[0]
+
+            payload = exercise()
+            self.assertEqual(
+                payload["issues"],
+                [journal.JOURNAL_READ_TRANSACTION_REFUSAL],
+            )
+
+            def restore_blocking_reread(
+                path: Path,
+                **kwargs: object,
+            ) -> dict[str, object]:
+                kwargs.pop("snapshot_records", None)
+                return validate_run(path, **kwargs)
+
+            validate_run = journal.validate_run
+            with mock.patch.object(
+                journal,
+                "validate_run",
+                side_effect=restore_blocking_reread,
+            ), self.assertRaisesRegex(
+                AssertionError, "entered blocking journal reread"
+            ):
+                exercise()
+
     @staticmethod
     def _snapshot(root: Path) -> dict[str, tuple[int, int, int, str | None]]:
         snapshot: dict[str, tuple[int, int, int, str | None]] = {}
@@ -550,7 +667,7 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
     def _process_lock(self, path: Path, mode: int):
         code = (
             "import fcntl,os,sys; "
-            "fd=os.open(sys.argv[1],os.O_RDONLY); "
+            "fd=os.open(sys.argv[1],os.O_RDWR); "
             f"fcntl.flock(fd,{mode}); "
             "print('locked',flush=True); sys.stdin.buffer.read(); os.close(fd)"
         )
@@ -575,7 +692,7 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
             process.stderr.close()
             self.assertEqual(return_code, 0, error)
 
-    def _assert_receipt_preflight_reuses_shared_lock(self, name: str) -> list[Path]:
+    def _assert_receipt_preflight_reuses_shared_lock(self, name: str) -> None:
         repo, run_id, run_dir, _chain_id = self._receipted_chain_run(name)
         entered: list[Path] = []
         with self._nonlocking_batch_spy(entered), self._process_lock(
@@ -584,7 +701,6 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
             payload = close_preflight.preflight(repo, run_id)
         self.assertFalse(payload["would_close_passed"])
         self.assertEqual(entered, [])
-        return entered
 
     def test_receipt_replay_reuses_shared_hold_and_control_disable_reenters_lock(
         self,
@@ -598,6 +714,32 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
                 self._assert_receipt_preflight_reuses_shared_lock(
                     "receipt-check-disabled"
                 )
+
+    def test_lockless_receipt_replay_refuses_and_disable_uses_batch_lock(self) -> None:
+        def assert_lockless_receipt_refusal(name: str) -> None:
+            repo, run_id, run_dir, _chain_id = self._receipted_chain_run(name)
+            for sidecar in (journal.BATCH_LOCK_NAME, journal.BATCH_RECEIPTS_NAME):
+                (run_dir / sidecar).unlink()
+            self.assertFalse((run_dir / journal.BATCH_INTENT_NAME).exists())
+            entered: list[Path] = []
+            controls = builders.TERMINAL_CHAIN_CONTROLS - {"landing"}
+            with mock.patch.object(
+                builders, "TERMINAL_CHAIN_CONTROLS", controls
+            ), self._nonlocking_batch_spy(entered):
+                payload = close_preflight.preflight(repo, run_id)
+            self.assertFalse(payload["would_close_passed"])
+            self.assertIn(builders.TERMINAL_CHAIN_INVALID, payload["issues"])
+            self.assertEqual(entered, [])
+
+        with self.api_environment():
+            assert_lockless_receipt_refusal("receipt-lockless")
+            disabled = close_law.CLOSE_LAW_CONTROLS - {
+                "read-only-receipt-check"
+            }
+            with mock.patch.object(
+                close_law, "CLOSE_LAW_CONTROLS", disabled
+            ), self.assertRaises(AssertionError):
+                assert_lockless_receipt_refusal("receipt-lockless-disabled")
 
     def test_existing_chain_lock_has_bounded_shared_wait(self) -> None:
         with self.api_environment():
@@ -622,6 +764,56 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
             [f"forge: close preflight — chain lock busy: {chain_id}"],
         )
         self.assertFalse(payload["would_close_passed"])
+
+    def test_chain_lock_fifo_swap_is_nonblocking_and_refused(self) -> None:
+        with self.api_environment():
+            repo, _head = self._repository("chain-lock-fifo")
+        chains_root = builders.chain_storage_root(repo)
+        chains_root.mkdir(parents=True)
+        chain_id = "c-2026-09-30T120250Z-c102"
+        name = f".{chain_id}.events.lock"
+        lock_path = chains_root / name
+        root_descriptor, _observation = journal._open_bound_directory(chains_root)
+        real_open = os.open
+        safe_flags = batch._safe_open_flags
+
+        def assert_refused() -> None:
+            if lock_path.exists():
+                lock_path.unlink()
+            lock_path.write_bytes(b"")
+            swapped = False
+
+            def swap_before_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if path == name:
+                    self.assertTrue(flags & os.O_NONBLOCK)
+                    lock_path.unlink()
+                    os.mkfifo(lock_path)
+                    swapped = True
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                close_law.os, "open", side_effect=swap_before_open
+            ), self.assertRaisesRegex(
+                journal.CoordinationRefusal, builders.TERMINAL_CHAIN_INVALID
+            ):
+                close_law._open_read_only_chain_lock(root_descriptor, name)
+            self.assertTrue(swapped)
+
+        try:
+            assert_refused()
+            with mock.patch.object(
+                batch,
+                "_safe_open_flags",
+                side_effect=lambda flags, *, nonblocking=False: safe_flags(
+                    flags, nonblocking=False
+                ),
+            ), self.assertRaises(AssertionError):
+                assert_refused()
+        finally:
+            if lock_path.exists():
+                lock_path.unlink()
+            os.close(root_descriptor)
 
     def _projection_run(self, name: str) -> tuple[Path, str, str]:
         repo, _head = self._repository(name)
@@ -653,7 +845,10 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
         (chains_root / f"{chain_id}.json").write_text(
             json.dumps(
                 {
+                    "schema": "forge-chain/1",
                     "chain_id": chain_id,
+                    "kind": "commit",
+                    "candidate": {"sha256": key("close-preflight-candidate")},
                     "tier": {"control": False},
                     "review": {"operator_cosign_required": False},
                 }
@@ -686,6 +881,26 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
         self.assertEqual(projected["issues"], [])
         self.assertTrue(projected["would_close_passed"])
         self.assertEqual(projected["projected_chain"], chain_id)
+        self.assertEqual(projected["journal_lines"], without["journal_lines"])
+
+    def test_projected_chain_guard_exclusion_fails_under_identity_mutation(
+        self,
+    ) -> None:
+        with self.api_environment():
+            repo, run_id, chain_id = self._projection_run("guard-exclusion")
+
+            def assert_projected_chain_is_excluded() -> None:
+                payload = close_preflight.preflight(
+                    repo, run_id, chain=chain_id
+                )
+                self.assertTrue(payload["would_close_passed"], payload)
+                self.assertEqual(payload["issues"], [])
+
+            assert_projected_chain_is_excluded()
+            with mock.patch.object(
+                close_law, "guard_chain_ids", side_effect=lambda values: values
+            ), self.assertRaises(AssertionError):
+                assert_projected_chain_is_excluded()
 
     def test_projected_chain_records_continue_snapshot_line_numbers(self) -> None:
         chain_id = "c-2026-09-30T120350Z-d102"
@@ -707,6 +922,8 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
             records,
             chain_id,
             {
+                "kind": "commit",
+                "candidate": {"sha256": key("close-preflight-candidate")},
                 "tier": {"control": True},
                 "review": {"operator_cosign_required": False},
             },
@@ -719,6 +936,40 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
         )
         self.assertEqual(projected[4]["status"], "complete")
         self.assertEqual(records[-1]["_line"], 4)
+
+    def test_projected_landing_uses_current_chain_candidate(self) -> None:
+        chain_id = "c-2026-09-30T120355Z-d103"
+        prior = self._binding(chain_id, "prior-candidate")
+        current = key("restaged-current-candidate")
+        records = [
+            {"type": "run_started", "_line": 1},
+            {
+                "type": "verification",
+                "task": "task-01",
+                "binding": prior,
+                "_line": 2,
+            },
+        ]
+
+        projected = close_law.projected_chain_records(
+            records,
+            chain_id,
+            {
+                "kind": "commit",
+                "candidate": {"sha256": current},
+                "tier": {"control": False},
+                "review": {"operator_cosign_required": False},
+            },
+        )
+
+        landing = projected[2]
+        self.assertEqual(
+            landing["binding"]["candidate"],
+            {"kind": "staged-diff-sha256", "value": current},
+        )
+        self.assertNotEqual(
+            landing["binding"]["candidate"], prior["candidate"]
+        )
 
     def test_output_is_compact_valid_json_bounded_to_64_kib(self) -> None:
         issues = [f"issue-{index}:" + ("x" * 2048) for index in range(100)]

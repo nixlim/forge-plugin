@@ -212,6 +212,54 @@ class SpecificationRevision15Tests(unittest.TestCase):
             with self.subTest(clause=clause), self.assertRaises(AssertionError):
                 assert_fr249_followup(SPEC.replace(clause, ""))
 
+    def test_revision18_close_preflight_followups_are_explicit(self) -> None:
+        self.assertIn(
+            "A docs-class skip recorded on a run-bound chain before this "
+            "amendment remains readable history, but it neither satisfies "
+            "mechanical completion nor projects as a journal verification.",
+            SPEC,
+        )
+
+        for message in (
+            "all required mechanical verification steps are complete",
+            "mechanical verification already complete; no-op",
+        ):
+            with self.subTest(requirement="FR-220", message=message):
+                self.assertIn(message, SPEC)
+
+        fr248 = requirement_block(SPEC, "FR-248")
+        clauses = (
+            "lockless legacy case defined by this requirement",
+            "performs exactly one journal descriptor identity-and-size-fenced read",
+            "immediately before and after that read, it proves `.journal-batch.lock`, "
+            "`.journal-batch.intent`, and `.journal-batch-receipts.jsonl` are all absent",
+            "accepts the resulting snapshot only if it is not activated",
+            "absence alone never yields `forge: journal read refused — pending or "
+            "changed batch transaction`",
+            "platform-safe `O_NOFOLLOW` and `O_NONBLOCK` convention",
+            "Each individual batch- or chain-lock acquisition repeatedly attempts "
+            "`LOCK_SH | LOCK_NB` and has its own maximum wait of 10 seconds.",
+            "current family-specific candidate, never a last or superseded journal "
+            "candidate",
+            "only that exact projected chain ID is excluded",
+            "number of successfully parsed JSON-object records in the stable "
+            "on-disk snapshot before any projected landing, approval, or task "
+            "record is added",
+            "it is zero when no stable snapshot is available",
+            "printable Unicode is preserved",
+            r"`\b`, `\t`, `\n`, `\v`, `\f`, and `\r` use those exact backslash escapes",
+            "capped at 4,096 UTF-8 bytes including an exact terminal `...`",
+            "The already-complete `verify` message is exactly `mechanical "
+            "verification already complete; no-op`, remains unsuffixed",
+            "Gate 2, Gate 3, and review-and-landing evidence for the current "
+            "candidate are not yet available; it is not a corruption diagnostic",
+        )
+        for clause in clauses:
+            with self.subTest(requirement="FR-248", clause=clause):
+                self.assertIn(clause, fr248)
+        self.assertNotIn("FR-011's lockless legacy path", fr248)
+        self.assertNotIn("under FR-011's Revision-9 reader rule", fr248)
+
     def test_fr244_deferral_assertion_detects_its_reinsertion(self) -> None:
         block = requirement_block(SPEC, "FR-244")
         self.assertNotIn("implementation deferred to chain L", block)

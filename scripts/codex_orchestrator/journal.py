@@ -8507,6 +8507,7 @@ def validate_run(
     gates: bool = False,
     closed_legacy_compat: str | None = None,
     repository: Path | None = None,
+    snapshot_records: Sequence[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Validate one run; ``repository`` overrides the layout-derived root.
 
@@ -8519,7 +8520,10 @@ def validate_run(
     )
     try:
         return _validate_run(
-            run_dir, gates=gates, closed_legacy_compat=closed_legacy_compat
+            run_dir,
+            gates=gates,
+            closed_legacy_compat=closed_legacy_compat,
+            snapshot_records=snapshot_records,
         )
     finally:
         _VALIDATION_REPOSITORY.reset(reset_handle)
@@ -8530,6 +8534,7 @@ def _validate_run(
     *,
     gates: bool = False,
     closed_legacy_compat: str | None = None,
+    snapshot_records: Sequence[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     warnings: list[str] = []
     non_passing: list[dict[str, object]] = []
@@ -8546,7 +8551,11 @@ def _validate_run(
         if gates:
             payload["profile"] = "gates"
         return payload
-    records, issues = read_journal(run_dir / "journal.jsonl")
+    records, issues = (
+        read_journal(run_dir / "journal.jsonl")
+        if snapshot_records is None
+        else ([dict(record) for record in snapshot_records], [])
+    )
     if issues == [JOURNAL_READ_TRANSACTION_REFUSAL]:
         payload = {
             "ok": False,

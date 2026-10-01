@@ -26,6 +26,41 @@ def _docs_class_skip_admitted(state: Mapping[str, Any]) -> bool:
     )
 
 
+def _gate_one_complete(state: Mapping[str, Any]) -> bool:
+    """Apply the run-bound Gate-1 rule without rewriting history semantics."""
+
+    if not chain_core._gate_one_complete(state):
+        return False
+    if (
+        "run-bound-gate-one" not in RUN_BOUND_GATE_ONE_CONTROLS
+        or not isinstance(state.get("run_binding"), Mapping)
+        or chain_core._user_skip(state, "gate-1") is not None
+    ):
+        return True
+    steps = state.get("steps")
+    runs = steps.get("gate-1") if isinstance(steps, Mapping) else None
+    candidate = state.get("candidate")
+    expected = candidate.get("sha256") if isinstance(candidate, Mapping) else None
+    newest = (
+        next(
+            (
+                record
+                for record in reversed(runs)
+                if isinstance(record, Mapping)
+                and record.get("candidate") == expected
+            ),
+            None,
+        )
+        if isinstance(runs, list)
+        else None
+    )
+    return not (
+        isinstance(newest, Mapping)
+        and newest.get("result") == "skipped"
+        and newest.get("reason") == chain_core.DOCS_CLASS_SKIP_REASON
+    )
+
+
 def _current_test_paths(
     ctx: chain_core.CommandContext, state: Mapping[str, Any] | None = None
 ) -> list[str]:
@@ -160,7 +195,7 @@ def _mechanical_complete(ctx: chain_core.CommandContext, state: Mapping[str, Any
     needed = chain_core._required_steps(ctx, state)
     for step_id in needed:
         if step_id == "gate-1":
-            if not chain_core._gate_one_complete(state):
+            if not _gate_one_complete(state):
                 return False
         elif step_id == chain_core.FRESH_REVIEWER_EVALS_GATE:
             if chain_core._user_skip(state, step_id) is not None:
@@ -185,7 +220,7 @@ def _mechanical_complete(ctx: chain_core.CommandContext, state: Mapping[str, Any
 def _next_incomplete(ctx: chain_core.CommandContext, state: Mapping[str, Any]) -> str | None:
     for step_id in chain_core._required_steps(ctx, state):
         if step_id == "gate-1":
-            if not chain_core._gate_one_complete(state):
+            if not _gate_one_complete(state):
                 return "gate-1"
             continue
         if step_id == chain_core.FRESH_REVIEWER_EVALS_GATE:

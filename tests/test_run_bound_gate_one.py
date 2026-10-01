@@ -275,6 +275,42 @@ class RunBoundGateOneTests(chain_tests.ForgeCLIFixture):
         self.assertEqual(state, before)
         self.assertEqual(self.state_path(chain_id).read_bytes(), persisted_before)
 
+    def test_bound_history_skip_is_not_engine_complete(self) -> None:
+        candidate = key("bound-history-candidate")
+        state = {
+            "candidate": {"sha256": candidate},
+            "run_binding": {"binding_id": key("bound-history-binding")},
+            "steps": {
+                "gate-1": [
+                    {"candidate": candidate, "result": "passed"},
+                    {
+                        "candidate": candidate,
+                        "result": "skipped",
+                        "reason": GATE_CHECKS.chain_core.DOCS_CLASS_SKIP_REASON,
+                    },
+                    {"candidate": key("foreign-candidate"), "result": "failed"},
+                ]
+            },
+        }
+        context = mock.Mock()
+
+        with mock.patch.object(
+            GATE_CHECKS.chain_core, "_required_steps", return_value=["gate-1"]
+        ):
+            self.assertTrue(GATE_CHECKS.chain_core._gate_one_complete(state))
+            self.assertFalse(GATE_CHECKS._gate_one_complete(state))
+            self.assertFalse(GATE_CHECKS._mechanical_complete(context, state))
+            self.assertEqual(GATE_CHECKS._next_incomplete(context, state), "gate-1")
+
+            with mock.patch.object(
+                GATE_CHECKS,
+                "RUN_BOUND_GATE_ONE_CONTROLS",
+                GATE_CHECKS.RUN_BOUND_GATE_ONE_CONTROLS - {CONTROL},
+            ):
+                self.assertTrue(GATE_CHECKS._gate_one_complete(state))
+                self.assertTrue(GATE_CHECKS._mechanical_complete(context, state))
+                self.assertIsNone(GATE_CHECKS._next_incomplete(context, state))
+
     def test_disabling_control_restores_the_bound_docs_skip(self) -> None:
         run_id = "run-20260930-bound-docs-disabled"
         chain_id = self._start_bound_docs_chain(run_id)

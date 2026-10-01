@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import sys
+import textwrap
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from types import FunctionType
 from unittest import mock
 
 from tests import test_revision9_coordination as coordination
@@ -27,6 +30,31 @@ MISSING_GATE_ISSUES = [
 
 def digest(seed: str) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()
+
+
+def mutated_function(
+    function: FunctionType,
+    anchor: str,
+    replacement: str,
+) -> FunctionType:
+    """Compile one exact in-memory mutant with production globals."""
+
+    source = textwrap.dedent(inspect.getsource(function))
+    if source.count(anchor) != 1:
+        raise AssertionError(f"mutation anchor drifted for {function.__name__}")
+    namespace = dict(function.__globals__)
+    exec(
+        compile(
+            source.replace(anchor, replacement, 1),
+            function.__code__.co_filename,
+            "exec",
+        ),
+        namespace,
+    )
+    mutant = namespace[function.__name__]
+    if not isinstance(mutant, FunctionType):
+        raise AssertionError(f"mutation did not define {function.__name__}")
+    return mutant
 
 
 class LandedCandidateEvidenceTests(unittest.TestCase):
@@ -639,6 +667,201 @@ class LandedCandidateEvidenceTests(unittest.TestCase):
         self.assertTrue(candidate(task_b_record))
         self.assertEqual(self._base_36bc5dc_correlation_issues(records), [])
         self.assertEqual(self._correlation_issues(records), [])
+
+
+class LandedCandidateSubclauseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.fixture = LandedCandidateEvidenceTests()
+
+    def test_approval_only_chain_gates_require_a_chain_landing(self) -> None:
+        fixture = self.fixture
+        gates = fixture.gate_set(
+            "approval-only",
+            chain=fixture.landed_chain,
+            candidate=fixture.landed_candidate,
+        )
+        records = fixture.relined(
+            [
+                fixture.activated_start(),
+                *fixture.boundary_execution(),
+                *gates,
+                fixture.decision(
+                    "approval-only",
+                    "chain-approval",
+                    chain=fixture.landed_chain,
+                    candidate=fixture.landed_candidate,
+                ),
+            ]
+        )
+        last_line = int(records[2]["_line"])
+
+        def assert_gates_are_missing() -> None:
+            self.assertEqual(
+                landed_evidence.missing_gate_issues(
+                    records, gates, last_line, False
+                ),
+                MISSING_GATE_ISSUES,
+            )
+
+        assert_gates_are_missing()
+        mutants = (
+            (
+                "M1-prime",
+                "_counting_predicate",
+                mutated_function(
+                    landed_evidence._counting_predicate,
+                    "            and (bound[0], bound[1]) in landed\n",
+                    "",
+                ),
+            ),
+            (
+                "M7",
+                "landed_keys",
+                mutated_function(
+                    landed_evidence.landed_keys,
+                    '        and record.get("outcome") == "chain-landing"\n',
+                    "        and record.get(\"outcome\") in "
+                    '{"chain-landing", "chain-approval", "chain-abort"}\n',
+                ),
+            ),
+        )
+        for name, attribute, mutant in mutants:
+            with self.subTest(mutant=name), mock.patch.object(
+                landed_evidence, attribute, mutant
+            ):
+                with self.assertRaises(AssertionError):
+                    assert_gates_are_missing()
+                self.assertEqual(
+                    landed_evidence.missing_gate_issues(
+                        records, gates, last_line, False
+                    ),
+                    [],
+                )
+
+    def test_cross_task_different_candidate_gate_requires_the_landed_pair(
+        self,
+    ) -> None:
+        fixture = self.fixture
+        gate = fixture.gate(
+            "cross-task-candidate",
+            "gate-1: project tests",
+            chain=fixture.landed_chain,
+            candidate=fixture.aborted_candidate,
+        )
+        gate["task"] = "task-B"
+        landing = fixture.decision(
+            "cross-task-landing",
+            "chain-landing",
+            chain=fixture.landed_chain,
+            candidate=fixture.landed_candidate,
+        )
+        landing["task"] = "task-A"
+        records = fixture.relined(
+            [
+                fixture.activated_start(),
+                *fixture.boundary_execution(),
+                gate,
+                landing,
+            ]
+        )
+        last_line = int(records[2]["_line"])
+
+        def assert_gate_is_missing() -> None:
+            self.assertEqual(
+                landed_evidence.missing_gate_issues(
+                    records, [gate], last_line, False
+                ),
+                MISSING_GATE_ISSUES,
+            )
+
+        assert_gate_is_missing()
+        mutant = mutated_function(
+            landed_evidence._counting_predicate,
+            "            and (bound[0], bound[1]) in landed\n",
+            "            and any(bound[0] == chain for chain, _candidate in landed)\n",
+        )
+        with mock.patch.object(landed_evidence, "_counting_predicate", mutant):
+            with self.assertRaises(AssertionError):
+                assert_gate_is_missing()
+            self.assertEqual(
+                landed_evidence.missing_gate_issues(
+                    records, [gate], last_line, False
+                ),
+                MISSING_GATE_ISSUES[1:],
+            )
+
+    def test_tombstone_basis_abort_retires_landed_gate_records(self) -> None:
+        fixture = self.fixture
+        gates = fixture.gate_set(
+            "tombstone",
+            chain=fixture.aborted_chain,
+            candidate=fixture.aborted_candidate,
+        )
+        for gate in gates:
+            gate["task"] = "task-B"
+        landing = fixture.decision(
+            "tombstone-landing",
+            "chain-landing",
+            chain=fixture.aborted_chain,
+            candidate=fixture.aborted_candidate,
+        )
+        landing["task"] = "task-A"
+        abort = fixture.decision(
+            "tombstone-abort",
+            "chain-abort",
+            chain=fixture.aborted_chain,
+            candidate=fixture.aborted_candidate,
+        )
+        abort["task"] = "task-B"
+        abort["basis"] = [
+            journal.TOMBSTONE_DISPOSITION_BASIS.format(
+                chain_id=fixture.aborted_chain
+            )
+        ]
+        records = fixture.relined(
+            [
+                fixture.activated_start(),
+                *fixture.boundary_execution(),
+                landing,
+                *gates,
+                abort,
+            ]
+        )
+        last_line = int(records[2]["_line"])
+
+        def assert_gates_are_retired() -> None:
+            self.assertEqual(
+                landed_evidence.missing_gate_issues(
+                    records, gates, last_line, False
+                ),
+                MISSING_GATE_ISSUES,
+            )
+
+        self.assertTrue(journal._is_tombstone_disposition(abort))
+        assert_gates_are_retired()
+        anchor = (
+            '        and record.get("outcome") == "chain-abort"\n'
+            '        and isinstance((task := record.get("task")), str)\n'
+        )
+        replacement = (
+            '        and record.get("outcome") == "chain-abort"\n'
+            "        and not journal._is_tombstone_disposition(record)\n"
+            '        and isinstance((task := record.get("task")), str)\n'
+        )
+        mutant = mutated_function(
+            landed_evidence.retirement_predicate,
+            anchor,
+            replacement,
+        )
+        with mock.patch.object(landed_evidence, "retirement_predicate", mutant):
+            with self.assertRaises(AssertionError):
+                assert_gates_are_retired()
+            self.assertEqual(
+                landed_evidence.missing_gate_issues(
+                    records, gates, last_line, False
+                ),
+                [],
+            )
 
 
 if __name__ == "__main__":

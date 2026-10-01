@@ -43,7 +43,9 @@ class CloseProjection(TypedDict, total=False):
     ok: bool
 
 
-_REPORT_MODE: ContextVar[tuple[str | None, batch.BatchLock] | None] = ContextVar(
+_REPORT_MODE: ContextVar[
+    tuple[str | None, batch.BatchLock | None] | None
+] = ContextVar(
     "close_law_report_mode", default=None
 )
 _BLOCKED_CLOSE_PASSED_ISSUES: ContextVar[tuple[str, ...]] = ContextVar(
@@ -55,12 +57,17 @@ def project_close(
     run_dir: Path,
     records: Sequence[dict[str, object]],
     judgment: str,
+    *,
+    base_validation: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Project the gate-profile half of one run-close build in memory."""
 
     _BLOCKED_CLOSE_PASSED_ISSUES.set(())
     validation = cast(
-        CloseProjection, journal.validate_run(run_dir, gates=False)
+        CloseProjection,
+        copy.deepcopy(base_validation)
+        if base_validation is not None
+        else journal.validate_run(run_dir, gates=False),
     )
     passed_validation = (
         copy.deepcopy(validation)
@@ -149,7 +156,7 @@ def _apply_projected_task_updates(
 
 @contextmanager
 def report_mode(
-    skip_chain: str | None, shared_lock: batch.BatchLock
+    skip_chain: str | None, shared_lock: batch.BatchLock | None
 ) -> Iterator[None]:
     """Select read-only terminal-chain behavior for a preflight report."""
 
@@ -187,6 +194,14 @@ def receipt_verifier() -> ReceiptVerifier | None:
     if report is None or "read-only-receipt-check" not in CLOSE_LAW_CONTROLS:
         return None
     _skip_chain, shared_lock = report
+
+    if shared_lock is None:
+        from . import builders
+
+        def unavailable(*_args: object) -> None:
+            raise builders._binding_replay_refusal()
+
+        return cast(ReceiptVerifier, unavailable)
 
     def verify(
         repository: Path,
@@ -292,9 +307,7 @@ def _open_read_only_chain_lock(
         raise journal.CoordinationRefusal(_terminal_chain_invalid())
     descriptor = os.open(
         name,
-        os.O_RDONLY
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0),
+        batch._safe_open_flags(os.O_RDONLY, nonblocking=True),
         dir_fd=root_descriptor,
     )
     try:
@@ -357,9 +370,17 @@ def projected_chain_records(
                 break
     if verification is None:
         return projected
-    source_binding = verification["binding"]
-    assert isinstance(source_binding, dict)
-    candidate = copy.deepcopy(source_binding["candidate"])
+    from . import builders
+
+    family = chain_state.get("kind")
+    candidate = (
+        builders._candidate_binding_for_state(family, chain_state)
+        if isinstance(family, str) and family in {"commit", "merge"}
+        else None
+    )
+    if candidate is None:
+        raise journal.CoordinationRefusal(builders.TERMINAL_CHAIN_INVALID)
+    candidate = copy.deepcopy(candidate)
     task = str(verification["task"])
     preimage = {
         "schema": journal.BINDING_SCHEMA,

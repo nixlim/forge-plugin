@@ -108,6 +108,28 @@ class JournalOnlySummaryTests(unittest.TestCase):
             f"{CHAIN_ID}): 2 issue(s), first: first issue",
         )
 
+    def test_summary_first_issue_escapes_controls_and_caps_length(self) -> None:
+        issue = "before\nmid\r\x1b\x85\u2028\u2029" + ("x" * 70_000)
+
+        def assert_safe() -> None:
+            line = self._summary([issue])
+            rendered = line.partition("first: ")[2]
+            for character in ("\n", "\r", "\x1b", "\x85", "\u2028", "\u2029"):
+                self.assertNotIn(character, rendered)
+            for escaped in (r"\n", r"\r", r"\x1b", r"\x85", r"\u2028", r"\u2029"):
+                self.assertIn(escaped, rendered)
+            self.assertEqual(
+                len(rendered.encode("utf-8")),
+                close_preflight._SUMMARY_ISSUE_LIMIT_BYTES,
+            )
+            self.assertTrue(rendered.endswith("..."))
+
+        assert_safe()
+        with mock.patch.object(
+            close_preflight, "_summary_issue", side_effect=lambda value: value
+        ), self.assertRaises(AssertionError):
+            assert_safe()
+
     def test_summary_line_maps_runtime_and_os_errors_to_unavailable(self) -> None:
         for raised in (RuntimeError("fixture failure"), OSError("fixture read")):
             with self.subTest(error=type(raised).__name__), mock.patch.object(
