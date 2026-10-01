@@ -753,6 +753,17 @@ class ClosePreflightTests(Revision9BuilderBatchSupport, unittest.TestCase):
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
         payload = json.loads(accepted.stdout)
         self.assertEqual(payload["schema"], "forge-close-preflight/1")
+        self.assertEqual(
+            set(payload),
+            {
+                "issues",
+                "journal_lines",
+                "projected_chain",
+                "run_id",
+                "schema",
+                "would_close_passed",
+            },
+        )
         self.assertTrue(payload["would_close_passed"])
 
         refused_key = self.command(

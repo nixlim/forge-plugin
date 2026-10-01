@@ -1483,14 +1483,14 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         journal_path = run_dir / "journal.jsonl"
         receipts_path = run_dir / journal.BATCH_RECEIPTS_NAME
 
-        exit_code, verified = self.invoke_cli(
-            "--chain-id", chain_id, "verify"
-        )
+        exit_code, verified = self.invoke_cli("--chain-id", chain_id, "verify")
 
         self.assertEqual(exit_code, 0, verified)
         self.assertEqual(
             verified["message"],
-            "all required mechanical verification steps are complete",
+            "all required mechanical verification steps are complete; close preflight "
+            f"(journal-only, projecting {chain_id}): 1 issue(s), first: task "
+            "'task-01' has inconsistent bound candidate across gate and landing records",
         )
         self.assertEqual(verified["state"], "reviewing")
         state = self.state(chain_id)
@@ -1755,14 +1755,14 @@ class Revision9BoundCLIIntegrationTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         ]
         self.assertNotEqual(restaged_candidate, failed_candidate)
 
-        exit_code, recovered = self.invoke_cli(
-            "--chain-id", chain_id, "verify"
-        )
+        exit_code, recovered = self.invoke_cli("--chain-id", chain_id, "verify")
 
         self.assertEqual(exit_code, 0, recovered)
         self.assertEqual(
             recovered["message"],
-            "all required mechanical verification steps are complete",
+            "all required mechanical verification steps are complete; close preflight "
+            f"(journal-only, projecting {chain_id}): 1 issue(s), first: task "
+            "'task-01' has inconsistent bound candidate across gate and landing records",
         )
         self.assertEqual(recovered["state"], "reviewing")
         recovered_state = self.state(chain_id)

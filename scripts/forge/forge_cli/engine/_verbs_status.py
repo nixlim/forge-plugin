@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -232,6 +232,33 @@ def journal_ingest_chain(
         schema=REVISION9_OUTPUT_SCHEMA,
     )
 
+
+def _status_close_preflight_line(
+    self: Any, state: Mapping[str, Any], message: str
+) -> str:
+    run_binding = state.get("run_binding")
+    if not isinstance(run_binding, Mapping):
+        return message
+    try:
+        _batch, _builders, journal = runtime._coordination_modules()
+        from codex_orchestrator import close_preflight
+
+        run_id = run_binding.get("run_id")
+        if not journal._valid_run_id(run_id):
+            raise ValueError("run binding has no run id")
+        assert isinstance(run_id, str)
+        run_dir = (
+            self.ctx.store.common_root
+            / ".codex-orchestrator"
+            / "runs"
+            / run_id
+        )
+        line = close_preflight.summary_line(run_dir, None, dict(state))
+    except Exception:
+        line = "close preflight (journal-only): unavailable"
+    return f"{message}; {line}" if line else message
+
+
 def status(self) -> Outcome:
     selected_id = self.ctx.options.chain_id
     if selected_id is not None:
@@ -354,4 +381,7 @@ def status(self) -> Outcome:
         next_step = "forge commit start --paths <path>..."
     else:
         next_step = self.next_step(state)
-    return _success(state, f"chain {state['chain_id']} is {state['state']}", next_step)
+    message = _status_close_preflight_line(
+        self, state, f"chain {state['chain_id']} is {state['state']}"
+    )
+    return _success(state, message, next_step)

@@ -18,6 +18,7 @@ _INVALID_CHAIN = "forge: close preflight — invalid chain id"
 _NO_BOUND_GATES = (
     "forge: close preflight — projected chain has no bound gate records: "
 )
+CLOSE_PREFLIGHT_CONTROLS = frozenset({"close-preflight-line"})
 
 
 def _take_shared_lock(descriptor: int) -> None:
@@ -172,6 +173,73 @@ def _projected_issues(
     except RuntimeError as exc:
         issues.extend(line for line in str(exc).splitlines() if line)
     return issues
+
+
+def _summary_prefix(projecting_chain: str | None) -> str:
+    suffix = f", projecting {projecting_chain}" if projecting_chain else ""
+    return f"close preflight (journal-only{suffix})"
+
+
+def _summary_records(run_dir: Path) -> list[dict[str, object]]:
+    records, read_issues = journal.read_journal(run_dir / "journal.jsonl")
+    if read_issues:
+        raise ValueError("journal snapshot is unavailable")
+    return records
+
+
+def summary_line(
+    run_dir: Path,
+    projecting_chain: str | None,
+    chain_state: dict[str, object] | None,
+) -> str:
+    """Summarize only journal law; omit terminal-chain artifact checks."""
+
+    if "close-preflight-line" not in CLOSE_PREFLIGHT_CONTROLS:
+        return ""
+    prefix = _summary_prefix(None)
+    try:
+        valid_chain = (
+            projecting_chain is None
+            or journal.CHAIN_ID_PATTERN.fullmatch(projecting_chain) is not None
+        )
+        reported_chain = projecting_chain if valid_chain else None
+        prefix = _summary_prefix(reported_chain)
+        if not valid_chain:
+            raise ValueError("projected chain identifier is malformed")
+        records = _summary_records(run_dir)
+        if any(record.get("type") == "run_closed" for record in records):
+            return f"{prefix}: 1 issue(s), first: {_RUN_NOT_OPEN}"
+        projected = list(records)
+        if projecting_chain is not None:
+            if not isinstance(chain_state, dict) or not any(
+                _bound_chain_record(record, projecting_chain) for record in records
+            ):
+                raise ValueError("projected chain state is unavailable")
+            projected = close_law.projected_chain_records(
+                records, projecting_chain, chain_state
+            )
+        projection_input = tuple(
+            {name: value for name, value in record.items() if name != "_line"}
+            for record in projected
+        )
+        validation = close_law.project_close(run_dir, projection_input, "passed")
+        raw_issues = validation.get("issues")
+        if not isinstance(raw_issues, list) or not all(
+            isinstance(issue, str) for issue in raw_issues
+        ):
+            raise ValueError("close projection issues are malformed")
+        issues = list(raw_issues)
+        try:
+            journal.route_provenance.enforce_run_close(
+                projected, "passed", refusal=RuntimeError
+            )
+        except RuntimeError as exc:
+            issues.extend(line for line in str(exc).splitlines() if line)
+        if not issues:
+            return f"{prefix}: no issue found; terminal chain guard not run"
+        return f"{prefix}: {len(issues)} issue(s), first: {issues[0]}"
+    except Exception:
+        return f"{prefix}: unavailable"
 
 
 def _json_bytes(payload: dict[str, object]) -> bytes:
