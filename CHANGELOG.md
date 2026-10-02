@@ -11,6 +11,7 @@ Release dates are the UTC dates of the release commits.
 ### Changed
 
 - Plugin manifests no longer declare a version (GH#37, bead forge-plugin-6j08), so Claude Code keys the plugin cache by the installed commit SHA and updates, including `autoUpdate`, follow each commit on `main`; pin a `vX.Y.Z` tag for release-only updates.
+- The rendered `AGENTS.md` Forge splice is re-rendered from `forge-project.md` (it had lagged by the `tests.test_version` line added to the docs-contract stack cell); nothing outside the splice markers changes and the executed policy is unchanged.
 
 ### Fixed
 

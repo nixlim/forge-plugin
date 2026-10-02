@@ -196,6 +196,7 @@ MODULES = [
     "tests.test_route_config_support",
     "tests.test_route_vocab",
     "tests.test_spec_revision15",
+    "tests.test_version",
     "tests.test_worktree_merge_skill",
 ]
 raise SystemExit(subprocess.call([sys.executable, "-m", "unittest", *MODULES]))
