@@ -12,6 +12,10 @@ Release dates are the UTC dates of the release commits.
 
 - Plugin manifests no longer declare a version (GH#37, bead forge-plugin-6j08), so Claude Code keys the plugin cache by the installed commit SHA and updates, including `autoUpdate`, follow each commit on `main`; pin a `vX.Y.Z` tag for release-only updates.
 
+### Fixed
+
+- The docs-class stack validation (the contract tests that run for a candidate whose only changed paths are documentation, because Gate 1 is skipped for it) now includes `tests.test_version`, and the policy pin that lists every test module reading repository prose now counts a `CHANGELOG.md` read as prose. Since the manifest version field was dropped, `tests.test_version` compares the `pyproject.toml` version with the newest `CHANGELOG.md` release heading; before this, a changelog-only candidate could move that heading without the comparison running (bead forge-plugin-7pvu).
+
 ## [0.7.0] - 2026-10-02
 
 ### Added

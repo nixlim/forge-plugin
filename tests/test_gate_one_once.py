@@ -273,7 +273,7 @@ class CommittedPolicyPinsTests(unittest.TestCase):
         listed = set(re.findall(r'"(tests\.test_\w+)"', cell))
         self.assertTrue(listed)
         prose = re.compile(
-            r'ROOT / "(?:README\.md|OPERATIONS\.md|UPSTREAM|LICENSE'
+            r'ROOT / "(?:README\.md|OPERATIONS\.md|CHANGELOG\.md|UPSTREAM|LICENSE'
             r'|docs/orchestration-contract\.md)"|"docs/orchestration-contract\.md"'
         )
         readers = {
@@ -282,6 +282,7 @@ class CommittedPolicyPinsTests(unittest.TestCase):
             if prose.search(path.read_text(encoding="utf-8"))
         }
         self.assertTrue(readers)
+        self.assertIn("tests.test_version", readers)
         self.assertLessEqual(readers, listed, sorted(readers - listed))
         for module in sorted(listed):
             self.assertTrue((ROOT / "tests" / f"{module.split('.')[1]}.py").is_file(), module)
