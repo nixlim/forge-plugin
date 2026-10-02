@@ -8,6 +8,10 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Changed
+
+- Plugin manifests no longer declare a version (GH#37, bead forge-plugin-6j08), so Claude Code keys the plugin cache by the installed commit SHA and updates, including `autoUpdate`, follow each commit on `main`; pin a `vX.Y.Z` tag for release-only updates.
+
 ## [0.7.0] - 2026-10-02
 
 ### Added

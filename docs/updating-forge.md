@@ -9,9 +9,11 @@ both supported by the plugin's update flow.
 ## How updates propagate
 
 Forge installs from its marketplace (this repository's
-`.claude-plugin/marketplace.json`). The update signal is the version string in
-`plugin.json`: when a release bumps it on `main`, consumers see the new
-version. Delivery depends on your marketplace registration:
+`.claude-plugin/marketplace.json`). The update signal is each commit on `main`:
+with no version in either plugin manifest, Claude Code names the cache directory
+for the installed plugin by that commit's SHA. Releases are identified by the
+`CHANGELOG.md` heading, `pyproject.toml`, and the annotated tag `vX.Y.Z`.
+Delivery depends on your marketplace registration:
 
 - **`autoUpdate: true`** — Claude Code refreshes the marketplace and its
   installed plugins at **session startup**. A running session keeps the copy
@@ -41,8 +43,9 @@ a live reviewer. Any actual project review is our review, not yours.
 
 Best when your own governance posture says gate instructions should not change
 silently — the same principle the Forge workflow asks cooperative agents to
-follow inside your repository. Pin the plugin entry to a version or commit `sha`
-in your marketplace registration, and move deliberately:
+follow inside your repository. Pin the plugin entry in your marketplace
+registration to `nixlim/forge-plugin#vX.Y.Z` (a tag ref) for a release, or to a
+commit SHA, and move deliberately:
 
 1. Read the release notes and the `[Unreleased]`→version diff in
    `CHANGELOG.md`.
@@ -65,6 +68,13 @@ in your marketplace registration, and move deliberately:
   consulted; a dead lock owner is an operator-cleared condition) and gated run
   close retires restaged-candidate gate sets from FR-021 correlation. If you scripted around old behavior, those scripts
   fail loudly rather than silently — by design.
+- **0.7.0 consumer semantics:** `.forge/local/routes.toml` is opt-in;
+  `review attach` is retired for new requests in favor of `review collect`;
+  Claude Code 2.1.283 or newer and Codex CLI 0.155.0 or newer are required.
+- **After 0.7.0 (unreleased):** the plugin manifests no longer declare a
+  version, so plugin caches are keyed by commit SHA and updates track each
+  commit on `main`. The `v0.7.0` tag itself still ships versioned manifests.
+  Pin `nixlim/forge-plugin#vX.Y.Z` for release-only updates.
 - **Local modifications do not survive updates.** Any patch you carry in the
   plugin cache is overwritten by every update; re-apply and re-verify after
   each one, or upstream the change.
