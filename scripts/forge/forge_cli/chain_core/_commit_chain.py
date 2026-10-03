@@ -54,6 +54,9 @@ import os
 import datetime as dt
 
 
+ARCHIVE_CHANGELOG_EXEMPTION = frozenset({"archive-only"})
+
+
 def _landed_commit_names(
     repository: Path, parent_sha: str, commit_sha: str
 ) -> subprocess.CompletedProcess[bytes]:
@@ -1883,10 +1886,19 @@ def _fresh_reviewer_evals_required(
     return fresh_eval_module.trigger_required(trigger)
 
 
+def _archive_changelog_exempt(state: Mapping[str, Any]) -> bool:
+    staging = state.get("staging")
+    return (
+        "archive-only" in ARCHIVE_CHANGELOG_EXEMPTION
+        and isinstance(staging, Mapping)
+        and isinstance(staging.get("archive"), Mapping)
+    )
+
+
 def _required_steps(ctx: CommandContext, state: Mapping[str, Any]) -> list[str]:
     policy = ctx.policy or _policy_for_state(ctx, state)
     result: list[str] = []
-    if policy.changelog is not None:
+    if policy.changelog is not None and not _archive_changelog_exempt(state):
         result.append("changelog")
     result.append("gate-1")
     categories = [str(value) for value in state["tier"].get("categories", [])]

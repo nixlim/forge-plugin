@@ -40,8 +40,10 @@ from forge_cli.policy import sha256_bytes
 
 
 def _pending_mutating_gate(self, state: Mapping[str, Any]) -> str | None:
-    policy = self.ctx.policy or chain_core._policy_for_state(self.ctx, state)
-    if policy.changelog is not None and not chain_core._gate_satisfied(state, "changelog"):
+    if (
+        "changelog" in chain_core._required_steps(self.ctx, state)
+        and not chain_core._gate_satisfied(state, "changelog")
+    ):
         return "changelog"
     return None
 

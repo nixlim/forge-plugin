@@ -15,6 +15,7 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Archive-only commit chains no longer schedule the changelog step (bead forge-plugin-5wz). With a configured changelog policy, `commit start --archive-run-id` chains used to dead-end at the changelog gate, which an archive chain refuses as a mutating gate, so every run-archive commit needed an operator `commit skip changelog`. Now `_required_steps` omits `changelog` when the chain carries validated archive staging (control `ARCHIVE_CHANGELOG_EXEMPTION`), and every verb, including the pending-mutating-gate check, derives from that same step list; ordinary chains keep their changelog gate first.
 - The docs-class stack validation (the contract tests that run for a candidate whose only changed paths are documentation, because Gate 1 is skipped for it) now includes `tests.test_version`, and the policy pin that lists every test module reading repository prose now counts a `CHANGELOG.md` read as prose. Since the manifest version field was dropped, `tests.test_version` compares the `pyproject.toml` version with the newest `CHANGELOG.md` release heading; before this, a changelog-only candidate could move that heading without the comparison running (bead forge-plugin-7pvu).
 
 ## [0.7.0] - 2026-10-02
