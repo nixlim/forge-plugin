@@ -179,7 +179,7 @@ def assert_fr249_followup(specification: str) -> None:
 
 class SpecificationRevision15Tests(unittest.TestCase):
     def test_revision_and_deferral_state_are_explicit(self) -> None:
-        self.assertIn("**Status**: Draft (Revision 18)", SPEC)
+        self.assertIn("**Status**: Draft (Revision 19)", SPEC)
         intent = next(
             line for line in SPEC.splitlines() if line.startswith("**Intent**:")
         )
