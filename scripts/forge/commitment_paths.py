@@ -11,6 +11,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 
+CITATION_LAYOUT_ROOT_LEGS = frozenset(
+    {"audit", "basis-documents", "append-time"}
+)
 WEB_URL = re.compile(r"\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)
 MARKDOWN_TARGET = re.compile(
     r"\[[^\]]*\]\((?:<([^>]+)>|(\S+?))(?:\s+['\"][^'\"]*['\"])?\)"
@@ -552,6 +555,30 @@ def _path_uses_symlink(root: Path, relative: Path) -> bool:
     return False
 
 
+def layout_repository_root(run_dir: Path) -> Path | None:
+    """Return the repository root implied by the fixed run layout, if any."""
+
+    try:
+        resolved = run_dir.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if (
+        len(resolved.parents) < 3
+        or resolved.parent.name != "runs"
+        or resolved.parents[1].name != ".codex-orchestrator"
+    ):
+        return None
+    return resolved.parents[2]
+
+
+def citation_layout_root(run_dir: Path, *, leg: str) -> Path | None:
+    """Return the fixed-layout root when one named citation reader enables it."""
+
+    if leg not in CITATION_LAYOUT_ROOT_LEGS:
+        return None
+    return layout_repository_root(run_dir)
+
+
 def resolve_contained_path(
     value: str, roots: Iterable[Path]
 ) -> CommitmentPathResolution | None:
@@ -569,7 +596,11 @@ def resolve_contained_path(
             return None
         fallback: CommitmentPathResolution | None = None
         for raw_root in roots:
-            root = raw_root.expanduser().resolve(strict=True)
+            try:
+                root = raw_root.expanduser().resolve(strict=True)
+            except (OSError, RuntimeError, UnicodeError, ValueError):
+                # An unprovable root contributes no leg; later roots remain usable.
+                continue
             candidate = root / relative
             resolved = candidate.resolve(strict=False)
             try:
@@ -598,11 +629,26 @@ def resolve_contained_path(
         return None
 
 
+def _distinct_roots(roots: Iterable[Path]) -> tuple[Path, ...]:
+    """Keep each physical root once, retaining its first ordered spelling."""
+
+    selected: list[Path] = []
+    identities: set[Path] = set()
+    for root in roots:
+        identity = root.expanduser().resolve(strict=False)
+        if identity in identities:
+            continue
+        identities.add(identity)
+        selected.append(root)
+    return tuple(selected)
+
+
 def surface_roots(
     surface: CommitmentPathSurface,
     *,
     repository: Path,
     run_dir: Path | None = None,
+    layout_root: Path | None = None,
 ) -> tuple[Path, ...]:
     """Expand one table row's ordered root names to concrete paths."""
 
@@ -614,9 +660,28 @@ def surface_roots(
             selected.append(run_dir)
         elif root == "repository":
             selected.append(repository)
+            if layout_root is not None:
+                selected.append(layout_root)
         else:
             raise ValueError(f"unknown commitment path root: {root}")
-    return tuple(selected)
+    return _distinct_roots(selected)
+
+
+def citation_roots(
+    repository: Path,
+    run_dir: Path,
+    *,
+    leg: str,
+) -> tuple[Path, ...]:
+    """Return the controlled run, recorded, and fixed-layout citation roots."""
+
+    surface = commitment_surface("decision.basis")
+    return surface_roots(
+        surface,
+        repository=repository,
+        run_dir=run_dir,
+        layout_root=citation_layout_root(run_dir, leg=leg),
+    )
 
 
 def resolve_surface_path(
@@ -625,6 +690,7 @@ def resolve_surface_path(
     *,
     repository: Path,
     run_dir: Path | None = None,
+    layout_root: Path | None = None,
 ) -> CommitmentPathResolution | None:
     """Resolve one value using only its immutable inventory row."""
 
@@ -633,10 +699,40 @@ def resolve_surface_path(
             surface,
             repository=repository,
             run_dir=run_dir,
+            layout_root=layout_root,
         )
     except (OSError, RuntimeError, UnicodeError, ValueError):
         return None
     return resolve_contained_path(value, roots)
+
+
+def resolve_citation_path(
+    surface: CommitmentPathSurface,
+    value: str,
+    *,
+    repository: Path | None = None,
+    run_dir: Path | None = None,
+    leg: str | None = None,
+    roots: Iterable[Path] | None = None,
+) -> CommitmentPathResolution | None:
+    """Apply the shared ordered predicate for one citation reader.
+
+    Named FR-017 readers derive roots from ``leg``. FR-011 validation supplies
+    its ordered roots under the independent ``VALIDATION_REPOSITORY_LEG``.
+    """
+
+    if roots is not None:
+        return resolve_contained_path(value, roots)
+    if repository is None or run_dir is None or leg is None:
+        return None
+
+    return resolve_surface_path(
+        surface,
+        value,
+        repository=repository,
+        run_dir=run_dir,
+        layout_root=citation_layout_root(run_dir, leg=leg),
+    )
 
 
 def surface_path_is_contained(
@@ -645,6 +741,7 @@ def surface_path_is_contained(
     *,
     repository: Path,
     run_dir: Path | None = None,
+    layout_root: Path | None = None,
 ) -> bool:
     """Apply the shared fail-closed containment predicate to one surface."""
 
@@ -653,6 +750,7 @@ def surface_path_is_contained(
         value,
         repository=repository,
         run_dir=run_dir,
+        layout_root=layout_root,
     )
     return selected is not None and selected.contained
 

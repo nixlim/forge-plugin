@@ -24,6 +24,226 @@ from codex_orchestrator import batch, journal  # noqa: E402
 class CommitmentPathInventoryTests(unittest.TestCase):
     maxDiff = None
 
+    def test_layout_repository_root_is_physical_and_shared_with_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            repository = base / "repo"
+            run_dir = repository / ".codex-orchestrator/runs/run-layout"
+            run_dir.mkdir(parents=True)
+            linked_run = base / "linked-run"
+            linked_run.symlink_to(run_dir, target_is_directory=True)
+            foreign = base / "foreign/runs/run-layout"
+            foreign.mkdir(parents=True)
+
+            self.assertEqual(
+                repository.resolve(),
+                commitment_paths.layout_repository_root(linked_run),
+            )
+            self.assertIsNone(commitment_paths.layout_repository_root(foreign))
+            self.assertEqual(
+                (foreign, repository),
+                commitment_paths.citation_roots(
+                    repository,
+                    foreign,
+                    leg="audit",
+                ),
+            )
+            self.assertIs(
+                commitment_paths.layout_repository_root,
+                journal._layout_repository_root,
+            )
+
+    def test_layout_root_order_is_scoped_and_physically_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            layout_root = base / "repo"
+            run_dir = layout_root / ".codex-orchestrator/runs/run-roots"
+            recorded = layout_root / ".worktrees/recorded"
+            run_dir.mkdir(parents=True)
+            recorded.mkdir(parents=True)
+            record_surface = commitment_paths.commitment_surface("decision.basis")
+
+            self.assertEqual(
+                (run_dir, recorded, layout_root),
+                commitment_paths.surface_roots(
+                    record_surface,
+                    repository=recorded,
+                    run_dir=run_dir,
+                    layout_root=layout_root,
+                ),
+            )
+            self.assertEqual(
+                (run_dir, layout_root),
+                commitment_paths.surface_roots(
+                    record_surface,
+                    repository=layout_root,
+                    run_dir=run_dir,
+                    layout_root=layout_root,
+                ),
+            )
+            self.assertEqual(
+                (run_dir,),
+                commitment_paths.surface_roots(
+                    commitment_paths.commitment_surface("batch.intent"),
+                    repository=recorded,
+                    run_dir=run_dir,
+                    layout_root=layout_root,
+                ),
+            )
+            self.assertEqual(
+                (recorded, layout_root),
+                commitment_paths.surface_roots(
+                    commitment_paths.commitment_surface("ingest.state_file"),
+                    repository=recorded,
+                    run_dir=run_dir,
+                    layout_root=layout_root,
+                ),
+            )
+
+            recorded_link = base / "recorded-link"
+            recorded_link.symlink_to(layout_root, target_is_directory=True)
+            self.assertEqual(
+                (run_dir, recorded_link),
+                commitment_paths.surface_roots(
+                    record_surface,
+                    repository=recorded_link,
+                    run_dir=run_dir,
+                    layout_root=layout_root,
+                ),
+            )
+
+    def test_shared_citation_predicate_preserves_order_and_first_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            layout_root = base / "repo"
+            run_dir = layout_root / ".codex-orchestrator/runs/run-order"
+            recorded = layout_root / ".worktrees/recorded"
+            run_dir.mkdir(parents=True)
+            recorded.mkdir(parents=True)
+            relative = Path("evidence/shared.txt")
+            layout_file = layout_root / relative
+            layout_file.parent.mkdir(parents=True)
+            layout_file.write_text("layout\n", encoding="utf-8")
+            surface = commitment_paths.commitment_surface("verification.evidence")
+
+            selected = commitment_paths.resolve_citation_path(
+                surface,
+                relative.as_posix(),
+                repository=recorded,
+                run_dir=run_dir,
+                leg="audit",
+            )
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(layout_root, selected.root)
+            self.assertTrue(selected.contained)
+
+            recorded_file = recorded / relative
+            recorded_file.parent.mkdir(parents=True)
+            recorded_file.write_text("recorded\n", encoding="utf-8")
+            selected = commitment_paths.resolve_citation_path(
+                surface,
+                relative.as_posix(),
+                repository=recorded,
+                run_dir=run_dir,
+                leg="audit",
+            )
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(recorded, selected.root)
+
+            run_file = run_dir / relative
+            run_file.parent.mkdir(parents=True)
+            run_file.write_text("run\n", encoding="utf-8")
+            selected = commitment_paths.resolve_citation_path(
+                surface,
+                relative.as_posix(),
+                repository=recorded,
+                run_dir=run_dir,
+                leg="audit",
+            )
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(run_dir.resolve(), selected.root)
+            run_file.unlink()
+
+            recorded_file.unlink()
+            outside = base / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            recorded_file.symlink_to(outside)
+            selected = commitment_paths.resolve_citation_path(
+                surface,
+                relative.as_posix(),
+                repository=recorded,
+                run_dir=run_dir,
+                leg="audit",
+            )
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(recorded, selected.root)
+            self.assertTrue(selected.anchored)
+            self.assertFalse(selected.contained)
+
+    def test_unresolvable_root_omits_only_its_leg(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            run_dir = base / "run"
+            layout_root = base / "repo"
+            run_dir.mkdir()
+            layout_root.mkdir()
+            citation = "evidence/later-root.txt"
+            artifact = layout_root / citation
+            artifact.parent.mkdir()
+            artifact.write_text("later root\n", encoding="utf-8")
+
+            selected = commitment_paths.resolve_contained_path(
+                citation,
+                (run_dir, base / "missing-recorded-root", layout_root),
+            )
+
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(layout_root.resolve(), selected.root)
+            self.assertEqual(artifact.resolve(), selected.resolved)
+            self.assertTrue(selected.anchored)
+            self.assertTrue(selected.contained)
+
+    def test_each_layout_reader_leg_is_independently_disableable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            run_dir = root / ".codex-orchestrator/runs/run-controls"
+            recorded = root / ".worktrees/recorded"
+            run_dir.mkdir(parents=True)
+            recorded.mkdir(parents=True)
+            enabled = commitment_paths.CITATION_LAYOUT_ROOT_LEGS
+            self.assertEqual(
+                frozenset({"audit", "basis-documents", "append-time"}),
+                enabled,
+            )
+            for leg in sorted(enabled):
+                with self.subTest(leg=leg):
+                    self.assertEqual(
+                        (run_dir, recorded, root),
+                        commitment_paths.citation_roots(
+                            recorded,
+                            run_dir,
+                            leg=leg,
+                        ),
+                    )
+                    with mock.patch.object(
+                        commitment_paths,
+                        "CITATION_LAYOUT_ROOT_LEGS",
+                        enabled - {leg},
+                    ):
+                        self.assertEqual(
+                            (run_dir, recorded),
+                            commitment_paths.citation_roots(
+                                recorded,
+                                run_dir,
+                                leg=leg,
+                            ),
+                        )
+
     def test_exact_immutable_fourteen_surface_table(self) -> None:
         expected = (
             ("execution.prompt", "record", ("run", "repository"), ("append", "audit"), "execution", "prompt", "direct", None, True, False, False, None, "record-citation", False, False, None),

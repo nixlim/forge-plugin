@@ -37,7 +37,7 @@ from commitment_paths import (  # noqa: E402
     iter_record_citations,
     parse_run_captured_path,
     resolution_matches_surface,
-    resolve_surface_path,
+    resolve_citation_path,
     validate_surface_path,
 )
 
@@ -586,12 +586,16 @@ def audit_missing_paths(
 ) -> list[AuditedCitation]:
     branches = recorded_branches(records)
     missing: list[AuditedCitation] = []
+    # CONTROL layout-root BEGIN
+    citation_leg = "audit"
+    # CONTROL layout-root END
     for citation in audited_citations:
-        selected = resolve_surface_path(
+        selected = resolve_citation_path(
             citation.original.surface,
             citation.value,
             repository=repo_root,
             run_dir=run_dir,
+            leg=citation_leg,
         )
         if resolution_matches_surface(citation.original.surface, selected):
             continue

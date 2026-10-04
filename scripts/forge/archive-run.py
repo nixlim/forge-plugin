@@ -36,9 +36,10 @@ from codex_orchestrator.journal import (
     validate_run,
 )
 from commitment_paths import (
-    commitment_surface,
+    citation_roots, commitment_surface,
     parse_run_captured_path,
     path_tokens,
+    resolve_citation_path,
     validate_surface_path,
 )
 
@@ -2856,12 +2857,10 @@ def recompute_pre_close_validation(
                     sidecar = b"".join(retained)
                 (mirror / sidecar_name).write_bytes(sidecar)
             (mirror / "journal.jsonl").write_bytes(prefix)
-            # The mirror sits outside the fixed run layout, so pass the real
-            # run's layout-derived repository root: repository-relative
-            # citations must resolve here exactly as they did at close.
+            # Keep citation anchoring on the real run while reading the mirror.
             return canonical_payload(
                 validate_run(
-                    mirror,
+                    mirror, citation_run_dir=run_dir,
                     gates=True,
                     repository=journal_engine._layout_repository_root(run_dir),
                 )
@@ -3935,13 +3934,17 @@ def document_path(repo: Path, run_dir: Path, value: str) -> Path | None:
     relative = safe_basis_relative(value)
     if relative is None:
         return None
-    for root in (run_dir, repo):
-        try:
-            snapshot_basis_document(root, relative, value)
-        except FileNotFoundError:
-            continue
-        return root / relative
-    return None
+    selected = resolve_citation_path(
+        commitment_surface("decision.basis"), value, repository=repo,
+        run_dir=run_dir, leg="basis-documents",
+    )
+    if selected is None:
+        return None
+    try:
+        snapshot_basis_document(selected.root, relative, value)
+    except FileNotFoundError:
+        return None
+    return selected.root / relative
 
 
 def basis_documents(
@@ -3967,23 +3970,20 @@ def basis_documents(
                 relative = safe_basis_relative(reference)
                 if relative is None:
                     continue
-                if any(root / relative in excluded_paths for root in (run_dir, repo)):
+                roots = citation_roots(repo, run_dir, leg="basis-documents")
+                if any(root / relative in excluded_paths for root in roots):
                     continue
-                captured: tuple[
-                    Path, ExactFile, tuple[tuple[str, FileIdentity], ...]
-                ] | None = None
-                for root in (run_dir, repo):
-                    try:
-                        exact, directories = snapshot_basis_document(
-                            root, relative, value
-                        )
-                    except FileNotFoundError:
-                        continue
-                    captured = (root, exact, directories)
-                    break
-                if captured is None:
+                selected = resolve_citation_path(
+                    commitment_surface("decision.basis"), reference, repository=repo,
+                    run_dir=run_dir, leg="basis-documents",
+                )
+                if selected is None:
                     continue
-                root, exact, directories = captured
+                root = selected.root
+                try:
+                    exact, directories = snapshot_basis_document(root, relative, value)
+                except FileNotFoundError:
+                    continue
                 identity_key = (exact.identity.device, exact.identity.inode)
                 if identity_key in seen:
                     continue
@@ -4517,12 +4517,10 @@ def legacy_closing_mode(
     if prove_approval:
         if "legacy-approval" not in RENDERER_CONTROLS:
             raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-        recovery_dir = repo / ".codex-orchestrator" / "runs" / recovery_run_id
+        recovery_dir = target_run_dir.parent / recovery_run_id
         try:
             recovery_dir = recovery_dir.resolve(strict=True)
-            recovery_dir.relative_to(
-                (repo / ".codex-orchestrator" / "runs").resolve(strict=True)
-            )
+            recovery_dir.relative_to(target_run_dir.parent.resolve(strict=True))
         except (OSError, RuntimeError, ValueError):
             raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
         try:

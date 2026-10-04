@@ -33,8 +33,8 @@ import route_evidence  # noqa: E402
 import route_provenance  # noqa: E402, F401
 import route_vocab  # noqa: E402
 from commitment_paths import (  # noqa: E402
-    iter_record_citations, path_tokens,
-    resolve_contained_path, surface_path_is_contained,
+    commitment_surface, iter_record_citations, layout_repository_root as _layout_repository_root,
+    path_tokens, resolve_citation_path, resolve_contained_path, surface_roots,
 )
 
 JOURNAL_ENTRY_TYPES = {
@@ -685,12 +685,11 @@ def _validate_append_citations(
     for citation in citations:
         if not _safe_diagnostic_text(citation.value):
             raise CoordinationRefusal(INVALID_JOURNAL_RECORD)
-        if not surface_path_is_contained(
-            citation.surface,
-            citation.value,
-            repository=repo_root,
-            run_dir=run_dir,
-        ):
+        selected = resolve_citation_path(
+            citation.surface, citation.value, repository=repo_root,
+            run_dir=run_dir, leg="append-time",
+        )
+        if selected is None or not selected.contained:
             raise CoordinationRefusal(
                 "forge: journal append refused — record cites path outside run or "
                 f"repository: {citation.label}: {citation.value}"
@@ -7847,70 +7846,67 @@ def resolve_run_path(run_dir: Path, value: str) -> Path:
     return path.resolve() if path.is_absolute() else (run_dir / path).resolve()
 
 
-# Revision 13 (FR-011 amendment): validation resolves a relative citation
-# against the run directory first (upstream resolve-then-exist, unchanged)
-# and, only when absent there, against the run's repository root through
-# the same ordered resolve-then-contain predicate FR-017 applies at append
-# time. The repository root is derived only from the fixed run layout
-# ``<repository>/.codex-orchestrator/runs/<run-id>`` of the run being
-# validated, or supplied explicitly by a consumer that validates a mirrored
-# journal outside that layout (the archive's pre-close recompute). Journal
-# data never widens it. Setting the control to False restores
-# run-relative-only resolution.
+# Revision 20 (FR-011/FR-017): validation resolves a relative citation against
+# the run directory, its resolved recorded repository, and then the root from
+# the fixed run layout. Out-of-layout runs omit only the layout root. A caller
+# validating a mirror supplies the real layout root and citation run directory.
+# Setting the control to False restores run-relative-only resolution.
 VALIDATION_REPOSITORY_LEG = True
 _VALIDATION_REPOSITORY: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "forge_validation_repository", default=None
 )
 
 
-def _layout_repository_root(run_dir: Path) -> Path | None:
-    """Return the repository root implied by the fixed run layout, if any."""
-    try:
-        resolved = run_dir.expanduser().resolve(strict=True)
-    except (OSError, RuntimeError, ValueError):
-        return None
-    if (
-        len(resolved.parents) < 3
-        or resolved.parent.name != "runs"
-        or resolved.parents[1].name != ".codex-orchestrator"
-    ):
-        return None
-    return resolved.parents[2]
-
-
-def _validation_repository(run_dir: Path) -> Path | None:
-    """The repository root for this validation: explicit override, else layout."""
+def _validation_roots(run_dir: Path, records: Sequence[dict[str, object]]) -> tuple[Path, ...]:
     if not VALIDATION_REPOSITORY_LEG:
-        return None
-    override = _VALIDATION_REPOSITORY.get()
-    if override is not None:
-        return override
-    return _layout_repository_root(run_dir)
+        return (run_dir,)
+    layout_root = _VALIDATION_REPOSITORY.get() or _layout_repository_root(run_dir)
+    opening = records[0] if records else {}
+    recorded = opening.get("repo") if opening.get("type") == "run_started" else None
+    if layout_root is None:
+        # With no layout authority, admit only a present Git caller and let the
+        # recorded-repository resolver normalize it to that checkout's toplevel.
+        if not isinstance(recorded, str) or not recorded or not Path(recorded).is_absolute():
+            return (run_dir,)
+        try:
+            candidate, state_root = _resolve_repository(Path(recorded), "validation")
+            repository = _recorded_repository_root(
+                run_dir, state_root, candidate, records=tuple(records),
+            )
+        except CoordinationRefusal:
+            return (run_dir,)
+    else:
+        try:
+            repository = _recorded_repository_root(run_dir, layout_root, layout_root, records=tuple(records))
+        except CoordinationRefusal:
+            repository = layout_root
+    return surface_roots(commitment_surface("verification.evidence"), repository=repository,
+                         run_dir=run_dir, layout_root=layout_root)
 
 
-def _resolve_declared_path(run_dir: Path, value: str) -> Path:
+def _resolve_declared_path(run_dir: Path, value: str,
+                           *, roots: tuple[Path, ...] | None = None) -> Path | None:
     """Resolve a citation for existence checks through the ordered roots."""
     path = Path(value).expanduser()
     if path.is_absolute():
         return resolve_run_path(run_dir, value)
-    run_resolved = (run_dir / path).resolve()
-    if run_resolved.exists():
-        return run_resolved
-    repository = _validation_repository(run_dir)
-    if repository is None:
-        return run_resolved
-    selected = resolve_contained_path(value, (run_dir, repository))
-    if selected is None or not selected.contained or selected.root != repository:
-        return run_resolved
+    if roots is None:
+        records, _issues = read_journal(run_dir / "journal.jsonl")
+        roots = _validation_roots(run_dir, records)
+    selected = resolve_citation_path(commitment_surface("verification.evidence"), value,
+                                     roots=roots)
+    if selected is None or not selected.contained:
+        return None
     return selected.resolved
 
 
-def declared_file_exists(run_dir: Path, value: object, *, nonempty: bool = False) -> bool:
+def declared_file_exists(run_dir: Path, value: object, *, nonempty: bool = False,
+                         roots: tuple[Path, ...] | None = None) -> bool:
     if not isinstance(value, str) or not value:
         return False
     try:
-        path = _resolve_declared_path(run_dir, value)
-        return path.is_file() and (not nonempty or path.stat().st_size > 0)
+        path = _resolve_declared_path(run_dir, value, roots=roots)
+        return path is not None and path.is_file() and (not nonempty or path.stat().st_size > 0)
     except (OSError, RuntimeError, ValueError):
         return False
 
@@ -7934,18 +7930,17 @@ def _legacy_compatibility_declaration(
     return None
 
 
-def _legacy_allows(
-    leg: str, declaration_line: int | None, *records: dict[str, object]
-) -> bool:
+def _legacy_record(declaration_line: int | None, record: dict[str, object]) -> bool:
+    line = record.get("_line")
+    return declaration_line is not None and isinstance(line, int) and line < declaration_line
+
+
+def _legacy_allows(leg: str, declaration_line: int | None,
+                   *records: dict[str, object]) -> bool:
     return (
         leg in LEGACY_COMPATIBILITY_LEGS
-        and declaration_line is not None
         and bool(records)
-        and all(
-            isinstance(record.get("_line"), int)
-            and int(record["_line"]) < declaration_line
-            for record in records
-        )
+        and all(_legacy_record(declaration_line, record) for record in records)
     )
 
 
@@ -7971,33 +7966,45 @@ def _citation_correction_target_ids(
     return targets
 
 
-def _declared_path_is_missing(run_dir: Path, value: str) -> bool:
-    try:
-        spelled = Path(value).expanduser()
-        if not spelled.is_absolute():
-            spelled = run_dir / spelled
-        os.lstat(spelled)
+def _legacy_validation_roots(roots: tuple[Path, ...]) -> tuple[Path, ...]:
+    # FR-016 deliberately retains its Revision-13 roots: run directory and
+    # layout-derived repository.  The Revision-20 recorded-repository root is
+    # for ordinary validation and must not widen this legacy dispensation.
+    run_dir = roots[0]
+    layout_root = _VALIDATION_REPOSITORY.get() or _layout_repository_root(run_dir)
+    if VALIDATION_REPOSITORY_LEG and layout_root is not None:
+        return surface_roots(commitment_surface("verification.evidence"),
+                             repository=layout_root, run_dir=run_dir)
+    return (run_dir,)
+
+
+def _declared_file_roots(roots: tuple[Path, ...], declaration_line: int | None,
+                         record: dict[str, object]) -> tuple[Path, ...]:
+    # The declaration fixes the historical existence epoch too, so disabling a
+    # missing-file leg restores the exact pre-Revision-20 issue partition.
+    return _legacy_validation_roots(roots) if _legacy_record(declaration_line, record) else roots
+
+
+def _declared_path_is_missing(roots: tuple[Path, ...], value: str) -> bool:
+    spelled = Path(value).expanduser()
+    legacy_roots: tuple[Path, ...] = _legacy_validation_roots(roots)
+    selected = None if spelled.is_absolute() else resolve_contained_path(value, legacy_roots)
+    if not spelled.is_absolute() and (selected is None or selected.anchored or not selected.contained):
         return False
-    except FileNotFoundError:
-        pass
-    except (OSError, RuntimeError, ValueError):
+    candidates = (spelled,) if spelled.is_absolute() else tuple(root / spelled for root in legacy_roots)
+    for candidate in candidates:
+        try:
+            os.lstat(candidate)
+        except FileNotFoundError:
+            continue
+        except (OSError, RuntimeError, ValueError):
+            return False
         return False
-    if Path(value).expanduser().is_absolute():
-        return True
-    repository = _validation_repository(run_dir)
-    if repository is None:
-        return True
-    try:
-        os.lstat(repository / Path(value).expanduser())
-        return False
-    except FileNotFoundError:
-        return True
-    except (OSError, RuntimeError, ValueError):
-        return False
+    return True
 
 
 def check_declared_file(
-    run_dir: Path,
+    roots: tuple[Path, ...],
     record: dict[str, object],
     field: str,
     issues: list[str],
@@ -8024,21 +8031,21 @@ def check_declared_file(
         else:
             issues.append(f"{record_line(record)}: {field} must name a file")
         return
-    if not declared_file_exists(run_dir, value):
-        if _legacy_allows(
-            "missing-execution-file", declaration_line, record
-        ) and _declared_path_is_missing(run_dir, value):
-            warnings.append(
-                _legacy_warning(
-                    record,
-                    f"tolerated missing {field} file {value!r}; interpreted as "
-                    "unavailable legacy execution metadata",
-                )
+    existence_roots = _declared_file_roots(roots, declaration_line, record)
+    if _legacy_allows(
+        "missing-execution-file", declaration_line, record
+    ) and _declared_path_is_missing(roots, value):
+        warnings.append(
+            _legacy_warning(
+                record,
+                f"tolerated missing {field} file {value!r}; interpreted as "
+                "unavailable legacy execution metadata",
             )
-        else:
-            issues.append(
-                f"{record_line(record)}: referenced {field} file does not exist: {value}"
-            )
+        )
+    elif not declared_file_exists(existence_roots[0], value, roots=existence_roots):
+        issues.append(
+            f"{record_line(record)}: referenced {field} file does not exist: {value}"
+        )
 
 
 def _binding_chain_and_candidate(
@@ -8535,13 +8542,14 @@ def validate_run(
     gates: bool = False,
     closed_legacy_compat: str | None = None,
     repository: Path | None = None,
+    citation_run_dir: Path | None = None,
     snapshot_records: Sequence[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Validate one run; ``repository`` overrides the layout-derived root.
+    """Validate one run with optional citation roots for a journal mirror.
 
     A consumer that validates a mirrored journal outside the fixed run layout
-    (the archive's pre-close recompute) passes the real run's layout-derived
-    repository root here so repository-relative citations resolve identically.
+    passes the real run's layout-derived root and citation run directory so
+    repository- and run-relative citations resolve identically.
     """
     reset_handle = _VALIDATION_REPOSITORY.set(
         repository.expanduser().resolve() if repository is not None else None
@@ -8551,6 +8559,7 @@ def validate_run(
             run_dir,
             gates=gates,
             closed_legacy_compat=closed_legacy_compat,
+            citation_run_dir=citation_run_dir,
             snapshot_records=snapshot_records,
         )
     finally:
@@ -8562,12 +8571,14 @@ def _validate_run(
     *,
     gates: bool = False,
     closed_legacy_compat: str | None = None,
+    citation_run_dir: Path | None = None,
     snapshot_records: Sequence[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     warnings: list[str] = []
     non_passing: list[dict[str, object]] = []
     try:
         run_dir = run_dir.expanduser().resolve()
+        citation_run_dir = run_dir if citation_run_dir is None else citation_run_dir.expanduser().resolve()
     except (OSError, RuntimeError, ValueError) as exc:
         payload: dict[str, object] = {
             "ok": False,
@@ -8594,6 +8605,7 @@ def _validate_run(
         if gates:
             payload["profile"] = "gates"
         return payload
+    validation_roots = _validation_roots(citation_run_dir, records)
 
     declaration = _legacy_compatibility_declaration(records)
     declaration_line_value = declaration.get("_line") if declaration is not None else None
@@ -8872,12 +8884,8 @@ def _validate_run(
                 )
             else:
                 executions[key] = record
-            check_declared_file(
-                run_dir, record, "prompt", issues, warnings, declaration_line
-            )
-            check_declared_file(
-                run_dir, record, "events", issues, warnings, declaration_line
-            )
+            check_declared_file(validation_roots, record, "prompt", issues, warnings, declaration_line)
+            check_declared_file(validation_roots, record, "events", issues, warnings, declaration_line)
         elif kind == "execution_result":
             status = record.get("status")
             if not isinstance(status, str) or status not in TERMINAL_EXECUTION_STATUSES:
@@ -8935,17 +8943,22 @@ def _validate_run(
                         issues.append(
                             f"{record_line(record)}: evidence[{index}] must name a file: {value!r}"
                         )
-                    elif not declared_file_exists(run_dir, value):
+                    else:
+                        existence_roots = _declared_file_roots(
+                            validation_roots, declaration_line, record
+                        )
                         if _legacy_allows(
                             "missing-evidence-file", declaration_line, record
-                        ) and _declared_path_is_missing(run_dir, value):
+                        ) and _declared_path_is_missing(validation_roots, value):
                             warnings.append(
                                 _legacy_warning(
                                     record,
                                     f"tolerated missing evidence[{index}] file: {value}",
                                 )
                             )
-                        else:
+                        elif not declared_file_exists(
+                            existence_roots[0], value, roots=existence_roots
+                        ):
                             issues.append(
                                 f"{record_line(record)}: referenced evidence[{index}] "
                                 f"file does not exist: {value}"
@@ -9023,7 +9036,8 @@ def _validate_run(
             source.get("handoff") for source in (execution, result) if "handoff" in source
         ]
         handoff_ok = bool(handoff_values) and all(
-            declared_file_exists(run_dir, value, nonempty=True) for value in handoff_values
+            declared_file_exists(run_dir, value, nonempty=True, roots=validation_roots)
+            for value in handoff_values
         )
         if not handoff_ok:
             message = f"execution {display_execution(key)} handoff is missing or empty"
