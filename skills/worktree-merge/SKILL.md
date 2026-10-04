@@ -614,23 +614,135 @@ anything:
 ```bash
 PUSHED_HEAD="$(git rev-parse HEAD)"
 MAIN_WORKTREE="$(cd "${GIT_COMMON_DIR}/.." && pwd -P)"
-git fetch origin "$DEFAULT_BRANCH" --quiet
+git fetch origin "$DEFAULT_BRANCH" --quiet || {
+  echo "forge: default-branch fetch failed — cleanup refused" >&2
+  exit 1
+}
 git merge-base --is-ancestor "$PUSHED_HEAD" "origin/${DEFAULT_BRANCH}" || {
   echo "forge: pushed candidate is not contained in origin/${DEFAULT_BRANCH} — cleanup refused" >&2
   exit 1
 }
-cd "$MAIN_WORKTREE"
-git worktree remove "$WORKTREE_DIR" || {
-  echo "forge: worktree removal failed — branch preserved" >&2
-  exit 1
-}
-git branch -D "$BRANCH"
+WORKTREE_CHECK_STATUS=0
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" worktree-check \
+  --repo "$MAIN_WORKTREE" --worktree "$WORKTREE_DIR" || WORKTREE_CHECK_STATUS=$?
+case "$WORKTREE_CHECK_STATUS" in
+  0)
+    CURRENT_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q \
+      "refs/heads/${BRANCH}^{commit}")" || {
+      echo "forge: current branch tip is unavailable — cleanup refused" >&2
+      exit 1
+    }
+    WORKTREE_BRANCH="$(git -C "$WORKTREE_DIR" symbolic-ref --quiet HEAD)" || {
+      echo "forge: worktree branch is unavailable — cleanup refused" >&2
+      exit 1
+    }
+    [ "$WORKTREE_BRANCH" = "refs/heads/${BRANCH}" ] || {
+      echo "forge: worktree branch changed after push — cleanup refused" >&2
+      exit 1
+    }
+    WORKTREE_HEAD="$(git -C "$WORKTREE_DIR" rev-parse --verify HEAD^{commit})" || {
+      echo "forge: worktree HEAD is unavailable — cleanup refused" >&2
+      exit 1
+    }
+    [ "$WORKTREE_HEAD" = "$CURRENT_BRANCH_TIP" ] || {
+      echo "forge: worktree HEAD differs from current branch tip — cleanup refused" >&2
+      exit 1
+    }
+    WORKTREE_STATUS="$(git -C "$WORKTREE_DIR" status \
+      --porcelain=v1 --untracked-files=all)" || {
+      echo "forge: worktree status is unreadable — cleanup refused" >&2
+      exit 1
+    }
+    [ -z "$WORKTREE_STATUS" ] || {
+      echo "forge: worktree is not clean — cleanup refused" >&2
+      exit 1
+    }
+    if [ "$CURRENT_BRANCH_TIP" != "$PUSHED_HEAD" ]; then
+      git -C "$MAIN_WORKTREE" merge-base --is-ancestor \
+        "$CURRENT_BRANCH_TIP" "origin/${DEFAULT_BRANCH}" || {
+        echo "forge: current branch tip moved outside origin/${DEFAULT_BRANCH} — cleanup refused" >&2
+        exit 1
+      }
+    fi
+    cd "$MAIN_WORKTREE" || {
+      echo "forge: main worktree is unavailable — cleanup refused" >&2
+      exit 1
+    }
+    git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_DIR" || {
+      echo "forge: worktree removal failed — branch preserved" >&2
+      exit 1
+    }
+    DELETE_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q \
+      "refs/heads/${BRANCH}^{commit}")" || {
+      echo "forge: branch tip is unavailable after worktree removal — cleanup incomplete" >&2
+      exit 1
+    }
+    [ "$DELETE_BRANCH_TIP" = "$CURRENT_BRANCH_TIP" ] || {
+      echo "forge: branch tip changed during cleanup — cleanup incomplete" >&2
+      exit 1
+    }
+    git -C "$MAIN_WORKTREE" merge-base --is-ancestor \
+      "$DELETE_BRANCH_TIP" "origin/${DEFAULT_BRANCH}" || {
+      echo "forge: branch tip is not contained in origin/${DEFAULT_BRANCH} — cleanup incomplete" >&2
+      exit 1
+    }
+    git -C "$MAIN_WORKTREE" update-ref -d \
+      "refs/heads/$BRANCH" "$DELETE_BRANCH_TIP" || {
+      echo "forge: branch deletion failed — cleanup incomplete" >&2
+      exit 1
+    }
+    CLEANUP_OUTCOME="cleanup succeeded"
+    ;;
+  1)
+    CLEANUP_OUTCOME="cleanup deferred"
+    ;;
+  2)
+    exit 2
+    ;;
+  *)
+    echo "forge: worktree check refused — unexpected exit $WORKTREE_CHECK_STATUS" >&2
+    exit 2
+    ;;
+esac
 ```
 
 Run the worktree-removal command exactly as shown; do not add options that discard residual files.
-If removal finds residual tracked or untracked files, stop cleanup and keep the branch. Delete the
-branch only after `git merge-base --is-ancestor` confirms that its pushed tip is contained in the
-remote default branch. No failed merge path may remove either the worktree or the branch.
+Before removal, require the named branch's current tip to equal the worktree `HEAD`, require the
+worktree to remain on that branch and clean including untracked files, and require the current tip
+either to equal the recorded pushed SHA or to be contained in the fetched remote default branch.
+After removal, re-read the branch tip, recheck its containment, and delete exactly the already
+verified object with `update-ref`'s expected-old-object guard. Never use `branch -D`; any missing,
+moved, detached, dirty, unreadable, or uncontained state stops cleanup with the branch preserved.
+A worktree-check exit 1 keeps both the worktree and branch, reports `cleanup deferred`, and
+does not change the successful merge outcome; the push has already landed. Exit 2 stops cleanup
+with its diagnostic and likewise preserves both. No failed merge path may remove either the
+worktree or the branch.
+
+The check treats cited evidence as exactly the FR-017 journal-record surfaces, in order:
+`execution.prompt`, `execution.events`, `execution.handoff`, `execution_result.handoff`,
+`verification.evidence`, `decision.basis`, and `verification.observation`. It uses the shared
+per-surface tokenizer and resolves relative citations against the run directory first and the
+layout-derived repository root second.
+
+It classifies runs-root children in bytewise name order. A non-dot regular file is skipped. A
+non-dot real non-symlink directory is skipped only when it is completely empty, ownerless, and has
+no `journal.jsonl`; this read-only check does not need the registry to recognize that inert
+placeholder. A directory containing `journal.jsonl` is scanned. Dot-prefixed entries or unsafe
+directory names, symlinks or broken links, other non-regular children, unreadable directories, owner-bearing
+or nonempty journal-less directories, empty, unreadable, symlinked, broken, or non-file journals,
+malformed scanned journals, and inspection errors all produce exit 2 with the unreadable-input
+diagnostic; none is silently skipped.
+
+A worktree on which a permanently unarchivable run depends—a passed run that remains
+unarchivable after the deferred workflow retry, a retired run, or a blocked run that is not
+gate-clean—remains `cleanup deferred` with its worktree and branch intact. It may be released only
+as an operator-reserved cleanup under explicit terminal direction recorded as an operator
+`decision` in an open run's journal. The operator—not this skill or any agent—runs
+`git -C <main-worktree> worktree remove <absolute-worktree-path>` without a force option and, only after
+independently re-proving the branch tip and remote containment, runs
+`git -C <main-worktree> update-ref -d <branch-ref> <verified-old-oid>`. Agents never run either
+command themselves, never release that worktree, and never treat the operator decision as guard
+exit 0.
 
 ## Record authority and report
 
@@ -651,5 +763,7 @@ its own integration target, not in the agent's worktree. Record only the orchest
 commands, outputs, and exit statuses as gate evidence.
 
 Report the four gate results, any in-lock re-runs, the pushed full SHA, the default branch, lock
-outcome, and cleanup outcome. Never report reintegration or cleanup as successful unless the
-corresponding command succeeded.
+outcome, and `CLEANUP_OUTCOME`. When cleanup is deferred, also report the absolute worktree path and
+branch so workflow close can retry that exact cleanup after the archive commit. Include `cleanup
+deferred` when the guard retained the worktree. Never report reintegration or cleanup as successful
+unless the corresponding command succeeded.

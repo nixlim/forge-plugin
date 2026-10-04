@@ -8,27 +8,39 @@ Invoked by path from the plugin skills, so this stable entry point remains in
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 from pathlib import Path
+from typing import NoReturn
 
-from codex_orchestrator.cli import main as upstream_main
-from codex_orchestrator import (
-    batch,
-    builders,
-    close_law,
-    close_preflight,
-    result_gate,
+WORKTREE_CHECK_INPUT_DIAGNOSTIC = (
+    "forge: worktree check refused — unreadable input"
 )
-from codex_orchestrator.journal import (
-    CoordinationRefusal,
-    INVALID_JOURNAL_RECORD,
-    LEGACY_RUN_OPEN_NOTICE,
-    append_run_record,
-    close_run,
-    open_run,
-    retire_run,
-)
+
+try:
+    from codex_orchestrator.cli import main as upstream_main
+    from codex_orchestrator import (
+        batch,
+        builders,
+        close_law,
+        close_preflight,
+        result_gate,
+    )
+    from codex_orchestrator.journal import (
+        CoordinationRefusal,
+        INVALID_JOURNAL_RECORD,
+        LEGACY_RUN_OPEN_NOTICE,
+        append_run_record,
+        close_run,
+        open_run,
+        retire_run,
+    )
+except Exception:
+    if __name__ == "__main__" and sys.argv[1:2] == ["worktree-check"]:
+        print(WORKTREE_CHECK_INPUT_DIAGNOSTIC, file=sys.stderr)
+        raise SystemExit(2) from None
+    raise
 
 
 # forge: modified from upstream — expose D13 run coordination at the stable entry point
@@ -39,6 +51,7 @@ COORDINATION_COMMANDS = {
     "run-readmit",
     "run-close",
     "run-retire",
+    "worktree-check",
 }
 
 TYPED_REPEATED_OPTIONS = frozenset(
@@ -142,6 +155,32 @@ def _record(path: str) -> object:
     return value
 
 
+class _WorktreeCheckArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        print(WORKTREE_CHECK_INPUT_DIAGNOSTIC, file=sys.stderr)
+        super().error(message)
+
+
+def _worktree_check_parser() -> argparse.ArgumentParser:
+    parser = _WorktreeCheckArgumentParser(
+        prog="codex_orch_tools.py worktree-check",
+        add_help=False,
+    )
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--worktree", required=True)
+    return parser
+
+
+def _worktree_check_main(argv: list[str]) -> int:
+    args = _worktree_check_parser().parse_args(argv)
+    try:
+        guard = importlib.import_module("codex_orchestrator.worktree_guard")
+        return guard.main(Path(args.repo), Path(args.worktree))
+    except Exception:
+        print(WORKTREE_CHECK_INPUT_DIAGNOSTIC, file=sys.stderr)
+        return 2
+
+
 def _coordination_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex_orch_tools.py")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -166,6 +205,7 @@ def _coordination_parser() -> argparse.ArgumentParser:
     retired = subparsers.add_parser("run-retire")
     retired.add_argument("--repo", required=True)
     retired.add_argument("--run-id", required=True)
+
     return parser
 
 
@@ -470,6 +510,8 @@ def _typed_main(argv: list[str]) -> int:
 
 
 def _coordination_main(argv: list[str]) -> int:
+    if argv and argv[0] == "worktree-check":
+        return _worktree_check_main(argv[1:])
     args = _coordination_parser().parse_args(argv)
     repo = Path(args.repo)
     try:

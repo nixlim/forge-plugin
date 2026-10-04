@@ -190,6 +190,22 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"
 8. When every task is terminal, re-read the complete journal and inspect the final repository state
    and diff.
 
+   Before closing or removing a deferred worktree, copy every FR-017-cited artifact that lives in a
+   worktree into `<run>/evidence/` before removal and cite the copy by its matching `evidence/...`
+   run-relative spelling so later validation survives removal. If an existing immutable citation
+   has a different relative spelling, also reproduce the artifact at that exact spelling beneath
+   the run directory. The cleanup guard reads original journal citations, not citation-correction
+   decisions. For a valid run, a committed archive releases that run's dependency; before archive,
+   only an artifact copied beneath the run directory at the original citation's exact spelling can
+   release a citation-based dependency. For a correctable citation, append its citation correction
+   while the run is still open, but treat the correction as protecting later validation only—it
+   does not change the guard's decision.
+
+   The complete journal-record surface list is `execution.prompt`, `execution.events`,
+   `execution.handoff`, `execution_result.handoff`, `verification.evidence`, `decision.basis`, and
+   `verification.observation`. Relative citations use the shared FR-017 resolution order: the run
+   directory first, then the layout-derived repository root.
+
 <!-- forge: modified from upstream — use the Level B gates profile before and after closure -->
 9. Run the pre-close gates check. This pass is advisory: the passed-close gate-presence check cannot
    fire before a `run_closed` entry exists.
@@ -296,6 +312,142 @@ The canonical close sequence is
 Claude still decides the semantic judgment, while gated validation enforces the recorded gate
 conditions required for a clean accepted close. The final report never repairs or rewrites journal
 history.
+
+14. After the report succeeds, re-run deferred cleanup for each worktree whose earlier outcome was
+    `cleanup deferred`. Use the absolute worktree path, branch, pushed full SHA, and default branch
+    reported by that worktree-merge; do not reuse the main worktree's new archive-commit `HEAD` as
+    the pushed candidate. This is the post-archive re-run required by FR-064. From the repository
+    root, substitute those four reported values and run each retry in its own subshell so its exit
+    status can be recorded without ending the outer close workflow:
+
+```bash
+DEFERRED_RETRY_STATUS=0
+(
+DEFERRED_WORKTREE="<absolute-worktree-path>"
+DEFERRED_BRANCH="<branch>"
+DEFERRED_PUSHED_HEAD="<pushed-full-sha>"
+DEFERRED_DEFAULT_BRANCH="<default-branch>"
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "forge: repository root is unavailable — cleanup refused" >&2
+  exit 2
+}
+git -C "$REPO" fetch origin "$DEFERRED_DEFAULT_BRANCH" --quiet || {
+  echo "forge: default-branch fetch failed — cleanup refused" >&2
+  exit 2
+}
+git -C "$REPO" merge-base --is-ancestor \
+  "$DEFERRED_PUSHED_HEAD" "origin/${DEFERRED_DEFAULT_BRANCH}" || {
+  echo "forge: pushed candidate is not contained in origin/${DEFERRED_DEFAULT_BRANCH} — cleanup refused" >&2
+  exit 2
+}
+DEFERRED_CHECK_STATUS=0
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" worktree-check \
+  --repo "$REPO" --worktree "$DEFERRED_WORKTREE" || DEFERRED_CHECK_STATUS=$?
+case "$DEFERRED_CHECK_STATUS" in
+  0)
+    DEFERRED_CURRENT_BRANCH_TIP="$(git -C "$REPO" rev-parse --verify -q \
+      "refs/heads/${DEFERRED_BRANCH}^{commit}")" || {
+      echo "forge: current branch tip is unavailable — cleanup refused" >&2
+      exit 2
+    }
+    DEFERRED_WORKTREE_BRANCH="$(git -C "$DEFERRED_WORKTREE" \
+      symbolic-ref --quiet HEAD)" || {
+      echo "forge: worktree branch is unavailable — cleanup refused" >&2
+      exit 2
+    }
+    [ "$DEFERRED_WORKTREE_BRANCH" = "refs/heads/${DEFERRED_BRANCH}" ] || {
+      echo "forge: worktree branch changed after push — cleanup refused" >&2
+      exit 2
+    }
+    DEFERRED_WORKTREE_HEAD="$(git -C "$DEFERRED_WORKTREE" \
+      rev-parse --verify HEAD^{commit})" || {
+      echo "forge: worktree HEAD is unavailable — cleanup refused" >&2
+      exit 2
+    }
+    [ "$DEFERRED_WORKTREE_HEAD" = "$DEFERRED_CURRENT_BRANCH_TIP" ] || {
+      echo "forge: worktree HEAD differs from current branch tip — cleanup refused" >&2
+      exit 2
+    }
+    DEFERRED_WORKTREE_STATUS="$(git -C "$DEFERRED_WORKTREE" status \
+      --porcelain=v1 --untracked-files=all)" || {
+      echo "forge: worktree status is unreadable — cleanup refused" >&2
+      exit 2
+    }
+    [ -z "$DEFERRED_WORKTREE_STATUS" ] || {
+      echo "forge: worktree is not clean — cleanup refused" >&2
+      exit 2
+    }
+    if [ "$DEFERRED_CURRENT_BRANCH_TIP" != "$DEFERRED_PUSHED_HEAD" ]; then
+      git -C "$REPO" merge-base --is-ancestor \
+        "$DEFERRED_CURRENT_BRANCH_TIP" "origin/${DEFERRED_DEFAULT_BRANCH}" || {
+        echo "forge: current branch tip moved outside origin/${DEFERRED_DEFAULT_BRANCH} — cleanup refused" >&2
+        exit 2
+      }
+    fi
+    git -C "$REPO" worktree remove "$DEFERRED_WORKTREE" || {
+      echo "forge: worktree removal failed — branch preserved" >&2
+      exit 2
+    }
+    DEFERRED_DELETE_BRANCH_TIP="$(git -C "$REPO" rev-parse --verify -q \
+      "refs/heads/${DEFERRED_BRANCH}^{commit}")" || {
+      echo "forge: branch tip is unavailable after worktree removal — cleanup incomplete" >&2
+      exit 2
+    }
+    [ "$DEFERRED_DELETE_BRANCH_TIP" = "$DEFERRED_CURRENT_BRANCH_TIP" ] || {
+      echo "forge: branch tip changed during cleanup — cleanup incomplete" >&2
+      exit 2
+    }
+    git -C "$REPO" merge-base --is-ancestor \
+      "$DEFERRED_DELETE_BRANCH_TIP" "origin/${DEFERRED_DEFAULT_BRANCH}" || {
+      echo "forge: branch tip is not contained in origin/${DEFERRED_DEFAULT_BRANCH} — cleanup incomplete" >&2
+      exit 2
+    }
+    git -C "$REPO" update-ref -d \
+      "refs/heads/$DEFERRED_BRANCH" "$DEFERRED_DELETE_BRANCH_TIP" || {
+      echo "forge: branch deletion failed — cleanup incomplete" >&2
+      exit 2
+    }
+    DEFERRED_CLEANUP_OUTCOME="cleanup succeeded"
+    DEFERRED_RETRY_RESULT=0
+    ;;
+  1)
+    DEFERRED_CLEANUP_OUTCOME="cleanup deferred"
+    DEFERRED_RETRY_RESULT=1
+    ;;
+  2)
+    exit 2
+    ;;
+  *)
+    echo "forge: worktree check refused — unexpected exit $DEFERRED_CHECK_STATUS" >&2
+    exit 2
+    ;;
+esac
+printf 'forge: deferred worktree cleanup outcome — %s\n' \
+  "$DEFERRED_CLEANUP_OUTCOME" >&2
+exit "$DEFERRED_RETRY_RESULT"
+) || DEFERRED_RETRY_STATUS=$?
+```
+
+    Retry every deferred worktree independently, record and report every
+    `DEFERRED_RETRY_STATUS`, and continue after any refusal or failure. Status 0 means cleanup
+    succeeded, status 1 means the guard deferred cleanup, and status 2 means cleanup was refused or
+    another retry step failed. The check now passes for the just-archived run. If another
+    unarchived run still depends on that worktree, retain that worktree and branch and report
+    `cleanup deferred`; if any pre-removal proof fails, retain them and report the refusal. Never
+    weaken that second run's guard. A post-removal branch-ref failure preserves the branch and
+    reports cleanup incomplete. After all retry outcomes have been collected, continue to
+    post-report best-effort learning even when one or more retries did not succeed.
+
+    A worktree on which a permanently unarchivable run depends—a passed run that remains
+    unarchivable after the deferred workflow retry, a retired run, or a blocked run that is not
+    gate-clean—remains `cleanup deferred` with its worktree and branch intact. It may be released
+    only as an operator-reserved cleanup under explicit terminal direction recorded as an operator
+    `decision` in an open run's journal. The operator—not this skill or any agent—runs
+    `git -C <main-worktree> worktree remove <absolute-worktree-path>` without a force option and, only
+    after independently re-proving the branch tip and remote containment, runs
+    `git -C <main-worktree> update-ref -d <branch-ref> <verified-old-oid>`. Agents never run either
+    command themselves, never release that worktree, and never treat the operator decision as guard
+    exit 0.
 
 ## Machine Moves Are Run Boundaries
 

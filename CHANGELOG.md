@@ -8,6 +8,10 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Added
+
+- Worktree cleanup now waits for run archives (beads forge-plugin-i5k, forge-plugin-tf8, forge-plugin-qvu). The new read-only `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" worktree-check --repo <repo> --worktree <absolute-path>` exits 1 with `forge: worktree cleanup deferred — run <run-id> has no committed archive and depends on <worktree>` while a run without a committed archive (a blob at `HEAD:.forge/history/runs/<run-id>.md`) was opened from that worktree or cites evidence that physically resolves inside it, through any of the seven FR-017 journal citation surfaces, and 0 when nothing depends on it. Every other outcome, including an unexpected error, exits 2 with `forge: worktree check refused — unreadable input`: runs-root children are classified after run coordination's rules (a stray regular file or an empty placeholder directory is skipped; a directory holding a journal is scanned; other children refuse), every journal is fully validated before an archive releases it, and a run id or path with control characters or undecodable bytes is refused rather than printed. `/forge:worktree-merge` runs it after the push-containment proof and, on exit 1, keeps the worktree and branch and reports the cleanup as deferred without failing the merge; before removing anything it re-proves the branch tip and a clean worktree, never forces removal, and deletes the branch with `git update-ref -d` against the verified tip instead of `git branch -D`. `/forge:workflow` retries each deferred cleanup after the archive commit and the report, and says to copy worktree-resident evidence into `<run>/evidence/` first; a worktree a permanently unarchivable run depends on is released only by an operator-reserved cleanup recorded as an operator decision.
+
 ## [0.7.1] - 2026-10-04
 
 ### Changed
