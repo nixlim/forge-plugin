@@ -71,7 +71,7 @@ commit SHA, and move deliberately:
 - **0.7.0 consumer semantics:** `.forge/local/routes.toml` is opt-in;
   `review attach` is retired for new requests in favor of `review collect`;
   Claude Code 2.1.283 or newer and Codex CLI 0.155.0 or newer are required.
-- **After 0.7.0 (unreleased):** the plugin manifests no longer declare a
+- **From 0.7.1:** the plugin manifests no longer declare a
   version, so plugin caches are keyed by commit SHA and updates track each
   commit on `main`. The `v0.7.0` tag itself still ships versioned manifests.
   Pin `nixlim/forge-plugin#vX.Y.Z` for release-only updates.
