@@ -28,6 +28,7 @@ SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
+from codex_orchestrator import binding_history
 from codex_orchestrator import builders as journal_builders
 from codex_orchestrator import journal as journal_engine
 from codex_orchestrator.chain_paths import chain_storage_root
@@ -154,6 +155,10 @@ RENDERER_CONTROLS = frozenset(
         "basis-snapshot",
         "carried-record-equality",
         "html-escape",
+        "historical-abort",
+        "historical-binding",
+        "historical-recheck",
+        "historical-rerun",
         "captured-ingest-classification",
         "captured-ingest-replay",
         "captured-ingest-binding",
@@ -3284,14 +3289,14 @@ def resolve_archive_bindings(
     activated: bool,
     *,
     activated_record_ids: frozenset[int] | None = None,
-) -> dict[int, dict[str, object]]:
+) -> binding_history.ResolvedBindings:
     required = required_binding_records(
         records,
         activated,
         activated_record_ids=activated_record_ids,
     )
     if not required:
-        return {}
+        return binding_history.ResolvedBindings({}, {})
     captured = {snapshot.chain.chain_id: snapshot for snapshot in package.captured}
     tombstones = {snapshot.chain_id: snapshot for snapshot in package.tombstones}
     required_by_chain: dict[str, list[dict[str, Any]]] = {}
@@ -3339,46 +3344,25 @@ def resolve_archive_bindings(
             if set(chain_resolved) & set(resolved):
                 authoritative_discrepancy("structured_chain_mismatch")
             resolved.update(chain_resolved)
-        for record in (
-            record
-            for chain_id in sorted(live_ids, key=os.fsencode)
-            for record in required_by_chain[chain_id]
-        ):
-            binding = record.get("binding")
-            assert isinstance(binding, dict)
-            source = binding.get("source_record")
-            assert isinstance(source, dict)
-            chain_id = str(source["chain_id"])
-            expected_fields = {
-                name: value
-                for name, value in record.items()
-                if name not in {"_line", "binding"}
-            }
-            require_exact_carried_record(
-                chains[chain_id], str(binding["binding_id"]), record
+        classifications = {line: binding_history.CURRENT for line in resolved}
+        if live_ids:
+            assert directory is not None
+            live_resolved, live_classifications = binding_history.resolve_live_bindings(
+                binding_history.ResolutionContext(
+                    repo, run_dir.name, directory, chains, records,
+                    RENDERER_CONTROLS, journal_builders,
+                    require_exact_carried_record, authoritative_discrepancy,
+                ),
+                required_by_chain,
+                live_ids,
             )
-            task_id = record.get("task")
-            try:
-                assert directory is not None
-                replayed = journal_builders._resolve_binding_from_descriptor(
-                    repo,
-                    directory,
-                    chain_id,
-                    str(binding["binding_id"]),
-                    expected_type=str(record.get("type")),
-                    expected_fields=expected_fields,
-                    expected_run_id=run_dir.name,
-                    expected_task_id=task_id if isinstance(task_id, str) else None,
-                )
-            except (OSError, RuntimeError, ValueError, journal_engine.CoordinationRefusal):
+            if set(live_resolved) & set(resolved):
                 authoritative_discrepancy("structured_chain_mismatch")
-            if replayed != binding:
-                authoritative_discrepancy("structured_chain_mismatch")
-            line = record_line_number(record)
-            if line is None or line in resolved:
-                authoritative_discrepancy("structured_chain_mismatch")
-            resolved[line] = dict(binding)
-        return resolved
+            resolved.update(live_resolved)
+            classifications.update(live_classifications)
+        if set(classifications) != set(resolved):
+            authoritative_discrepancy("structured_chain_mismatch")
+        return binding_history.ResolvedBindings(resolved, classifications)
     finally:
         if directory is not None:
             os.close(directory)
@@ -3603,6 +3587,8 @@ def binding_candidate_display(binding: dict[str, object]) -> str:
     value = candidate.get("value")
     if candidate.get("kind") == "git-range" and isinstance(value, dict):
         return f"{value.get('base')}..{value.get('head')}"
+    if (authorization_id := binding_history.v2_authorization_id(candidate)) is not None:
+        return authorization_id
     return display(value)
 
 
@@ -3623,7 +3609,7 @@ def render_discrepancy_section(discrepancies: list[Discrepancy]) -> list[str]:
 def render_chain_sections(
     package: ChainPackage,
     records: list[dict[str, Any]],
-    bindings: dict[int, dict[str, object]],
+    bindings: binding_history.ResolvedBindings,
     discrepancies: list[Discrepancy],
 ) -> list[str]:
     lines = ["## Chain evidence", ""]
@@ -3773,7 +3759,10 @@ def render_chain_sections(
                 "",
                 *(
                     [
-                        f"- line {line}: {binding['binding_id']}"
+                        binding_history.journal_mapping(
+                            bindings, line, binding["binding_id"],
+                            authoritative_discrepancy,
+                        )
                         for line, binding in selected
                     ]
                     if selected
@@ -4043,7 +4032,7 @@ def render_archive(
     post_close: dict[str, Any],
     audit_fragment: str,
     package: ChainPackage | None = None,
-    bindings: dict[int, dict[str, object]] | None = None,
+    bindings: binding_history.ResolvedBindings | None = None,
     discrepancies: list[Discrepancy] | None = None,
     documents: Sequence[BasisDocument] | None = None,
     dispense_targets: Sequence[str] = (),
@@ -4077,7 +4066,7 @@ def render_archive(
         package = ChainPackage(None, None, (), ())
     tombstone_citations = tombstone_evidence_citations(package)
     if bindings is None:
-        bindings = {}
+        bindings = binding_history.ResolvedBindings({}, {})
     if discrepancies is None:
         discrepancies = [
             *legacy_discrepancies(
@@ -4275,6 +4264,13 @@ def render_archive(
                     "",
                 ]
             )
+        elif decision_binding is not None:
+            lines.extend(
+                binding_history.decision_history_lines(
+                    bindings, physical_line or -1, decision_binding,
+                    authoritative_discrepancy,
+                )
+            )
         legacy_value = decision.get("decision")
         if isinstance(legacy_value, str):
             raw_line = raw_lines.get(physical_line or -1)
@@ -4363,7 +4359,10 @@ def render_archive(
                         f"({binding['binding_id']})"
                     )
                 else:
-                    binding_status = f"BOUND ({binding['binding_id']})"
+                    binding_status = binding_history.status_for(
+                        bindings, line or -1, binding["binding_id"],
+                        authoritative_discrepancy,
+                    )
             else:
                 candidate, verdict, iteration = legacy_review_values(gate, [])
                 binding_source = UNBOUND

@@ -34,6 +34,7 @@ from commitment_paths import (  # noqa: E402
 BUILDER_VALIDATION_CONTROLS = frozenset(
     {
         "derived-fields",
+        "historical-binding-replay",
         "relations",
         "binding-replay",
         "scope-change",
@@ -6966,6 +6967,7 @@ def _resolve_binding_from_descriptor(
     resolve_tombstone: bool = True,
     state_cap: int | None = None,
     events_cap: int | None = None,
+    historical: bool = False,
 ) -> dict[str, object]:
     if resolve_tombstone:
         tombstone = _resolve_tombstone_abort_binding(
@@ -7291,7 +7293,7 @@ def _resolve_binding_from_descriptor(
     if len(matches) != 1:
         raise _binding_replay_refusal()
     resolved, source_record, source_event, source_prior, source_state = matches[0]
-    if not _binding_is_current(
+    current = _binding_is_current(
         state,
         resolved,
         source_record,
@@ -7301,7 +7303,28 @@ def _resolve_binding_from_descriptor(
         replay_entries,
         chain_family=str(chain_family),
         repository=repository,
-    ):
+    )
+    if historical and "historical-binding-replay" in BUILDER_VALIDATION_CONTROLS:
+        currency = "current"
+        if not current:
+            after_source = False
+            moved = False
+            for event, _prior, event_state, _records, _digest in replay_entries:
+                if after_source:
+                    event_candidate = _candidate_binding_for_state(
+                        str(chain_family), event_state
+                    )
+                    moved = moved or (
+                        event_candidate is not None
+                        and event_candidate != resolved.get("candidate")
+                    )
+                after_source = after_source or event is source_event
+            currency = "superseded" if moved else "rerun"
+        return {
+            "binding": dict(resolved),
+            "currency": currency,
+        }
+    if not current:
         raise _binding_replay_refusal()
     return dict(resolved)
 
