@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
+from . import recorded_repository
+
 FORGE_SCRIPTS = Path(__file__).resolve().parents[1] / "forge"
 if str(FORGE_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(FORGE_SCRIPTS))
@@ -695,9 +697,17 @@ def _validate_append_citations(
             )
 
 
+def _recorded_repository_unavailable(run_id: str) -> str:
+    return (
+        "forge: journal append refused — recorded repository unavailable for run "
+        f"{run_id}"
+    )
+
+
 def _recorded_repository_root(
     run_dir: Path,
     state_root: Path,
+    caller_repository: Path | None = None,
     *,
     records: tuple[dict[str, object], ...] | None = None,
 ) -> Path:
@@ -714,25 +724,35 @@ def _recorded_repository_root(
         # Their common Git root is the only repository authority still provable.
         if "scope" not in opening:
             return state_root
-        raise CoordinationRefusal(
-            f"forge: journal append refused — recorded repository unavailable for run "
-            f"{run_dir.name}"
-        )
-    refusal = CoordinationRefusal(
-        f"forge: journal append refused — recorded repository unavailable for run "
-        f"{run_dir.name}"
-    )
-    if not isinstance(recorded, str) or not recorded or not Path(recorded).is_absolute():
-        raise refusal
+        raise CoordinationRefusal(_recorded_repository_unavailable(run_dir.name))
+    # Legacy private callers omit caller_repository and immediately compare the
+    # returned toplevel with their canonical checkout. New paths pass it here.
     try:
-        repository, recorded_state_root = _resolve_repository(
-            Path(recorded), "journal append"
+        repository, _absent_relative = recorded_repository.resolve(
+            recorded,
+            state_root=state_root,
+            run_dir=run_dir,
+            caller_repository=caller_repository,
         )
-    except CoordinationRefusal as exc:
-        raise refusal from exc
-    if recorded_state_root != state_root:
-        raise refusal
+    except recorded_repository.ResolutionError as exc:
+        raise CoordinationRefusal(
+            _recorded_repository_unavailable(run_dir.name)
+        ) from exc
     return repository
+
+
+def _recorded_repository_matches(
+    recorded: Path, repository: Path, state_root: Path
+) -> bool:
+    """Match a live caller by checkout toplevel, not its admitted subdirectory."""
+
+    try:
+        caller = recorded_repository._present_repository(
+            str(repository), repository, state_root
+        )
+    except recorded_repository.ResolutionError:
+        return False
+    return recorded == caller
 
 
 def _atomic_replace(path: Path, payload: bytes) -> None:
@@ -5537,7 +5557,9 @@ def _append_owned_record_reserved(journal: Path, record: object) -> None:
     repository_probe = run_dir
     while not repository_probe.exists() and repository_probe.parent != repository_probe:
         repository_probe = repository_probe.parent
-    _, state_root = _resolve_repository(repository_probe, "journal append")
+    caller_repository, state_root = _resolve_repository(
+        repository_probe, "journal append"
+    )
     expected = state_root / ".codex-orchestrator/runs" / run_id / "journal.jsonl"
     if supplied != expected:
         raise CoordinationRefusal(REGISTRY_UNAVAILABLE)
@@ -5557,7 +5579,10 @@ def _append_owned_record_reserved(journal: Path, record: object) -> None:
                 "forge: journal append refused — activated writer requires typed builder"
             )
         repository = _recorded_repository_root(
-            state.run_dir, state_root, records=state.records
+            state.run_dir,
+            state_root,
+            caller_repository,
+            records=state.records,
         )
         with _locked_journal(state) as locked:
             prior = state.records
@@ -7056,7 +7081,7 @@ def _append_run_record_reserved(
 ) -> None:
     candidate = _validate_record_envelope(record)
     run_id = _operation_run_id("journal append", run_id)
-    _, state_root = _resolve_repository(repo, "journal append")
+    caller_repository, state_root = _resolve_repository(repo, "journal append")
     _preflight_existing_candidate(
         state_root, run_id, "journal append", candidate
     )
@@ -7073,7 +7098,10 @@ def _append_run_record_reserved(
                 "forge: journal append refused — activated writer requires typed builder"
             )
         repository = _recorded_repository_root(
-            state.run_dir, state_root, records=state.records
+            state.run_dir,
+            state_root,
+            caller_repository,
+            records=state.records,
         )
         with _locked_journal(state) as locked:
             prior = state.records

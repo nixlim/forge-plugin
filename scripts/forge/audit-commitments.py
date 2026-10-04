@@ -42,6 +42,7 @@ from commitment_paths import (  # noqa: E402
 )
 
 from codex_orchestrator import journal as journal_engine  # noqa: E402
+from codex_orchestrator import recorded_repository as recorded_repository_engine  # noqa: E402
 
 DIAGNOSTIC_PREFIX = "forge: commitment audit failed — "
 CORRECTION_TOKEN = "citation-correction:"
@@ -534,8 +535,8 @@ def recorded_branch_contains(
     # CONTROL branch-aware END
 
 
-def recorded_repository(start: dict[str, object]) -> Path:
-    """Return the one existing absolute repository recorded by run_started."""
+def _legacy_recorded_repository(start: dict[str, object]) -> Path:
+    """Preserve support for present repositories in out-of-layout audit fixtures."""
 
     repo = start.get("repo")
     if not isinstance(repo, str) or not repo or not Path(repo).is_absolute():
@@ -547,6 +548,34 @@ def recorded_repository(start: dict[str, object]) -> Path:
     if not repo_root.is_dir():
         fail(2, "run_started repo must name an existing absolute directory")
     return repo_root
+
+
+def _resolved_recorded_repository(
+    start: dict[str, object], run_dir: Path
+) -> Path:
+    """Resolve a fixed-layout run through its recorded Git authority."""
+
+    layout_root = journal_engine._layout_repository_root(run_dir)
+    if layout_root is None:
+        return _legacy_recorded_repository(start)
+    try:
+        recorded = start.get("repo")
+        caller = Path(recorded) if isinstance(recorded, str) else layout_root
+        repository, _absent_relative = recorded_repository_engine.resolve(
+            recorded,
+            state_root=layout_root,
+            run_dir=run_dir,
+            caller_repository=caller,
+        )
+    except recorded_repository_engine.ResolutionError:
+        fail(2, "run_started repo must name an existing absolute directory")
+    return repository
+
+
+def recorded_repository(start: dict[str, object], run_dir: Path) -> Path:
+    """Return the repository resolved for this run and layout."""
+
+    return _resolved_recorded_repository(start, run_dir)
 
 
 def audit_missing_paths(
@@ -814,16 +843,10 @@ def render_section(title: str, values: list[str]) -> str:
     return f"## {title}\n\n{body}\n"
 
 
-def forge_source_root(start: dict[str, object]) -> Path | None:
+def forge_source_root(start: dict[str, object], run_dir: Path) -> Path | None:
     """Return the recorded repository root only when all source markers are tracked."""
 
-    repo_value = start.get("repo")
-    if not isinstance(repo_value, str):
-        return None
-    try:
-        repo = Path(repo_value).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError, ValueError):
-        return None
+    repo = _resolved_recorded_repository(start, run_dir)
     try:
         root_result = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
@@ -863,7 +886,7 @@ def audit_repo_conformance(
 ) -> str:
     """Run forge-plugin dogfood conformance and return its archival Markdown."""
 
-    source_root = forge_source_root(start)
+    source_root = forge_source_root(start, run_dir)
     if source_root is None:
         return ""
     try:
@@ -905,7 +928,7 @@ def audit(
 ) -> str:
     records, start, close = closed_records(run_dir)
     auditable = commitment_records(records)
-    repo_root = recorded_repository(start)
+    repo_root = recorded_repository(start, run_dir)
     source_citations = citations(auditable)
     audited_citations = [
         AuditedCitation(citation, citation.value) for citation in source_citations

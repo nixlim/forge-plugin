@@ -55,6 +55,17 @@ class Revision9LedgerRecoveryTests(Revision9BuilderBatchSupport, unittest.TestCa
         assert archived_owner is not None
         return repo, run_dir, recorded_repo, archived_owner
 
+    @staticmethod
+    def _recover_archived_prefix_wedge(
+        repo: Path, run_id: str, recorded_repo: Path
+    ) -> batch.BatchOutcome:
+        with mock.patch.object(
+            journal,
+            "_resolve_repository",
+            return_value=(recorded_repo, repo),
+        ):
+            return batch.recover_batch(repo, run_id)
+
     def test_pre_fix_golden_wedge_recovers_and_continues(self) -> None:
         run_id = "run-20260910-inplace-wedge"
         repo, run_dir, recorded_repo, archived_owner = (
@@ -76,7 +87,7 @@ class Revision9LedgerRecoveryTests(Revision9BuilderBatchSupport, unittest.TestCa
             return real_realpath(path, *args, **kwargs)
 
         def restored_chain_storage_root(repository: Path) -> Path:
-            self.assertEqual(Path(repository), recorded_repo)
+            self.assertEqual(Path(repository), repo)
             return restored_chains_root
 
         journal_before = journal_path.read_bytes()
@@ -99,9 +110,9 @@ class Revision9LedgerRecoveryTests(Revision9BuilderBatchSupport, unittest.TestCa
         )
 
         with self.api_environment(), mock.patch.object(
-            journal,
-            "_resolve_repository",
-            return_value=(recorded_repo, repo),
+            journal.recorded_repository,
+            "resolve",
+            return_value=(repo, None),
         ), mock.patch.object(
             journal, "_session_owner", return_value=archived_owner
         ), mock.patch.object(
@@ -113,7 +124,9 @@ class Revision9LedgerRecoveryTests(Revision9BuilderBatchSupport, unittest.TestCa
         ) as chain_storage_resolver, mock.patch(
             "os.path.realpath", side_effect=reject_recorded_realpath
         ):
-            recovered = batch.recover_batch(repo, run_id)
+            recovered = self._recover_archived_prefix_wedge(
+                repo, run_id, recorded_repo
+            )
             self.assertTrue(recovered.repeated)
             self.assertEqual(
                 [record["id"] for record in recovered.records],

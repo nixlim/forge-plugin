@@ -2795,10 +2795,10 @@ def _adopt_owner_before_intent(
             allow_reserving_retired_close=close,
         )
         recorded = journal._recorded_repository_root(
-            state.run_dir, state_root, records=state.records
+            state.run_dir, state_root, repository, records=state.records
         )
-        if recorded != repository:
-            raise journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE)
+        if not journal._recorded_repository_matches(recorded, repository, state_root):
+            raise journal.CoordinationRefusal(journal._recorded_repository_unavailable(run_id))
         with journal._locked_journal(state) as locked_journal:
             classification = journal._classify_owner(
                 state,
@@ -3480,14 +3480,14 @@ def _recover_scope_change_locked(
             )
         )
         try:
-            recorded_repository = journal._recorded_repository_root(
-                state.run_dir, state_root, records=state.records
-            )
-        except journal.CoordinationRefusal as exc:
+            recorded_repository = state.records[0]["repo"]
+        except (IndexError, KeyError) as exc:
             raise journal.CoordinationRefusal(
                 journal.BATCH_DIVERGED
             ) from exc
-        if recorded_repository != repository:
+        if not isinstance(recorded_repository, str) or (
+            recorded_repository != str(repository)
+        ):
             raise journal.CoordinationRefusal(journal.BATCH_DIVERGED)
         if not published:
             # Standalone recovery has no durable proof of --replace.  It may
@@ -3643,11 +3643,11 @@ def execute_scope_change_batch(
             )
             state = journal._target_state(view, run_id, "run readmit")
             recorded_repository = journal._recorded_repository_root(
-                state.run_dir, state_root, records=state.records
+                state.run_dir, state_root, repository, records=state.records
             )
-            if recorded_repository != repository:
+            if not journal._recorded_repository_matches(recorded_repository, repository, state_root):
                 raise journal.CoordinationRefusal(
-                    journal.REGISTRY_UNAVAILABLE
+                    journal._recorded_repository_unavailable(run_id)
                 )
             journal._classify_owner(
                 state,
@@ -3716,11 +3716,11 @@ def execute_scope_change_batch(
             )
             state = journal._target_state(view, run_id, "run readmit")
             recorded_repository = journal._recorded_repository_root(
-                state.run_dir, state_root, records=state.records
+                state.run_dir, state_root, repository, records=state.records
             )
-            if recorded_repository != repository:
+            if not journal._recorded_repository_matches(recorded_repository, repository, state_root):
                 raise journal.CoordinationRefusal(
-                    journal.REGISTRY_UNAVAILABLE
+                    journal._recorded_repository_unavailable(run_id)
                 )
             _validate_target_lifecycle(state, close=False)
             journal._classify_owner(
@@ -3875,10 +3875,10 @@ def execute_existing_batch(
         # session identity deliberately carries no newly allocated timestamp.
         state = journal._scan_run(run_dir)
         recorded_repository = journal._recorded_repository_root(
-            state.run_dir, state_root, records=state.records
+            state.run_dir, state_root, repository, records=state.records
         )
-        if recorded_repository != repository:
-            raise journal.CoordinationRefusal(journal.REGISTRY_UNAVAILABLE)
+        if not journal._recorded_repository_matches(recorded_repository, repository, state_root):
+            raise journal.CoordinationRefusal(journal._recorded_repository_unavailable(run_id))
         _validate_target_lifecycle(state, close=close)
         journal._classify_owner(
             state,
