@@ -712,7 +712,7 @@ AMENDMENT_PARAGRAPH_SHA256 = {
     BEAD_OWNER: "d8e159da4024edc117eb689b15822b475d0d73ab865e95ceb4e63b44b9ec1aef",
 }
 PINNED_LINE_SHA256 = (
-    ("marker scope**", "3dea7e4bc12724cdc5ce665f4c86aec0b5a1eefeb75ebfcfc0cdb38e9b0b7ef0"),
+    ("19 marker scope**", "3dea7e4bc12724cdc5ce665f4c86aec0b5a1eefeb75ebfcfc0cdb38e9b0b7ef0"),
     ("FR-170 archive mode", "9948228fa2bb26d374092f4f722fe854d4a252dc3b33825b2cdf522af1a34a4e"),
     ("FR-172 legacy mode", "baf74cc5e19fbc5fbced7e16aee6f197b85efcd46f55b7b1bf2ecd4fd1ca7668"),
     ("FR-173 report check", "c23171fb62f42f3d43aef0bb8fb0e45aabcbb0d322ce0715e7108aa6b422beb9"),
@@ -872,10 +872,10 @@ def line_containing(document: str, needle: str) -> str:
 
 def assert_header(document: str) -> None:
     lines = document.splitlines()
-    if lines.count("**Status**: Draft (Revision 19)") != 1:
-        raise AssertionError("Revision-19 status header is not unique")
-    if lines.count("**Revised**: 2026-10-03") != 1:
-        raise AssertionError("Revision-19 revised date is not unique")
+    if lines.count("**Status**: Draft (Revision 20)") != 1:
+        raise AssertionError("Revision-20 status header is not unique")
+    if lines.count("**Revised**: 2026-10-04") != 1:
+        raise AssertionError("Revision-20 revised date is not unique")
 
 
 def assert_authority_paragraphs(document: str) -> None:
@@ -1004,8 +1004,8 @@ class SpecificationRevision19Tests(unittest.TestCase):
 
     def test_each_cross_cutting_literal_has_a_disable_style_check(self) -> None:
         pinned = (
-            "**Status**: Draft (Revision 19)",
-            "**Revised**: 2026-10-03",
+            "**Status**: Draft (Revision 20)",
+            "**Revised**: 2026-10-04",
             DISCREPANCY_ENUM,
             *(needle for _task, needle in CROSS_CUTTING_LINES),
             *GLOBAL_LITERALS,
@@ -1027,7 +1027,7 @@ class SpecificationRevision19Tests(unittest.TestCase):
                 unmarked = source.replace(f" {marker}", "", 1)
                 removed = SPEC.replace(source, unmarked, 1)
                 self.assert_mutation_detected(SPEC, removed)
-                destination = destination or "**Revised**: 2026-10-03"
+                destination = destination or "**Revised**: 2026-10-04"
                 moved = removed.replace(destination, f"{destination} {marker}", 1)
                 self.assert_mutation_detected(SPEC, moved)
 
