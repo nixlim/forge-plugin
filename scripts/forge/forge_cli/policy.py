@@ -85,6 +85,65 @@ REVIEWER_EVAL_TRIGGER_TABLE = (
 )
 
 
+SUPERSEDED_REVIEWER_EVAL_TRIGGER_TABLES = (
+    (
+        "3d1be7b789a8ee5cc7b5f65ac7f77a5ce3622fe0214a09650c85424c91147d93",
+        (
+            "| control | path patterns |\n"
+            "|---|---|\n"
+            "| constitution | rules/** |\n"
+            "| agent-prompt-template | agents/**, system/codex/prompts/**, "
+            ".claude/agents/** |\n"
+            "| reviewer-routing | system/codex/agents/**, system/codex/config.toml, "
+            ".codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, "
+            "scripts/forge/forge_cli/engine.py |\n"
+            "| execpolicy | system/codex/rules/**, .codex/rules/** |\n"
+            "| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, "
+            "system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, "
+            "scripts/forge/forge_cli/engine.py |\n"
+            "| commit-review-prompt | skills/commit/SKILL.md |\n"
+        ),
+    ),
+    (
+        "9ad0623e2eb7c9d56df44a0c57cb4c7c79e30e4322d9bbc0ea2e50b8817c3ce2",
+        (
+            "| control | path patterns |\n"
+            "|---|---|\n"
+            "| constitution | rules/** |\n"
+            "| agent-prompt-template | agents/**, system/codex/prompts/**, "
+            ".claude/agents/** |\n"
+            "| reviewer-routing | system/codex/agents/**, system/codex/config.toml, "
+            ".codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, "
+            "scripts/forge/forge_cli/engine/** |\n"
+            "| execpolicy | system/codex/rules/**, .codex/rules/** |\n"
+            "| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, "
+            "system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, "
+            "scripts/forge/forge_cli/engine/** |\n"
+            "| commit-review-prompt | skills/commit/SKILL.md |\n"
+        ),
+    ),
+    (
+        "45e2e69e0067f06f99cb0e3d42f185d3fdc8ee45f6961100eb51f3298c9500c3",
+        (
+            "| control | path patterns |\n"
+            "|---|---|\n"
+            "| constitution | rules/** |\n"
+            "| agent-prompt-template | agents/**, system/codex/prompts/**, "
+            "system/claude/prompts/**, .claude/agents/** |\n"
+            "| reviewer-routing | system/codex/agents/**, system/codex/config.toml, "
+            ".codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, "
+            "scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, "
+            "system/local/** |\n"
+            "| execpolicy | system/codex/rules/**, .codex/rules/** |\n"
+            "| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, "
+            "system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, "
+            "scripts/forge/forge_cli/engine/** |\n"
+            "| commit-review-prompt | skills/commit/SKILL.md |\n"
+        ),
+    ),
+)
+
+
 class PolicyError(ValueError):
     pass
 
@@ -374,19 +433,43 @@ def _parse_invariants(body: str) -> list[dict[str, str | int]]:
     return parsed
 
 
-def _parse_reviewer_eval_triggers(
+def _reviewer_eval_trigger_rows(
     body: str,
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """Accept only the one plugin-owned reviewer-facing trigger table."""
-
-    if body != REVIEWER_EVAL_TRIGGER_TABLE:
-        raise PolicyError("reviewer-facing-eval-triggers is malformed")
-    rows = [_split_markdown_row(line) for line in REVIEWER_EVAL_TRIGGER_TABLE.splitlines()]
+    rows = [_split_markdown_row(line) for line in body.splitlines()]
     return tuple(
         (row[0], tuple(pattern.strip() for pattern in row[1].split(",")))
         for row in rows[2:]
         if row is not None
     )
+
+
+def _effective_reviewer_eval_trigger_rows(
+    body: str,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Return current-first per-control unions in canonical control order."""
+
+    current_rows = _reviewer_eval_trigger_rows(REVIEWER_EVAL_TRIGGER_TABLE)
+    base_rows = dict(_reviewer_eval_trigger_rows(body))
+    return tuple(
+        (
+            control,
+            tuple(dict.fromkeys((*current_patterns, *base_rows[control]))),
+        )
+        for control, current_patterns in current_rows
+    )
+
+
+def _parse_reviewer_eval_triggers(
+    body: str,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Accept only current or released superseded plugin-owned tables."""
+
+    if body != REVIEWER_EVAL_TRIGGER_TABLE and all(
+        body != table for _digest, table in SUPERSEDED_REVIEWER_EVAL_TRIGGER_TABLES
+    ):
+        raise PolicyError("reviewer-facing-eval-triggers is malformed")
+    return _effective_reviewer_eval_trigger_rows(body)
 
 
 def _parse_changelog(body: str) -> dict[str, Any] | None:
