@@ -175,7 +175,7 @@ def _verify_operator_harness(
     """Compose the committed FR-223 evaluator before accepting approval."""
     argv = [
         sys.executable,
-        str(ctx.helper("fr223_eval.py")),
+        str(ctx.helper("fr223_verify.py")),
         "verify",
         "--root",
         str(ctx.plugin_root()),

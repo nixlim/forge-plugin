@@ -296,7 +296,7 @@ with Path(os.environ["FORGE_TEST_GATE_LOG"]).open("a", encoding="utf-8") as hand
 """
 
 
-FR223_HELPER = r"""
+FR223_VERIFY_HELPER = r"""
 import os
 import sys
 
@@ -397,8 +397,8 @@ class ForgeCLIFixture(unittest.TestCase):
         (self.helpers / "changelog.py").write_text(
             textwrap.dedent(CHANGELOG_HELPER).lstrip(), encoding="utf-8"
         )
-        (self.helpers / "fr223_eval.py").write_text(
-            textwrap.dedent(FR223_HELPER).lstrip(), encoding="utf-8"
+        (self.helpers / "fr223_verify.py").write_text(
+            textwrap.dedent(FR223_VERIFY_HELPER).lstrip(), encoding="utf-8"
         )
         for provider in ("codex", "claude"):
             REVIEW_SUPPORT.install_fake_provider(
@@ -1744,7 +1744,7 @@ class ForgeCLIChainTests(ForgeCLIFixture):
             state["steps"]["approval-qualification"][-1]["result"], "failed"
         )
 
-        (self.helpers / "fr223_eval.py").unlink()
+        (self.helpers / "fr223_verify.py").unlink()
         _result, unavailable = self.cli(
             "commit",
             "approve",
