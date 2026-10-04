@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from datetime import datetime, timezone
 import hashlib
+import json
 import re
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ TEMPLATE = (ROOT / "system" / "template" / "forge-project.md").read_text(
     encoding="utf-8"
 )
 ROOT_PROJECT = (ROOT / "forge-project.md").read_text(encoding="utf-8")
+ROOT_AGENTS = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
 COMMIT_SKILL = (ROOT / "skills" / "commit" / "SKILL.md").read_text(
     encoding="utf-8"
 )
@@ -24,6 +26,9 @@ STACKS_SEED = (
     ROOT / "system" / "seeds" / "validation-snippets" / "stacks.md"
 ).read_text(encoding="utf-8")
 DRIFT_CHECK = (ROOT / "scripts" / "forge" / "drift-check.sh").read_text(
+    encoding="utf-8"
+)
+CODEX_HOOKS = (ROOT / "system" / "codex" / "hooks.json").read_text(
     encoding="utf-8"
 )
 
@@ -109,6 +114,29 @@ def document_region_body(document: str, name: str) -> str:
     if match is None:
         raise AssertionError(f"missing region {name}")
     return match.group(1)
+
+
+def project_scaffold(document: str) -> str:
+    normalized = re.sub(
+        r"^Install date: `[^`]+`$",
+        "Install date: `{{FORGE_INSTALL_DATE}}`",
+        document,
+        flags=re.MULTILINE,
+    )
+    normalized = re.sub(
+        r"(<!-- FORGE:PROJECT-SPINE BEGIN -->).*?"
+        r"(<!-- FORGE:PROJECT-SPINE END -->)",
+        r"\1\n\2",
+        normalized,
+        flags=re.DOTALL,
+    )
+    return re.sub(
+        r"(<!-- FORGE:REGION (\S+) BEGIN -->).*?"
+        r"(<!-- FORGE:REGION \2 END -->)",
+        r"\1\3",
+        normalized,
+        flags=re.DOTALL,
+    )
 
 
 class ForgeProjectTemplateTests(unittest.TestCase):
@@ -351,6 +379,42 @@ class ForgeProjectTemplateTests(unittest.TestCase):
             "drift",
         ):
             self.assertIn(f"${{CLAUDE_PLUGIN_ROOT}}/skills/{skill}/SKILL.md", TEMPLATE)
+
+    def test_project_spine_slot_is_single_empty_bounded_and_outside_regions(self) -> None:
+        begin = "<!-- FORGE:PROJECT-SPINE BEGIN -->"
+        end = "<!-- FORGE:PROJECT-SPINE END -->"
+        self.assertEqual(TEMPLATE.count(begin), 1)
+        self.assertEqual(TEMPLATE.count(end), 1)
+        self.assertEqual(TEMPLATE.split(begin, 1)[1].split(end, 1)[0], "\n")
+        self.assertLess(TEMPLATE.index(begin), TEMPLATE.index("## Plugin Skills"))
+        self.assertGreater(TEMPLATE.index(begin), TEMPLATE.index("### Risk and Authority Classes"))
+        for name in REGIONS:
+            self.assertNotIn(begin, region_body(name))
+            self.assertNotIn(end, region_body(name))
+        self.assertIn(
+            "Project addenda may add or narrow rules in this spine, but must never weaken a "
+            "gate or expand\nauthority.",
+            TEMPLATE,
+        )
+
+    def test_every_installed_codex_hook_handler_has_the_ownership_marker(self) -> None:
+        marker = ": 'forge-managed';"
+        hooks = json.loads(CODEX_HOOKS)["hooks"]
+        handlers = [
+            handler
+            for groups in hooks.values()
+            for group in groups
+            for handler in group["hooks"]
+        ]
+        self.assertTrue(handlers)
+        self.assertTrue(all(marker in handler["command"] for handler in handlers))
+
+    def test_root_scaffold_and_agents_splice_are_synchronized(self) -> None:
+        self.assertEqual(project_scaffold(ROOT_PROJECT), project_scaffold(TEMPLATE))
+        agents_project = ROOT_AGENTS.split("<!-- FORGE:BEGIN -->\n", 1)[1].split(
+            "<!-- FORGE:END -->", 1
+        )[0]
+        self.assertEqual(agents_project, ROOT_PROJECT)
 
 
 class CommitSkillTests(unittest.TestCase):

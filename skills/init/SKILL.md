@@ -196,10 +196,26 @@ and `.forge/tmp/decisions/`. The installer must also prove the target repository
 rules ignore `.forge/tmp/` but do not ignore `.forge/history/`; either failure stops installation.
 Content outside the AGENTS markers must be unchanged.
 
-Treat `config.toml.forge-new` or `hooks.json.forge-new` as a collision, not a successful merge.
-Report each collision and ask the user how to merge the incoming Forge settings with the existing
-file; never overwrite the existing file. An unresolved collision that prevents the required agents
-or hook from being registered blocks completed initialization.
+Treat `forge-project.md.forge-prev`, `config.toml.forge-new`, or `hooks.json.forge-new` as a
+collision, not a successful merge. A `forge-project.md.forge-prev` file preserves legacy text found
+outside the project regions; ask the user to move any still-required project rules into the single
+`FORGE:PROJECT-SPINE` addenda block, then resolve the sibling explicitly. Project addenda may add or
+narrow the spine, but never weaken a gate or expand authority.
+
+Report each collision and ask the user how to merge the preserved and incoming settings. A
+`.forge-prev` collision preserves the legacy project bytes in that sibling before
+`forge-project.md` is refreshed; never remove or replace the sibling automatically. For Codex
+collisions, never overwrite the existing project-owned file. An unresolved collision that prevents
+the required spine, agents, or hook from being registered blocks completed initialization. Forge
+identifies an owned hook handler by the exact `: 'forge-managed';` command marker. A project handler
+that copies that marker is intentionally treated as Forge-owned and replaced on re-init; project
+handlers must omit it. Re-init otherwise preserves foreign hook handlers, groups, events, and
+top-level keys. A Forge-marked `config.toml` that contains a foreign key, table, or added `agents.*`
+member stays in place while the incoming template is written to `config.toml.forge-new` for explicit
+resolution.
+Whitespace, ordering, and owned-value spelling refresh from the template. A TOML comment is foreign
+unless its bytes begin `# forge-managed` or `# forge: modified from upstream —`; a project comment
+that copies either prefix is intentionally treated as Forge-owned.
 
 Tell the user this trust caveat explicitly: until the operator opens and TRUSTS this repository in
 Codex, Codex skips the repository's `.codex/` configuration, agents, rules, and hooks. Never bypass
@@ -243,6 +259,9 @@ to any later denied branch deletion.
 Read and follow `${CLAUDE_PLUGIN_ROOT}/system/seeds/brownfield-exploration.md` before filling any
 unfilled region. Mirror the repository's existing reality; do not introduce a parallel toolchain.
 For a large repository, parallelize independent read-only searches and synthesize their evidence.
+Include `forge-project.md.forge-prev` and every `.forge-new` sibling in that brownfield inspection.
+A Forge-marked `config.toml` with foreign content also collides as `config.toml.forge-new`; read both
+sides and require explicit resolution.
 
 At minimum:
 
@@ -578,8 +597,9 @@ Treat the complete init output as a control-class change.
 6. After every preceding Phase 5 check passes, freeze the review candidate. First prove
    `.forge/tmp/` is ignored. Then deterministically materialize the exact full install diff relative
    to the Phase 0 state into `.forge/tmp/init-candidate.diff`. Include binary patches, every tracked
-   change, every new untracked install file in stable byte ordering, every `.forge-new` collision,
-   and `.forge-manifest` containing exactly `init_completed: false`; exclude only ignored scratch
+   change, every new untracked install file in stable byte ordering, every `.forge-new` or
+   `.forge-prev` collision, and `.forge-manifest` containing exactly `init_completed: false`;
+   exclude only ignored scratch
    state. Do not hide a file, stage unrelated content, or omit the manifest. Phase 0 step 5 requires
    the branch's first commit, so an unborn branch never reaches candidate materialization.
 
@@ -621,7 +641,7 @@ Treat the complete init output as a control-class change.
 Present the user with the exact frozen `.forge/tmp/init-candidate.diff`, its `CANDIDATE_ID`, and a
 concise summary of:
 
-- files written, refreshed, skipped, and preserved as `.forge-new`;
+- files written, refreshed, skipped, and preserved as `.forge-new` or `.forge-prev`;
 - every filled or byte-preserved region and its evidence;
 - the confirmed blast-radius suite and clean-tree Gate 1/stack-validation results;
 - every eval fixture, preserved or new baseline, and both baseline-establishment and

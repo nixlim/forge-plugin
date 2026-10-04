@@ -14,6 +14,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ UPSTREAM_REGION_LINE_RE = re.compile(
     rb"^region: [A-Za-z0-9._-]+ \([^\r\n()]+\)\s*$", re.MULTILINE
 )
 BEGIN_RE = re.compile(rb"<!-- FORGE:REGION ([A-Za-z0-9._-]+) BEGIN -->")
+MAX_CODEX_INPUT_BYTES = 1024 * 1024
 
 SALVAGE_SOURCES = {
     "file-categories": ".opencode/rules/commit-workflow.md",
@@ -315,22 +317,42 @@ def is_upstream_codex(data: bytes, relative: str) -> bool:
     return all(signature in normalized for signature in signatures)
 
 
-def prepare_codex_backups(root: Path, stage: Path) -> list[str]:
+def read_bounded_codex(path: Path) -> bytes | None:
+    """Read a regular non-symlink Codex input without exceeding its bound."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise MigrationError("no-follow Codex reads are unavailable")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | nofollow)
+    except OSError:
+        return None
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            return None
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            data = handle.read(MAX_CODEX_INPUT_BYTES + 1)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return data if len(data) <= MAX_CODEX_INPUT_BYTES else None
+
+
+def prepare_codex_backups(
+    root: Path, stage: Path, signed_codex: dict[str, bytes]
+) -> list[str]:
     backed_up: list[str] = []
-    for relative in ("config.toml", "hooks.json"):
-        source = root / ".codex" / relative
-        if not source.is_file():
-            continue
-        data = source.read_bytes()
-        if not is_upstream_codex(data, relative):
-            continue
+    for relative, data in signed_codex.items():
         backup = root / ".codex" / f"{relative}.pre-migration"
         if os.path.lexists(backup):
             if backup.is_symlink() or not backup.is_file():
                 raise MigrationError(
                     f"migration output is not a regular file: .codex/{relative}.pre-migration"
                 )
-            if backup.read_bytes() != data:
+            status = backup.lstat()
+            if status.st_size != len(data) or backup.read_bytes() != data:
                 raise MigrationError(
                     f"pre-migration backup collision: .codex/{relative}.pre-migration"
                 )
@@ -484,6 +506,48 @@ def atomic_install(source: Path, destination: Path) -> None:
             pass
 
 
+def publish_idempotent_no_clobber(
+    source: Path, destination: Path, collision: str
+) -> None:
+    """Install once with a hard-link create, accepting only identical prior bytes."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    data = source.read_bytes()
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.migration-", dir=destination.parent
+    )
+    staged = Path(temp_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+        staged.chmod(0o644)
+        try:
+            os.link(staged, destination)
+        except FileExistsError as exc:
+            try:
+                status = destination.lstat()
+                identical = (
+                    stat.S_ISREG(status.st_mode)
+                    and not destination.is_symlink()
+                    and status.st_size == len(data)
+                    and destination.read_bytes() == data
+                )
+            except OSError:
+                identical = False
+            if not identical:
+                raise MigrationError(collision) from exc
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def verify_pre_migration_backup(
+    root: Path, relative: str, expected: bytes
+) -> None:
+    backup = root / ".codex" / f"{relative}.pre-migration"
+    if read_bounded_codex(backup) != expected:
+        raise MigrationError(f"pre-migration backup verification failed: {backup}")
+
+
 def preflight_output_parent(root: Path, parent: Path) -> None:
     """Require a repository-contained, traversable, writable parent chain."""
     try:
@@ -531,6 +595,42 @@ def preflight_output_destination(root: Path, destination: Path) -> None:
         raise MigrationError(f"migration output is not a regular file: {shown}")
 
 
+def verify_codex_snapshot(
+    helper: Path,
+    preconditions: Path,
+    target: Path,
+    relative: str | None = None,
+) -> None:
+    command = [
+        sys.executable,
+        "-I",
+        str(helper),
+        "verify",
+        str(preconditions),
+        str(target),
+    ]
+    if relative is not None:
+        command.append(relative)
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "Codex input changed after preflight"
+        raise MigrationError(f"Codex preflight invalidated: {detail}")
+
+
+def trusted_temp_root(target: Path) -> Path:
+    temporary = Path("/tmp").resolve()
+    try:
+        temporary.relative_to(target.resolve())
+    except ValueError:
+        return temporary
+    raise MigrationError("cannot stage migration preflight outside the target repository")
+
+
 def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str | None) -> Path:
     git_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -564,8 +664,9 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
     signed_codex: dict[str, bytes] = {}
     for relative in ("config.toml", "hooks.json"):
         path = root / ".codex" / relative
-        if path.is_file() and is_upstream_codex(path.read_bytes(), relative):
-            signed_codex[relative] = path.read_bytes()
+        data = read_bounded_codex(path)
+        if data is not None and is_upstream_codex(data, relative):
+            signed_codex[relative] = data
     shadow = root / ".claude/agents/review-final.md"
     if shadow.is_file():
         print(
@@ -574,7 +675,9 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
             file=sys.stderr,
         )
 
-    with tempfile.TemporaryDirectory(prefix="forge-migration-") as temp:
+    with tempfile.TemporaryDirectory(
+        prefix="forge-migration-", dir=trusted_temp_root(root)
+    ) as temp:
         stage = Path(temp)
         staged_project = stage / "forge-project.md"
         staged_project.write_bytes(splice_selected(template_bytes, selected))
@@ -583,37 +686,53 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
         copy_existing_tree(root / ".forge/evals/tasks", staged_tasks)
         staged_tasks.mkdir(parents=True, exist_ok=True)
         imported, _imported_fixtures = prepare_eval_imports(root, staged_tasks)
-        backups = prepare_codex_backups(root, stage)
+        backups = prepare_codex_backups(root, stage, signed_codex)
 
-        prepared_codex: dict[str, Path] = {}
-        for relative, original in signed_codex.items():
-            payload = plugin_root / "system/codex" / relative
+        codex_source = plugin_root / "system/codex"
+        required_codex_payloads = (
+            "config.toml",
+            "hooks.json",
+            "agents/implementer.toml",
+            "agents/review-cheap.toml",
+            "agents/plan.toml",
+        )
+        for relative in required_codex_payloads:
+            payload = codex_source / relative
             if not payload.is_file():
                 raise MigrationError(f"missing plugin Codex payload: {payload}")
-            rendered = payload.read_bytes().replace(
-                b"{{FORGE_PROJECT_NAME}}", root.name.encode("utf-8")
-            )
-            rendered = rendered.replace(
-                b"{{FORGE_INSTALL_DATE}}", dt.date.today().isoformat().encode("ascii")
-            )
-            prepared = stage / ".codex-active" / relative
-            prepared.parent.mkdir(parents=True, exist_ok=True)
-            prepared.write_bytes(rendered)
-            prepared_codex[relative] = prepared
+        merge_helper = Path(__file__).with_name("codex_layer_merge.py")
+        if not merge_helper.is_file():
+            raise MigrationError(f"missing Codex merge helper: {merge_helper}")
+        codex_templates = stage / ".codex-active"
+        stage_result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                str(merge_helper),
+                "stage",
+                str(codex_source),
+                str(codex_templates),
+                root.name,
+                dt.date.today().isoformat(),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if stage_result.returncode != 0:
+            detail = stage_result.stderr.strip() or "Codex template staging failed"
+            raise MigrationError(f"Codex preflight failed: {detail}")
 
         prepared_agent_tomls: dict[str, Path] = {}
         for relative in ("implementer.toml", "review-cheap.toml", "plan.toml"):
-            payload = plugin_root / "system/codex/agents" / relative
+            payload = codex_templates / "agents" / relative
             if not payload.is_file():
                 raise MigrationError(f"missing plugin Codex payload: {payload}")
-            prepared = stage / ".codex-active/agents" / relative
-            prepared.parent.mkdir(parents=True, exist_ok=True)
-            prepared.write_bytes(payload.read_bytes())
-            prepared_agent_tomls[relative] = prepared
+            prepared_agent_tomls[relative] = payload
 
         upstream_agents = root / ".codex/agents"
         plugin_agent_names = {
-            path.name for path in (plugin_root / "system/codex/agents").glob("*.toml")
+            path.name for path in (codex_templates / "agents").glob("*.toml")
         }
         deregistered = sorted(
             path.relative_to(root).as_posix()
@@ -636,6 +755,52 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
             )
         )
 
+        codex_preflight = stage / ".codex-preflight"
+        replacements = ",".join(signed_codex) or "none"
+        merge_result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                str(merge_helper),
+                "prepare",
+                str(codex_templates),
+                str(root / ".codex"),
+                str(codex_preflight),
+                replacements,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if merge_result.returncode != 0:
+            detail = merge_result.stderr.strip() or "Codex merge helper failed"
+            shape_prefix = "forge install: destination is not a regular file: "
+            if detail.startswith(shape_prefix):
+                hostile = Path(detail.removeprefix(shape_prefix))
+                try:
+                    shown = hostile.relative_to(root).as_posix()
+                except ValueError:
+                    pass
+                else:
+                    raise MigrationError(
+                        f"migration output is not a regular file: {shown}"
+                    )
+            raise MigrationError(f"Codex preflight failed: {detail}")
+        codex_actions = dict(
+            line.split("=", 1)
+            for line in (codex_preflight / "plan").read_text(encoding="ascii").splitlines()
+        )
+        if set(codex_actions) != {"config.toml", "hooks.json"} or not all(
+            action in {"install", "collision"} for action in codex_actions.values()
+        ):
+            raise MigrationError("Codex preflight returned an invalid plan")
+        for relative, original in signed_codex.items():
+            observed = codex_preflight / "preconditions" / relative
+            if not observed.is_file() or observed.read_bytes() != original:
+                raise MigrationError(
+                    f"Codex input changed after signature classification: {relative}"
+                )
+
         output_destinations = [root / "forge-project.md"]
         output_destinations.extend(
             root / ".forge/evals/tasks" / path.relative_to(staged_tasks)
@@ -643,7 +808,6 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
             if path.is_file()
         )
         output_destinations.extend(root / relative for relative in backups)
-        output_destinations.extend(root / ".codex" / relative for relative in prepared_codex)
         output_destinations.extend(
             root / ".codex/agents" / relative for relative in prepared_agent_tomls
         )
@@ -651,28 +815,16 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
             (root / relative)
             for relative in ("AGENTS.md", "CLAUDE.md", ".gitignore")
         )
-        codex_source = plugin_root / "system/codex"
         output_destinations.extend(
-            root / ".codex" / path.relative_to(codex_source)
-            for path in codex_source.rglob("*")
+            root / ".codex" / path.relative_to(codex_templates)
+            for path in codex_templates.rglob("*")
             if path.is_file()
-            and ".devlog" not in path.relative_to(codex_source).parts
+            and ".devlog" not in path.relative_to(codex_templates).parts
             and path.name != "CLAUDE.md"
         )
         for relative in ("config.toml", "hooks.json"):
             destination = root / ".codex" / relative
-            if (
-                destination.is_file()
-                and relative not in signed_codex
-                and not (
-                    relative == "config.toml"
-                    and b"# forge-managed" in destination.read_bytes().splitlines()
-                )
-                and not (
-                    relative == "hooks.json"
-                    and b": 'forge-managed';" in destination.read_bytes()
-                )
-            ):
+            if codex_actions[relative] == "collision":
                 output_destinations.append(destination.with_name(destination.name + ".forge-new"))
         for destination in output_destinations:
             preflight_output_destination(root, destination)
@@ -691,17 +843,47 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
         # prepared false-manifest candidate.  Helper and mandatory installer
         # destination-shape failures have now occurred before the first target mutation.
 
+        verify_codex_snapshot(
+            merge_helper, codex_preflight / "preconditions", root / ".codex"
+        )
         atomic_install(staged_project, root / "forge-project.md")
         for path in sorted(item for item in staged_tasks.rglob("*") if item.is_file()):
             atomic_install(path, root / ".forge/evals/tasks" / path.relative_to(staged_tasks))
         for relative in backups:
-            atomic_install(stage / relative, root / relative)
-        for relative, original in signed_codex.items():
+            publish_idempotent_no_clobber(
+                stage / relative,
+                root / relative,
+                f"pre-migration backup collision: {relative}",
+            )
+        verify_codex_snapshot(
+            merge_helper, codex_preflight / "preconditions", root / ".codex"
+        )
+        for relative in ("config.toml", "hooks.json"):
+            verify_codex_snapshot(
+                merge_helper,
+                codex_preflight / "preconditions",
+                root / ".codex",
+                relative,
+            )
+            if relative in signed_codex:
+                verify_pre_migration_backup(
+                    root, relative, signed_codex[relative]
+                )
             destination = root / ".codex" / relative
-            atomic_install(prepared_codex[relative], destination)
-            backup = destination.with_name(destination.name + ".pre-migration")
-            if backup.read_bytes() != original:
-                raise MigrationError(f"pre-migration backup verification failed: {backup}")
+            if codex_actions[relative] == "collision":
+                destination = destination.with_name(destination.name + ".forge-new")
+                publish_idempotent_no_clobber(
+                    codex_preflight / relative,
+                    destination,
+                    "Codex preflight invalidated: forge install: refusing to "
+                    f"overwrite non-forge collision sibling: {destination}",
+                )
+            else:
+                atomic_install(codex_preflight / relative, destination)
+            if relative in signed_codex:
+                verify_pre_migration_backup(
+                    root, relative, signed_codex[relative]
+                )
         for relative, prepared in prepared_agent_tomls.items():
             atomic_install(prepared, root / ".codex/agents" / relative)
         destination_report = publish_report_exclusive(root, staged_report, stamp)

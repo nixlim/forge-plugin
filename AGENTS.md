@@ -71,6 +71,14 @@ Never game, weaken, disable, or silently bypass a gate.
 A gate satisfied by reducing its strength is a failure, not a pass.
 Separation of duties requires the reviewer to be distinct from the author.
 
+### Project Spine Addenda
+
+Project addenda may add or narrow rules in this spine, but must never weaken a gate or expand
+authority.
+
+<!-- FORGE:PROJECT-SPINE BEGIN -->
+<!-- FORGE:PROJECT-SPINE END -->
+
 ## Plugin Skills
 
 - Installation and project discovery: `${CLAUDE_PLUGIN_ROOT}/skills/init/SKILL.md`

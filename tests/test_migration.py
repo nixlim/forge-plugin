@@ -318,7 +318,11 @@ config_file = "./agents/review-final.toml"
 config_file = "./agents/security-auditor.toml"
 """
         config.write_bytes(self.config_bytes)
-        self.hooks_bytes = b'{"hooks":{"Stop":[{"command":"bash legacy/scripts/aggregate-telemetry.sh .tmp/decisions --csv .tmp/telemetry-latest.csv"}]}}\n'
+        self.hooks_bytes = (
+            b'{"hooks":{"Stop":[{"hooks":[{"type":"command","command":'
+            b'"bash legacy/scripts/aggregate-telemetry.sh .tmp/decisions '
+            b'--csv .tmp/telemetry-latest.csv","timeout":60}]}]}}\n'
+        )
         (self.repo / ".codex/hooks.json").write_bytes(self.hooks_bytes)
         agents = self.repo / ".codex/agents"
         agents.mkdir(exist_ok=True)
@@ -746,17 +750,17 @@ config_file = "./agents/security-auditor.toml"
 
     def test_near_match_codex_owner_files_are_not_replaced_or_backed_up(self) -> None:
         config = self.repo / ".codex/config.toml"
-        config.write_bytes(
-            self.config_bytes.replace(b'[agents."security-auditor"]\n', b"")
+        signature_table = (
+            b'[agents."security-auditor"]\n'
+            b'config_file = "./agents/security-auditor.toml"\n'
         )
+        near_match_config = self.config_bytes.replace(signature_table, b"")
+        config.write_bytes(near_match_config)
 
         result = self.run_helper()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            config.read_bytes(),
-            self.config_bytes.replace(b'[agents."security-auditor"]\n', b""),
-        )
+        self.assertEqual(config.read_bytes(), near_match_config)
         self.assertFalse((self.repo / ".codex/config.toml.pre-migration").exists())
         self.assertEqual(
             (self.repo / ".codex/hooks.json.pre-migration").read_bytes(), self.hooks_bytes
@@ -999,8 +1003,9 @@ class InstallerMigrationControlsTests(unittest.TestCase):
             b'[agents."security-auditor"]\r\n'
         )
         hooks = (
-            b'{"command":"aggregate-telemetry.sh .tmp/decisions --csv '
-            b'.tmp/telemetry-latest.csv"}\r\n'
+            b'{"hooks":{"Stop":[{"hooks":[{"type":"command","command":'
+            b'"aggregate-telemetry.sh .tmp/decisions --csv '
+            b'.tmp/telemetry-latest.csv","timeout":60}]}]}}\r\n'
         )
         (codex / "config.toml").write_bytes(config)
         (codex / "hooks.json").write_bytes(hooks)
