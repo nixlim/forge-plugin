@@ -41,7 +41,7 @@ class ReasonCode(str, Enum):
 
 
 class V2ReasonCode(str, Enum):
-    """The complete additive 55-member ``forge-cli/2`` reason union."""
+    """The complete additive 56-member ``forge-cli/2`` reason union."""
 
     AMBIGUOUS_TARGET = "ambiguous-target"
     APPROVAL_REQUIRED = "approval-required"
@@ -71,6 +71,7 @@ class V2ReasonCode(str, Enum):
     LIVE_MERGE_CHAIN_EXISTS = "live-merge-chain-exists"
     LOCK_RELEASE_FAILED = "lock-release-failed"
     LOCK_UNAVAILABLE = "lock-unavailable"
+    LZMA_UNAVAILABLE = "lzma-unavailable"
     MERGE_GATE_FAILED = "merge-gate-failed"
     MUTATING_GATE_PENDING = "mutating-gate-pending"
     NON_FAST_FORWARD = "non-fast-forward"

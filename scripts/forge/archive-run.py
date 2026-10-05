@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import copy
 import datetime as dt
 import fcntl
@@ -27,6 +26,9 @@ from typing import Any, Mapping, Sequence
 SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
+FORGE_SCRIPTS_ROOT = Path(__file__).resolve().parent
+if str(FORGE_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(FORGE_SCRIPTS_ROOT))
 
 from codex_orchestrator import binding_history
 from codex_orchestrator import builders as journal_builders
@@ -45,6 +47,7 @@ from commitment_paths import (
     validate_surface_path,
 )
 import archive_closing as closing_engine
+import chain_evidence_codec
 
 
 CONTAMINATION = "forge: archive refused — close tree contains unrelated changes"
@@ -98,7 +101,7 @@ CHAIN_TOMBSTONE_SCHEMA = "forge-chain-tombstone/1"
 CHAIN_STATE_MARKER = "FORGE:CHAIN-STATE"
 CHAIN_EVIDENCE_MARKER = "FORGE:CHAIN-EVIDENCE"
 CHAIN_TOMBSTONE_MARKER = "FORGE:CHAIN-TOMBSTONE"
-EVENT_EMBED_LIMIT = 2_097_152
+EVENT_EMBED_LIMIT = chain_evidence_codec.ENCODED_PAYLOAD_MAX_BYTES
 TOMBSTONE_SIZE_LIMIT = 65_536
 TOMBSTONE_DIRECTORY_ENTRY_LIMIT = 4_096
 ARCHIVE_SIZE_LIMIT = 16_777_216
@@ -3544,20 +3547,12 @@ def render_chain_state_block(raw: bytes) -> str:
 
 
 def render_chain_event_block(raw: bytes) -> str:
-    digest = hashlib.sha256(raw).hexdigest()
-    if len(raw) <= EVENT_EMBED_LIMIT:
-        payload = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-        return (
-            f"<!-- {CHAIN_EVIDENCE_MARKER} v1 encoding=base64url "
-            f"bytes={len(raw)} sha256={digest} -->\n"
-            f"{payload}\n"
-            f"<!-- /{CHAIN_EVIDENCE_MARKER} -->\n"
-        )
-    return (
-        f"<!-- {CHAIN_EVIDENCE_MARKER} v1 encoding=UNEMBEDDED "
-        f"bytes={len(raw)} sha256={digest} -->\n"
-        f"<!-- /{CHAIN_EVIDENCE_MARKER} -->\n"
-    )
+    try:
+        return chain_evidence_codec.encode_chain_evidence(raw)
+    except chain_evidence_codec.ChainEvidenceError as exc:
+        if str(exc) == chain_evidence_codec.ARCHIVE_LZMA_UNAVAILABLE:
+            raise ArchiveRefusal(str(exc)) from exc
+        raise
 
 
 def render_chain_tombstone_block(snapshot: TombstoneSnapshot) -> str:

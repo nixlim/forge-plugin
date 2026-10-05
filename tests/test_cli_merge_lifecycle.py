@@ -4986,11 +4986,11 @@ class MergeLifecycleStatusTests(ADAPTERS.MergeAdapterFixture):
 
 
 class MergeLifecycleDormancyTests(ADAPTERS.MergeAdapterFixture):
-    def test_revision18_reason_union_has_55_members(self) -> None:
-        self.assertEqual(len(CLI.V2ReasonCode), 55)
+    def test_revision21_reason_union_has_56_members(self) -> None:
+        self.assertEqual(len(CLI.V2ReasonCode), 56)
         values = {item.value for item in CLI.V2ReasonCode}
-        self.assertIn("run-scope-exceeded", values)
-        self.assertIn("execution-result-pending", values)
+        pins = {"run-scope-exceeded", "execution-result-pending", "lzma-unavailable"}
+        self.assertLessEqual(pins, values)
 
     def test_activation_flag_false_hides_merge_and_true_exposes_exact_slice(self) -> None:
         self.assertIs(CLI.MERGE_LIFECYCLE_ACTIVE, False)

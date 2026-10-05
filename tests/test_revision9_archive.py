@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import copy
 import hashlib
@@ -223,31 +222,16 @@ class Revision9ArchiveBlocksTests(unittest.TestCase):
         encoded = body.split("\n", 1)[1].encode("utf-8")
         self.assertEqual(encoded[:size], raw)
 
-    def test_event_embedding_zero_boundary_and_unembedded_fallback(self) -> None:
-        empty = archive.render_chain_event_block(b"")
+    def test_event_embedding_uses_exact_compressed_codec_bytes(self) -> None:
+        rendered = archive.render_chain_event_block(b"")
         self.assertEqual(
-            empty,
-            "<!-- FORGE:CHAIN-EVIDENCE v1 encoding=base64url bytes=0 "
-            f"sha256={hashlib.sha256(b'').hexdigest()} -->\n\n"
+            rendered,
+            "<!-- FORGE:CHAIN-EVIDENCE v1 encoding=xz+base64url bytes=0 encoded_bytes=43 "
+            f"sha256={hashlib.sha256(b'').hexdigest()} -->\n"
+            "_Td6WFoAAATm1rRGAAAAABzfRCEftvN9AQAAAAAEWVo\n"
             "<!-- /FORGE:CHAIN-EVIDENCE -->\n",
         )
-
-        boundary = bytes(range(256)) * (archive.EVENT_EMBED_LIMIT // 256)
-        rendered = archive.render_chain_event_block(boundary)
-        lines = rendered.splitlines()
-        self.assertIn("encoding=base64url", lines[0])
-        self.assertNotIn("=", lines[1])
-        padding = "=" * (-len(lines[1]) % 4)
-        self.assertEqual(base64.urlsafe_b64decode(lines[1] + padding), boundary)
-
-        oversized = boundary + b"x"
-        fallback = archive.render_chain_event_block(oversized)
-        self.assertEqual(
-            fallback,
-            "<!-- FORGE:CHAIN-EVIDENCE v1 encoding=UNEMBEDDED "
-            f"bytes={len(oversized)} sha256={hashlib.sha256(oversized).hexdigest()} -->\n"
-            "<!-- /FORGE:CHAIN-EVIDENCE -->\n",
-        )
+        self.assertEqual(archive.chain_evidence_codec.decode_chain_evidence(rendered), b"")
 
     def test_archive_utf8_cap_and_disable_control_are_load_bearing(self) -> None:
         with mock.patch.object(archive, "ARCHIVE_SIZE_LIMIT", 4):
@@ -1571,7 +1555,7 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
                 "merge",
             )
 
-    def test_oversized_captured_events_are_not_duplicated_as_basis(self) -> None:
+    def test_large_compressible_captured_events_are_not_duplicated_as_basis(self) -> None:
         chain_id, records, citations, _state, event = self.write_captured_ingest(
             "commit", suffix="06", detail_size=archive.EVENT_EMBED_LIMIT
         )
@@ -1600,7 +1584,14 @@ class Revision9ChainSnapshotTests(unittest.TestCase):
             )
         events_raw = package.chains[0].events_file.raw
         self.assertGreater(len(events_raw), archive.EVENT_EMBED_LIMIT)
-        self.assertIn("encoding=UNEMBEDDED", archive.render_chain_event_block(events_raw))
+        event_block = archive.render_chain_event_block(events_raw)
+        self.assertEqual(
+            (
+                "encoding=xz+base64url" in event_block,
+                archive.chain_evidence_codec.decode_chain_evidence(event_block),
+            ),
+            (True, events_raw),
+        )
         documents = archive.basis_documents(self.repo, self.run_dir, [records[0]])
         self.assertEqual(
             [item.label for item in archive.verbatim_basis_documents(package, documents)],
@@ -2342,7 +2333,7 @@ class Revision9Phase0GoldenTests(unittest.TestCase):
             )
         self.assertEqual(
             hashlib.sha256(rendered).hexdigest(),
-            "be53b308502d7a0359216142be41b59c3694032a0790a7c1c0cb221b9ef5d7e8",
+            "e49f3753bb396018272b29525390917e26fa07eef98edef9119fd50df6db74e0",
         )
         text = rendered.decode("utf-8")
         self.assertEqual(text.count(f"Closing HEAD: {HARDENING_HEAD}"), 1)

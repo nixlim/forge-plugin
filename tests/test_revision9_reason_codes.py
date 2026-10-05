@@ -7,6 +7,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests._cli_loader import package_module
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = Path("docs/specs/forge-plugin-spec.md")
@@ -14,6 +16,7 @@ V1_CORPUS = ROOT / "system/fr223/reason-codes-v1.json"
 V2_CORPUS = ROOT / "system/fr223/reason-codes-v2.json"
 V3_CORPUS = ROOT / "system/fr223/reason-codes-v3.json"
 V1_SHA256 = "3646227d8437789e0407117dc09e00d6116edccb63e89354c746d4b9059c264b"
+ENVELOPE = package_module("envelope")
 
 REVISION9_ADDITIONS = [
     {
@@ -208,6 +211,17 @@ class Revision9ReasonCodeCorpusTests(unittest.TestCase):
             with self.subTest(code=row["code"]):
                 self.assertEqual(v2_by_code[row["code"]], row)
                 self.assertEqual(v3_by_code[row["code"]], row)
+
+    def test_runtime_addition_does_not_remint_frozen_corpora(self) -> None:
+        self.assertEqual(len(ENVELOPE.V2ReasonCode), 56)
+        self.assertEqual(
+            ENVELOPE.V2ReasonCode.LZMA_UNAVAILABLE.value,
+            "lzma-unavailable",
+        )
+        self.assertNotIn(
+            "lzma-unavailable",
+            {row["code"] for row in self.v3["codes"]},
+        )
 
 
 if __name__ == "__main__":

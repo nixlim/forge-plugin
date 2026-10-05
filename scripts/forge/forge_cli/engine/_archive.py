@@ -27,6 +27,9 @@ _BACKFILL_MODE_CONFLICT = (
 _BACKFILL_APPROVAL_REFUSAL = (
     "forge: archive refused — backfill approval missing or mismatched"
 )
+_LZMA_UNAVAILABLE_REFUSAL = (
+    "forge: archive refused — Python lzma module unavailable"
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,20 @@ def _archive_oid(value: Any) -> bool:
 
 def _archive_metadata_is_backfill(metadata: Mapping[str, Any]) -> bool:
     return metadata.get("backfill_approval") is not None
+
+
+def _archive_renderer_refusal(message: str) -> Refusal:
+    """Map one renderer diagnostic to its closed CLI reason member."""
+
+    if message == _LZMA_UNAVAILABLE_REFUSAL:
+        return Refusal(
+            V2ReasonCode.LZMA_UNAVAILABLE,
+            message,
+            expected="Python standard-library lzma compression support",
+            observed=message,
+            remediation="restore Python lzma support and retry archive commit start",
+        )
+    return _archive_refusal(message)
 
 
 def _archive_module() -> Any:
@@ -247,7 +264,9 @@ def _render_archive_bytes(
             ) from exc
     except Exception as exc:
         if exc.__class__.__name__ == "ArchiveRefusal":
-            raise _archive_refusal(str(getattr(exc, "message", exc))) from exc
+            raise _archive_renderer_refusal(
+                str(getattr(exc, "message", exc))
+            ) from exc
         raise
     finally:
         try:

@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import lzma
 import os
 import re
 import sys
@@ -103,20 +104,21 @@ class Revision9MergeIngestArchiveMatrixTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture
         )
 
         event_evidence = re.search(
-            r"<!-- FORGE:CHAIN-EVIDENCE v1 encoding=base64url bytes=(\d+) "
-            r"sha256=([0-9a-f]{64}) -->\n([^\n]*)\n"
+            r"<!-- FORGE:CHAIN-EVIDENCE v1 encoding=xz\+base64url bytes=(\d+) "
+            r"encoded_bytes=(\d+) sha256=([0-9a-f]{64}) -->\n([^\n]*)\n"
             r"<!-- /FORGE:CHAIN-EVIDENCE -->",
             rendered,
         )
         self.assertIsNotNone(event_evidence)
-        encoded = event_evidence.group(3)
-        decoded_events = base64.urlsafe_b64decode(
-            encoded + "=" * (-len(encoded) % 4)
+        encoded = event_evidence.group(4)
+        decoded_events = lzma.decompress(
+            base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True),
+            format=lzma.FORMAT_XZ,
         )
         self.assertEqual(decoded_events, events_raw)
-        self.assertEqual(int(event_evidence.group(1)), len(events_raw))
+        self.assertEqual((int(event_evidence.group(1)), int(event_evidence.group(2))), (len(events_raw), len(encoded)))
         self.assertEqual(
-            event_evidence.group(2), hashlib.sha256(events_raw).hexdigest()
+            event_evidence.group(3), hashlib.sha256(events_raw).hexdigest()
         )
 
     def append_merge_event(
