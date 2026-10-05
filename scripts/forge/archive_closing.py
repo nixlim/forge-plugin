@@ -275,12 +275,27 @@ def _approval_repository_matches(
         _refuse(refusal)
 
 
+def _scope_after_replayed_record(
+    record: Mapping[str, object], scope: tuple[str, ...]
+) -> tuple[str, ...]:
+    if (
+        record.get("type") != "decision"
+        or record.get("resolution") != journal_engine.READMISSION_RESOLUTION
+    ):
+        return scope
+    updated = journal_engine._scope_from_record(record.get("scope"))
+    if updated is None:
+        raise journal_engine.CoordinationRefusal(journal_engine.INVALID_JOURNAL_RECORD)
+    return updated
+
+
 def _replay_approval(evidence: ApprovalEvidence, repo: Path, refusal: str) -> None:
     canonical_records = tuple(
         {name: value for name, value in record.items() if name != "_line"}
         for record in evidence.records
     )
     try:
+        admitted_scope = evidence.scope
         for index, proposed in enumerate(canonical_records):
             if journal_engine._writer_activation_marker(proposed):
                 continue
@@ -288,10 +303,11 @@ def _replay_approval(evidence: ApprovalEvidence, repo: Path, refusal: str) -> No
                 proposed,
                 run_id=evidence.run_id,
                 repo_root=repo,
-                scope=evidence.scope,
+                scope=admitted_scope,
                 prior_records=canonical_records[:index],
                 _historical_replay=journal_engine._HISTORICAL_REPLAY,
             )
+            admitted_scope = _scope_after_replayed_record(proposed, admitted_scope)
     except (
         journal_engine.CoordinationRefusal,
         KeyError,
