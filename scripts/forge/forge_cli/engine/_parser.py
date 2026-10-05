@@ -44,6 +44,8 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[chain_core.CLIOptions,
         "--task-status",
         "--idempotency-key",
         "--archive-run-id",
+        "--backfill-closing-head",
+        "--backfill-approval",
         "--legacy-recovered-head",
         "--legacy-approval",
         "--dispense-citation",
@@ -224,6 +226,9 @@ def build_parser() -> ContractArgumentParser:
     start.add_argument(
         "--task", help="run task to bind (required with the global --run-id)"
     )
+    start.add_argument("--closing-head")
+    start.add_argument("--backfill-closing-head")
+    start.add_argument("--backfill-approval")
     start.add_argument("--legacy-recovered-head")
     start.add_argument("--legacy-approval")
     start.add_argument("--dispense-citation", action="append", default=[])

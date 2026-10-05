@@ -6,6 +6,7 @@ from typing import Any, Sequence
 from forge_cli import chain_core
 from forge_cli.engine._approval import _authorization_problem as _authorization_problem
 from forge_cli.engine._approval import _success as _success
+from forge_cli.engine._archive import ArchiveClosingOptions as ArchiveClosingOptions
 from forge_cli.engine._archive import _archive_recheck as _archive_recheck
 from forge_cli.engine._archive import _prepare_archive_candidate as _prepare_archive_candidate
 from forge_cli.engine._candidate_ops import (
@@ -45,8 +46,11 @@ def start(
     *,
     task: str | None = None,
     archive_run_id: str | None = None,
+    closing_head: str | None = None,
     legacy_recovered_head: str | None = None,
     legacy_approval: str | None = None,
+    backfill_closing_head: str | None = None,
+    backfill_approval: str | None = None,
     dispense_targets: Sequence[str] = (),
     dispense_reason: str | None = None,
 ) -> Outcome:
@@ -89,16 +93,34 @@ def start(
             normalized, archive_metadata = _prepare_archive_candidate(
                 self.ctx,
                 archive_run_id,
-                legacy_recovered_head=legacy_recovered_head,
-                legacy_approval=legacy_approval,
+                closing=ArchiveClosingOptions(
+                    closing_head=closing_head,
+                    legacy_recovered_head=legacy_recovered_head,
+                    legacy_approval=legacy_approval,
+                    backfill_closing_head=backfill_closing_head,
+                    backfill_approval=backfill_approval,
+                ),
                 dispense_targets=dispense_targets,
                 dispense_reason=dispense_reason,
             )
         else:
             normalized = self.ctx.repo.normalize_paths(paths)
             archive_metadata = None
+        pinned_archive_head = (
+            archive_metadata.get("archiving_head")
+            if archive_metadata is not None
+            and archive_metadata.get("backfill_approval") is not None
+            else None
+        )
+        if pinned_archive_head is not None and not isinstance(
+            pinned_archive_head, str
+        ):
+            raise FrozenError(
+                "backfill archive metadata has no pinned repository HEAD",
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
         try:
-            head, raw = self.ctx.repo.policy()
+            head, raw = self.ctx.repo.policy(pinned_archive_head)
             policy = parse_policy(head, raw)
         except (OSError, PolicyError, UnicodeError) as exc:
             raise Refusal(

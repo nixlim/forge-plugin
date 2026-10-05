@@ -31,6 +31,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 from codex_orchestrator import binding_history
 from codex_orchestrator import builders as journal_builders
 from codex_orchestrator import journal as journal_engine
+from codex_orchestrator import recorded_repository as recorded_repository_engine
 from codex_orchestrator.chain_paths import chain_storage_root
 from codex_orchestrator.journal import (
     read_journal as read_shared_journal,
@@ -43,12 +44,13 @@ from commitment_paths import (
     resolve_citation_path,
     validate_surface_path,
 )
+import archive_closing as closing_engine
 
 
 CONTAMINATION = "forge: archive refused — close tree contains unrelated changes"
-LEGACY_APPROVAL_REFUSAL = (
-    "forge: archive refused — legacy recovery approval missing or mismatched"
-)
+ArchiveRefusal = closing_engine.ArchiveRefusal
+ClosingMode = closing_engine.ClosingMode
+LEGACY_APPROVAL_REFUSAL = closing_engine.LEGACY_APPROVAL_REFUSAL
 NONE = "None recorded"
 UNBOUND = "UNBOUND"
 HEX_HEAD = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
@@ -88,10 +90,6 @@ LEGACY_SHORT_REVIEW_OBSERVATION = re.compile(
 CHAIN_ID_IN_TEXT = re.compile(
     r"(?<![A-Za-z0-9_.-])c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}"
     r"(?![A-Za-z0-9_.-])"
-)
-LEGACY_APPROVAL = re.compile(
-    r"^(?P<run>[A-Za-z0-9][A-Za-z0-9._-]{0,127}):"
-    r"(?P<decision>[A-Za-z0-9][A-Za-z0-9._-]{0,127})$"
 )
 
 CHAIN_STATE_SCHEMA = "forge-chain/1"
@@ -247,12 +245,6 @@ class Discrepancy:
 
 
 @dataclass(frozen=True)
-class ClosingMode:
-    head: str
-    legacy_approval: str | None = None
-
-
-@dataclass(frozen=True)
 class BasisDocument:
     label: str
     content: str
@@ -296,18 +288,25 @@ class EligibleIngestRecord:
     outcome: str | None = None
 
 
-class ArchiveRefusal(Exception):
-    """A fail-closed archive precondition or transaction failure."""
-
-    def __init__(self, message: str, *, contamination: bool = False) -> None:
-        super().__init__(message)
-        self.message = message
-        self.contamination = contamination
-
-
 class ContractArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise ArchiveRefusal(f"forge: archive refused — invalid invocation: {message}")
+
+    def parse_args(
+        self, args: Sequence[str] | None = None, namespace: argparse.Namespace | None = None
+    ) -> argparse.Namespace:
+        parsed = super().parse_args(args, namespace)
+        backfill = (
+            parsed.backfill_closing_head is not None
+            or parsed.backfill_approval is not None
+        )
+        if (
+            parsed.closing_head is None
+            and parsed.legacy_recovered_head is None
+            and not backfill
+        ):
+            self.error("one archive closing mode is required")
+        return parsed
 
 
 def authoritative_discrepancy(code: str) -> None:
@@ -999,13 +998,16 @@ def register_archive_merge_reducer() -> None:
         authoritative_discrepancy("structured_chain_mismatch")
 
 
-def run_git(repo: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
+def run_git(repo: Path, *arguments: str, input_bytes: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
     try:
+        # check-ignore rejects literal pathspec magic, including the global form;
+        # its caller therefore supplies the repository-relative path over -z stdin.
         return subprocess.run(
-            ["git", *arguments],
+            ["git", *(("--literal-pathspecs",) if arguments[:1] != ("check-ignore",) else ()), *arguments],
             cwd=repo,
             check=False,
             capture_output=True,
+            input=input_bytes,
         )
     except OSError as exc:
         raise ArchiveRefusal(f"forge: archive refused — git failed: {exc}") from exc
@@ -3937,12 +3939,11 @@ def document_path(repo: Path, run_dir: Path, value: str) -> Path | None:
 
 
 def basis_documents(
-    repo: Path,
-    run_dir: Path,
-    decisions: list[dict[str, Any]],
+    repo: Path, run_dir: Path, decisions: list[dict[str, Any]],
     *,
     excluded_paths: frozenset[Path] = frozenset(),
     excluded_references: frozenset[str] = frozenset(),
+    basis_references: list[closing_engine.BasisReference] | None = None,
 ) -> list[BasisDocument]:
     documents: list[BasisDocument] = []
     seen: set[tuple[int, int]] = set()
@@ -3962,6 +3963,8 @@ def basis_documents(
                 roots = citation_roots(repo, run_dir, leg="basis-documents")
                 if any(root / relative in excluded_paths for root in roots):
                     continue
+                if basis_references is not None:
+                    basis_references.extend(closing_engine.BasisReference(value, item / relative) for item in roots)
                 selected = resolve_citation_path(
                     commitment_surface("decision.basis"), reference, repository=repo,
                     run_dir=run_dir, leg="basis-documents",
@@ -4019,6 +4022,52 @@ def recheck_basis_documents(documents: Sequence[BasisDocument]) -> None:
                 "forge: archive refused — basis document changed during rendering: "
                 f"{document.label}"
             )
+
+
+def recorded_repository_provenance(
+    repo: Path, run_dir: Path, recorded: object
+) -> str | None:
+    refusal = "forge: archive refused — run repository does not match current repository"
+    try:
+        canonical = repo.resolve(strict=True)
+        state_root = journal_engine._resolve_state_root(canonical, "archive")
+        resolved, absent_relative = recorded_repository_engine.resolve(
+            recorded,
+            state_root=state_root,
+            run_dir=run_dir,
+            caller_repository=canonical,
+        )
+    except (
+        OSError,
+        RuntimeError,
+        UnicodeError,
+        ValueError,
+        journal_engine.CoordinationRefusal,
+        recorded_repository_engine.ResolutionError,
+    ) as exc:
+        raise ArchiveRefusal(refusal) from exc
+    if resolved != canonical:
+        raise ArchiveRefusal(refusal)
+    if absent_relative is None:
+        return None
+    rendered = os.fspath(absent_relative)
+    try:
+        rendered.encode("utf-8")
+    except UnicodeError as exc:
+        raise ArchiveRefusal(refusal) from exc
+    if any(ord(character) <= 0x1F or 0x7F <= ord(character) <= 0x9F for character in rendered):
+        raise ArchiveRefusal(refusal)
+    return f"Recorded repository: absent worktree {rendered}; resolved to the state root"
+
+
+def require_valid_run_identity(
+    started: Mapping[str, Any], closed: Mapping[str, Any], run_id: str
+) -> None:
+    if started.get("run_id") != run_id or closed.get("judgment") not in {
+        "passed",
+        "blocked",
+    }:
+        raise ArchiveRefusal("forge: archive refused — invalid run journal")
 
 
 def render_archive(
@@ -4089,20 +4138,11 @@ def render_archive(
         if not tombstone_citations.intersection(document_references(document.label))
     )
     run_id = run_dir.name
-    if started.get("run_id") != run_id or closed.get("judgment") != "passed":
-        raise ArchiveRefusal("forge: archive refused — invalid run journal")
-    recorded_repo = started.get("repo")
-    try:
-        same_repo = (
-            isinstance(recorded_repo, str)
-            and Path(recorded_repo).expanduser().resolve(strict=True) == repo
-        )
-    except (OSError, RuntimeError, ValueError):
-        same_repo = False
-    if not same_repo:
-        raise ArchiveRefusal(
-            "forge: archive refused — run repository does not match current repository"
-        )
+    require_valid_run_identity(started, closed, run_id)
+    closing_engine.require_passed_without_backfill(closing, closed.get("judgment"))
+    recorded_repository_line = recorded_repository_provenance(
+        repo, run_dir, started.get("repo")
+    )
     starting_head = started.get("repo_head")
     if not isinstance(starting_head, str) or not HEX_HEAD.fullmatch(starting_head):
         raise ArchiveRefusal("forge: archive refused — invalid starting HEAD")
@@ -4409,15 +4449,11 @@ def render_archive(
             f"- `--dispense-reason {dispense_reason}`",
             "",
         ]
-    closing_lines = (
-        [
-            f"Legacy recovered closing HEAD: {closing.head}",
-            "",
-            f"Legacy recovery approval: {closing.legacy_approval}",
-            "",
-        ]
-        if closing.legacy_approval is not None
-        else [f"Closing HEAD: {closing.head}", ""]
+    closing_lines = closing_engine.provenance_lines(closing)
+    repository_lines = (
+        [recorded_repository_line, ""]
+        if recorded_repository_line is not None
+        else []
     )
     lines.extend(
         [
@@ -4425,6 +4461,7 @@ def render_archive(
             "",
             f"Starting HEAD: {starting_head}",
             "",
+            *repository_lines,
             *closing_lines,
             *dispensation_lines,
             "### Pre-close validation payload embedded in `run_closed`",
@@ -4486,138 +4523,31 @@ def legacy_closing_mode(
     approval: str,
     prove_approval: bool,
 ) -> ClosingMode:
-    if (
-        not isinstance(recovered_head, str)
-        or HEX_HEAD.fullmatch(recovered_head) is None
-        or not isinstance(approval, str)
-        or (match := LEGACY_APPROVAL.fullmatch(approval)) is None
-    ):
-        raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-    if run_git(repo, "cat-file", "-e", f"{recovered_head}^{{commit}}").returncode != 0:
-        raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
     try:
-        target_records, target_raw = stable_journal_snapshot(target_run_dir)
-        started = only_record(target_records, "run_started")
-        closed = only_record(target_records, "run_closed")
+        target_records, _target_raw = stable_journal_snapshot(target_run_dir)
     except ArchiveRefusal as exc:
         raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL) from exc
-    if (
-        journal_engine.writer_contract_active(target_records)
-        or started.get("run_id") != target_run_dir.name
-        or closed.get("judgment") != "passed"
-        or not target_records
-        or target_records[-1] is not closed
-    ):
-        raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-    recovery_run_id = match.group("run")
-    decision_id = match.group("decision")
-    if recovery_run_id == target_run_dir.name:
-        raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-    if prove_approval:
-        if "legacy-approval" not in RENDERER_CONTROLS:
-            raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-        recovery_dir = target_run_dir.parent / recovery_run_id
-        try:
-            recovery_dir = recovery_dir.resolve(strict=True)
-            recovery_dir.relative_to(target_run_dir.parent.resolve(strict=True))
-        except (OSError, RuntimeError, ValueError):
-            raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-        try:
-            current_owner = journal_engine._session_owner()
-            owner_before = journal_engine._read_owner_observation(
-                recovery_dir / "owner"
-            )
-        except (OSError, RuntimeError, ValueError, journal_engine.CoordinationRefusal) as exc:
-            raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL) from exc
-        if (
-            owner_before is None
-            or owner_before[1].pid != current_owner.pid
-            or owner_before[1].host != current_owner.host
-        ):
-            raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-        try:
-            recovery_records, recovery_raw = stable_journal_snapshot(recovery_dir)
-        except ArchiveRefusal as exc:
-            raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL) from exc
-        starts = [
-            record
-            for record in recovery_records
-            if record.get("type") == "run_started"
-        ]
-        decisions = [
-            record
-            for record in recovery_records
-            if record.get("type") == "decision" and record.get("id") == decision_id
-        ]
-        expected_prefix = (
-            f"legacy-archive-recovery: {target_run_dir.name} recovered closing HEAD "
-            f"{recovered_head}; "
-        )
-        start_scope = starts[0].get("scope") if starts else None
-        valid = bool(
-            len(starts) == 1
-            and starts[0].get("run_id") == recovery_run_id
-            and journal_engine.writer_contract_active(recovery_records)
-            and isinstance(start_scope, list)
-            and all(isinstance(item, str) and item for item in start_scope)
-            and not any(
-                record.get("type") == "run_closed" for record in recovery_records
-            )
-            and len(decisions) == 1
-            and "decision" not in decisions[0]
-            and decisions[0].get("outcome") == "operator_approval"
-            and isinstance(decisions[0].get("resolution"), str)
-            and decisions[0]["resolution"].startswith(expected_prefix)
-            and decisions[0]["resolution"][len(expected_prefix) :].strip()
-            and "\r" not in decisions[0]["resolution"]
-            and "\n" not in decisions[0]["resolution"]
-        )
-        recorded_repo = starts[0].get("repo") if starts else None
-        try:
-            valid = bool(
-                valid
-                and isinstance(recorded_repo, str)
-                and Path(recorded_repo).expanduser().resolve(strict=True) == repo
-            )
-        except (OSError, RuntimeError, ValueError):
-            valid = False
-        if valid:
-            canonical_records = tuple(
-                {
-                    name: value
-                    for name, value in record.items()
-                    if name != "_line"
-                }
-                for record in recovery_records
-            )
-            try:
-                for index, proposed in enumerate(canonical_records):
-                    if journal_engine._writer_activation_marker(proposed):
-                        continue
-                    journal_engine._validate_proposed_record(
-                        proposed,
-                        run_id=recovery_run_id,
-                        repo_root=repo,
-                        scope=tuple(start_scope),
-                        prior_records=canonical_records[:index], _historical_replay=journal_engine._HISTORICAL_REPLAY,
-                    )
-            except (journal_engine.CoordinationRefusal, KeyError, TypeError, ValueError):
-                valid = False
-        if not valid:
-            raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-        if journal_engine._stable_journal_read(recovery_dir / "journal.jsonl") != recovery_raw:
-            authoritative_discrepancy("snapshot_changed")
-        owner_after = journal_engine._read_owner_observation(recovery_dir / "owner")
-        if (
-            owner_after is None
-            or owner_after[0] != owner_before[0]
-            or owner_after[1].pid != current_owner.pid
-            or owner_after[1].host != current_owner.host
-        ):
-            authoritative_discrepancy("snapshot_changed")
-    if journal_engine._stable_journal_read(target_run_dir / "journal.jsonl") != target_raw:
-        authoritative_discrepancy("snapshot_changed")
-    return ClosingMode(recovered_head, approval)
+    return closing_engine.legacy_closing_mode(
+        repo,
+        target_run_dir,
+        closing_engine.LegacyRequest(
+            target_records,
+            recovered_head,
+            approval,
+            prove_approval,
+        ),
+        _closing_services(),
+    )
+
+
+def _closing_services() -> closing_engine.ClosingServices:
+    return closing_engine.ClosingServices(
+        run_git,
+        stable_journal_snapshot,
+        only_record,
+        authoritative_discrepancy,
+        RENDERER_CONTROLS,
+    )
 
 
 def closing_mode_from_options(
@@ -4628,29 +4558,23 @@ def closing_mode_from_options(
     legacy_recovered_head: str | None,
     legacy_approval: str | None,
     prove_legacy_approval: bool,
+    backfill_closing_head: str | None = None,
+    backfill_approval: str | None = None,
 ) -> ClosingMode:
-    normal = closing_head is not None
-    legacy = legacy_recovered_head is not None or legacy_approval is not None
-    if normal == legacy:
-        if legacy:
-            raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-        raise ArchiveRefusal(
-            "forge: archive refused — choose normal or paired legacy closing mode"
-        )
-    if normal:
-        if legacy_approval is not None or not isinstance(closing_head, str) or not HEX_HEAD.fullmatch(closing_head):
-            raise ArchiveRefusal("forge: archive refused — invalid closing HEAD")
-        if run_git(repo, "cat-file", "-e", f"{closing_head}^{{commit}}").returncode != 0:
-            raise ArchiveRefusal("forge: archive refused — closing HEAD is not a repository commit")
-        return ClosingMode(closing_head)
-    if legacy_recovered_head is None or legacy_approval is None:
-        raise ArchiveRefusal(LEGACY_APPROVAL_REFUSAL)
-    return legacy_closing_mode(
-        repo=repo,
-        target_run_dir=run_dir,
-        recovered_head=legacy_recovered_head,
-        approval=legacy_approval,
-        prove_approval=prove_legacy_approval,
+    records, _raw = stable_journal_snapshot(run_dir)
+    return closing_engine.closing_mode_from_options(
+        repo,
+        run_dir,
+        records,
+        closing_engine.ClosingOptions(
+            closing_head,
+            legacy_recovered_head,
+            legacy_approval,
+            backfill_closing_head,
+            backfill_approval,
+            prove_legacy_approval,
+        ),
+        _closing_services(),
     )
 
 
@@ -4661,6 +4585,9 @@ def _render_archive_candidate(
     closing_head: str | None,
     legacy_recovered_head: str | None,
     legacy_approval: str | None,
+    backfill_closing_head: str | None,
+    backfill_approval: str | None,
+    archiving_head: str | None,
     post_close_validation: Path,
     dispense_targets: Sequence[str],
     dispense_reason: str | None,
@@ -4684,14 +4611,22 @@ def _render_archive_candidate(
     relative = f".forge/history/runs/{run_dir.name}.md"
     started = only_record(records, "run_started")
     closed = only_record(records, "run_closed")
-    closing = closing_mode_from_options(
-        repo=repo,
-        run_dir=run_dir,
-        closing_head=closing_head,
-        legacy_recovered_head=legacy_recovered_head,
-        legacy_approval=legacy_approval,
-        prove_legacy_approval=prove_legacy_approval,
+    require_valid_run_identity(started, closed, run_dir.name)
+    closing = closing_engine.closing_mode_from_options(
+        repo,
+        run_dir,
+        records,
+        closing_engine.ClosingOptions(
+            closing_head,
+            legacy_recovered_head,
+            legacy_approval,
+            backfill_closing_head,
+            backfill_approval,
+            prove_legacy_approval,
+        ),
+        _closing_services(),
     )
+    closing_engine.require_passed_without_backfill(closing, closed.get("judgment"))
     # Authority is proven before destination state: an invalid or unactivated
     # approval refuses on its own literal even when the archive also exists.
     listed = run_git(repo, "ls-tree", "-z", "--name-only", "HEAD", "--", relative)
@@ -4767,12 +4702,24 @@ def _render_archive_candidate(
         *tombstone_discrepancies(package, records),
     ]
     decisions, _lifecycle_decisions = archive_decision_records(records)
+    basis_references: list[closing_engine.BasisReference] = []
     documents = basis_documents(
-        repo,
-        run_dir,
-        decisions,
+        repo, run_dir, decisions,
         excluded_references=tombstone_evidence_citations(package),
+        basis_references=basis_references,
     )
+    if closing.is_backfill:
+        closing_engine.prove_backfill_controls(
+            closing_engine.BackfillEvidence(
+                repo,
+                records,
+                package,
+                (*documents, *dict.fromkeys(basis_references)),
+                closing,
+                archiving_head,
+                run_git,
+            )
+        )
     content = render_archive(
         repo=repo,
         run_dir=run_dir,
@@ -4808,6 +4755,9 @@ def render_archive_candidate(
     legacy_recovered_head: str | None,
     legacy_approval: str | None,
     post_close_validation: Path,
+    backfill_closing_head: str | None = None,
+    backfill_approval: str | None = None,
+    archiving_head: str | None = None,
     dispense_targets: Sequence[str] = (),
     dispense_reason: str | None = None,
 ) -> bytes:
@@ -4823,6 +4773,9 @@ def render_archive_candidate(
         closing_head=closing_head,
         legacy_recovered_head=legacy_recovered_head,
         legacy_approval=legacy_approval,
+        backfill_closing_head=backfill_closing_head,
+        backfill_approval=backfill_approval,
+        archiving_head=archiving_head,
         post_close_validation=post_close_validation,
         dispense_targets=dispense_targets,
         dispense_reason=dispense_reason,
@@ -4853,6 +4806,9 @@ def preview_legacy_archive_candidate(
         closing_head=None,
         legacy_recovered_head=legacy_recovered_head,
         legacy_approval=proposed_legacy_approval,
+        backfill_closing_head=None,
+        backfill_approval=None,
+        archiving_head=None,
         post_close_validation=post_close_validation,
         dispense_targets=dispense_targets,
         dispense_reason=dispense_reason,
@@ -5127,7 +5083,23 @@ def write_and_stage(
     content: str,
     *,
     preexisting: ExactFile | None = None,
+    expected_head: str | None = None,
 ) -> None:
+    head_refusal = (
+        "forge: archive refused — repository HEAD is not the approved archive HEAD"
+    )
+
+    def require_expected_head() -> None:
+        if expected_head is None:
+            return
+        try:
+            current = git_stdout(repo, "rev-parse", "HEAD").decode("ascii").strip()
+        except (ArchiveRefusal, UnicodeError) as exc:
+            raise ArchiveRefusal(head_refusal) from exc
+        if current != expected_head:
+            raise ArchiveRefusal(head_refusal)
+
+    require_expected_head()
     archive_path = repo / relative
     created: ExactFile | None = None
     if preexisting is None:
@@ -5155,6 +5127,7 @@ def write_and_stage(
     try:
         if nul_paths(git_stdout(repo, "diff", "--name-only", "-z")):
             raise ArchiveRefusal(CONTAMINATION, contamination=True)
+        require_expected_head()
         if nul_paths(git_stdout(repo, "diff", "--cached", "--name-only", "-z")):
             raise ArchiveRefusal(CONTAMINATION, contamination=True)
         if nul_paths(git_stdout(repo, "ls-files", "--others", "--exclude-standard", "-z")) != [
@@ -5191,6 +5164,7 @@ def write_and_stage(
         untracked = nul_paths(git_stdout(repo, "ls-files", "--others", "--exclude-standard", "-z"))
         if staged != [os.fsencode(relative)] or unstaged or untracked:
             raise ArchiveRefusal(CONTAMINATION, contamination=True)
+        require_expected_head()
         if expected_worktree is not None:
             rebound = snapshot_existing_archive(repo, relative)
             if (
@@ -5222,10 +5196,12 @@ def write_and_stage(
 def parser() -> argparse.ArgumentParser:
     result = ContractArgumentParser(description=__doc__)
     result.add_argument("--run-dir", required=True)
-    closing = result.add_mutually_exclusive_group(required=True)
+    closing = result.add_mutually_exclusive_group()
     closing.add_argument("--closing-head")
     closing.add_argument("--legacy-recovered-head")
     result.add_argument("--legacy-approval")
+    result.add_argument("--backfill-closing-head")
+    result.add_argument("--backfill-approval")
     result.add_argument("--post-close-validation", required=True)
     # FR-018(b): operator-directed dispensation, forwarded verbatim to the audit.
     result.add_argument("--dispense-citation", action="append", default=[])
@@ -5233,7 +5209,31 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def _direct_backfill_mode(arguments: argparse.Namespace) -> bool:
+    backfill = (
+        arguments.backfill_closing_head is not None
+        or arguments.backfill_approval is not None
+    )
+    legacy = (
+        arguments.legacy_recovered_head is not None
+        or arguments.legacy_approval is not None
+    )
+    if backfill and (arguments.closing_head is not None or legacy):
+        raise ArchiveRefusal(closing_engine.BACKFILL_MODE_CONFLICT)
+    if backfill and (
+        arguments.backfill_closing_head is None
+        or arguments.backfill_approval is None
+    ):
+        raise ArchiveRefusal(closing_engine.BACKFILL_APPROVAL_REFUSAL)
+    return backfill
+
+
+def _check_archive_ignore(repo: Path, relative: str) -> subprocess.CompletedProcess[bytes]:
+    return run_git(repo, "check-ignore", "-q", "--stdin", "-z", input_bytes=os.fsencode("./" + relative) + b"\0")
+
+
 def archive(arguments: argparse.Namespace) -> str:
+    backfill = _direct_backfill_mode(arguments)
     repo = repository_root()
     run_dir = resolve_run_dir(arguments.run_dir)
     run_id = run_dir.name
@@ -5247,6 +5247,7 @@ def archive(arguments: argparse.Namespace) -> str:
         prove_clean_with_untracked_archive(repo, relative)
 
     closing_head = arguments.closing_head
+    archiving_head = git_stdout(repo, "rev-parse", "HEAD").decode("ascii").strip() if backfill else None
     if closing_head is not None:
         if not isinstance(closing_head, str) or not HEX_HEAD.fullmatch(closing_head):
             raise ArchiveRefusal("forge: archive refused — invalid closing HEAD")
@@ -5254,7 +5255,8 @@ def archive(arguments: argparse.Namespace) -> str:
         if closing_head != recorded_head:
             raise ArchiveRefusal("forge: archive refused — closing HEAD does not match repository HEAD")
 
-    ignored = run_git(repo, "check-ignore", "-q", "--", relative)
+    # A leading ./ prevents pathspec magic; --stdin -z preserves hostile bytes.
+    ignored = _check_archive_ignore(repo, relative)
     if ignored.returncode == 0:
         raise ArchiveRefusal(f"forge: archive refused — archive path is ignored: {relative}")
     if ignored.returncode != 1:
@@ -5268,6 +5270,9 @@ def archive(arguments: argparse.Namespace) -> str:
         closing_head=closing_head,
         legacy_recovered_head=arguments.legacy_recovered_head,
         legacy_approval=arguments.legacy_approval,
+        backfill_closing_head=arguments.backfill_closing_head,
+        backfill_approval=arguments.backfill_approval,
+        archiving_head=archiving_head,
         post_close_validation=Path(arguments.post_close_validation),
         dispense_targets=dispense_targets,
         dispense_reason=dispense_reason,
@@ -5282,7 +5287,11 @@ def archive(arguments: argparse.Namespace) -> str:
             f"deterministic rerender: {relative}"
         )
     write_and_stage(
-        repo, relative, rendered, preexisting=preexisting
+        repo,
+        relative,
+        rendered,
+        preexisting=preexisting,
+        expected_head=archiving_head,
     )
     return relative
 

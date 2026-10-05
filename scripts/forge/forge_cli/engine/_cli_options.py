@@ -9,6 +9,14 @@ import sys
 
 LAUNCH_RUN_ID_REQUIRED = "forge: launch refused — explicit --repo and --run-id are required"
 
+_BACKFILL_MODE_CONFLICT = (
+    "forge: archive refused — backfill closing mode cannot be combined with "
+    "normal or legacy closing mode"
+)
+_BACKFILL_APPROVAL_REFUSAL = (
+    "forge: archive refused — backfill approval missing or mismatched"
+)
+
 
 def _message_from_args(args: argparse.Namespace) -> str:
     if args.message is not None:
@@ -32,6 +40,48 @@ def _message_from_args(args: argparse.Namespace) -> str:
             remediation="forge commit finalize --message <message>",
         )
     return message
+
+
+def _validate_commit_start_closing_options(
+    args: argparse.Namespace,
+) -> tuple[tuple[bool, bool], tuple[bool, bool]]:
+    """Validate archive closing-mode tuples before repository discovery."""
+
+    legacy_pair = (
+        args.legacy_recovered_head is not None,
+        args.legacy_approval is not None,
+    )
+    backfill_pair = (
+        args.backfill_closing_head is not None,
+        args.backfill_approval is not None,
+    )
+    if any(backfill_pair) and (
+        args.closing_head is not None or any(legacy_pair)
+    ):
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            _BACKFILL_MODE_CONFLICT,
+            expected="one closing mode",
+            observed="backfill and normal or legacy closing flags",
+            remediation="remove the normal and legacy flags or the backfill flags",
+        )
+    if backfill_pair[0] != backfill_pair[1]:
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            _BACKFILL_APPROVAL_REFUSAL,
+            expected="paired --backfill-closing-head and --backfill-approval",
+            observed="exactly one backfill flag",
+            remediation="supply both backfill flags with the reviewed tuple",
+        )
+    if args.closing_head is not None and any(legacy_pair):
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            "forge: archive refused — legacy recovery approval missing or mismatched",
+            expected="normal or paired legacy closing mode",
+            observed="normal and legacy closing flags",
+            remediation="remove --closing-head or both legacy recovery flags",
+        )
+    return legacy_pair, backfill_pair
 
 
 def _validate_revision9_cross_options(
@@ -150,6 +200,7 @@ def _validate_revision9_cross_options(
         return
     if args.command != "commit" or args.commit_command != "start":
         return
+    legacy_pair, backfill_pair = _validate_commit_start_closing_options(args)
     task = args.task
     if (options.run_id is None) != (task is None):
         raise Refusal(
@@ -159,10 +210,6 @@ def _validate_revision9_cross_options(
             observed="exactly one run/task binding flag",
             remediation="rerun commit start with both binding flags or neither",
         )
-    legacy_pair = (
-        args.legacy_recovered_head is not None,
-        args.legacy_approval is not None,
-    )
     if legacy_pair[0] != legacy_pair[1]:
         raise Refusal(
             V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
@@ -182,7 +229,20 @@ def _validate_revision9_cross_options(
             remediation="remove --run-id and --task from archive commit start",
         )
     if args.archive_run_id is None and (
-        any(legacy_pair) or args.dispense_citation or args.dispense_reason
+        any(backfill_pair)
+    ):
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            _BACKFILL_APPROVAL_REFUSAL,
+            expected="backfill flags only with --archive-run-id",
+            observed="backfill flag on an ordinary commit start",
+            remediation="supply --archive-run-id or remove backfill flags",
+        )
+    if args.archive_run_id is None and (
+        args.closing_head is not None
+        or any(legacy_pair)
+        or args.dispense_citation
+        or args.dispense_reason
     ):
         raise Refusal(
             V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,

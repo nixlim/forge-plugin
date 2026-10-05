@@ -2,6 +2,10 @@
 from __future__ import annotations
 from forge_cli import chain_core, engine as _engine_module, runtime, engine
 from forge_cli.app._merge_engine import MergeEngine
+from forge_cli.engine._cli_options import (
+    _BACKFILL_APPROVAL_REFUSAL as _BACKFILL_APPROVAL_REFUSAL,
+    _validate_commit_start_closing_options as _validate_commit_start_closing_options,
+)
 import argparse
 from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal, V2ReasonCode, OUTPUT_SCHEMA, REVISION9_OUTPUT_SCHEMA
 import dataclasses
@@ -52,6 +56,72 @@ def _dispatch_launch(engine: engine.Engine, args: argparse.Namespace) -> Outcome
         return engine.launch_cancel(args.execution)
     return engine.launch(
         role=args.role, task=args.task, worktree=args.worktree, brief=args.brief
+    )
+
+
+def _dispatch_commit_start(
+    command_engine: engine.Engine, args: argparse.Namespace
+) -> Outcome:
+    legacy_pair, backfill_pair = _validate_commit_start_closing_options(args)
+    if (command_engine.ctx.options.run_id is None) != (args.task is None):
+        raise Refusal(
+            V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
+            "forge: commit start refused — --run-id and --task must be supplied together",
+            expected="both --run-id and --task, or neither",
+            observed="exactly one run/task binding flag",
+            remediation="rerun commit start with both binding flags or neither",
+        )
+    if legacy_pair[0] != legacy_pair[1]:
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            "forge: archive refused — legacy recovery approval missing or mismatched",
+            expected="paired --legacy-recovered-head and --legacy-approval",
+            observed="exactly one legacy recovery flag",
+            remediation="supply both legacy recovery flags with the reviewed tuple",
+        )
+    if args.archive_run_id is not None and (
+        args.task is not None or command_engine.ctx.options.run_id is not None
+    ):
+        raise Refusal(
+            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            "forge: archive refused — archive-only chains cannot carry a run/task binding",
+            expected="--archive-run-id without --run-id or --task",
+            observed="archive and run/task binding flags",
+            remediation="remove --run-id and --task from archive commit start",
+        )
+    if args.archive_run_id is None and any(backfill_pair):
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            _BACKFILL_APPROVAL_REFUSAL,
+            expected="backfill flags only with --archive-run-id",
+            observed="backfill flag on an ordinary commit start",
+            remediation="supply --archive-run-id or remove backfill flags",
+        )
+    if args.archive_run_id is None and (
+        args.closing_head is not None
+        or any(legacy_pair)
+        or args.dispense_citation
+        or args.dispense_reason
+    ):
+        raise Refusal(
+            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+            "forge: archive refused — legacy recovery approval missing or mismatched",
+            expected="archive flags only with --archive-run-id",
+            observed="archive-only flag on an ordinary commit start",
+            remediation="supply --archive-run-id or remove archive-only flags",
+        )
+    return command_engine.start(
+        args.paths or (),
+        args.declare_tier,
+        task=args.task,
+        archive_run_id=args.archive_run_id,
+        closing_head=args.closing_head,
+        legacy_recovered_head=args.legacy_recovered_head,
+        legacy_approval=args.legacy_approval,
+        backfill_closing_head=args.backfill_closing_head,
+        backfill_approval=args.backfill_approval,
+        dispense_targets=tuple(args.dispense_citation),
+        dispense_reason=args.dispense_reason,
     )
 
 
@@ -135,56 +205,7 @@ def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
         return _dispatch_launch(engine, args)
     if args.command == "commit":
         if args.commit_command == "start":
-            if (engine.ctx.options.run_id is None) != (args.task is None):
-                raise Refusal(
-                    V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
-                    "forge: commit start refused — --run-id and --task must be supplied together",
-                    expected="both --run-id and --task, or neither",
-                    observed="exactly one run/task binding flag",
-                    remediation="rerun commit start with both binding flags or neither",
-                )
-            legacy_pair = (
-                args.legacy_recovered_head is not None,
-                args.legacy_approval is not None,
-            )
-            if legacy_pair[0] != legacy_pair[1]:
-                raise Refusal(
-                    V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
-                    "forge: archive refused — legacy recovery approval missing or mismatched",
-                    expected="paired --legacy-recovered-head and --legacy-approval",
-                    observed="exactly one legacy recovery flag",
-                    remediation="supply both legacy recovery flags with the reviewed tuple",
-                )
-            if args.archive_run_id is not None and (
-                args.task is not None or engine.ctx.options.run_id is not None
-            ):
-                raise Refusal(
-                    V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                    "forge: archive refused — archive-only chains cannot carry a run/task binding",
-                    expected="--archive-run-id without --run-id or --task",
-                    observed="archive and run/task binding flags",
-                    remediation="remove --run-id and --task from archive commit start",
-                )
-            if args.archive_run_id is None and (
-                any(legacy_pair) or args.dispense_citation or args.dispense_reason
-            ):
-                raise Refusal(
-                    V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
-                    "forge: archive refused — legacy recovery approval missing or mismatched",
-                    expected="archive flags only with --archive-run-id",
-                    observed="archive-only flag on an ordinary commit start",
-                    remediation="supply --archive-run-id or remove archive-only flags",
-                )
-            return engine.start(
-                args.paths or (),
-                args.declare_tier,
-                task=args.task,
-                archive_run_id=args.archive_run_id,
-                legacy_recovered_head=args.legacy_recovered_head,
-                legacy_approval=args.legacy_approval,
-                dispense_targets=tuple(args.dispense_citation),
-                dispense_reason=args.dispense_reason,
-            )
+            return _dispatch_commit_start(engine, args)
         if args.commit_command == "restage":
             return engine.restage(args.paths)
         if args.commit_command == "rebase":
@@ -243,6 +264,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for name in (
                     "--task",
                     "--archive-run-id",
+                    "--closing-head",
+                    "--backfill-closing-head",
+                    "--backfill-approval",
                     "--legacy-recovered-head",
                     "--legacy-approval",
                     "--dispense-citation",

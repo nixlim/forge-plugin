@@ -11,9 +11,39 @@ import contextlib
 import stat
 from pathlib import Path
 import io
+from dataclasses import dataclass
 from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode
+from forge_cli.chain_core._chain_state import (
+    _archive_metadata_mode_is_valid as _archive_metadata_mode_is_valid,
+)
 from forge_cli.policy import sha256_bytes
 import threading
+
+
+_BACKFILL_MODE_CONFLICT = (
+    "forge: archive refused — backfill closing mode cannot be combined with "
+    "normal or legacy closing mode"
+)
+_BACKFILL_APPROVAL_REFUSAL = (
+    "forge: archive refused — backfill approval missing or mismatched"
+)
+
+
+@dataclass(frozen=True)
+class ArchiveClosingOptions:
+    closing_head: str | None = None
+    legacy_recovered_head: str | None = None
+    legacy_approval: str | None = None
+    backfill_closing_head: str | None = None
+    backfill_approval: str | None = None
+
+
+def _archive_oid(value: Any) -> bool:
+    return isinstance(value, str) and chain_core.COMMIT_RE.fullmatch(value) is not None
+
+
+def _archive_metadata_is_backfill(metadata: Mapping[str, Any]) -> bool:
+    return metadata.get("backfill_approval") is not None
 
 
 def _archive_module() -> Any:
@@ -174,6 +204,7 @@ def _render_archive_bytes(
     ctx: chain_core.CommandContext, metadata: Mapping[str, Any]
 ) -> bytes:
     renderer = _archive_module()
+    backfill = _archive_metadata_is_backfill(metadata)
     run_dir = (
         ctx.store.common_root
         / ".codex-orchestrator"
@@ -188,9 +219,16 @@ def _render_archive_bytes(
                 rendered = renderer.render_archive_candidate(
                     repo=ctx.repo.root,
                     run_dir=run_dir,
-                    closing_head=metadata.get("closing_head"),
+                    closing_head=(
+                        None if backfill else metadata.get("closing_head")
+                    ),
                     legacy_recovered_head=metadata.get("legacy_recovered_head"),
                     legacy_approval=metadata.get("legacy_approval"),
+                    backfill_closing_head=(
+                        metadata.get("closing_head") if backfill else None
+                    ),
+                    backfill_approval=metadata.get("backfill_approval"),
+                    archiving_head=metadata.get("archiving_head"),
                     post_close_validation=Path(
                         str(metadata["post_close_validation"])
                     ),
@@ -230,23 +268,98 @@ def _render_archive_bytes(
     return rendered
 
 
+def _backfill_option_refusal(message: str) -> Refusal:
+    return Refusal(
+        V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
+        message,
+        expected="one complete archive closing mode",
+        observed="conflicting, incomplete, or malformed backfill flags",
+        remediation="supply only the reviewed backfill pair",
+    )
+
+
+def _archive_closing_metadata(
+    ctx: chain_core.CommandContext,
+    options: ArchiveClosingOptions,
+) -> dict[str, str | None]:
+    legacy_pair = (
+        options.legacy_recovered_head is not None,
+        options.legacy_approval is not None,
+    )
+    backfill_pair = (
+        options.backfill_closing_head is not None,
+        options.backfill_approval is not None,
+    )
+    if any(backfill_pair) and (
+        options.closing_head is not None or any(legacy_pair)
+    ):
+        raise _backfill_option_refusal(_BACKFILL_MODE_CONFLICT)
+    if backfill_pair[0] != backfill_pair[1]:
+        raise _backfill_option_refusal(_BACKFILL_APPROVAL_REFUSAL)
+    if all(backfill_pair):
+        if (
+            not _archive_oid(options.backfill_closing_head)
+            or not options.backfill_approval
+        ):
+            raise _backfill_option_refusal(_BACKFILL_APPROVAL_REFUSAL)
+        return {
+            "closing_head": options.backfill_closing_head,
+            "legacy_recovered_head": None,
+            "legacy_approval": None,
+            "archiving_head": ctx.repo.head(),
+            "backfill_approval": options.backfill_approval,
+        }
+    if legacy_pair[0] != legacy_pair[1] or (
+        options.legacy_recovered_head is not None
+        and not _archive_oid(options.legacy_recovered_head)
+    ):
+        raise _archive_refusal(
+            "forge: archive refused — legacy recovery approval missing or mismatched"
+        )
+    if all(legacy_pair):
+        if options.closing_head is not None or not options.legacy_approval:
+            raise _archive_refusal(
+                "forge: archive refused — legacy recovery approval missing or mismatched"
+            )
+        return {
+            "closing_head": None,
+            "legacy_recovered_head": options.legacy_recovered_head,
+            "legacy_approval": options.legacy_approval,
+            "archiving_head": None,
+            "backfill_approval": None,
+        }
+    normal_closing_head = options.closing_head
+    repository_head = ctx.repo.head()
+    if normal_closing_head is not None and (
+        not _archive_oid(normal_closing_head)
+        or len(normal_closing_head) != len(repository_head)
+    ):
+        raise _archive_refusal("forge: archive refused — invalid closing HEAD")
+    recorded_closing_head = normal_closing_head or repository_head
+    if recorded_closing_head != repository_head:
+        raise _archive_refusal(
+            "forge: archive refused — closing HEAD does not match repository HEAD"
+        )
+    return {
+        "closing_head": recorded_closing_head,
+        "legacy_recovered_head": None,
+        "legacy_approval": None,
+        "archiving_head": None,
+        "backfill_approval": None,
+    }
+
+
 def _prepare_archive_candidate(
     ctx: chain_core.CommandContext,
     run_id: str,
     *,
-    legacy_recovered_head: str | None,
-    legacy_approval: str | None,
+    closing: ArchiveClosingOptions,
     dispense_targets: Sequence[str],
     dispense_reason: str | None,
 ) -> tuple[list[str], dict[str, Any]]:
     if chain_core.RUN_ID_RE.fullmatch(run_id) is None:
         raise _archive_refusal("forge: archive refused — invalid run identity")
-    if legacy_recovered_head is not None and chain_core.COMMIT_RE.fullmatch(
-        legacy_recovered_head
-    ) is None:
-        raise _archive_refusal(
-            "forge: archive refused — legacy recovery approval missing or mismatched"
-        )
+    closing_metadata = _archive_closing_metadata(ctx, closing)
     relative = f".forge/history/runs/{run_id}.md"
     if Path(relative).parts != (".forge", "history", "runs", f"{run_id}.md"):
         raise _archive_refusal("forge: archive refused — unsafe archive candidate path")
@@ -265,9 +378,7 @@ def _prepare_archive_candidate(
     metadata: dict[str, Any] = {
         "run_id": run_id,
         "path": relative,
-        "closing_head": None if legacy_recovered_head is not None else ctx.repo.head(),
-        "legacy_recovered_head": legacy_recovered_head,
-        "legacy_approval": legacy_approval,
+        **closing_metadata,
         "post_close_validation": str(run_dir / "post-close-validation.json"),
         "dispense_targets": list(dispense_targets),
         "dispense_reason": dispense_reason,
@@ -353,17 +464,10 @@ def _archive_recheck(
     )
     if metadata is None:
         return
-    if not isinstance(metadata, Mapping) or set(metadata) != {
-        "run_id",
-        "path",
-        "closing_head",
-        "legacy_recovered_head",
-        "legacy_approval",
-        "post_close_validation",
-        "dispense_targets",
-        "dispense_reason",
-        "rendered_sha256",
-    }:
+    if (
+        not isinstance(metadata, Mapping)
+        or not _archive_metadata_mode_is_valid(metadata)
+    ):
         raise _archive_refusal("forge: archive refused — malformed archive chain metadata", chain=state)
     relative = str(metadata["path"])
     if relative != f".forge/history/runs/{metadata['run_id']}.md":
