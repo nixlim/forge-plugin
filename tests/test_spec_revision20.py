@@ -253,8 +253,13 @@ AMENDMENT_PARAGRAPH_SHA256 = {
 }
 
 HEADER_LITERALS = (
-    "**Revised**: 2026-10-04",
-    "**Status**: Draft (Revision 20)",
+    "**Revised**: 2026-10-05",
+    "**Status**: Draft (Revision 21)",
+    (
+        "**Revision 21 marker scope**: A Revision-21 marker scopes only the Revision-21 "
+        "sentence(s) it directly follows, never older in-force text on the same line; task TA "
+        "removes each task marker only after the named implementation lands."
+    ),
     (
         "**Revision 20 status**: The four marked omnipus-fix amendments are "
         "specification-first authority only and do not claim their runtime surfaces have "
@@ -542,7 +547,7 @@ def line_containing(document: str, needle: str) -> str:
 
 def assert_header(document: str) -> None:
     lines = document.splitlines()
-    if tuple(lines[3:7]) != HEADER_LITERALS:
+    if tuple(lines[3:8]) != HEADER_LITERALS:
         raise AssertionError("Revision-20 header lines moved or reordered")
     for literal in HEADER_LITERALS:
         if lines.count(literal) != 1:
@@ -657,7 +662,7 @@ class SpecificationRevision20Tests(unittest.TestCase):
                 self.assert_mutation_detected(SPEC.replace(scope, mutated, 1))
 
     def test_header_literals_are_load_bearing(self) -> None:
-        self.assertEqual(tuple(SPEC.splitlines()[3:7]), HEADER_LITERALS)
+        self.assertEqual(tuple(SPEC.splitlines()[3:8]), HEADER_LITERALS)
         for literal in HEADER_LITERALS:
             with self.subTest(literal=literal):
                 self.assertEqual(SPEC.splitlines().count(literal), 1)
@@ -683,8 +688,8 @@ class SpecificationRevision20Tests(unittest.TestCase):
                 removed = SPEC.replace(source, removed_source, 1)
                 self.assert_mutation_detected(removed)
                 moved = removed.replace(
-                    "**Revised**: 2026-10-04",
-                    f"**Revised**: 2026-10-04 {marker}",
+                    "**Revised**: 2026-10-05",
+                    f"**Revised**: 2026-10-05 {marker}",
                     1,
                 )
                 self.assert_mutation_detected(moved)

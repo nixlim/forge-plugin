@@ -872,10 +872,10 @@ def line_containing(document: str, needle: str) -> str:
 
 def assert_header(document: str) -> None:
     lines = document.splitlines()
-    if lines.count("**Status**: Draft (Revision 20)") != 1:
-        raise AssertionError("Revision-20 status header is not unique")
-    if lines.count("**Revised**: 2026-10-04") != 1:
-        raise AssertionError("Revision-20 revised date is not unique")
+    if lines.count("**Status**: Draft (Revision 21)") != 1:
+        raise AssertionError("Revision-21 status header is not unique")
+    if lines.count("**Revised**: 2026-10-05") != 1:
+        raise AssertionError("Revision-21 revised date is not unique")
 
 
 def assert_authority_paragraphs(document: str) -> None:
@@ -1004,8 +1004,8 @@ class SpecificationRevision19Tests(unittest.TestCase):
 
     def test_each_cross_cutting_literal_has_a_disable_style_check(self) -> None:
         pinned = (
-            "**Status**: Draft (Revision 20)",
-            "**Revised**: 2026-10-04",
+            "**Status**: Draft (Revision 21)",
+            "**Revised**: 2026-10-05",
             DISCREPANCY_ENUM,
             *(needle for _task, needle in CROSS_CUTTING_LINES),
             *GLOBAL_LITERALS,
@@ -1027,7 +1027,7 @@ class SpecificationRevision19Tests(unittest.TestCase):
                 unmarked = source.replace(f" {marker}", "", 1)
                 removed = SPEC.replace(source, unmarked, 1)
                 self.assert_mutation_detected(SPEC, removed)
-                destination = destination or "**Revised**: 2026-10-04"
+                destination = destination or "**Revised**: 2026-10-05"
                 moved = removed.replace(destination, f"{destination} {marker}", 1)
                 self.assert_mutation_detected(SPEC, moved)
 
