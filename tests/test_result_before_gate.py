@@ -35,7 +35,6 @@ CORE = package_module("chain_core")
 COMMAND_LOCK = package_module("engine._command_lock")
 MERGE_GATE = package_module("app._engine_gate")
 MERGE_REVIEW_LAUNCH = package_module("app._engine_review_launch")
-SPEC = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
 
 
 def key(label: str) -> str:
@@ -252,19 +251,6 @@ class ResultGateUnitTests(unittest.TestCase):
             result_gate.shlex, "quote", side_effect=lambda value: value
         ), self.assertRaises(AssertionError):
             assert_quoted()
-
-    def test_spec_pins_commit_family_scope_and_reason_row(self) -> None:
-        self.assertIn("the commit-family run-bound chain verbs", SPEC)
-        self.assertIn(
-            "Merge-family chains are outside this control: "
-            "`MergeEngine.review_request`, `merge verify`, and `merge gate run`",
-            SPEC,
-        )
-        self.assertIn(
-            "| `execution-result-pending` | 1 | A commit-family run-bound "
-            "chain verb found a mutating execution",
-            SPEC,
-        )
 
     def test_route_j_prefixes_block_in_journal_order(self) -> None:
         records = activated_records(

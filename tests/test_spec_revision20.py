@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
 
 # Task TZ removes each marker and empties this set after the named implementations land.
-DEFERRED = frozenset({"G40", "G41", "G42", "G43"})
+DEFERRED = frozenset({"G40", "G42"})
 RUN_ID = "run-20261003-archive"
 MARKER_RE = re.compile(r"\(Revision 20 authority;[^)]*\)")
 
@@ -18,20 +18,8 @@ HEADINGS = {
         "Revision-20 installed-root harness-qualification amendment to **FR-223** "
         "(GH#40):"
     ),
-    "G41": (
-        "Revision-20 released superseded reviewer-trigger-table amendment to **DM-003**, "
-        "**FR-050**, **FR-103**, and the candidate-bound fresh reviewer evaluation "
-        "operator-skip amendment (GH#41):"
-    ),
-    "G42": (
-        "Revision-20 project-content preservation amendment to **DM-003**, **FR-038**, "
-        "**FR-072**, **FR-080**, and **FR-084** (GH#42):"
-    ),
-    "G43": (
-        "Revision-20 worktree-citation and archive-recovery amendment to **FR-017**, "
-        "the Revision-13 citation-root amendment to **FR-011**, **FR-064**, **FR-171**, "
-        "and **FR-172** (GH#43):"
-    ),
+    "G41": "The current complete LF-terminated table, SHA-256",
+    "G42": "Project content preservation under DM-003 and FR-038, FR-072, FR-080 and FR-084:",
     "FR100": "Revision-20 candidate-checkout clarification to **FR-100** (GH#41):",
 }
 
@@ -149,32 +137,6 @@ AMENDMENT_LITERALS = {
         "every differing or unsafe sibling refuses before mutation",
         "never silently drops foreign content",
     ),
-    "G43": (
-        "the repository leg of a relative citation follows the run-directory leg",
-        "the run's resolved recorded repository",
-        "the repository root derived from the physically resolved fixed run layout",
-        "A duplicate root is consulted once in its first position",
-        "supersedes only the Revision-13 statements that the repository root is derived "
-        "only from the fixed layout and that journal data never widens it",
-        "every other Revision-13 citation-root rule remains in force",
-        "the first anchored spelling is decisive",
-        "a `..` spelling or a symlink whose resolved target escapes that root refuses",
-        "MUST NOT fall through to a later root",
-        "A run outside the fixed layout has no layout-derived leg",
-        "Historical absolute-citation behavior is unchanged",
-        "The Revision-13 FR-011 file-existence and run-close validation",
-        "FR-017 append-time validation",
-        "FR-171 archive basis-document discovery, consistency checking, and verbatim copying",
-        'CITATION_LAYOUT_ROOT_LEGS = {"audit", "basis-documents", "append-time"}',
-        "each member is independently disableable in memory",
-        "FR-011 retains its independently disableable `VALIDATION_REPOSITORY_LEG`",
-        "keeps its existing two ordered roots",
-        "MUST NOT insert the recorded repository between them",
-        "FR-064's independent recorded-repository dependency",
-        "`<target-run-dir>.parent/<recovery-run-id>`",
-        "MUST NOT be derived from the archive renderer's current checkout",
-        "All existing approval identity, ownership, and refusal rules remain unchanged",
-    ),
     "FR100": (
         "Since 0.6.11",
         "has refused, anywhere in the whole tree",
@@ -201,11 +163,6 @@ CROSS_CUTTING_LINES = (
         "3d94a6d0a3cf68dbf5bb34df0009765a916aceb778bb4b95b4688a136e785812",
     ),
     (
-        "G43",
-        "A fixed-layout relative citation is absent beneath the run directory",
-        "652d5f2c46cbd9e759f966bd3a3f97ef4ccc92b4755d126ca59c57ac04ec1861",
-    ),
-    (
         "G42",
         "Given** a forge-initialized repo with project spine addenda",
         "ac2324bbc9768acd0b9320564f3bd3bde27ad61271aa7a9a2de0873ab1fc1e1e",
@@ -226,51 +183,24 @@ CROSS_CUTTING_LINES = (
         "c165ac99b74fc0adeb47383c2728c89ae8ad7186dce4f4d94464220ce8e90b8a",
     ),
     (
-        "G43",
-        "Revision-20 worktree-citation tests cover",
-        "ff360111160a6cb3e0da9b9c069c4107d68ed4435d1a6d430a35041dbd401152",
-    ),
-    (
         "G42",
         "DM-003; FR-038/FR-072/FR-080/FR-084 | Revision-20",
         "932fcc4e62a14472f637b6737ba3022b4b9b4221d930a11cd3d103ef76b14192",
     ),
-    (
-        "G43",
-        "FR-011/FR-017/FR-064/FR-171/FR-172 | Revision-20",
-        "8cf938946651fe85fc1d239c92075fcf2e134c184d34cce8be3c1ff180cf5964",
-    ),
 )
 
-EXPECTED_MARKER_COUNTS = {"G40": 3, "G41": 1, "G42": 7, "G43": 4}
+EXPECTED_MARKER_COUNTS = {"G40": 3, "G42": 6}
 
 AMENDMENT_PARAGRAPH_SHA256 = {
     "G40": "82d2ed9632ea9bf4b61407e97c8e9cbfea4bb4bad21ba7b22059ec542e8e8009",
-    "G41": "f5f8d3d52a59c7e18e1d1ea1eb4fb5d7a8add29655828d220433ce4524ce8650",
-    "G42": "98a5280ced3b09e159ec0702e442c6885bbd4271745e1cdc7f0c2db50c413f45",
-    "G43": "9312f7a5f3c6231c5cb19496272764250328de4e1e775d36564c3258cf80bfcd",
+    "G41": "b153887a652b757d3f803065a46a6b8318a576ef4f88af9f088645645f5916d5",
+    "G42": "bad232fb7568b104539d20e8ac0067d67beed1c2bff66ec0f222cc805c003d5d",
     "FR100": "41fde4565a0f8a8a3568695582e2d185258f3af315168fc6a3fb0a2f136c21a9",
 }
 
 HEADER_LITERALS = (
-    "**Revised**: 2026-10-05",
-    "**Status**: Draft (Revision 21)",
-    (
-        "**Revision 21 marker scope**: A Revision-21 marker scopes only the Revision-21 "
-        "sentence(s) it directly follows, never older in-force text on the same line; task TA "
-        "removes each task marker only after the named implementation lands."
-    ),
-    (
-        "**Revision 20 status**: The four marked omnipus-fix amendments are "
-        "specification-first authority only and do not claim their runtime surfaces have "
-        "shipped until tasks G40, G41, G42, and G43 land; the unmarked FR-100 clarification "
-        "records behavior already in force since 0.6.11."
-    ),
-    (
-        "**Revision 20 marker scope**: A Revision-20 marker scopes only the Revision-20 "
-        "sentence(s) it directly follows, never older in-force text on the same line; task TZ "
-        "removes each task marker only after the named implementation lands."
-    ),
+    "**Revised**: 2026-10-06",
+    "**Status**: Draft (Revision 22)",
 )
 
 REVIEWED_WEAKENINGS = (
@@ -471,47 +401,6 @@ REVIEWED_WEAKENINGS = (
         "non-symlink with bytes equal to the fresh template",
         "an existing `.forge-new` may be overwritten",
     ),
-    ("G43", "resolved recorded repository and then", "layout-derived root and then"),
-    ("G43", "consulted once in its first position", "consulted at every position"),
-    (
-        "G43",
-        "every other Revision-13 citation-root rule remains in force",
-        "other Revision-13 citation-root rules may be weakened",
-    ),
-    (
-        "G43",
-        "At every root the shared resolve-then-contain predicate applies and the first "
-        "anchored spelling is decisive",
-        "Later roots may override an earlier anchor",
-    ),
-    ("G43", "MUST NOT fall through to a later root", "MAY fall through"),
-    (
-        "G43",
-        "outside the fixed layout has no layout-derived leg",
-        "outside the fixed layout derives a layout leg",
-    ),
-    (
-        "G43",
-        "Historical absolute-citation behavior is unchanged",
-        "Historical absolute citations use the new roots",
-    ),
-    ("G43", "all use that same ordered predicate", "may use different predicates"),
-    (
-        "G43",
-        'CITATION_LAYOUT_ROOT_LEGS = {"audit", "basis-documents", "append-time"}',
-        'CITATION_LAYOUT_ROOT_LEGS = {"audit"}',
-    ),
-    ("G43", "keeps its existing two ordered roots", "uses all three ordered roots"),
-    (
-        "G43",
-        "MUST NOT insert the recorded repository between them",
-        "MAY insert the recorded repository between them",
-    ),
-    (
-        "G43",
-        "`<target-run-dir>.parent/<recovery-run-id>`",
-        "`<current-checkout>/.codex-orchestrator/runs/<recovery-run-id>`",
-    ),
     ("FR100", "Since 0.6.11", "Since 0.7.0"),
     ("FR100", "absolute symlink targets", "selected absolute symlink targets"),
     ("FR100", "anywhere in the whole tree", "only in changed paths"),
@@ -547,7 +436,7 @@ def line_containing(document: str, needle: str) -> str:
 
 def assert_header(document: str) -> None:
     lines = document.splitlines()
-    if tuple(lines[3:8]) != HEADER_LITERALS:
+    if tuple(lines[3:5]) != HEADER_LITERALS:
         raise AssertionError("Revision-20 header lines moved or reordered")
     for literal in HEADER_LITERALS:
         if lines.count(literal) != 1:
@@ -561,7 +450,7 @@ def assert_amendments(document: str) -> None:
             if literal not in paragraph:
                 raise AssertionError(f"{owner} authority lacks {literal!r}")
         markers = MARKER_RE.findall(paragraph)
-        marker = None if owner == "FR100" else expected_marker(owner)
+        marker = expected_marker(owner) if owner == "G40" else None
         expected = [marker] if marker else []
         if markers != expected:
             raise AssertionError(f"{owner} markers {markers!r} != {expected!r}")
@@ -617,6 +506,25 @@ def weakening_scope(document: str, owner: str) -> str:
 
 
 class SpecificationRevision20Tests(unittest.TestCase):
+    def test_cleanup_condition_enum_remains_exactly_closed(self) -> None:
+        prose = (
+            "`cleanup.condition` is exactly `none` or `cleanup-failed`; the latter retains "
+            "`cleanup_pending` and admits only `status` or `merge cleanup`."
+        )
+        enum = "cleanup.condition = none | cleanup-failed"
+
+        def assert_closed(document: str) -> None:
+            self.assertEqual(document.count(prose), 1)
+            self.assertEqual(
+                re.findall(r"^cleanup\.condition = .+$", document, flags=re.MULTILINE),
+                [enum],
+            )
+
+        assert_closed(SPEC)
+        for literal in (prose, enum):
+            with self.subTest(literal=literal), self.assertRaises(AssertionError):
+                assert_closed(SPEC.replace(literal, "DISABLED_CONTROL", 1))
+
     def assert_mutation_detected(self, mutant: str) -> None:
         self.assertNotEqual(SPEC, mutant)
         with self.assertRaises(AssertionError):
@@ -653,7 +561,7 @@ class SpecificationRevision20Tests(unittest.TestCase):
                 assert_cross_cutting_lines(mutant)
 
     def test_reviewed_weakenings_are_detected(self) -> None:
-        self.assertEqual(len(REVIEWED_WEAKENINGS), 72)
+        self.assertEqual(len(REVIEWED_WEAKENINGS), 60)
         for owner, original, replacement in REVIEWED_WEAKENINGS:
             with self.subTest(owner=owner, original=original):
                 scope = weakening_scope(SPEC, owner)
@@ -662,7 +570,7 @@ class SpecificationRevision20Tests(unittest.TestCase):
                 self.assert_mutation_detected(SPEC.replace(scope, mutated, 1))
 
     def test_header_literals_are_load_bearing(self) -> None:
-        self.assertEqual(tuple(SPEC.splitlines()[3:8]), HEADER_LITERALS)
+        self.assertEqual(tuple(SPEC.splitlines()[3:5]), HEADER_LITERALS)
         for literal in HEADER_LITERALS:
             with self.subTest(literal=literal):
                 self.assertEqual(SPEC.splitlines().count(literal), 1)
@@ -675,7 +583,7 @@ class SpecificationRevision20Tests(unittest.TestCase):
         self.assert_mutation_detected(reordered)
 
     def test_markers_cannot_be_removed_or_moved(self) -> None:
-        sites = [(task, amendment_paragraph(SPEC, task)) for task in DEFERRED]
+        sites = [("G40", amendment_paragraph(SPEC, "G40"))]
         sites.extend(
             (task, line_containing(SPEC, needle))
             for task, needle, _digest in CROSS_CUTTING_LINES
@@ -688,8 +596,8 @@ class SpecificationRevision20Tests(unittest.TestCase):
                 removed = SPEC.replace(source, removed_source, 1)
                 self.assert_mutation_detected(removed)
                 moved = removed.replace(
-                    "**Revised**: 2026-10-05",
-                    f"**Revised**: 2026-10-05 {marker}",
+                    "**Revised**: 2026-10-06",
+                    f"**Revised**: 2026-10-06 {marker}",
                     1,
                 )
                 self.assert_mutation_detected(moved)

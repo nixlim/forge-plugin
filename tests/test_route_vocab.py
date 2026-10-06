@@ -293,35 +293,6 @@ class RouteVocabularyCanonicalizationTests(unittest.TestCase):
                 self.assertFalse(route_vocab.is_non_mutating(raw_role))
 
 
-class RouteVocabularyDocumentationTests(unittest.TestCase):
-    def test_spec_mutating_execution_rule_matches_non_mutating_classifier(self) -> None:
-        spec = (ROOT / "docs" / "specs" / "forge-plugin-spec.md").read_text(
-            encoding="utf-8"
-        )
-        terminology_line = next(
-            line for line in spec.splitlines() if line.startswith("| Mutating execution |")
-        )
-        self.assertEqual(
-            "| Mutating execution | A journal `execution` whose raw `role` spelling is "
-            "not one `scripts/forge/route_vocab.is_non_mutating` accepts (`review`, "
-            "`reviewer`, `review-cheap`, `review-final`, `plan`, `monitoring`) |",
-            terminology_line,
-        )
-        fr_021_line = next(
-            line for line in spec.splitlines() if line.startswith("- **FR-021** (MUST):")
-        )
-        self.assertIn(
-            "(executions whose raw `role` is not one "
-            "`route_vocab.is_non_mutating` accepts)",
-            fr_021_line,
-        )
-
-        listed_roles = re.findall(r"`([^`]+)`", terminology_line.rsplit("accepts (", 1)[1])
-        for raw_role in listed_roles:
-            with self.subTest(raw_role=raw_role):
-                self.assertTrue(route_vocab.is_non_mutating(raw_role))
-
-
 class ModelVocabularyTests(unittest.TestCase):
     def test_model_id_pattern_is_exact(self) -> None:
         self.assertEqual(

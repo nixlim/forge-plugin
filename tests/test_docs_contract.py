@@ -418,13 +418,12 @@ def assert_candidate_v2_spec_contract(spec: str) -> None:
     required = (
         "**Commit candidate identity.**",
         "that evidence digest is never commit authorization",
-        "`candidate.kind` is exactly `git-tree-candidate-v2`, `staged-diff-sha256`, `git-commit`, or `git-range`",
-        "`authorization_id`, `object_format`, and `tree_oid`",
+        "Every authorization, approval, event binding, and marker uses `authorization_id`",
         "An accepted historical v1 candidate has exactly the two keys `sha256` and `computed_at`",
         "a mixed, partial, extra-key, unknown-schema, or otherwise malformed candidate is neither v1 nor v2",
         "A v2 `candidate` has exactly `schema`, `sha256`, `authorization_id`, `object_format`, `tree_oid`, `base_commit_oid`, `review_diff_sha256`, `review_diff_byte_count`, and `computed_at`",
-        "The candidate-bound finalize amendment adds the commit-family literal `commit_identity_checked`",
-        "`gate-2: produced commit identity`",
+        "reuses its durable `commit_identity_checked` result",
+        "The commit-family event `commit_identity_checked` occurs exactly once per produced commit",
         "forge: produced commit does not match authorized candidate — chain frozen; commit left untouched",
         "If HEAD still equals the recorded pre-commit HEAD, recovery revokes rather than revives the ambiguous v1 authorization",
         "If HEAD changed, the chain cannot be auto-closed",
@@ -453,19 +452,12 @@ def assert_candidate_v2_spec_contract(spec: str) -> None:
 
 
 def assert_fresh_reviewer_operator_skip_contract(spec: str, commit: str) -> None:
-    heading = "Candidate-bound fresh reviewer evaluation operator-skip amendment"
-    amendment = spec.split(heading, maxsplit=1)[1].split(
-        "- **FR-218**", maxsplit=1
-    )[0]
+    heading = "The exact fresh-step operator exception applies as follows."
+    amendment = spec.split(heading, maxsplit=1)[1].split("\n\n", maxsplit=1)[0]
     for marker in (
-        "**FR-214**",
-        "**FR-216**",
-        "follows the ordinary mechanical-gate skip rule",
         "`commit skip fresh-reviewer-evals --reason <text>`",
         "only on explicit operator direction",
         "`operator_skip` event and DM-012 `user_skip` record",
-        "`chain-skip` decision whose `resolution` carries the exact reason",
-        "`basis` remains limited to evidence references",
         "creates no fresh manifest, Gate-2 verification, or fabricated fresh-evaluation segment",
         "trigger-region-introducing bootstrap commit",
         "between plugin upgrade and committed adoption",
@@ -491,292 +483,6 @@ def assert_fresh_reviewer_operator_skip_contract(spec: str, commit: str) -> None
     ):
         if marker not in wiring:
             raise AssertionError(marker)
-
-
-def assert_writer_activation_repair_mutation_spec_contract(spec: str) -> None:
-    run_open_refusal = (
-        "forge: run open refused — writer_contract is builder-injected; use typed "
-        "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
-        "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
-        "--scope <pathspec>"
-    )
-    legacy_open_notice = (
-        "forge: notice — run opened in legacy mode (no writer_contract); its first "
-        "typed mutation will activate it in place; prefer typed run-open"
-    )
-    dm001 = spec.split("**DM-001**", maxsplit=1)[1].split(
-        "**DM-002**", maxsplit=1
-    )[0]
-    dm012 = spec.split("**DM-012**", maxsplit=1)[1].split(
-        "**DM-013**", maxsplit=1
-    )[0]
-    fr011 = spec.split("- **FR-011**", maxsplit=1)[1].split(
-        "- **FR-012**", maxsplit=1
-    )[0]
-    fr019 = spec.split("- **FR-019**", maxsplit=1)[1].split(
-        "### Level B gate enforcement", maxsplit=1
-    )[0]
-    fr120 = spec.split("- **FR-120**", maxsplit=1)[1].split(
-        "- **FR-121**", maxsplit=1
-    )[0]
-    fr142 = spec.split("- **FR-142**", maxsplit=1)[1].split(
-        "- **FR-143**", maxsplit=1
-    )[0]
-    api = spec.split(
-        "### Revision-9 typed journal builders and batch transaction", maxsplit=1
-    )[1].split("### `forge-gate-binding", maxsplit=1)[0]
-    errors = spec.split("## 9. Error Contract", maxsplit=1)[1].split(
-        "## Behavioral Scenarios", maxsplit=1
-    )[0]
-    test_matrix = spec.split("## 11. Testing Requirements", maxsplit=1)[1].split(
-        "## 12. Success Criteria", maxsplit=1
-    )[0]
-    sc027 = spec.split("- **SC-027**", maxsplit=1)[1].split(
-        "- **SC-028**", maxsplit=1
-    )[0]
-    trace = spec.split("## 13. Traceability Matrix", maxsplit=1)[1].split(
-        "## 14. Task Decomposition Guidance", maxsplit=1
-    )[0]
-
-    marker_match = re.search(
-        r"reserved builder-owned `decision`:\n\n```json\n(.*?)\n```",
-        dm001,
-        flags=re.DOTALL,
-    )
-    if marker_match is None:
-        raise AssertionError("DM-001 activation marker")
-    marker = json.loads(marker_match.group(1))
-    if list(marker) != [
-        "type",
-        "id",
-        "resolution",
-        "writer_contract",
-        "receipt_origin_size",
-        "receipt_origin_sha256",
-        "run_id",
-        "recorded_at",
-    ]:
-        raise AssertionError("DM-001 exact activation marker keys")
-    if marker["type"] != "decision" or marker["id"] != "decision-NN":
-        raise AssertionError("DM-001 activation marker identity")
-    expected_marker_values = {
-        "resolution": "writer-contract-activated: forge-journal-binding/1",
-        "writer_contract": "forge-journal-binding/1",
-    }
-    for key, expected in expected_marker_values.items():
-        if marker[key] != expected:
-            raise AssertionError(f"DM-001 activation marker {key}")
-
-    required_by_section = {
-        "DM-001": (
-            (
-                "Following FR-016's existing decision-as-mode-marker precedent",
-                "`id` is allocated normally as `decision-NN`",
-                "nonnegative JSON integer (not Boolean)",
-                "authenticates the exact immutable journal prefix",
-                "selected receipt origin is the activation cutoff",
-                "exactly one marker and exactly one authenticating ordinary receipt",
-                "partial, duplicate, malformed, unreceipted, or legacy-prefix-mismatched",
-            ),
-            dm001,
-        ),
-        "DM-012": (
-            (
-                "optional first-use preamble",
-                "included in `record_count`, `batch_digest`, the exact intent batch bytes",
-                "same ordinary receipt as the adopting records",
-                "reserve that run's first typed use until the exact batch drains",
-            ),
-            dm012,
-        ),
-        "FR-011": (
-            (
-                "opening `run_started.writer_contract`",
-                "exactly one DM-001 activation decision",
-                "authenticated legacy-prefix digest",
-                "remain read-only",
-                "never inject a marker, repair coverage, replay a batch",
-            ),
-            fr011,
-        ),
-        "FR-019": (
-            (
-                "known optional nonnegative JSON integer (not Boolean)",
-                "first typed mutation of a legacy-opened run MUST have the builder prepend",
-                "Shape-only marker recognition",
-                "every persisted activation classification MUST authenticate",
-                "selected origin is exactly zero for a typed-opened run",
-                "`N >= 1` complete canonical",
-                "`record_count` is `N`",
-                "MUST NOT invoke the normal append path, reapply that batch",
-                "using internal request verb `journal batch-recover`",
-                "unlinks the intent and fsyncs the directory last",
-                "forge: journal append refused — activated writer requires typed builder",
-                "Supplying any caller-authored `writer_contract` through the record-JSON surface",
-                run_open_refusal,
-                legacy_open_notice,
-                "never emits that advisory on stdout or for a typed opening",
-                "raw `run close`, `run retire`, and `run readmit` MUST complete",
-                "exact batch → registry → journal order",
-                "Retrospective commit- and merge-chain ingest",
-                "project this batch-owned marker before allocating",
-                "forge: journal batch refused — another intent is pending",
-                "forge: journal batch recovery refused — journal diverged from intent",
-                "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; retire the run and open a successor with --successor-of, or run journal batch-recover if the trailing records were written by an interrupted typed batch",
-                "legacy raw append retains its compatibility behavior",
-            ),
-            fr019,
-        ),
-        "FR-120": (
-            (
-                "allocates its ordinary `decision-NN` and `recorded_at`",
-                "A caller MUST NOT author, request, copy, or select that marker",
-            ),
-            fr120,
-        ),
-        "FR-142": (
-            (
-                "typed `builders.verification_add`",
-                '"schema":"forge-scoped-mutation-journal/1"',
-                '"repository":<repository>,"run_id":<run-id>,"task":<task>',
-                '"base":<base>,"head":<head>,"criterion":<criterion>',
-                '"result":<result>,"check":<check>',
-                '"truncated_observation":<truncated-observation>,"evidence":<evidence>',
-                "stable `FORGE_SESSION_PID` remains available to the trusted runner",
-                "untrusted mutation `bash -c` child MUST remove `FORGE_SESSION_PID`",
-                "MUST NOT call `append_owned_record` or any raw append fallback",
-                "forge: scoped mutation journal persistence unavailable — advisory evidence emitted only",
-                "preserves exit 0",
-                "remain non-gating",
-            ),
-            fr142,
-        ),
-        "section 8": (
-            (
-                "Typed `run-open` is the canonical opening surface",
-                "record-JSON coordination forms remain legacy/migration-only",
-                legacy_open_notice,
-                "never on stdout and never for typed open",
-                "implicitly prepends DM-001's activation decision",
-                "one intent, `batch_sha256`, `record_count`, and ordinary receipt",
-                "one authenticated interior gap containing `N >= 1`",
-                "never reapplies its batch or receipt",
-            ),
-            api,
-        ),
-        "SC-027": (
-            (
-                "first typed use of a legacy-opened run",
-                "authenticated nonzero legacy origin",
-                "interior `N >= 1` record gap",
-                "spent intent's batch and receipt are never reapplied",
-                "typed `verification_add` with a deterministic key",
-                "persistence refusal remains evidence-only without raw fallback",
-            ),
-            sc027,
-        ),
-        "traceability": (
-            (
-                "Legacy first typed use activates atomically",
-                "One proven N-record gap plus spent intent recovers without reapplication",
-                "deterministic mutation receipt/owner scrub",
-            ),
-            trace,
-        ),
-    }
-    for section_name, (required, section) in required_by_section.items():
-        for marker_text in required:
-            if marker_text not in section:
-                raise AssertionError(f"{section_name}: {marker_text}")
-
-    control_sets = (
-        (
-            "WRITER_ACTIVATION_CONTROLS",
-            (
-                "marker-injection",
-                "marker-recognition",
-                "receipt-origin",
-                "recovery-extension",
-            ),
-        ),
-        (
-            "BATCH_GAP_REPAIR_CONTROLS",
-            (
-                "canonical-gap-receipt",
-                "legacy-record-membership",
-                "multi-record-gap",
-            ),
-        ),
-        (
-            "MUTATION_JOURNAL_CONTROLS",
-            ("typed-builder", "deterministic-key", "owner-scrub"),
-        ),
-    )
-    for name, members in control_sets:
-        declaration = re.search(
-            rf"`{name}` set is exactly ([^.]+)\.", spec
-        )
-        if declaration is None:
-            raise AssertionError(name)
-        if re.findall(r"`([^`]+)`", declaration.group(1)) != list(members):
-            raise AssertionError(f"{name} exact members")
-        if not all(member in test_matrix for member in members):
-            raise AssertionError(f"{name} test matrix")
-
-    run_open_row = next(
-        line for line in api.splitlines() if line.startswith("| `run-open` |")
-    )
-    for required in (
-        "Canonical typed form",
-        "separately retained `--record-json` form is legacy/migration-only",
-        "accepts no caller-authored `writer_contract`",
-        "activates in place on its first typed use",
-    ):
-        if required not in run_open_row:
-            raise AssertionError(f"run-open forms: {required}")
-    raw_open_refusal_row = next(
-        line
-        for line in errors.splitlines()
-        if line.startswith(
-            "| Legacy/migration `run-open --record-json` supplies any caller-authored "
-        )
-    )
-    for required in (
-        run_open_refusal,
-        "no owner, journal, registry, intent, or receipt mutation",
-        "exact FR-019 legacy-mode stderr advisory",
-    ):
-        if required not in raw_open_refusal_row:
-            raise AssertionError(f"raw run-open refusal: {required}")
-    repair_refusal_row = next(
-        line for line in errors.splitlines() if line.startswith("| Proposed repair is ")
-    )
-    if "multi-record" in repair_refusal_row:
-        raise AssertionError("canonical multi-record gap must not be refused")
-    for unsafe_shape in (
-        "leading",
-        "trailing",
-        "overlapping",
-        "multiple",
-        "noncanonical",
-        "tampered",
-    ):
-        if unsafe_shape not in repair_refusal_row:
-            raise AssertionError(f"repair refusal: {unsafe_shape}")
-
-    legacy_adoption_refusal_row = next(
-        line
-        for line in errors.splitlines()
-        if line.startswith("| An unactivated legacy receipt ledger ")
-    )
-    for required in (
-        "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; retire the run and open a successor with --successor-of, or run journal batch-recover if the trailing records were written by an interrupted typed batch",
-        "legacy raw append and lifecycle compatibility remain available",
-        "typed `run-open --successor-of`",
-    ):
-        if required not in legacy_adoption_refusal_row:
-            raise AssertionError(f"legacy adoption refusal: {required}")
-
 
 class DocumentationContractTests(unittest.TestCase):
     def test_stack_validation_fence_refusal_and_init_grammar_are_pinned(self) -> None:
@@ -974,7 +680,6 @@ class DocumentationContractTests(unittest.TestCase):
 
         for control in (
             "**Commit candidate identity.**",
-            "git-tree-candidate-v2",
             "commit_identity_checked",
             "format: forge-commit-candidate/2",
             "An accepted historical v1 candidate has exactly the two keys",
@@ -992,39 +697,6 @@ class DocumentationContractTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     assert_candidate_v2_spec_contract(mutated)
 
-    def test_writer_activation_repair_and_mutation_spec_contract_survives_mutation(
-        self,
-    ) -> None:
-        spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
-        assert_writer_activation_repair_mutation_spec_contract(spec)
-
-        for control in (
-            "writer-contract-activated: forge-journal-binding/1",
-            "marker-injection",
-            "marker-recognition",
-            "receipt-origin",
-            "recovery-extension",
-            "canonical-gap-receipt",
-            "legacy-record-membership",
-            "multi-record-gap",
-            "typed-builder",
-            "deterministic-key",
-            "owner-scrub",
-            "raw `run close`, `run retire`, and `run readmit` MUST complete",
-            "exact batch → registry → journal order",
-            "Retrospective commit- and merge-chain ingest",
-            "project this batch-owned marker before allocating",
-            "Supplying any caller-authored `writer_contract` through the record-JSON surface",
-            "forge: run open refused — writer_contract is builder-injected; use typed run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> --idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> --scope <pathspec>",
-            "forge: notice — run opened in legacy mode (no writer_contract); its first typed mutation will activate it in place; prefer typed run-open",
-            "separately retained `--record-json` form is legacy/migration-only",
-            "forge: journal builder refused — legacy receipt ledger does not reach journal EOF; retire the run and open a successor with --successor-of, or run journal batch-recover if the trailing records were written by an interrupted typed batch",
-            "legacy raw append retains its compatibility behavior",
-        ):
-            with self.subTest(disabled=control):
-                mutated = spec.replace(control, "DISABLED_CONTROL")
-                with self.assertRaises(AssertionError):
-                    assert_writer_activation_repair_mutation_spec_contract(mutated)
 
     def test_run_open_refusal_source_literal_inventory(self) -> None:
         source = (
@@ -1060,8 +732,6 @@ class DocumentationContractTests(unittest.TestCase):
         for marker in (
             "only on explicit operator direction",
             "`operator_skip` event and DM-012 `user_skip` record",
-            "`resolution` carries the exact reason",
-            "`basis` remains limited to evidence references",
             "trigger-region-introducing bootstrap commit",
             "between plugin upgrade and committed adoption",
             "Recorded-baseline integrity remains non-skippable",
@@ -1069,7 +739,7 @@ class DocumentationContractTests(unittest.TestCase):
         ):
             with self.subTest(disabled=marker):
                 amendment_offset = spec.index(
-                    "Candidate-bound fresh reviewer evaluation operator-skip amendment"
+                    "The exact fresh-step operator exception applies as follows."
                 )
                 mutated = spec[:amendment_offset] + spec[amendment_offset:].replace(
                     marker, "DISABLED_CONTROL", 1

@@ -43,7 +43,8 @@ INVENTORY_LITERAL = (
 
 CONTROLS = {
     "FR-034": (
-        "Revision-17 typed-launch amendment to **FR-034**:",
+        "Every fresh Forge-launched role MUST use the exact provider-specific FR-245 "
+        "argv template selected from its resolved route",
         "FR-210's subcommands gain the run-scoped, unserialized surfaces",
         "`launch --role implementer|plan --task <task-id> --worktree <abs> "
         "--brief <abs>`",
@@ -62,7 +63,6 @@ CONTROLS = {
         "forge: launch refused — implementer worktree must be a dedicated linked "
         "worktree: <path>",
         "forge: forge initialization incomplete — run /forge:init",
-        "forge: journal builder refused — task <task> is not active",
         "forge: launch refused — brief path is not canonical; pass its absolute "
         "realpath",
         "forge: launch refused — opened brief path could not be verified against "
@@ -87,9 +87,6 @@ CONTROLS = {
         "does not claim an inode identity captured before `open`; same-path "
         "replacement remains subject to the opened descriptor's owner, mode, type, "
         "and size controls",
-        "forge: execution refused — route diverges from run snapshot for <role>: "
-        "<field>",
-        "forge: execution refused — role <role> has no frozen route in the run snapshot",
         "forge: <provider> launch refused — <provider> CLI could not be started",
         "forge: launch refused — execution <execution-NN> is still in flight in "
         "<worktree>; run launch collect or launch cancel",
@@ -101,11 +98,9 @@ CONTROLS = {
         "forge: launch refused — <provider> version <x.y.z> is below required <floor>",
         "this is FR-036's required order",
         "attempt-[0-9a-f]{16}",
-        "mode: detached",
-        "launch_marker: <agent>/<execution>/launch.json",
-        "schema: forge-launch-idempotency/1",
-        "step: execution-start",
-        "step: execution-result",
+        "only then appends the `execution_started` log record",
+        "The launch marker and completion artifacts, not journal state, determine "
+        "launch idempotence and in-flight status",
         "FR-037 prompt assembly is provider-specific but byte-stable",
         "Claude stdin starts with the exact bytes `\\n--- committed "
         "agent-project-context ---\\n`",
@@ -131,9 +126,9 @@ CONTROLS = {
         "paths, then retry launch collect",
         "forge: launch collect refused — worktree path list exceeds 1 MiB for "
         "<execution-NN>; reduce changed or untracked paths, then retry launch collect",
-        "a repeat returns the recorded status without a second result",
-        "forge: journal builder refused — execution result does not match one "
-        "open execution",
+        "a repeat returns the marker's recorded status",
+        "Journal availability or contents MUST NOT decide whether collection or "
+        "cancellation may proceed",
         "forge: launch collect refused — execution <execution-NN> has no "
         "launch_marker; collect a prose launch by prose",
         "forge: launch collect refused — launch marker does not bind execution "
@@ -145,8 +140,8 @@ CONTROLS = {
         "forge: launch collect refused — worktree facts unavailable for <execution-NN>",
         "Launch-lane recovery is exhaustive",
         "`Clear` means, in order: exclusively publish the terminal completion only "
-        "once the wrapper can no longer publish; write a failed terminal "
-        "`execution_result`; then set the marker's `collected_at` and `collected_status`",
+        "once the wrapper can no longer publish; append a failed "
+        "`execution_finished` record; then set the marker's `collected_at` and `collected_status`",
         "forge: launch collect refused — execution <execution-NN> is still "
         "launching; retry after the identity deadline",
         "collect re-observes rather than guessing",
@@ -185,11 +180,11 @@ CONTROLS = {
         "member PIDs <pids>; recorded PGID <pgid>; nothing was signalled",
         "forge: launch cancel refused — identity-unproven for <execution-NN>; "
         "member PIDs <pids>; recorded PGID <pgid>; nothing was signalled",
-        "forge: execution refused — role <role> carries no route fields in a run "
-        "with a route snapshot",
+        "Each execution records the route actually used; no run-open snapshot "
+        "constrains later executions",
     ),
     "FR-080": (
-        "Revision-17 init-probe amendment to **FR-080**:",
+        "Phase 0 step 5 runs these four commands in order from the repository root",
         "rev-parse --verify --quiet 'HEAD^{commit}'",
         'scripts/forge/route_config.py\" init --repo \"$REPO_ROOT\"',
         'scripts/forge/route_floor.py\" --repo \"$REPO_ROOT\"',
@@ -207,9 +202,9 @@ CONTROLS = {
         "init-review amendment",
     ),
     "DM-018": (
-        "Revision-17 typed-launch amendment to **DM-018** (2026-09-28):",
-        "this amendment supersedes the earlier chain-I parenthetical that placed "
-        "process identity in `launch.json`",
+        "Every new execution record carries the route actually used for that execution",
+        "Route resolution uses FR-244..FR-246 when the execution is launched",
+        "no route is frozen by `run_started`",
         "wrapper and child identity remain only in the attempt-keyed `identity.json`",
         "`launch collect` binds that identity to the marker through `attempt`",
         "owner-only `forge-launch-marker/1` object has exactly",
@@ -220,12 +215,9 @@ CONTROLS = {
         "`collected_at` and `collected_status` are initially null and thereafter are "
         "either both null or respectively a parseable UTC-Z timestamp and exactly "
         "`complete` or `failed`",
-        "forge: journal append refused — invalid journal record: "
-        "execution.launch_marker must equal <agent>/<execution>/launch.json and "
-        "requires the route trio and mode detached",
-        "forge: execution refused — role <role> carries no route fields in a run "
-        "with a route snapshot",
-        "historical replay remains accepted",
+        "The launcher MUST publish a marker at `<agent>/<execution>/launch.json` "
+        "carrying the resolved route",
+        "These launcher and collector checks are not journal-append preconditions",
     ),
     "FR-245": (
         "chain I supplies the deferred implementer and plan cells",
@@ -254,12 +246,10 @@ ORDERED_CONTROLS = (
             "the halt check",
             "registered-worktree and dedicated linked-worktree check for an implementer",
             "HEAD and committed `init_completed: true` check",
-            "active-task check",
             "canonical-realpath, owner-controlled, no-follow-leaf, regular UTF-8, "
             "NUL-free, at-most-1-MiB brief check",
             "route resolution and sandbox selection",
             "committed-prompt-input read",
-            "snapshot and proposed-record validation",
             "executable lookup",
             "provider version-floor check",
             "same-worktree in-flight check",
@@ -276,7 +266,7 @@ ORDERED_CONTROLS = (
             "descriptor",
             "builds the wrapper configuration",
             "atomically writes and fsyncs `launch.json`",
-            "only then appends the `execution` owner record",
+            "only then appends the `execution_started` log record",
         ),
     ),
     (

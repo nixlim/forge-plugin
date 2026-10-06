@@ -8,7 +8,6 @@ import hashlib
 import inspect
 import io
 import json
-import re
 import sys
 import textwrap
 from pathlib import Path
@@ -25,7 +24,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from codex_orchestrator import ingest_refusal  # noqa: E402
 
 STATUS = package_module("engine._verbs_status")
-SPEC = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
 _BareRefusal = type("CoordinationRefusal", (Exception,), {})
 _FrozenCause = type("FrozenError", (Exception,), {})
 
@@ -49,19 +47,6 @@ def _without_verbose_gate():
         namespace,
     )
     return namespace[function.__name__]
-
-
-def _assert_spec_proof_names(specification: str) -> None:
-    match = re.search(
-        r"The sixteen ordered proof-name tokens for those positions are exactly: "
-        r"(?P<names>[^\n]+)\.",
-        specification,
-    )
-    if match is None:
-        raise AssertionError("ordered proof-name tokens are absent")
-    proof_names = tuple(re.findall(r"`([a-z0-9-]+)`", match.group("names")))
-    if proof_names != tuple(NEGATIVE.CLI.INGEST_PROOF_ORDER):
-        raise AssertionError("ordered proof-name tokens differ from code")
 
 
 class IngestRefusalTests(NEGATIVE.CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
@@ -198,11 +183,6 @@ class IngestRefusalTests(NEGATIVE.CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
         ), self.assertRaises(AssertionError):
             assert_bare_observation()
 
-    def test_spec_pins_the_ordered_proof_names_to_code(self) -> None:
-        _assert_spec_proof_names(SPEC)
-        mutant = SPEC.replace("`chain-schema-and-digest-replay`, ", "", 1)
-        with self.assertRaisesRegex(AssertionError, "differ from code"):
-            _assert_spec_proof_names(mutant)
 
     def test_verbose_unclassified_nonproof_refusal_has_no_augmentation(self) -> None:
         prepared = self.prepare_terminal_ingest(

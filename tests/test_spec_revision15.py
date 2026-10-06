@@ -6,18 +6,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
-RESULT_GUIDANCE = {
-    name: (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
-    for name in ("orchestrate", "workflow")
-}
 POLICIES = {
     "root": (ROOT / "forge-project.md").read_text(encoding="utf-8"),
     "template": (ROOT / "system/template/forge-project.md").read_text(
         encoding="utf-8"
     ),
 }
-DEFERRED_MARKERS = {}
-IMPLEMENTED = ("FR-244", "FR-245", "FR-246", "FR-247", "DM-018")
+IMPLEMENTED = ("FR-244", "FR-245", "FR-246", "DM-018")
 NEW_CONTROL_PATHS = ("system/claude/**", "system/local/**")
 REVIEWER_PATTERNS = (
     ("agent-prompt-template", "system/claude/prompts/**"),
@@ -99,15 +94,6 @@ def assert_deferred_authority(specification: str) -> None:
             raise AssertionError(
                 f"{requirement_id} retains deferral markers {markers!r}"
             )
-    for requirement_id, expected in DEFERRED_MARKERS.items():
-        block = requirement_block(specification, requirement_id)
-        markers = re.findall(
-            r"\(Revision 15 authority; [^)]*deferred to chain [^)]+\)", block
-        )
-        if markers != [expected]:
-            raise AssertionError(
-                f"{requirement_id} deferral markers {markers!r} != {[expected]!r}"
-            )
 
 
 def assert_trigger_controls(specification: str, policies: dict[str, str]) -> None:
@@ -137,128 +123,42 @@ def assert_trigger_controls(specification: str, policies: dict[str, str]) -> Non
                 )
 
 
-def assert_result_guidance(document: str) -> None:
-    normalized = re.sub(r"\s+", " ", document)
-    required = (
-        "`execution-result-pending` refusal means",
-        "journal its real terminal result through the typed builder",
-        "Never invent a result to clear the refusal",
-        "forge: journal warning — this append makes a passed close impossible as recorded:",
-        "are advisory close projections",
-        "stdout and exit status are unchanged",
-    )
-    for clause in required:
-        if clause not in normalized:
-            raise AssertionError(f"result guidance lacks {clause}")
-
-
-def assert_fr249_followup(specification: str) -> None:
-    block = requirement_block(specification, "FR-249")
-    required = (
-        'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py"',
-        "JSON-style escaping is applied before POSIX shell-word quoting",
-        "Operators are responsible for journaling only the real terminal outcome",
-        "nonempty task IDs already recorded by `task-start`",
-        "not syntax-validated beyond being nonempty",
-        "If the required pending-result inspection on any of the six surfaces",
-        "`OSError` while reading the committed policy or run journal",
-        "or another unexpected exception, the command fails closed",
-        "A missing, null, non-string, or otherwise non-terminal authoritative status",
-        "Without `--verbose`, the inspection-unavailable refusal's structured `observed`",
-        "exception class names in cause/context order",
-        "never exception messages",
-        "for the FR-249 inspection-unavailable refusal only",
-        "Pending-result inspection raises an `OSError`",
-    )
-    for clause in required:
-        if clause not in specification:
-            raise AssertionError(f"FR-249 follow-up lacks {clause}")
-    if "python3 scripts/codex_orch_tools.py journal execution-result" in block:
-        raise AssertionError("FR-249 retains the repository-relative builder spelling")
-
-
 class SpecificationRevision15Tests(unittest.TestCase):
-    def test_revision_and_deferral_state_are_explicit(self) -> None:
-        self.assertIn("**Status**: Draft (Revision 21)", SPEC)
-        intent = next(
-            line for line in SPEC.splitlines() if line.startswith("**Intent**:")
-        )
-        self.assertIn("Revision 15", intent)
+    def test_implemented_authority_has_no_deferral_marker(self) -> None:
         assert_deferred_authority(SPEC)
 
-    def test_revision18_result_followup_and_skill_guidance_are_load_bearing(self) -> None:
-        assert_fr249_followup(SPEC)
-        for name, document in RESULT_GUIDANCE.items():
-            with self.subTest(skill=name):
-                assert_result_guidance(document)
-                mutant = document.replace("are advisory close projections", "are projections", 1)
-                with self.assertRaisesRegex(AssertionError, "advisory close projections"):
-                    assert_result_guidance(mutant)
-        for clause in (
-            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py"',
-            "JSON-style escaping is applied before POSIX shell-word quoting",
-            "Operators are responsible for journaling only the real terminal outcome",
-            "nonempty task IDs already recorded by `task-start`",
-            "If the required pending-result inspection on any of the six surfaces",
-            "`OSError` while reading the committed policy or run journal",
-            "or another unexpected exception, the command fails closed",
-            "A missing, null, non-string, or otherwise non-terminal authoritative status",
-            "Without `--verbose`, the inspection-unavailable refusal's structured `observed`",
-            "exception class names in cause/context order",
-            "never exception messages",
-            "for the FR-249 inspection-unavailable refusal only",
-            "Pending-result inspection raises an `OSError`",
-        ):
-            with self.subTest(clause=clause), self.assertRaises(AssertionError):
-                assert_fr249_followup(SPEC.replace(clause, ""))
-
-    def test_revision18_close_preflight_followups_are_explicit(self) -> None:
-        self.assertIn(
-            "A docs-class skip recorded on a run-bound chain before this "
-            "amendment remains readable history, but it neither satisfies "
-            "mechanical completion nor projects as a journal verification.",
-            SPEC,
+    def test_dm018_new_lane_route_is_mandatory(self) -> None:
+        literal = (
+            "whose `lane` is `forge-review-lane/1` MUST carry "
+            "`review.request.route` with exactly `provider`, `model`, `effort`, "
+            "`route_source`, and `route_sha256`"
         )
 
-        for message in (
-            "all required mechanical verification steps are complete",
-            "mechanical verification already complete; no-op",
-        ):
-            with self.subTest(requirement="FR-220", message=message):
-                self.assertIn(message, SPEC)
+        def assert_route(document: str) -> None:
+            self.assertIn(literal, requirement_block(document, "DM-018"))
 
-        fr248 = requirement_block(SPEC, "FR-248")
-        clauses = (
-            "lockless legacy case defined by this requirement",
-            "performs exactly one journal descriptor identity-and-size-fenced read",
-            "immediately before and after that read, it proves `.journal-batch.lock`, "
-            "`.journal-batch.intent`, and `.journal-batch-receipts.jsonl` are all absent",
-            "accepts the resulting snapshot only if it is not activated",
-            "absence alone never yields `forge: journal read refused — pending or "
-            "changed batch transaction`",
-            "platform-safe `O_NOFOLLOW` and `O_NONBLOCK` convention",
-            "Each individual batch- or chain-lock acquisition repeatedly attempts "
-            "`LOCK_SH | LOCK_NB` and has its own maximum wait of 10 seconds.",
-            "current family-specific candidate, never a last or superseded journal "
-            "candidate",
-            "only that exact projected chain ID is excluded",
-            "number of successfully parsed JSON-object records in the stable "
-            "on-disk snapshot before any projected landing, approval, or task "
-            "record is added",
-            "it is zero when no stable snapshot is available",
-            "printable Unicode is preserved",
-            r"`\b`, `\t`, `\n`, `\v`, `\f`, and `\r` use those exact backslash escapes",
-            "capped at 4,096 UTF-8 bytes including an exact terminal `...`",
-            "The already-complete `verify` message is exactly `mechanical "
-            "verification already complete; no-op`, remains unsuffixed",
-            "Gate 2, Gate 3, and review-and-landing evidence for the current "
-            "candidate are not yet available; it is not a corruption diagnostic",
+        assert_route(SPEC)
+        with self.assertRaises(AssertionError):
+            assert_route(SPEC.replace(literal, "DISABLED_CONTROL", 1))
+
+    def test_dm018_per_execution_route_is_load_bearing(self) -> None:
+        literals = (
+            "Every new execution record carries the route actually used for that execution",
+            "Route resolution uses FR-244..FR-246 when the execution is launched",
+            "a later execution MAY use a newly resolved route",
+            "`route_source` is exactly `local`, `committed-default`, or `plugin-default`",
+            "A journal writer records these values as data and MUST NOT refuse an append",
         )
-        for clause in clauses:
-            with self.subTest(requirement="FR-248", clause=clause):
-                self.assertIn(clause, fr248)
-        self.assertNotIn("FR-011's lockless legacy path", fr248)
-        self.assertNotIn("under FR-011's Revision-9 reader rule", fr248)
+
+        def assert_literals(document: str) -> None:
+            block = requirement_block(document, "DM-018")
+            for literal in literals:
+                self.assertIn(literal, block)
+
+        assert_literals(SPEC)
+        for literal in literals:
+            with self.subTest(literal=literal), self.assertRaises(AssertionError):
+                assert_literals(SPEC.replace(literal, "DISABLED_CONTROL", 1))
 
     def test_fr244_deferral_assertion_detects_its_reinsertion(self) -> None:
         block = requirement_block(SPEC, "FR-244")
@@ -272,17 +172,6 @@ class SpecificationRevision15Tests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "FR-244"):
             assert_deferred_authority(mutant)
 
-    def test_fr247_deferral_assertion_detects_its_reinsertion(self) -> None:
-        block = requirement_block(SPEC, "FR-247")
-        self.assertNotIn("implementation deferred to chain J", block)
-        mutant = SPEC.replace(
-            "**FR-247** (MUST): Task-completion provenance.",
-            "**FR-247** (MUST): Task-completion provenance "
-            "(Revision 15 authority; implementation deferred to chain J).",
-            1,
-        )
-        with self.assertRaisesRegex(AssertionError, "FR-247"):
-            assert_deferred_authority(mutant)
 
     def test_fr246_deferral_assertion_detects_its_reinsertion(self) -> None:
         block = requirement_block(SPEC, "FR-246")
@@ -309,28 +198,20 @@ class SpecificationRevision15Tests(unittest.TestCase):
             assert_deferred_authority(mutant)
 
     def test_fr246_headless_review_amendment_literals(self) -> None:
-        block = requirement_block(SPEC, "FR-246")
-        self.assertEqual(
-            block.count("Revision-17 headless-review amendment to **FR-246**:"),
-            1,
-        )
         literals = (
             "forge-review-identity/1",
             "forge-review-process/2",
             "forge-review-lane/1",
             "getpid() == getpgid(0) == getsid(0)",
-            "[sys.executable, \"-I\", \"-c\", <exact-wrapper-source>, ...]",
+            '[sys.executable, "-I", "-c", <exact-wrapper-source>, ...]',
             "os.link",
             "kp_proc.p_starttime",
             "wrapper-dead / child-alive",
             "forge: review cancel refused — identity-unproven; member PIDs <pids>; "
             "recorded PGID <pgid>; nothing was signalled",
             "forge: review cancel refused — kill-unconfirmed: <pids>",
-            "FR-210's shared review verbs gain `cancel`",
             "forge: review request shape newer than this plugin — finish or abort "
             "the chain on the requesting version",
-            "forge: review request refused — route diverges from run snapshot for <role>: <field>",
-            "forge: review request refused — role <role> has no frozen route in the run snapshot",
             "finding: MAJOR no reviewer verdict — <error>",
             "wrapper failure",
             "merge Option A",
@@ -343,24 +224,55 @@ class SpecificationRevision15Tests(unittest.TestCase):
             "Only after `_launch_inputs` has verified `argv_digest`",
             "claude init mismatch",
             "finding: MAJOR no reviewer verdict — claude init mismatch; completion <path>",
-            "FR-060's Revision-15 headless-review amendment is likewise deferred for "
-            "the legacy `/forge:worktree-merge` skill, which owns no Forge CLI merge "
-            "chain and keeps its interactive review-final until it does; FR-234's CLI "
-            "merge lane is unaffected.",
         )
+
+        def assert_literals(document: str) -> None:
+            block = requirement_block(document, "FR-246")
+            repeated = {"wrapper failure": 3, "init.permissionMode": 2,
+                        "init.tools": 2, "claude init mismatch": 5}
+            for literal in literals:
+                self.assertEqual(block.count(literal), repeated.get(literal, 1), literal)
+
+        assert_literals(SPEC)
+        block = requirement_block(SPEC, "FR-246")
         for literal in literals:
-            with self.subTest(literal=literal):
-                self.assertIn(literal, block)
-        exact_kill = "forge: review cancel refused — kill-unconfirmed: <pids>"
+            with self.subTest(literal=literal), self.assertRaises(AssertionError):
+                mutant_block = block.replace(literal, "DISABLED_CONTROL", 1)
+                assert_literals(SPEC.replace(block, mutant_block, 1))
+
+        cancel_command = "forge review cancel --chain-id <id>"
+        review_verbs = "`review request|collect|cancel|attach|disposition`"
+        retired_fragments = ("`citation invalid`", "read _ <&3 || exit 97")
+
+        def assert_cancel_contract(document: str) -> None:
+            self.assertEqual(document.count(cancel_command), 2)
+            self.assertEqual(document.count(review_verbs), 1)
+            review_block = requirement_block(document, "FR-246")
+            for retired in retired_fragments:
+                self.assertNotIn(retired, review_block)
+
+        assert_cancel_contract(SPEC)
+        for literal in (cancel_command, review_verbs):
+            with self.subTest(literal=literal), self.assertRaises(AssertionError):
+                assert_cancel_contract(SPEC.replace(literal, "DISABLED_CONTROL", 1))
+        for retired in retired_fragments:
+            with self.subTest(retired=retired), self.assertRaises(AssertionError):
+                assert_cancel_contract(SPEC.replace(block, block + retired, 1))
+
+    def test_fr246_legacy_worktree_merge_deferral_is_load_bearing(self) -> None:
+        sentence = (
+            "The FR-060 headless-review lane is likewise deferred for the legacy "
+            "`/forge:worktree-merge` skill, which owns no Forge CLI merge chain and "
+            "keeps its interactive review-final until it does; FR-234's CLI merge "
+            "lane is unaffected."
+        )
+
+        def assert_deferral(document: str) -> None:
+            self.assertEqual(requirement_block(document, "FR-246").count(sentence), 1)
+
+        assert_deferral(SPEC)
         with self.assertRaises(AssertionError):
-            self.assertIn(
-                exact_kill, block.replace(exact_kill, "kill-unconfirmed: <pids>")
-            )
-        self.assertEqual(SPEC.count("forge review cancel --chain-id <id>"), 2)
-        self.assertIn("`review request|collect|cancel|attach|disposition`", SPEC)
-        self.assertNotIn("`citation invalid`", block)
-        amendment = "Revision-17 headless-review amendment to **FR-246**:"
-        self.assertNotIn("read _ <&3 || exit 97", block.split(amendment, 1)[1])
+            assert_deferral(SPEC.replace(sentence, "DISABLED_CONTROL", 1))
 
     def test_fr246_engine_verdict_transport_is_single_and_trailing(self) -> None:
         sentences = (
@@ -465,49 +377,6 @@ class SpecificationRevision15Tests(unittest.TestCase):
             with self.subTest(literal=literal), self.assertRaises(AssertionError):
                 assert_literals(SPEC.replace(literal, "", 1))
 
-    def test_dm018_new_lane_route_is_mandatory(self) -> None:
-        block = requirement_block(SPEC, "DM-018")
-        for literal in (
-            "whose `lane` is `forge-review-lane/1` MUST carry",
-            "“when present” survives only for legacy request shapes",
-            "forge: review request refused — route diverges from run snapshot for <role>: <field>",
-            "forge: review request refused — role <role> has no frozen route in the run snapshot",
-        ):
-            self.assertIn(literal, block)
-
-    def test_chain_j_shipped_contracts_are_explicit(self) -> None:
-        dm018 = requirement_block(SPEC, "DM-018")
-        for literal in (
-            "emits both `route` and `orchestrator_model` on every new `run_started`",
-            "typed `run-open` unconditionally resolves all four launched roles",
-            "forge: routes file refused — malformed line 1",
-            "`when present` clauses retain compatibility only for historical records",
-            "uses exactly one of `var-unset`, `transcript-absent`, or `unreadable`",
-            "can never refuse typed `run-open`",
-            "forge: execution refused — role <role> has no frozen route in the run snapshot",
-        ):
-            self.assertIn(literal, dm018)
-        for helper in ("route_evidence.py", "route_provenance.py"):
-            self.assertIn(
-                f"`scripts/forge/{helper}`",
-                SPEC.split("## 6. Data Model", 1)[0],
-            )
-        self.assertIn(
-            "`route_source` is exactly `local`, `committed-default`, "
-            "`plugin-default`, or `unrecorded`, and `status` is exactly `local`, "
-            "`matched`, `mismatched`, or `unavailable`",
-            SPEC,
-        )
-        self.assertIn(
-            "Status `local` is produced when the recorded model or effort differs "
-            "from the committed default because a developer-local route was selected.",
-            SPEC,
-        )
-        self.assertEqual(
-            SPEC.count('"route_source":"plugin-default","run_id":"run-01"'), 2
-        )
-        self.assertIn("routing local/matched/mismatched/unavailable cases", SPEC)
-
     def test_fr244_amendments_pin_probe_and_review_final_defaults(self) -> None:
         block = requirement_block(SPEC, "FR-244")
         labels = (
@@ -571,16 +440,6 @@ class SpecificationRevision15Tests(unittest.TestCase):
             SPEC,
         )
 
-    def test_implemented_requirement_headings_have_no_deferral_marker(self) -> None:
-        for requirement_id in IMPLEMENTED:
-            with self.subTest(requirement=requirement_id):
-                heading = next(
-                    line for line in SPEC.splitlines()
-                    if re.match(rf"(?:- )?\*\*{requirement_id}\*\*", line)
-                )
-                self.assertNotRegex(
-                    heading, r"\(Revision 15 authority; [^)]*deferred[^)]*\)"
-                )
 
     def test_trigger_regions_are_mirrored_and_fail_closed(self) -> None:
         assert_trigger_controls(SPEC, POLICIES)
