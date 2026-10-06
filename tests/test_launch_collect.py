@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import errno
-import json
 import os
-import subprocess
-import sys
 import unittest
 from types import SimpleNamespace
 from typing import Any
@@ -16,7 +13,6 @@ from tests._cli_loader import package_module
 from tests._launch_support import (
     ENGINE,
     LAUNCH_LANE,
-    ROOT,
     VERBS_LAUNCH_COLLECT,
     LaunchLaneSupport,
     digest,
@@ -476,7 +472,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         ):
             assertion()
 
-    def test_launch_record_replays_historically_and_journal_patterns_accepts_it(self) -> None:
+    def test_launch_record_replays_historically(self) -> None:
         record = self.seed()
         self.publish(record)
         self.collect(record)
@@ -490,26 +486,6 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
             _historical_replay=self.journal._HISTORICAL_REPLAY,
         )
         self.assertEqual(replayed["launch_marker"], record["launch_marker"])
-        process = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "scripts/forge/journal-patterns.py"),
-                "--repo",
-                str(self.repo),
-                "--revision",
-                self.head,
-                str(self.run_dir(self.repo, self.run_id) / "journal.jsonl"),
-            ],
-            cwd=self.repo,
-            env=self.env,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(process.returncode, 0, process.stderr.decode())
-        patterns = json.loads(process.stdout)
-        self.assertTrue(patterns["available"])
-        self.assertEqual(patterns["failure"], "")
 
     def assert_failed_mapping(
         self,

@@ -370,7 +370,6 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         )
         for skill in (
             "init",
-            "learn",
             "workflow",
             "orchestrate",
             "commit",

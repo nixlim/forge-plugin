@@ -70,7 +70,6 @@ authority.
 - Worktree reintegration: `${CLAUDE_PLUGIN_ROOT}/skills/worktree-merge/SKILL.md`
 - Final reporting: `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md`
 - Periodic drift sensing: `${CLAUDE_PLUGIN_ROOT}/skills/drift/SKILL.md`
-- Advisory journal-derived learning: `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md`
 
 ## Project Overview
 

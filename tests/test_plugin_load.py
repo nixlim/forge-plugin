@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginLoadContractTests(unittest.TestCase):
-    def test_plugin_metadata_and_exact_eight_skill_surfaces(self) -> None:
+    def test_plugin_metadata_and_exact_seven_skill_surfaces(self) -> None:
         plugin = json.loads(
             (ROOT / ".claude-plugin/plugin.json").read_text(encoding="utf-8")
         )
@@ -36,7 +36,6 @@ class PluginLoadContractTests(unittest.TestCase):
                 "commit",
                 "drift",
                 "init",
-                "learn",
                 "orchestrate",
                 "report",
                 "workflow",

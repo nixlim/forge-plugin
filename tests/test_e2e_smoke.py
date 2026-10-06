@@ -44,7 +44,7 @@ def project_context(document: str) -> str:
     return match.group(1).strip()
 
 
-def committed_blob(worktree: Path, relative_path: str, *, required: bool) -> bytes | None:
+def committed_blob(worktree: Path, relative_path: str) -> bytes:
     object_name = f"HEAD:{relative_path}"
     present = subprocess.run(
         ["git", "cat-file", "-e", object_name],
@@ -64,9 +64,7 @@ def committed_blob(worktree: Path, relative_path: str, *, required: bool) -> byt
                 f"committed prompt input presence could not be resolved: {object_name}: "
                 f"{present.stderr.decode('utf-8', errors='replace')}"
             )
-        if required:
-            raise AssertionError(f"required committed prompt input is absent: {object_name}")
-        return None
+        raise AssertionError(f"required committed prompt input is absent: {object_name}")
     shown = subprocess.run(
         ["git", "show", object_name],
         cwd=worktree,
@@ -96,15 +94,9 @@ def assemble_codex_prompt(
     *, execution_worktree: Path, template_name: str, task_assignment: str
 ) -> bytes:
     template = (ROOT / "system" / "codex" / "prompts" / template_name).read_bytes()
-    project = committed_blob(execution_worktree, "forge-project.md", required=True)
-    assert project is not None
+    project = committed_blob(execution_worktree, "forge-project.md")
     context = project_context(project.decode("utf-8")).encode("utf-8")
     components = [template, b"## Agent project context\n\n" + context]
-    gotchas = committed_blob(
-        execution_worktree, ".forge/history/gotchas.md", required=False
-    )
-    if gotchas is not None:
-        components.append(b"## Committed forge gotchas\n\n" + gotchas)
     components.append(task_assignment.encode("utf-8"))
     return join_prompt_components(components)
 
@@ -936,14 +928,13 @@ event-retention: 400d""",
         self.install()
         self.complete_init()
         task_assignment = "# Implementation assignment\n\nExercise committed prompt assembly."
-        without_gotchas_head = self.snapshot_repo("initialized without gotchas")
-        self.assertEqual(self.git("rev-parse", "HEAD"), without_gotchas_head)
-        without_gotchas = assemble_codex_prompt(
+        initial_head = self.snapshot_repo("initialized prompt context")
+        self.assertEqual(self.git("rev-parse", "HEAD"), initial_head)
+        initial_prompt = assemble_codex_prompt(
             execution_worktree=self.repo, template_name="plan.md",
             task_assignment=task_assignment,
         )
-        self.assertTrue(without_gotchas.startswith((ROOT / "system/codex/prompts/plan.md").read_bytes()))
-        self.assertNotIn(b"## Committed forge gotchas", without_gotchas)
+        self.assertTrue(initial_prompt.startswith((ROOT / "system/codex/prompts/plan.md").read_bytes()))
 
         region_pattern = re.compile(
             r"(<!-- FORGE:REGION agent-project-context BEGIN -->).*?"
@@ -962,27 +953,18 @@ event-retention: 400d""",
             path.write_text(replaced, encoding="utf-8")
 
         committed_context = "COMMITTED_EXECUTION_CONTEXT_MARKER"
-        committed_gotchas = b"COMMITTED_EXECUTION_GOTCHA\nsecond committed line\n"
         replace_context(self.repo, committed_context)
-        gotchas_path = self.repo / ".forge" / "history" / "gotchas.md"
-        gotchas_path.parent.mkdir(parents=True, exist_ok=True)
-        gotchas_path.write_bytes(committed_gotchas)
         execution_head = self.snapshot_repo("seed committed prompt inputs")
 
         execution_worktree = self.temp_root / "prompt-execution-worktree"
         self.git("worktree", "add", "--detach", str(execution_worktree), execution_head)
 
         other_context = "OTHER_CHECKOUT_COMMITTED_CONTEXT"
-        other_gotcha = "OTHER_CHECKOUT_COMMITTED_GOTCHA\n"
         replace_context(self.repo, other_context)
-        gotchas_path.write_text(other_gotcha, encoding="utf-8")
         self.snapshot_repo("advance another checkout prompt inputs")
 
         dirty_context = "DIRTY_EXECUTION_CONTEXT"
-        dirty_gotcha = "DIRTY_EXECUTION_GOTCHA\n"
         replace_context(execution_worktree, dirty_context)
-        execution_gotchas = execution_worktree / ".forge" / "history" / "gotchas.md"
-        execution_gotchas.write_text(dirty_gotcha, encoding="utf-8")
 
         prompt = assemble_codex_prompt(
             execution_worktree=execution_worktree,
@@ -994,13 +976,11 @@ event-retention: 400d""",
         def assert_committed_only(candidate: bytes) -> None:
             self.assertTrue(candidate.startswith(template))
             self.assertIn(committed_context.encode("utf-8"), candidate)
-            self.assertIn(committed_gotchas, candidate)
-            for excluded in (dirty_context, dirty_gotcha, other_context, other_gotcha):
+            for excluded in (dirty_context, other_context):
                 self.assertNotIn(excluded.encode("utf-8"), candidate)
             positions = [
                 0,
                 candidate.index(b"## Agent project context"),
-                candidate.index(b"## Committed forge gotchas"),
                 candidate.index(task_assignment.encode("utf-8")),
             ]
             self.assertEqual(positions, sorted(positions))
@@ -1013,7 +993,6 @@ event-retention: 400d""",
                 + project_context(
                     (execution_worktree / "forge-project.md").read_text(encoding="utf-8")
                 ).encode("utf-8"),
-                b"## Committed forge gotchas\n\n" + execution_gotchas.read_bytes(),
                 task_assignment.encode("utf-8"),
             ]
         )

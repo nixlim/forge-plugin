@@ -38,7 +38,6 @@ flowchart TD
     Merge -->|Delivered| Close["Validate closure and audit commitments"]
     Close --> Archive["Commit durable run archive"]
     Archive --> Report["Write final report"]
-    Report -.-> Learn["Best-effort learning proposals"]
 ```
 
 This diagram shows a successful run, including ordinary revision loops. A halt,
@@ -109,7 +108,7 @@ sequence, using the common-lock helper without owning a CLI merge chain.
 
 | Component | Code or configuration | What it owns |
 |---|---|---|
-| Lifecycle instructions | [`skills/`](skills/) | Initialization, planning, execution cycles, commits, reintegration, closure, drift, and learning |
+| Lifecycle instructions | [`skills/`](skills/) | Initialization, planning, execution cycles, commits, reintegration, closure, and drift |
 | Public orchestration entry point | [`scripts/codex_orch_tools.py`](scripts/codex_orch_tools.py) | Run and journal commands, execution inspection, and validation |
 | Orchestration engine | [`scripts/codex_orchestrator/`](scripts/codex_orchestrator/) | Typed records, run ownership, scope admission, journal batches, and recovery |
 | Public gate entry point | [`scripts/forge/cli.py`](scripts/forge/cli.py) | Import-safe compatibility entry point forwarding into the CLI package |
@@ -292,9 +291,9 @@ executions; available host capacity may impose a smaller limit.
 **Purpose:** give one agent enough context to complete one bounded assignment.
 
 The orchestrator creates a dedicated worktree and assembles the prompt from the
-role template, the worktree's committed project context, committed gotchas when
-present, and the concrete assignment. It saves the exact prompt, creates the
-events file, and appends the execution record **before** launching the process.
+role template, the worktree's committed project context, and the concrete assignment.
+It saves the exact prompt, creates the events file, and appends the execution record
+**before** launching the process.
 
 The execution record includes the actual worktree, full HEAD, branch, model,
 effort, and evidence paths. The process launches detached in its own process
@@ -535,18 +534,10 @@ The final result states the actual judgment, failed or unresolved checks,
 accepted risks, and follow-ups. Validation checks bookkeeping completeness; it
 does not independently prove that the software is correct.
 
-### Step 12 — Learn from completed work and check for drift
+### Step 12 — Check for drift
 
 **Purpose:** improve future work without silently changing the rules that govern
-it. These are separate procedures with different authority.
-
-**Learning** runs as one best-effort pass after a completed run report or completed
-drift report. [`/forge:learn`](skills/learn/SKILL.md) gives a fresh read-only
-reviewer three evidence inputs: canonical journal patterns, committed archives,
-and committed gotchas. Accepted proposals can create candidate evaluations under
-`.forge/evals/candidates/` and append traceable gotchas. They remain unstaged and
-uncommitted. Promoting an evaluation into `.forge/evals/tasks/` is a separate
-control-class change. Learning failure cannot reopen or invalidate delivery.
+it.
 
 **Drift sensing** checks whether policy and practice have diverged over time.
 Hooks provide staleness reminders; scheduled automation can run the mechanical
@@ -554,7 +545,7 @@ checker without a model. An operator invokes
 [`/forge:drift`](skills/drift/SKILL.md) for the full mechanical-plus-semantic review.
 The checker first requires a clean tree, then examines configured checks,
 invariants, evaluations, mutation evidence, category coverage, policy staleness,
-telemetry, and journal patterns. Mechanical exit 0 means clean, exit 1 means a
+and telemetry. Mechanical exit 0 means clean, exit 1 means a
 valid drift-present result, and exit 2 means the check failed and semantic review
 must not begin.
 
@@ -580,7 +571,6 @@ from an `AGENT_HALT` sentinel.
 | `.forge/history/runs/<run-id>.md` | Committed durable run archive |
 | Run-local `report.md` | Final human-facing report, written after the archive commit |
 | `.forge/history/drift/` | Committed periodic drift reports |
-| `.forge/evals/candidates/` and `.forge/history/gotchas.md` | Advisory learning proposals and accumulated lessons |
 
 The journal records lifecycle and judgment; command evidence supports verification;
 chain events support candidate-bound authorization and landing. Chain events are
@@ -657,4 +647,4 @@ alter the specification or gate configuration.
 | How does accepted work reach the default branch? | [Worktree-merge skill](skills/worktree-merge/SKILL.md) |
 | What makes a review sufficient? | [Review constitution](rules/review-constitution.md), [review-final agent](agents/review-final.md) |
 | How is delivery reported? | [Report skill](skills/report/SKILL.md) |
-| How are decay and recurring mistakes handled? | [Drift skill](skills/drift/SKILL.md), [learn skill](skills/learn/SKILL.md) |
+| How is drift handled? | [Drift skill](skills/drift/SKILL.md) |

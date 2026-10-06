@@ -15,11 +15,10 @@ DRIFT_CHECK = ROOT / "scripts/forge/drift-check.sh"
 DRIFT_STALENESS = ROOT / "scripts/forge/drift-staleness.sh"
 MUTATION_HELPER = ROOT / "scripts/forge/run-scoped-mutation.py"
 EMIT_EVENT = ROOT / "scripts/forge/emit-decision-event.py"
-JOURNAL_PATTERNS = ROOT / "scripts/forge/journal-patterns.py"
 NOW = "2026-08-11T12:00:00Z"
 CONFIG_WARNING = "forge: malformed drift-config — using defaults (cadence: 14d, retention: forever, event-retention: 400d)"
 STALE_WARNING = "forge: drift report stale — run /forge:drift"
-SUMMARY_KEYS = set("checks findings generated_at journal_patterns policy_sha schema_version status telemetry".split())
+SUMMARY_KEYS = set("checks findings generated_at policy_sha schema_version status telemetry".split())
 REVIEWER_EVAL_TRIGGER_TABLE = """| control | path patterns |
 |---|---|
 | constitution | rules/** |
@@ -99,16 +98,6 @@ class DriftFixture:
         (self.plugin / "scripts/forge").mkdir(parents=True)
         shutil.copy2(MUTATION_HELPER, self.plugin / "scripts/forge/run-scoped-mutation.py")
         shutil.copy2(EMIT_EVENT, self.plugin / "scripts/forge/emit-decision-event.py")
-        shutil.copy2(JOURNAL_PATTERNS, self.plugin / "scripts/forge/journal-patterns.py")
-        dependencies = (
-            "route_config.py", "route_config_git.py", "route_config_probe.py",
-            "route_evidence.py", "route_provenance.py", "route_vocab.py",
-        )
-        for dependency in dependencies:
-            shutil.copy2(
-                JOURNAL_PATTERNS.with_name(dependency),
-                self.plugin / "scripts/forge" / dependency,
-            )
         self._script(
             "run-evals.sh",
             """#!/bin/sh
@@ -297,22 +286,6 @@ class DriftCheckTests(unittest.TestCase):
     def assert_empty_telemetry(self, value: dict) -> None:
         self.assertEqual(value, expected_telemetry())
 
-    def assert_empty_journal_patterns(
-        self, value: dict, *, available: bool, failure: str
-    ) -> None:
-        self.assertEqual(
-            value,
-            {
-                "available": available,
-                "decision_outcomes": {},
-                "diagnostics": [],
-                "failure": failure,
-                "findings": {"by_reviewer_role": {}, "by_severity": {}},
-                "routing": [],
-                "tasks": [],
-            },
-        )
-
     def normalized_summary(self, value: dict) -> dict:
         """Normalize only values that a black-box run cannot make literal."""
         normalized = json.loads(json.dumps(value))
@@ -329,7 +302,7 @@ class DriftCheckTests(unittest.TestCase):
         ]
         self.assertEqual(self.normalized_summary(summary), {
             "checks": expected_checks, "findings": [],
-            "generated_at": NOW, "journal_patterns": summary["journal_patterns"],
+            "generated_at": NOW,
             "policy_sha": "<policy-sha>", "schema_version": 1, "status": status,
             "telemetry": summary["telemetry"],
         })
@@ -367,11 +340,7 @@ class DriftCheckTests(unittest.TestCase):
                         ("file-category-coverage", "passed", "all tracked files categorized"),
                         ("region-staleness", "passed", "policy regions current"),
                         ("telemetry", "passed", "telemetry aggregated"),
-                        ("journal-patterns", "passed", "journal patterns extracted"),
                     ],
-                )
-                self.assert_empty_journal_patterns(
-                    summary["journal_patterns"], available=True, failure=""
                 )
                 self.assertEqual(
                     summary["telemetry"],
@@ -500,114 +469,6 @@ class DriftCheckTests(unittest.TestCase):
         )
         self.assertNotIn("fresh reviewer", baseline_check["summary"].lower())
 
-    def test_disabled_or_invalid_journal_extractor_forces_exit_two(self) -> None:
-        unavailable = {"available": False, "decision_outcomes": {}, "diagnostics": [], "failure": "disabled", "findings": {"by_reviewer_role": {}, "by_severity": {}}, "routing": [], "tasks": []}
-        routing_row = {"agent": "agent", "committed_effort": "high", "committed_model": "model", "execution": "execution-01", "recorded_effort": "high", "recorded_model": "model", "route_source": "local", "run_id": "run", "status": "local"}
-
-        def extractor(payload: dict) -> str:
-            return "import json\n" + f"payload = {payload!r}\n" + 'print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))\n'
-        variants = {
-            "disabled": (
-                extractor(unavailable) + "raise SystemExit(2)\n",
-                "disabled",
-            ),
-            "invalid-output": ('print("{}")\n', "journal-patterns-output"),
-            "invalid-route-source": (extractor({**unavailable, "available": True, "failure": "", "routing": [{**routing_row, "route_source": "future"}]}), "journal-patterns-output"),
-            "invalid-routing-status": (extractor({**unavailable, "available": True, "failure": "", "routing": [{**routing_row, "status": "future"}]}), "journal-patterns-output"),
-        }
-        for label, (source, expected_failure) in variants.items():
-            with self.subTest(control=label):
-                fixture = DriftFixture(self.temp / label)
-                extractor = fixture.plugin / "scripts/forge/journal-patterns.py"
-                extractor.write_text(source, encoding="utf-8")
-
-                result = fixture.invoke()
-
-                self.assertEqual(2, result.returncode, result.stderr.decode())
-                summary = self.assert_canonical(fixture, result)
-                self.assertEqual(
-                    {"failure": expected_failure, "state": "failed"},
-                    summary["status"],
-                )
-                self.assertEqual("journal-patterns", summary["checks"][-1]["check"])
-                self.assertEqual("failed", summary["checks"][-1]["outcome"])
-                self.assertNotIn(
-                    ("journal-patterns", "passed"),
-                    [
-                        (item["check"], item["outcome"])
-                        for item in summary["checks"]
-                    ],
-                )
-                self.assert_empty_journal_patterns(
-                    summary["journal_patterns"],
-                    available=False,
-                    failure=expected_failure,
-                )
-                self.assertTrue(summary["telemetry"]["available"])
-
-    def test_hung_journal_extractor_times_out_and_disabled_deadline_fails_oracle(self) -> None:
-        fixture = self.fixture()
-        extractor = fixture.plugin / "scripts/forge/journal-patterns.py"
-        available = {
-            "available": True,
-            "decision_outcomes": {},
-            "diagnostics": [],
-            "failure": "",
-            "findings": {"by_reviewer_role": {}, "by_severity": {}},
-            "routing": [],
-            "tasks": [],
-        }
-        extractor.write_text(
-            "import json\n"
-            "import time\n"
-            "time.sleep(0.3)\n"
-            f"payload = {available!r}\n"
-            'print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))\n',
-            encoding="utf-8",
-        )
-
-        source = DRIFT_CHECK.read_text(encoding="utf-8")
-        timeout_constant = "JOURNAL_PATTERNS_TIMEOUT_SECONDS = 30.0"
-        timeout_argument = (
-            "        timeout_seconds=JOURNAL_PATTERNS_TIMEOUT_SECONDS,\n"
-        )
-        self.assertEqual(source.count(timeout_constant), 1)
-        self.assertEqual(source.count(timeout_argument), 1)
-        controlled = self.temp / "drift-timeout-controlled.sh"
-        controlled.write_text(
-            source.replace(
-                timeout_constant,
-                "JOURNAL_PATTERNS_TIMEOUT_SECONDS = 0.05",
-                1,
-            ),
-            encoding="utf-8",
-        )
-
-        def assert_timeout(result: subprocess.CompletedProcess[bytes]) -> None:
-            self.assertEqual(2, result.returncode, result.stderr.decode())
-            summary = self.assert_canonical(fixture, result)
-            self.assertEqual(
-                {"failure": "journal-patterns-timeout", "state": "failed"},
-                summary["status"],
-            )
-            self.assert_empty_journal_patterns(
-                summary["journal_patterns"],
-                available=False,
-                failure="journal-patterns-timeout",
-            )
-            self.assertEqual("journal-patterns", summary["checks"][-1]["check"])
-            self.assertEqual("failed", summary["checks"][-1]["outcome"])
-
-        assert_timeout(fixture.invoke(script=controlled))
-
-        mutant = self.temp / "drift-timeout-disabled.sh"
-        mutant.write_text(
-            controlled.read_text(encoding="utf-8").replace(timeout_argument, "", 1),
-            encoding="utf-8",
-        )
-        with self.assertRaises(AssertionError):
-            assert_timeout(fixture.invoke(script=mutant))
-
     def test_dirty_paths_precede_plugin_root_and_order_mutant_fails_oracle(self) -> None:
         fixture = self.fixture()
         fixture.write("z-untracked.txt", "z\n")
@@ -623,9 +484,6 @@ class DriftCheckTests(unittest.TestCase):
                     "state": "failed",
                 },
                 summary["status"],
-            )
-            self.assert_empty_journal_patterns(
-                summary["journal_patterns"], available=False, failure="not-run"
             )
 
         assert_dirty(fixture.invoke(extra_env={"CLAUDE_PLUGIN_ROOT": ""}))
@@ -652,166 +510,47 @@ class DriftCheckTests(unittest.TestCase):
                 )
             )
 
-    def test_nonempty_journal_patterns_are_discovered_and_forwarded(self) -> None:
+    def test_journals_archives_and_learn_artifacts_do_not_affect_drift(self) -> None:
         fixture = self.fixture()
-        fixture.write(".codex/agents/implementer.toml", 'model = "route-model"\nmodel_reasoning_effort = "high"\n')
-        policy_sha = fixture.commit("record fixture route")
-        exclude = fixture.repo / ".git/info/exclude"
-        exclude.write_text(
-            exclude.read_text(encoding="utf-8") + ".codex-orchestrator/\n",
-            encoding="utf-8",
+        baseline = self.normalized_summary(self.assert_canonical(fixture, fixture.invoke()))
+        paths = (
+            ".codex-orchestrator/runs/legacy/journal.jsonl",
+            ".forge/history/runs/legacy.md",
+            ".forge/history/gotchas.md",
+            ".forge/evals/candidates/legacy.md",
         )
-        records = [
-            {"type": "run_started", "run_id": "run-drift-integration"},
-            {
-                "agent": "review-fixture",
-                "effort": "high",
-                "execution": "execution-01",
-                "head": policy_sha,
-                "model": "recorded-model",
-                "provider": "fixture",
-                "role": "review",
-                "task": "task-integration",
-                "type": "execution",
-            },
-            {"agent": "implementer-fixture", "effort": "high", "execution": "execution-03", "head": policy_sha, "model": "other-model", "provider": "codex", "role": "implementation", "route_source": "local", "task": "task-integration", "type": "execution"},
-            {"agent": "implementer-fixture", "effort": "high", "execution": "execution-02", "head": policy_sha, "model": "route-model", "provider": "codex", "role": "implementation", "route_source": "plugin-default", "task": "task-integration", "type": "execution"},
-            {"agent": "implementer-fixture", "effort": "high", "execution": "execution-04", "head": policy_sha, "model": "other-model", "provider": "codex", "role": "implementation", "route_source": "committed-default", "task": "task-integration", "type": "execution"},
-            {
-                "diagnostic": "exact integration diagnostic",
-                "outcome": "user_action_required",
-                "type": "decision",
-            },
-            {
-                "criterion": "gate-3: review-final verdict",
-                "observation": "BLOCK; 1 CRITICAL/MAJOR findings; severities CRITICAL=0,MAJOR=1,MINOR=0; reviewer review-final; iteration 1 of 8.",
-                "recorded_at": "2026-08-11T11:59:58Z",
-                "result": "failed",
-                "task": "task-integration",
-                "type": "verification",
-            },
-            {
-                "criterion": "gate-3: review-final verdict",
-                "recorded_at": "2026-08-11T11:59:59Z",
-                "result": "passed",
-                "task": "task-integration",
-                "type": "verification",
-            },
-        ]
-        journal = (
-            fixture.repo
-            / ".codex-orchestrator/runs/run-drift-integration/journal.jsonl"
-        )
-        journal.parent.mkdir(parents=True)
-        journal.write_text(
-            "".join(
-                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-                for record in records
-            ),
-            encoding="utf-8",
-        )
-        expected = {
-            "available": True,
-            "decision_outcomes": {"user_action_required": 1},
-            "diagnostics": [
-                {
-                    "count": 1,
-                    "diagnostic": "BLOCK; 1 CRITICAL/MAJOR findings; severities CRITICAL=0,MAJOR=1,MINOR=0; reviewer review-final; iteration 1 of 8.",
-                },
-                {"count": 1, "diagnostic": "exact integration diagnostic"}
-            ],
-            "failure": "",
-            "findings": {
-                "by_reviewer_role": {"review-final": 1},
-                "by_severity": {"MAJOR": 1},
-            },
-            "routing": [
-                {"agent": "review-fixture", "committed_effort": "", "committed_model": "", "execution": "execution-01", "recorded_effort": "high", "recorded_model": "recorded-model", "route_source": "unrecorded", "run_id": "run-drift-integration", "status": "unavailable"},
-                {"agent": "implementer-fixture", "committed_effort": "high", "committed_model": "route-model", "execution": "execution-02", "recorded_effort": "high", "recorded_model": "route-model", "route_source": "plugin-default", "run_id": "run-drift-integration", "status": "matched"},
-                {"agent": "implementer-fixture", "committed_effort": "high", "committed_model": "route-model", "execution": "execution-03", "recorded_effort": "high", "recorded_model": "other-model", "route_source": "local", "run_id": "run-drift-integration", "status": "local"},
-                {"agent": "implementer-fixture", "committed_effort": "high", "committed_model": "route-model", "execution": "execution-04", "recorded_effort": "high", "recorded_model": "other-model", "route_source": "committed-default", "run_id": "run-drift-integration", "status": "mismatched"},
-            ],
-            "tasks": [
-                {
-                    "block_to_pass_latency_ms": 1000,
-                    "iterations": 2,
-                    "results": ["failed", "passed"],
-                    "run_id": "run-drift-integration",
-                    "task": "task-integration",
-                }
-            ],
-        }
+        for path in paths:
+            fixture.write(path, "malformed historical content\nCRITICAL\n")
+        fixture.commit("historical inputs are ordinary files")
 
-        def assert_forwarded(summary: dict) -> None:
-            self.assertEqual(expected, summary["journal_patterns"])
-
-        result = fixture.invoke()
-        self.assertEqual(0, result.returncode, result.stderr.decode())
-        assert_forwarded(self.assert_canonical(fixture, result))
-
-        source = DRIFT_CHECK.read_text(encoding="utf-8")
-        mutants = {
-            "discovery-disabled": (
-                '(repo / ".codex-orchestrator/runs").glob("*/journal.jsonl")',
-                '(repo / ".codex-orchestrator/runs").glob("__disabled__/journal.jsonl")',
-            ),
-            "argv-disabled": (
-                "            *(str(path) for path in journals),",
-                "            *(),",
-            ),
-        }
-        for label, (needle, replacement) in mutants.items():
-            with self.subTest(control=label):
-                self.assertEqual(1, source.count(needle), needle)
-                mutant = self.temp / f"drift-check-{label}.sh"
-                mutant.write_text(source.replace(needle, replacement), encoding="utf-8")
-
-                mutant_result = fixture.invoke(script=mutant)
-
-                self.assertEqual(
-                    0, mutant_result.returncode, mutant_result.stderr.decode()
-                )
-                mutant_summary = self.assert_canonical(fixture, mutant_result)
-                with self.assertRaises(AssertionError):
-                    assert_forwarded(mutant_summary)
-
-    @unittest.skipUnless(hasattr(os, "symlink"), "symlink support required")
-    def test_symlinked_outside_journal_is_excluded_from_discovery(self) -> None:
-        fixture = self.fixture()
-        exclude = fixture.repo / ".git/info/exclude"
-        exclude.write_text(
-            exclude.read_text(encoding="utf-8") + ".codex-orchestrator/\n",
-            encoding="utf-8",
-        )
-        outside_run = self.temp / "outside-journal-run"
-        outside_run.mkdir()
-        (outside_run / "journal.jsonl").write_text(
-            json.dumps(
-                {
-                    "type": "run_started",
-                    "run_id": "outside-run",
-                    "diagnostic": "must not be consumed through a run symlink",
-                },
-                sort_keys=True,
-                separators=(",", ":"),
+        def assert_detached(result: subprocess.CompletedProcess[bytes]) -> None:
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(
+                self.normalized_summary(self.assert_canonical(fixture, result)), baseline
             )
-            + "\n",
-            encoding="utf-8",
-        )
-        runs = fixture.repo / ".codex-orchestrator/runs"
-        runs.mkdir(parents=True)
-        os.symlink(outside_run, runs / "outside-run")
 
+        assert_detached(fixture.invoke())
+        anchor = '    state = "findings" if findings else "ok"\n'
+        for index, path in enumerate(paths):
+            with self.subTest(input=path):
+                # Reintroduce each retired input in memory; the same oracle must fail.
+                mutant = self.controlled_script(
+                    anchor,
+                    f'    findings.append(finding("legacy", "legacy", [], '
+                    f'(repo / {path!r}).read_text()))\n' + anchor,
+                    f"drift-input-restored-{index}.sh",
+                )
+                with self.assertRaises(AssertionError):
+                    assert_detached(fixture.invoke(script=mutant))
+
+        archive = fixture.write(paths[1], "dirty historical archive\n")
         result = fixture.invoke()
-
-        self.assertEqual(0, result.returncode, result.stderr.decode())
         summary = self.assert_canonical(fixture, result)
-        self.assertEqual({"state": "ok"}, summary["status"])
-        self.assert_empty_journal_patterns(
-            summary["journal_patterns"], available=True, failure=""
-        )
-        self.assertEqual("journal-patterns", summary["checks"][-1]["check"])
-        self.assertEqual("passed", summary["checks"][-1]["outcome"])
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(summary["status"], {
+            "dirty_paths": [archive.relative_to(fixture.repo).as_posix()],
+            "failure": "dirty-worktree", "state": "failed",
+        })
 
     def test_multiline_html_comment_in_drift_config_is_ignored(self) -> None:
         fixture = self.fixture(
@@ -849,9 +588,6 @@ class DriftCheckTests(unittest.TestCase):
             {"dirty_paths": ["docs/spec.md", "scratch.txt"], "failure": "dirty-worktree", "state": "failed"},
         )
         self.assert_empty_telemetry(summary["telemetry"])
-        self.assert_empty_journal_patterns(
-            summary["journal_patterns"], available=False, failure="not-run"
-        )
         self.assert_literal_summary(
             summary,
             [("worktree-clean", "failed", "dirty worktree")],
@@ -867,9 +603,6 @@ class DriftCheckTests(unittest.TestCase):
         self.assertFalse(
             fixture.eval_log.exists(),
             "Recorded-baseline integrity ran after manifest deletion",
-        )
-        self.assert_empty_journal_patterns(
-            summary["journal_patterns"], available=False, failure="not-run"
         )
         self.assert_literal_summary(
             summary,
@@ -1006,9 +739,6 @@ class DriftCheckTests(unittest.TestCase):
             result.stderr,
         )
         self.assert_empty_telemetry(summary["telemetry"])
-        self.assert_empty_journal_patterns(
-            summary["journal_patterns"], available=False, failure="not-run"
-        )
         expected_checks = [
             ("worktree-clean", "passed", "clean"),
             ("evals-strict", "passed", "Recorded-baseline integrity passed"),

@@ -271,7 +271,7 @@ class CommittedPolicyPinsTests(unittest.TestCase):
         cell = policy.stack_commands[2]
         self.assertIn("docs contracts: no docs-class path in the candidate", cell)
         listed = set(re.findall(r'"(tests\.test_\w+)"', cell))
-        self.assertTrue(listed)
+        self.assertEqual(len(listed), 8)
         prose = re.compile(
             r'ROOT / "(?:README\.md|OPERATIONS\.md|CHANGELOG\.md|UPSTREAM|LICENSE'
             r'|docs/orchestration-contract\.md)"|"docs/orchestration-contract\.md"'

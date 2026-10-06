@@ -40,6 +40,7 @@ Launch one fresh reviewer in read-only mode. Apply the complete
 `${CLAUDE_PLUGIN_ROOT}/rules/review-constitution.md` baseline plus the `review-periodic` profile
 version 1.0. The reviewer may inspect the current repository and committed history as evidence, but
 must receive the validated schema-v1 JSON as its only current mechanical and telemetry input.
+Journal records, run archives and learn artifacts MUST NOT be drift inputs.
 For this D9 surface, the more specific FR-162 output contract replaces the constitution's generic
 prose finding format: every mechanical and semantic finding is an object with exactly `check`,
 `code`, `evidence`, `severity`, and `summary`. `severity` is exactly `CRITICAL`, `MAJOR`, or `MINOR`;
@@ -50,9 +51,10 @@ Compare trends with the immediately preceding UTC calendar quarter. Find candida
 committed tree and read them from committed objects; do not trust worktree copies. For example,
 enumerate with `git ls-tree -r --name-only HEAD -- .forge/history/drift` and read each candidate with
 `git show "HEAD:<path>"`. Ignore malformed, working-tree-only, and other-quarter reports, then select
-the valid preceding-quarter report with the greatest `generated_at`. Record the candidate inventory,
-selection rules, selected report path and commit, exclusions with reasons, or that no eligible
-baseline exists. Never read prior-quarter counters from `events.jsonl` or the Stop-hook CSV. Compare
+the valid preceding-quarter report with the greatest `generated_at`. Accept and ignore a legacy
+`journal_patterns` key in a committed report; `schema_version` remains `1`. Record the candidate
+inventory, selection rules, selected report path and commit, exclusions with reasons, or that no
+eligible baseline exists. Never read prior-quarter counters from `events.jsonl` or the Stop-hook CSV. Compare
 the JSON's fast-path share with that baseline; growth without a committed `risk-tiers` allowlist
 change in the comparison window is a semantic drift finding.
 
@@ -99,14 +101,3 @@ of drift.
 
 Report the mechanical outcome, semantic verdict and severity counts, durable committed report path,
 and whether the pre-existing or newly written operator-cleared block is present.
-
-## 5. Post-Report Best-Effort Learning
-
-Only after the durable drift report commit is verified, Section 4 has finished all applicable
-CRITICAL-block handling, and the primary drift outcome has been reported, make one best-effort
-invocation of `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md` (`/forge:learn`). Pass the already
-validated mechanical summary's available `journal_patterns` object as learning Input 1; the learn
-skill independently materializes its two committed inputs. This advisory pass never changes the
-durable drift report, block decision, process result, or reported verdict. Its failure or refusal
-does not block drift completion, and its candidate or gotcha changes remain unstaged and
-uncommitted for a separate ordinary commit.

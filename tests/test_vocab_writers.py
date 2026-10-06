@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -23,7 +22,6 @@ import route_vocab  # noqa: E402
 import codex_orch_tools  # noqa: E402
 from codex_orchestrator import builders, journal  # noqa: E402
 
-PATTERNS = ROOT / "scripts/forge/journal-patterns.py"
 LEGACY_FIXTURE = ROOT / "tests/replay/gates-missing-gate-3"
 RUN_ID = "run-20260923-vocabulary-writers"
 RECORDED_AT = "2026-09-23T12:00:00Z"
@@ -461,7 +459,7 @@ class VocabularyWriterTests(unittest.TestCase):
         self.assertIn(end, tail)
         return start + tail.split(end, 1)[0]
 
-    def test_historical_legacy_fixture_still_validates_and_extracts_patterns(self) -> None:
+    def test_historical_legacy_fixture_still_validates(self) -> None:
         historical = self.repo / ".codex-orchestrator/runs/run-historical-vocabulary"
         shutil.copytree(LEGACY_FIXTURE, historical)
         journal_path = historical / "journal.jsonl"
@@ -485,24 +483,6 @@ class VocabularyWriterTests(unittest.TestCase):
             },
             validation,
         )
-        patterns = subprocess.run(
-            [
-                sys.executable,
-                str(PATTERNS),
-                "--repo",
-                str(self.repo),
-                "--revision",
-                self.head,
-                str(journal_path),
-            ],
-            cwd=self.repo,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(0, patterns.returncode, patterns.stderr)
-        payload = json.loads(patterns.stdout)
-        self.assertTrue(payload["available"])
 
 
 if __name__ == "__main__":

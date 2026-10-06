@@ -13,6 +13,11 @@ def _flat(text: str) -> str:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+GATE3_PRODUCERS = (
+    ROOT / "docs/orchestration-contract.md",
+    ROOT / "skills/commit/SKILL.md",
+    ROOT / "skills/worktree-merge/SKILL.md",
+)
 JOURNAL_ENTRY_TYPES = {
     "run_started",
     "task",
@@ -772,8 +777,40 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("run-open refusal, not an `AGENT_HALT` sentinel", workflow)
         self.assertIn("agents never create or clear `AGENT_HALT` for drift", workflow)
 
+    def test_gate3_producers_share_the_lossless_observation_grammar(self) -> None:
+        grammar = (
+            "`<PASS|BLOCK>; <critical-plus-major-count> CRITICAL/MAJOR findings; "
+            "severities CRITICAL=<count>,MAJOR=<count>,MINOR=<count>; reviewer "
+            "<review-cheap|review-final>; iteration <number> of 8.`"
+        )
+
+        def assert_contract(text: str) -> None:
+            self.assertIn(grammar, " ".join(text.split()))
+
+        for path in GATE3_PRODUCERS:
+            with self.subTest(path=path):
+                source = path.read_text(encoding="utf-8")
+                normalized = " ".join(source.split())
+                assert_contract(normalized)
+                with self.assertRaises(AssertionError):
+                    assert_contract(
+                        normalized.replace(grammar, "DISABLED GATE3 GRAMMAR", 1)
+                    )
+
+    def test_retired_learning_tail_and_pointer_are_absent(self) -> None:
+        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        project = (ROOT / "forge-project.md").read_text(encoding="utf-8")
+        self.assertNotIn("## Post-Report Best-Effort Learning", workflow)
+        self.assertNotIn("skills/learn", workflow)
+        self.assertNotIn("skills/learn", project)
+
     def test_drift_skill_consumes_only_schema_json_and_blocks_only_critical(self) -> None:
         drift = (ROOT / "skills/drift/SKILL.md").read_text(encoding="utf-8")
+        for marker in (
+            "Journal records, run archives and learn artifacts MUST NOT be drift inputs.",
+            "Accept and ignore a legacy\n`journal_patterns` key in a committed report",
+        ):
+            self.assertIn(marker, drift)
         self.assertIn("review-periodic", drift)
         self.assertIn("schema_version: 1", drift)
         self.assertIn("only semantic input is that stdout document", _flat(drift))

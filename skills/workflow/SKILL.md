@@ -464,12 +464,3 @@ every missing terminal `execution_result` first, then a fresh passing verificati
 gate-1, gate-2, and gate-3 (a later terminal result moves the gate-ordering anchor past every
 earlier gate verification), and only then `run_closed`. A run closed in the wrong order cannot be
 repaired by appending.
-
-## Post-Report Best-Effort Learning
-
-Only after Step 13 has finished and the archive commit plus `report.md` outcome are final, make one
-best-effort invocation of `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md` (`/forge:learn`). This
-advisory pass is outside the canonical close sequence above and never runs inside the archive
-commit. Its failure or refusal must not reopen, block, delay, or change the completed close or
-report outcome. Leave every candidate or gotcha proposal unstaged and uncommitted for a separate
-ordinary commit.

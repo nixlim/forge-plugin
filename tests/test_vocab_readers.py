@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import runpy
 import subprocess
 import sys
 import tempfile
@@ -15,13 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "scripts/forge"))
 
+import route_evidence  # noqa: E402
+import route_provenance  # noqa: E402
 import route_vocab  # noqa: E402
 
 from tests.test_repo_conformance import check_run, recorded_authority  # noqa: E402
 
 from codex_orchestrator import journal, monitor  # noqa: E402
 
-PATTERNS = ROOT / "scripts/forge/journal-patterns.py"
 RUN_ID = "run-vocabulary"
 TASK_ID = "task-vocabulary"
 
@@ -232,51 +232,95 @@ class VocabularyReaderTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def patterns(self) -> dict[str, object]:
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(PATTERNS),
-                "--repo",
-                str(self.repo),
-                "--revision",
-                self.head,
-                str(self.journal_path),
-            ],
-            cwd=self.repo,
-            check=False,
-            capture_output=True,
-            text=True,
+    def reader_run(self, records: list[dict]) -> Path:
+        run_dir = self.repo / "reader-run"
+        run_dir.mkdir(exist_ok=True)
+        (run_dir / "journal.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records)
         )
-        self.assertEqual(0, result.returncode, result.stderr)
-        return json.loads(result.stdout)
+        return run_dir
 
-    def test_pattern_and_conformance_readers_accept_both_vocabularies(self) -> None:
-        extracted = self.patterns()
-        routing = {row["agent"]: row for row in extracted["routing"]}
-        unavailable = {agent for agent, row in routing.items() if row["status"] == "unavailable"}
-        self.assertEqual(
+    def reader_records(self) -> list[dict]:
+        return [
             {
-                "canonical-monitoring",
-                "cross-provider-claude-implementation",
-                "cross-provider-codex-review-final",
+                "type": "run_started",
+                "route": {},
+                "orchestrator_model": {"observed": "claude-fable-5-20250929"},
             },
-            unavailable,
+            {
+                "type": "execution",
+                "agent": "claude-impl",
+                "provider": "claude",
+                "role": "implementer",
+                "head": self.head,
+                "model": "sonnet",
+                "effort": "high",
+                "sandbox": "instruction-bounded",
+                "route_source": "local",
+                "route_sha256": "a" * 64,
+            },
+            {
+                "type": "execution",
+                "agent": "claude-review-final",
+                "provider": "claude",
+                "role": "review-final",
+                "head": self.head,
+                "model": "fable",
+                "effort": "high",
+                "sandbox": "instruction-bounded",
+            },
+            {"type": "task", "id": "task-owned", "status": "complete"},
+            {
+                "type": "decision",
+                "task": "task-owned",
+                "resolution": "orchestrator-owned: docs-only",
+                "basis": ["operator assignment"],
+            },
+            {
+                "type": "decision",
+                "task": "task-incomplete",
+                "resolution": "orchestrator-owned: no implementation needed",
+                "basis": ["scope"],
+            },
+        ]
+
+    def reader_findings(self) -> list[str]:
+        errors, findings = check_run(self.repo, self.reader_run(self.reader_records()))
+        self.assertEqual([], errors)
+        return findings
+
+    def test_route_aware_reader_findings_are_exact_and_task_bounded(self) -> None:
+        expected = [
+            "journal line 2: agent 'claude-impl'; developer-local selection "
+            f"(route_sha256 {'a' * 64})",
+            "journal line 2: agent 'claude-impl'; implementer ran instruction-bounded",
+            "journal line 3: agent 'claude-review-final'; same-model binding review",
+            "task 'task-owned': orchestrator-owned completion",
+        ]
+        self.assertEqual(expected, self.reader_findings())
+
+    def test_route_aware_reader_finding_controls_are_discriminating(self) -> None:
+        expected = self.reader_findings()
+        canonical_role = route_vocab.canonical_role
+        controls = (
+            mock.patch.object(route_evidence, "projected_route_source", return_value="unrecorded"),
+            mock.patch.object(
+                route_vocab,
+                "canonical_role",
+                side_effect=lambda raw, provider: (
+                    "plan"
+                    if canonical_role(raw, provider) == "implementer"
+                    else canonical_role(raw, provider)
+                ),
+            ),
+            mock.patch.object(route_vocab, "model_family", return_value=None),
+            mock.patch.object(route_provenance, "completion_provenance", return_value=None),
         )
-        for agent in (
-            "legacy-reviewer-codex",
-            "legacy-review-codex",
-            "legacy-review-codex-cli",
-            "legacy-review-claude",
-            "legacy-reviewer-claude",
-            "canonical-review-cheap",
-            "canonical-review-final",
-            "legacy-plan",
-            "canonical-plan",
-        ):
-            with self.subTest(agent=agent):
-                self.assertEqual("matched", routing[agent]["status"])
-        self.assertEqual(8, extracted["tasks"][0]["iterations"])
+        for control in controls:
+            with self.subTest(control=control.attribute), control:
+                self.assertNotEqual(expected, self.reader_findings())
+
+    def test_conformance_reader_accepts_both_vocabularies(self) -> None:
         authoritative_pairs = {
             ("codex", "implementer"),
             ("codex", "review-cheap"),
@@ -317,9 +361,6 @@ class VocabularyReaderTests(unittest.TestCase):
         self.assertEqual(expected_findings, mutant_findings)
 
     def test_roles_without_authority_are_soft_and_unknown_role_is_hard(self) -> None:
-        extracted = self.patterns()
-        routing = {row["agent"]: row for row in extracted["routing"]}
-        committed_route = runpy.run_path(str(PATTERNS))["committed_route"]
         negative_rows = [
             (line, record)
             for line, record in enumerate(self.records, 1)
@@ -329,8 +370,6 @@ class VocabularyReaderTests(unittest.TestCase):
             provider = route_vocab.canonical_provider(record["provider"])
             role = route_vocab.canonical_role(record["role"], provider or "")
             with self.subTest(provider=provider, role=record["role"]):
-                self.assertEqual("unavailable", routing[record["agent"]]["status"])
-                self.assertIsNone(committed_route(self.repo, record))
                 _authority, _path, error, finding = recorded_authority(
                     self.repo, self.head, record, line
                 )
@@ -359,7 +398,6 @@ class VocabularyReaderTests(unittest.TestCase):
                 "head": self.head,
             }
             with self.subTest(provider=provider, role=role):
-                self.assertIsNone(committed_route(self.repo, record))
                 _authority, _path, error, finding = recorded_authority(
                     self.repo, self.head, record, line
                 )
@@ -382,7 +420,6 @@ class VocabularyReaderTests(unittest.TestCase):
                 "head": self.head,
             }
             with self.subTest(provider=provider, role="navigator"):
-                self.assertIsNone(committed_route(self.repo, unknown))
                 _authority, _path, error, finding = recorded_authority(
                     self.repo, self.head, unknown, line
                 )

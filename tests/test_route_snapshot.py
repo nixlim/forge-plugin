@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import json
 import subprocess
-import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,7 +13,6 @@ from tests._revision9_coord_support import Revision9BuilderBatchSupport
 from codex_orchestrator import builders, journal
 
 ROOT = Path(__file__).resolve().parents[1]
-PATTERNS = ROOT / "scripts/forge/journal-patterns.py"
 route_evidence = journal.route_evidence
 route_config = route_evidence.route_config
 
@@ -451,7 +449,7 @@ class RouteSnapshotTests(Revision9BuilderBatchSupport, unittest.TestCase):
             with self.assertRaises(AssertionError):
                 assertion("run-20260925-route-monitoring-disabled")
 
-    def test_partial_trio_refuses_and_no_trio_projects_unrecorded(self) -> None:
+    def test_partial_trio_refuses_and_no_trio_remains_legacy(self) -> None:
         partial_id = "run-20260925-route-partial"
         route = self._open_task(partial_id)["route"]["implementer"]
         with self.assertRaises(journal.CoordinationRefusal) as caught:
@@ -481,20 +479,6 @@ class RouteSnapshotTests(Revision9BuilderBatchSupport, unittest.TestCase):
             route_sha256=None,
         )
         self.assertNotIn("route_source", outcome.records[0])
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(PATTERNS),
-                "--repo",
-                str(self.repo),
-                str(self.run_dir(self.repo, run_id) / "journal.jsonl"),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["routing"][0]["route_source"], "unrecorded")
 
     def test_pre_snapshot_run_skips_route_comparison(self) -> None:
         run_id = "run-20260925-route-legacy"

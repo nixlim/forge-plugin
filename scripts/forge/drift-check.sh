@@ -26,7 +26,6 @@ OUTPUT_LIMIT = 65_536
 NON_MUTATION_TIMEOUT = 1200
 DIAGNOSTIC_TAIL_BYTES = 8192
 DIAGNOSTIC_LINE_LIMIT = 64
-JOURNAL_PATTERNS_TIMEOUT_SECONDS = 30.0
 EVENT_RECOVERY_BYTES = 65_536
 EVENT_RECOVERY_CANDIDATES = 64
 CONFIG_WARNING = (
@@ -185,18 +184,6 @@ def empty_telemetry() -> dict[str, Any]:
     }
 
 
-def empty_journal_patterns(failure: str = "not-run") -> dict[str, Any]:
-    return {
-        "available": False,
-        "decision_outcomes": {},
-        "diagnostics": [],
-        "failure": failure,
-        "findings": {"by_reviewer_role": {}, "by_severity": {}},
-        "routing": [],
-        "tasks": [],
-    }
-
-
 def check(identifier: str, started: float, outcome: str, summary: str) -> dict[str, Any]:
     return {
         "check": identifier,
@@ -221,7 +208,6 @@ def run(
     cwd: Path,
     *,
     env: dict[str, str] | None = None,
-    timeout_seconds: float | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
@@ -232,11 +218,7 @@ def run(
             stderr=subprocess.STDOUT,
             env=env,
             check=False,
-            timeout=timeout_seconds,
         )
-    except subprocess.TimeoutExpired as exc:
-        output = exc.stdout if isinstance(exc.stdout, bytes) else b""
-        return subprocess.CompletedProcess(argv, 124, stdout=output, stderr=None)
     except OSError as exc:
         return subprocess.CompletedProcess(
             argv,
@@ -751,186 +733,11 @@ def aggregate_and_prune(repo: Path, plugin: Path, now: dt.datetime, retention_da
     return telemetry
 
 
-def nonnegative_integer(value: Any) -> bool:
-    return type(value) is int and value >= 0
-
-
-def valid_journal_patterns(value: Any) -> bool:
-    if not isinstance(value, dict) or set(value) != {
-        "available",
-        "decision_outcomes",
-        "diagnostics",
-        "failure",
-        "findings",
-        "routing",
-        "tasks",
-    }:
-        return False
-    if type(value["available"]) is not bool or not isinstance(value["failure"], str):
-        return False
-    outcomes = value["decision_outcomes"]
-    if not isinstance(outcomes, dict) or not all(
-        isinstance(key, str) and nonnegative_integer(count)
-        for key, count in outcomes.items()
-    ):
-        return False
-    diagnostics = value["diagnostics"]
-    if not isinstance(diagnostics, list):
-        return False
-    for item in diagnostics:
-        if (
-            not isinstance(item, dict)
-            or set(item) != {"count", "diagnostic"}
-            or not isinstance(item["diagnostic"], str)
-            or type(item["count"]) is not int
-            or item["count"] <= 0
-        ):
-            return False
-    if diagnostics != sorted(
-        diagnostics, key=lambda item: item["diagnostic"].encode("utf-8")
-    ):
-        return False
-    finding_counts = value["findings"]
-    if not isinstance(finding_counts, dict) or set(finding_counts) != {
-        "by_reviewer_role",
-        "by_severity",
-    }:
-        return False
-    for counts in finding_counts.values():
-        if not isinstance(counts, dict) or not all(
-            isinstance(key, str) and nonnegative_integer(count)
-            for key, count in counts.items()
-        ):
-            return False
-    routing = value["routing"]
-    if not isinstance(routing, list):
-        return False
-    for item in routing:
-        if not isinstance(item, dict) or set(item) != {
-            "agent",
-            "committed_effort",
-            "committed_model",
-            "execution",
-            "recorded_effort",
-            "recorded_model",
-            "route_source",
-            "run_id",
-            "status",
-        }:
-            return False
-        if not all(isinstance(item[key], str) for key in item):
-            return False
-        if item["route_source"] not in {
-            "local",
-            "committed-default",
-            "plugin-default",
-            "unrecorded",
-        }:
-            return False
-        if item["status"] not in {"local", "matched", "mismatched", "unavailable"}:
-            return False
-    if routing != sorted(
-        routing,
-        key=lambda item: (
-            item["run_id"].encode("utf-8"),
-            item["execution"].encode("utf-8"),
-        ),
-    ):
-        return False
-    tasks = value["tasks"]
-    if not isinstance(tasks, list):
-        return False
-    for item in tasks:
-        if not isinstance(item, dict) or set(item) != {
-            "block_to_pass_latency_ms",
-            "iterations",
-            "results",
-            "run_id",
-            "task",
-        }:
-            return False
-        if not isinstance(item["run_id"], str) or not isinstance(item["task"], str):
-            return False
-        if not nonnegative_integer(item["iterations"]):
-            return False
-        latency = item["block_to_pass_latency_ms"]
-        if latency is not None and not nonnegative_integer(latency):
-            return False
-        if not isinstance(item["results"], list) or not all(
-            isinstance(result, str) for result in item["results"]
-        ):
-            return False
-    if tasks != sorted(
-        tasks,
-        key=lambda item: (
-            item["run_id"].encode("utf-8"),
-            item["task"].encode("utf-8"),
-        ),
-    ):
-        return False
-    if value["available"]:
-        return value["failure"] == ""
-    return value == empty_journal_patterns(value["failure"])
-
-
-def extract_journal_patterns(
-    repo: Path, plugin: Path, policy_sha: str
-) -> tuple[dict[str, Any], str]:
-    try:
-        journals = sorted(
-            (
-                path
-                for path in (repo / ".codex-orchestrator/runs").glob("*/journal.jsonl")
-                if path.is_file() and not path.is_symlink() and not path.parent.is_symlink()
-            ),
-            key=lambda path: str(path.relative_to(repo)).encode("utf-8"),
-        )
-    except OSError:
-        return empty_journal_patterns("journal-patterns-discovery"), "journal-patterns-discovery"
-    result = run(
-        [
-            sys.executable,
-            str(plugin / "scripts/forge/journal-patterns.py"),
-            "--repo",
-            str(repo),
-            "--revision",
-            policy_sha,
-            *(str(path) for path in journals),
-        ],
-        repo,
-        timeout_seconds=JOURNAL_PATTERNS_TIMEOUT_SECONDS,
-    )
-    if result.returncode == 124:
-        return empty_journal_patterns("journal-patterns-timeout"), "journal-patterns-timeout"
-    try:
-        patterns = json.loads(result.stdout)
-    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
-        return empty_journal_patterns("journal-patterns-output"), "journal-patterns-output"
-    canonical = (
-        json.dumps(patterns, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n"
-    ).encode("utf-8")
-    if result.stdout != canonical or not valid_journal_patterns(patterns):
-        return empty_journal_patterns("journal-patterns-output"), "journal-patterns-output"
-    if result.returncode == 0 and patterns["available"]:
-        return patterns, ""
-    failure = patterns["failure"]
-    if (
-        result.returncode != 0
-        and not patterns["available"]
-        and re.fullmatch(r"[a-z0-9][a-z0-9-]*", failure)
-        and failure != "not-run"
-    ):
-        return patterns, failure
-    return empty_journal_patterns("journal-patterns-execution"), "journal-patterns-execution"
-
-
-def emit(repo: Path | None, now: dt.datetime, policy_sha: str, checks: list[dict[str, Any]], findings: list[dict[str, Any]], status: dict[str, Any], telemetry: dict[str, Any], exit_code: int, journal_patterns: dict[str, Any] | None = None) -> None:
+def emit(repo: Path | None, now: dt.datetime, policy_sha: str, checks: list[dict[str, Any]], findings: list[dict[str, Any]], status: dict[str, Any], telemetry: dict[str, Any], exit_code: int) -> None:
     summary = {
         "checks": checks,
         "findings": findings,
         "generated_at": utc_timestamp(now),
-        "journal_patterns": journal_patterns or empty_journal_patterns(),
         "policy_sha": policy_sha,
         "schema_version": 1,
         "status": status,
@@ -1192,32 +999,6 @@ def main() -> None:
         checks.append(check("telemetry", started, "failed", failure.summary))
         emit(repo, now, policy_sha, checks, [], {"failure": failure.code, "state": "failed"}, empty_telemetry(), 2)
 
-    started = time.monotonic()
-    journal_patterns, journal_failure = extract_journal_patterns(repo, plugin, policy_sha)
-    if journal_failure:
-        checks.append(
-            check(
-                "journal-patterns",
-                started,
-                "failed",
-                "journal pattern extraction failed",
-            )
-        )
-        emit(
-            repo,
-            now,
-            policy_sha,
-            checks,
-            [],
-            {"failure": journal_failure, "state": "failed"},
-            telemetry,
-            2,
-            journal_patterns,
-        )
-    checks.append(
-        check("journal-patterns", started, "passed", "journal patterns extracted")
-    )
-
     state = "findings" if findings else "ok"
     emit(
         repo,
@@ -1228,7 +1009,6 @@ def main() -> None:
         {"state": state},
         telemetry,
         1 if findings else 0,
-        journal_patterns,
     )
 
 
@@ -1254,7 +1034,6 @@ if __name__ == "__main__":
             "checks": [fallback_check],
             "findings": [],
             "generated_at": utc_timestamp(fallback_now),
-            "journal_patterns": empty_journal_patterns(),
             "policy_sha": "",
             "schema_version": 1,
             "status": {"failure": "drift-execution", "state": "failed"},

@@ -88,7 +88,6 @@ authority.
 - Worktree reintegration: `${CLAUDE_PLUGIN_ROOT}/skills/worktree-merge/SKILL.md`
 - Final reporting: `${CLAUDE_PLUGIN_ROOT}/skills/report/SKILL.md`
 - Periodic drift sensing: `${CLAUDE_PLUGIN_ROOT}/skills/drift/SKILL.md`
-- Advisory journal-derived learning: `${CLAUDE_PLUGIN_ROOT}/skills/learn/SKILL.md`
 
 ## Project Overview
 
@@ -199,8 +198,6 @@ MODULES = [
     "tests.test_commit_and_region_template",
     "tests.test_docs_contract",
     "tests.test_governance_content",
-    "tests.test_journal_patterns",
-    "tests.test_learn_skill",
     "tests.test_route_config_support",
     "tests.test_route_vocab",
     "tests.test_spec_revision15",

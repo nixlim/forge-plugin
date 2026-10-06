@@ -80,7 +80,7 @@ The repository is its own plugin marketplace. From any Claude Code session:
 
 (For a local checkout, pass the absolute path to the repo instead of the GitHub
 slug.) Restart the session afterwards so the skills and hooks load. You should see
-eight skills:
+seven skills:
 
 | Skill | Purpose |
 |---|---|
@@ -91,7 +91,6 @@ eight skills:
 | `/forge:commit` | The five-step fail-closed commit gate chain |
 | `/forge:worktree-merge` | The four-gate merge chain with locked-rebase reintegration |
 | `/forge:drift` | Mechanical drift sensing, then an operator-invoked periodic semantic review |
-| `/forge:learn` | Advisory journal-derived learning: proposes eval candidates and traceable gotchas |
 
 Installing also registers a **PreToolUse mistake-prevention guard for recognized
 direct Git invocations**, an advisory **PostToolUse invariant guard**, a **Stop
@@ -138,7 +137,6 @@ rather than assumed.
 | **Adversarial review** | Does the change do what was intended, and what did the last reviewer miss? Eight baseline lenses plus a per-artefact profile; binary PASS/BLOCK, no hedging. |
 | **Risk tiers** | How much scrutiny does *this* diff deserve? Derived from the diff at gate time against committed policy, promote-only, with a non-narrowable floor for control-class paths. |
 | **Drift sensing** | Has anything decayed since the last change? Evals, gates on a clean tree, invariants, full mutation, category coverage, region staleness, telemetry. |
-| **Learning loop** | Which failure shapes keep recurring, and what control would have caught them? Proposes; never applies. |
 
 Both the commit chain and the merge chain end in a binding review, and the merge
 chain's final gate is mandatory even when every constituent commit took the fast
@@ -197,22 +195,6 @@ STRICT=1 scripts/forge/run-evals.sh
 
 An empty suite exits non-zero. A gate that no fixture exercises is not satisfied
 by having no fixtures.
-
-## Learning loop
-
-After the archive commit and final report — and, on the drift side, after the
-durable drift report — `/forge:learn` runs as a best-effort advisory pass over
-three committed inputs: the journal-derived pattern output, the archive corpus
-under `.forge/history/runs/`, and the current gotchas file. It clusters recurring
-failure shapes and names the control that would have caught each one earlier.
-
-It proposes and nothing more. Candidate fixtures land in
-`.forge/evals/candidates/` carrying the exact recorded prompt and its source run
-and execution; observations append to `.forge/history/gotchas.md`, which then
-feeds forward into later agent prompts.
-It never promotes or applies a fixture, changes a control, commits, or blocks a
-run from closing — a system that rewrote its own controls from its own failure
-history would be gaming its own gates.
 
 ## Scheduled mechanical drift sensing
 
