@@ -31,6 +31,10 @@ RETIREMENTS = (
 )
 
 REQUIREMENTS = {
+    "FR-160": (
+        "Tracked-file category coverage of such a path is not consumption of the "
+        "artefact as an input; the runner never reads its content.",
+    ),
     "FR-032": (
         "The binding `review-final` role MUST additionally resolve to a different "
         "provider or model than the implementer role's resolved route",
@@ -309,6 +313,7 @@ JOURNAL_READER = (
 )
 
 OTHER_PINS = (
+    "scripts/forge/{check-test-quality.py,emit-decision-event.py,route_config.py}",
     "No proof satisfies Gate 1, a candidate-bound safety cell, binding review, "
     "approval or a fresh-reviewer manifest.",
     "A candidate's mechanical verification runs Gate 1 once, or records a freshly "

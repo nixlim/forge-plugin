@@ -581,17 +581,17 @@ class RepoConformanceTests(unittest.TestCase):
 
     def test_executable_inventory_preserves_nested_path_identity(self) -> None:
         repo = self.fixture_repo()
-        script = repo / "scripts/forge/nested/archive-run.py"
+        script = repo / "scripts/forge/nested/tool.py"
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
         script.chmod(0o755)
 
         self.assertEqual(
-            executable_scripts(repo), {"scripts/forge/nested/archive-run.py"}
+            executable_scripts(repo), {"scripts/forge/nested/tool.py"}
         )
         issues = check_current(repo)
         self.assertTrue(
-            any("scripts/forge/nested/archive-run.py" in issue for issue in issues),
+            any("scripts/forge/nested/tool.py" in issue for issue in issues),
             issues,
         )
 
@@ -749,17 +749,17 @@ class RepoConformanceTests(unittest.TestCase):
         )
 
         spec_path.write_text(spec, encoding="utf-8")
-        script = repo / "scripts/forge/archive-run.py"
+        script = repo / "scripts/forge/emit-decision-event.py"
         script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
         script.chmod(0o755)
         self.assertEqual(check_current(repo), [])
 
-        missing = spec.replace(",archive-run.py", "", 1)
+        missing = spec.replace(",emit-decision-event.py", "", 1)
         self.assertNotEqual(spec, missing)
         spec_path.write_text(missing, encoding="utf-8")
         issues = check_current(repo)
         self.assertTrue(
-            any("scripts/forge/archive-run.py" in issue for issue in issues), issues
+            any("scripts/forge/emit-decision-event.py" in issue for issue in issues), issues
         )
 
     def test_current_route_mismatch_refuses_at_cli_boundary(self) -> None:

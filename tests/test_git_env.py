@@ -37,9 +37,6 @@ THIS_MODULE = "tests/test_git_env.py"
 GIT_ENV_HELPER = "tests/_git_env.py"
 PENDING_ADOPTION = frozenset(
     {
-        "tests/test_archive_replay_vocabulary.py",
-        "tests/test_archive_run.py",
-        "tests/test_audit_commitments.py",
         "tests/test_candidate_identity.py",
         "tests/test_cli_chain_finalize.py",
         "tests/test_cli_common_lock.py",
@@ -532,7 +529,7 @@ class GitEnvironmentTests(_GitMaintenanceFixture):
                 quiet_repository(disabled_linked)
 
     def test_repository_creation_adoption_is_an_exact_ratchet(self) -> None:
-        self.assertEqual(len(PENDING_ADOPTION), 27)
+        self.assertEqual(len(PENDING_ADOPTION), 24)
         self.assertEqual(_adoption_issues(_test_sources()), [])
 
     def test_repo_conformance_imports_in_commitment_audit_script_mode(self) -> None:

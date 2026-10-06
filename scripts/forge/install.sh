@@ -1082,7 +1082,6 @@ ensure_claude_import
 install_codex_layer
 append_gitignore_block
 ensure_directory "${TARGET_ROOT}/.forge/evals/tasks" ".forge/evals/tasks/"
-ensure_directory "${TARGET_ROOT}/.forge/history/runs" ".forge/history/runs/"
 ensure_directory "${TARGET_ROOT}/.forge/history/drift" ".forge/history/drift/"
 ensure_directory "${TARGET_ROOT}/.forge/history/migrations" ".forge/history/migrations/"
 ensure_directory "${TARGET_ROOT}/.forge/tmp" ".forge/tmp/"

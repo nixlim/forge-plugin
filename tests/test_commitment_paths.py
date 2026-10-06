@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import tempfile
 import unittest
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest import mock
 
@@ -472,7 +471,7 @@ class CommitmentPathInventoryTests(unittest.TestCase):
                 )
             )
 
-    def test_record_expansion_is_coextensive_for_journal_and_audit(self) -> None:
+    def test_record_expansion_matches_journal(self) -> None:
         records = (
             {
                 "type": "execution",
@@ -542,60 +541,6 @@ class CommitmentPathInventoryTests(unittest.TestCase):
             ),
         )
 
-        spec = importlib.util.spec_from_file_location(
-            "audit_commitments_inventory_test",
-            ROOT / "scripts" / "forge" / "audit-commitments.py",
-        )
-        assert spec is not None and spec.loader is not None
-        audit = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = audit
-        self.addCleanup(sys.modules.pop, spec.name, None)
-        spec.loader.exec_module(audit)
-        audited = audit.citations(records)
-        self.assertEqual(
-            tuple(citation.surface.label for citation in expanded),
-            tuple(citation.surface.label for citation in audited),
-        )
-        self.assertEqual(
-            {"decision.basis", "verification.observation"},
-            {
-                citation.surface.label
-                for citation in audited
-                if citation.target is not None
-            },
-        )
-
-        disabled = tuple(
-            replace(
-                surface,
-                enforcement=tuple(
-                    point for point in surface.enforcement if point != "audit"
-                ),
-            )
-            if surface.label == "decision.basis"
-            else surface
-            for surface in commitment_paths.COMMITMENT_PATH_SURFACES
-        )
-        with mock.patch.object(
-            commitment_paths,
-            "COMMITMENT_PATH_SURFACES",
-            disabled,
-        ):
-            self.assertNotIn(
-                "decision.basis",
-                {citation.surface.label for citation in audit.citations(records)},
-            )
-            self.assertIn(
-                "decision.basis",
-                {
-                    citation.surface.label
-                    for record in records
-                    for citation in commitment_paths.iter_record_citations(
-                        record,
-                        enforcement="append",
-                    )
-                },
-            )
 
     def test_final_built_record_escape_precedes_schema_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

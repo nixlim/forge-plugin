@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import importlib.util
 import json
 import shutil
 import subprocess
@@ -1733,32 +1732,6 @@ class CitationRootTests(unittest.TestCase):
                 self.assertFalse(validate_run(mirror, repository=repo)["ok"])
             # The override never leaks past the call.
             self.assertIsNone(journal._VALIDATION_REPOSITORY.get())
-            # The archive's pre-close recompute passes the real run's root.
-            archive = sys.modules.get("_forge_validation_archive_probe")
-            if archive is None:
-                specification = importlib.util.spec_from_file_location(
-                    "_forge_validation_archive_probe",
-                    ROOT / "scripts" / "forge" / "archive-run.py",
-                )
-                assert specification is not None and specification.loader is not None
-                archive = importlib.util.module_from_spec(specification)
-                sys.modules["_forge_validation_archive_probe"] = archive
-                specification.loader.exec_module(archive)
-            closed = records[:-1] + [
-                {"type": "run_closed", "judgment": "passed", "summary": "done",
-                 "validation": {"ok": True, "issues": [], "warnings": [],
-                                "non_passing_verifications": [], "profile": "gates"}}
-            ]
-            write_journal(run_dir, closed)
-            for line, record in enumerate(closed, start=1):
-                record["_line"] = line
-            fresh = archive.recompute_pre_close_validation(run_dir, closed)
-            self.assertTrue(fresh["ok"], fresh)
-            # The archive binds its own journal module instance; disable the
-            # control there to prove the recompute depends on it.
-            with mock.patch.object(archive.journal_engine, "VALIDATION_REPOSITORY_LEG", False):
-                degraded = archive.recompute_pre_close_validation(run_dir, closed)
-            self.assertFalse(degraded["ok"], degraded)
 
 
 if __name__ == "__main__":

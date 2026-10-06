@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,23 +11,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests._cli_loader import load_script
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "scripts" / "forge"))
 
 import commitment_paths  # noqa: E402
 from codex_orchestrator import close_law, journal  # noqa: E402
-
-AUDIT = load_script(
-    "worktree_citation_audit",
-    ROOT / "scripts" / "forge" / "audit-commitments.py",
-)
-ARCHIVE = load_script(
-    "worktree_citation_archive",
-    ROOT / "scripts" / "forge" / "archive-run.py",
-)
 
 
 class WorktreeCitationRootTests(unittest.TestCase):
@@ -213,21 +200,8 @@ class WorktreeCitationRootTests(unittest.TestCase):
             in {"verification", "execution", "execution_result", "decision"}
         ]
 
-    def _render(self) -> str:
-        records, issues = journal.read_journal(self.run_dir / "journal.jsonl")
-        self.assertEqual([], issues)
-        closed = next(record for record in records if record.get("type") == "run_closed")
-        fragment = AUDIT.audit(self.run_dir)
-        return ARCHIVE.render_archive(
-            repo=self.worktree.resolve(),
-            run_dir=self.run_dir,
-            records=records,
-            closing_head=self.head,
-            post_close=closed["validation"],
-            audit_fragment=fragment,
-        )
 
-    def test_linked_worktree_append_audit_and_archive_use_layout_root(self) -> None:
+    def test_linked_worktree_append_uses_layout_root(self) -> None:
         for record in self.citation_records():
             with self.subTest(record=record["type"]):
                 journal._validate_append_citations(
@@ -235,22 +209,6 @@ class WorktreeCitationRootTests(unittest.TestCase):
                     self.run_dir,
                     record,
                 )
-
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/forge/audit-commitments.py"),
-             "--run-dir", str(self.run_dir)],
-            cwd=self.worktree,
-            check=False,
-            capture_output=True,
-        )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(b"", result.stderr)
-        self.assertIn(b"## Residual Risks", result.stdout)
-
-        rendered = self._render()
-        self.assertIn("## Verbatim basis documents", rendered)
-        self.assertIn(f"### {self.relative}", rendered)
-        self.assertIn("# Common-root evidence\n\nshared body\n", rendered)
 
     def test_layout_only_citation_uses_one_predicate_for_all_readers(self) -> None:
         layout_file = self.repository / self.relative
@@ -293,54 +251,7 @@ class WorktreeCitationRootTests(unittest.TestCase):
 
         projection = close_law.project_close(self.run_dir, records, "passed")
         self.assertTrue(projection["ok"], projection["issues"])
-        self.write_records(
-            self._focused_citation_records(self.relative, closed=True)
-        )
-        self.assertIn("## Residual Risks", AUDIT.audit(self.run_dir))
 
-    def test_pre_close_recompute_keeps_the_real_run_citation_root(self) -> None:
-        citation = "run-local/evidence.log"
-        evidence = self.run_dir / citation
-        evidence.parent.mkdir(parents=True)
-        evidence.write_text("run-local evidence\n", encoding="utf-8")
-        self.assertFalse((self.worktree / citation).exists())
-        self.assertFalse((self.repository / citation).exists())
-        records = self._focused_citation_records(citation, closed=True)
-        self.write_records(records)
-        for line, record in enumerate(records, start=1):
-            record["_line"] = line
-
-        fresh = ARCHIVE.recompute_pre_close_validation(self.run_dir, records)
-        self.assertIsNotNone(fresh)
-        assert fresh is not None
-        self.assertTrue(fresh["ok"], fresh)
-
-        original_validate = ARCHIVE.validate_run
-        propagated: list[object] = []
-
-        def without_citation_run_dir(run_dir, **kwargs):
-            propagated.append(kwargs.pop("citation_run_dir", None))
-            return original_validate(run_dir, **kwargs)
-
-        with mock.patch.object(
-            ARCHIVE,
-            "validate_run",
-            side_effect=without_citation_run_dir,
-        ):
-            degraded = ARCHIVE.recompute_pre_close_validation(
-                self.run_dir, records
-            )
-        self.assertEqual([self.run_dir], propagated)
-        self.assertIsNotNone(degraded)
-        assert degraded is not None
-        self.assertFalse(degraded["ok"], degraded)
-        self.assertTrue(
-            any(
-                "referenced evidence[0] file does not exist" in issue
-                for issue in degraded["issues"]
-            ),
-            degraded["issues"],
-        )
 
     def test_validation_roots_and_controls_match_revision_twenty(self) -> None:
         records = self._focused_citation_records(self.relative)
@@ -406,13 +317,6 @@ class WorktreeCitationRootTests(unittest.TestCase):
             projection["issues"],
         )
 
-        self.write_records(
-            self._focused_citation_records(self.relative, closed=True)
-        )
-        with self.assertRaises(AUDIT.Failure) as caught:
-            AUDIT.audit(self.run_dir)
-        self.assertEqual(5, caught.exception.exit_code)
-        self.assertIn(self.relative, caught.exception.diagnostic)
 
     def test_fr016_missing_probe_keeps_run_and_layout_roots_only(self) -> None:
         citation = "legacy-recorded-only/evidence.log"
@@ -678,86 +582,11 @@ class WorktreeCitationRootTests(unittest.TestCase):
                     result["warnings"],
                 )
 
-    def test_append_audit_and_archive_import_one_predicate(self) -> None:
-        self.assertIs(commitment_paths.resolve_citation_path, AUDIT.resolve_citation_path)
-        self.assertIs(commitment_paths.resolve_citation_path, ARCHIVE.resolve_citation_path)
+    def test_append_imports_shared_predicate(self) -> None:
         self.assertIs(commitment_paths.resolve_citation_path, journal.resolve_citation_path)
 
-    def test_audit_and_basis_document_legs_are_load_bearing(self) -> None:
-        enabled = commitment_paths.CITATION_LAYOUT_ROOT_LEGS
-        self.assertIn("## Residual Risks", AUDIT.audit(self.run_dir))
-        decisions = [
-            record for record in self.records() if record.get("type") == "decision"
-        ]
-        documents = ARCHIVE.basis_documents(
-            self.worktree.resolve(),
-            self.run_dir,
-            decisions,
-        )
-        self.assertEqual([self.relative], [document.label for document in documents])
 
-        with mock.patch.object(
-            commitment_paths,
-            "CITATION_LAYOUT_ROOT_LEGS",
-            enabled - {"audit"},
-        ):
-            with self.assertRaises(AUDIT.Failure) as caught:
-                AUDIT.audit(self.run_dir)
-        self.assertEqual(5, caught.exception.exit_code)
-        self.assertEqual(
-            "cited path does not exist within run or repository: "
-            f"{self.relative} (verification check-01 evidence[0])",
-            caught.exception.diagnostic,
-        )
-
-        with mock.patch.object(
-            commitment_paths,
-            "CITATION_LAYOUT_ROOT_LEGS",
-            enabled - {"basis-documents"},
-        ):
-            self.assertEqual(
-                [],
-                ARCHIVE.basis_documents(
-                    self.worktree.resolve(),
-                    self.run_dir,
-                    decisions,
-                ),
-            )
-
-    def test_named_audit_control_block_is_load_bearing(self) -> None:
-        source = (ROOT / "scripts/forge/audit-commitments.py").read_text(
-            encoding="utf-8"
-        )
-        begin = "    # CONTROL layout-root BEGIN\n"
-        end = "    # CONTROL layout-root END\n"
-        before, rest = source.split(begin, 1)
-        _, after = rest.split(end, 1)
-        source = (
-            before
-            + begin
-            + '    citation_leg = "disabled-audit"\n'
-            + end
-            + after
-        )
-        derived = "PLUGIN_ROOT = Path(__file__).resolve().parents[2]\n"
-        pinned = (
-            f"PLUGIN_ROOT = Path({str(ROOT)!r})\n"
-            f"sys.path.insert(0, {str(ROOT / 'scripts/forge')!r})\n"
-        )
-        mutant = self.base / "audit-layout-root-disabled.py"
-        mutant.write_text(source.replace(derived, pinned, 1), encoding="utf-8")
-
-        result = subprocess.run(
-            [sys.executable, str(mutant), "--run-dir", str(self.run_dir)],
-            cwd=self.worktree,
-            check=False,
-            capture_output=True,
-        )
-        self.assertEqual(5, result.returncode)
-        self.assertEqual(b"", result.stdout)
-        self.assertIn(self.relative.encode(), result.stderr)
-
-    def test_layout_escape_refuses_append_and_audit(self) -> None:
+    def test_layout_escape_refuses_append(self) -> None:
         escape = ".forge/chains/c-2026-10-04T120000Z-abcd/evidence/escape.md"
         outside = self.base / "outside.md"
         outside.write_text("outside\n", encoding="utf-8")
@@ -781,16 +610,6 @@ class WorktreeCitationRootTests(unittest.TestCase):
                 self.worktree.resolve(), self.run_dir, record
             )
 
-        records = self.records()
-        verification = next(
-            item for item in records if item.get("type") == "verification"
-        )
-        verification["evidence"] = [escape]
-        self.write_records(records)
-        with self.assertRaises(AUDIT.Failure) as caught:
-            AUDIT.audit(self.run_dir)
-        self.assertEqual(5, caught.exception.exit_code)
-        self.assertIn(escape, caught.exception.diagnostic)
 
     def test_traversal_and_absolute_citations_still_refuse(self) -> None:
         traversal = "../outside.md"
@@ -812,173 +631,6 @@ class WorktreeCitationRootTests(unittest.TestCase):
                     journal._validate_append_citations(
                         self.worktree.resolve(), self.run_dir, record
                     )
-
-                records = self.records()
-                verification = next(
-                    item for item in records if item.get("type") == "verification"
-                )
-                verification["evidence"] = [value]
-                self.write_records(records)
-                with self.assertRaises(AUDIT.Failure) as caught:
-                    AUDIT.audit(self.run_dir)
-                self.assertEqual(5, caught.exception.exit_code)
-                self.write_records(self._fixture_records())
-
-    def test_main_checkout_recorded_leg_still_works_without_layout_leg(self) -> None:
-        records = self.records()
-        records[0]["repo"] = str(self.repository)
-        self.write_records(records)
-        enabled = commitment_paths.CITATION_LAYOUT_ROOT_LEGS
-        with mock.patch.object(
-            commitment_paths,
-            "CITATION_LAYOUT_ROOT_LEGS",
-            enabled - {"audit"},
-        ):
-            output = AUDIT.audit(self.run_dir)
-        self.assertIn("## Residual Risks", output)
-
-
-class WorktreeLegacyRecoveryRootTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="forge-recovery-root-")
-        self.addCleanup(self.temporary.cleanup)
-        self.repository = Path(self.temporary.name) / "repo"
-        self.repository.mkdir()
-        self.run_git("init", "--quiet")
-        self.run_git("config", "user.name", "Recovery Fixture")
-        self.run_git("config", "user.email", "recovery@example.invalid")
-        (self.repository / "tracked.txt").write_text("initial\n", encoding="utf-8")
-        self.run_git("add", "tracked.txt")
-        self.run_git("commit", "--quiet", "-m", "initial")
-        self.head = self.output_git("rev-parse", "HEAD")
-        self.worktree = self.repository / ".worktrees/recovery"
-        self.run_git(
-            "worktree",
-            "add",
-            "--quiet",
-            "-b",
-            "recovery-fixture",
-            str(self.worktree),
-            self.head,
-        )
-
-    def run_git(self, *arguments: str) -> None:
-        subprocess.run(
-            ["git", *arguments],
-            cwd=self.repository,
-            check=True,
-            capture_output=True,
-        )
-
-    def output_git(self, *arguments: str) -> str:
-        return subprocess.run(
-            ["git", *arguments],
-            cwd=self.repository,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-
-    @staticmethod
-    def write_journal(run_dir: Path, records: list[dict[str, object]]) -> None:
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "journal.jsonl").write_text(
-            "".join(
-                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-                for record in records
-            ),
-            encoding="utf-8",
-        )
-
-    def test_recovery_containment_uses_resolved_target_parent(self) -> None:
-        target_name = "legacy-target"
-        recovery_name = "recovery-run"
-        resolution = (
-            f"legacy-archive-recovery: {target_name} recovered closing HEAD "
-            f"{self.head}; operator recovered the closed implementation state"
-        )
-        with mock.patch.dict(
-            os.environ,
-            {"FORGE_SESSION_PID": str(os.getpid())},
-        ):
-            ARCHIVE.journal_builders.run_open(
-                self.worktree.resolve(),
-                recovery_name,
-                idempotency_key=hashlib.sha256(b"open recovery").hexdigest(),
-                goal="Approve one recovery",
-                scope=["recovery/**"],
-                plugin_ref="forge-test-worktree-roots",
-            )
-            decision = ARCHIVE.journal_builders.decision_add(
-                self.worktree.resolve(),
-                recovery_name,
-                idempotency_key=hashlib.sha256(b"approve recovery").hexdigest(),
-                resolution=resolution,
-                task=None,
-                finding=None,
-                outcome="operator_approval",
-                risk=None,
-                basis=(),
-                binding_chain=None,
-                binding_id=None,
-            )
-            runs = self.repository / ".codex-orchestrator/runs"
-            target = runs / target_name
-            self.write_journal(
-                target,
-                [
-                    {
-                        "type": "run_started",
-                        "run_id": target_name,
-                        "repo": str(self.worktree),
-                        "repo_head": self.head,
-                        "goal": "Preserve a historical run.",
-                        "scope": ["legacy/**"],
-                    },
-                    {"type": "run_closed", "judgment": "passed"},
-                ],
-            )
-            linked_runs = Path(self.temporary.name) / "linked-runs"
-            linked_runs.symlink_to(runs, target_is_directory=True)
-            linked_target = linked_runs / target_name
-            decision_id = decision.records[0]["id"]
-            mode = ARCHIVE.legacy_closing_mode(
-                repo=self.worktree.resolve(),
-                target_run_dir=linked_target,
-                recovered_head=self.head,
-                approval=f"{recovery_name}:{decision_id}",
-                prove_approval=True,
-            )
-        self.assertEqual(
-            ARCHIVE.ClosingMode(self.head, f"{recovery_name}:{decision_id}"),
-            mode,
-        )
-        escaped_recovery = Path(self.temporary.name) / "escaped-recovery"
-        shutil.move(runs / recovery_name, escaped_recovery)
-        (runs / recovery_name).symlink_to(
-            escaped_recovery,
-            target_is_directory=True,
-        )
-        with mock.patch.dict(
-            os.environ,
-            {"FORGE_SESSION_PID": str(os.getpid())},
-        ):
-            current_owner = ARCHIVE.journal_engine._session_owner()
-            owner_before = ARCHIVE.journal_engine._read_owner_observation(
-                escaped_recovery / "owner"
-            )
-            self.assertIsNotNone(owner_before)
-            assert owner_before is not None
-            self.assertEqual(current_owner.pid, owner_before[1].pid)
-            self.assertEqual(current_owner.host, owner_before[1].host)
-            with self.assertRaises(ARCHIVE.ArchiveRefusal):
-                ARCHIVE.legacy_closing_mode(
-                    repo=self.worktree.resolve(),
-                    target_run_dir=linked_target,
-                    recovered_head=self.head,
-                    approval=f"{recovery_name}:{decision_id}",
-                    prove_approval=True,
-                )
 
 
 if __name__ == "__main__":

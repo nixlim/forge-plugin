@@ -85,7 +85,7 @@ seven skills:
 | Skill | Purpose |
 |---|---|
 | `/forge:init` | Install or refresh the per-repo layer (region file, AGENTS.md splice, `.codex/`, evals) |
-| `/forge:workflow` | Run a full orchestration lifecycle (plan → tasks → gated close → archive → report) |
+| `/forge:workflow` | Run a full orchestration lifecycle (plan → tasks → close → report) |
 | `/forge:orchestrate` | One focused Codex-agent execution, review, or verification cycle |
 | `/forge:report` | Author the final report after a gated close |
 | `/forge:commit` | The five-step fail-closed commit gate chain |
@@ -164,23 +164,11 @@ tier.
   Forge instructions reserve clearing it for you after proving the recorded host
   and PID dead.
 
-## The durable record
+## The run record
 
-A run's journal is working state and stays out of git. What survives is a
-distilled archive, committed at close under `.forge/history/runs/<run-id>.md`: the
-goal, per-task acceptance criteria, every decision with its basis, the gate
-evidence table with verdicts and iteration counts, residual risks, and provenance
-SHAs read from command output.
-
-Before that archive is written, a mechanical audit checks the journal's own
-bookkeeping — that no decision references a task which does not exist, that no
-task is left non-terminal, and that every artifact the journal claims exists
-actually does. A failed audit means no archive, and no archive means no report.
-
-Because the journal is append-only, a mistyped citation cannot simply be edited
-away. It is corrected by appending a correction entry, and the archive records both
-the correction and the original error, so the mistake stays visible rather than
-being quietly rewritten.
+The append-only run journal records executions and decisions. The final report
+draws on that record and the chain evidence. Existing committed run archives
+remain readable history; Forge does not generate or require new ones.
 
 ## Evals
 

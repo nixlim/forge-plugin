@@ -352,7 +352,7 @@ class InstallerIntegrationTests(unittest.TestCase):
             },
         )
         self.assertTrue((self.repo / ".forge/evals/tasks").is_dir())
-        self.assertTrue((self.repo / ".forge/history/runs").is_dir())
+        self.assertFalse((self.repo / ".forge/history/runs").exists())
         self.assertTrue((self.repo / ".forge/history/drift").is_dir())
         self.assertTrue((self.repo / ".forge/history/migrations").is_dir())
         self.assertTrue((self.repo / ".forge/tmp").is_dir())
@@ -1328,7 +1328,6 @@ class InstallerPayloadContractTests(unittest.TestCase):
                 "fresh-evaluation coordinator is\n   unavailable"
             ),
             "init must stop before\n   `review-final`",
-            ".forge/history/runs/",
             ".forge/history/drift/",
             ".forge/tmp/authorized/",
             ".forge/tmp/drift/",

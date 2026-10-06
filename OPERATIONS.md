@@ -35,9 +35,8 @@ flowchart TD
     More -->|Yes| Work
     More -->|No| Merge["Review combined change and reintegrate"]
     Merge -->|Revision needed| Work
-    Merge -->|Delivered| Close["Validate closure and audit commitments"]
-    Close --> Archive["Commit durable run archive"]
-    Archive --> Report["Write final report"]
+    Merge -->|Delivered| Close["Close run"]
+    Close --> Report["Write final report"]
 ```
 
 This diagram shows a successful run, including ordinary revision loops. A halt,
@@ -88,10 +87,8 @@ flowchart LR
     Helpers --> Checks
     Runner --> Checks["Project tests, invariants, sensors, Git"]
     CLI -.->|"Typed bound records"| Orch
-    Run --> Audit["Validation and commitment audit"]
-    Chain --> Audit
-    Audit --> Archive["Committed run archive"]
-    Archive --> Report["Local final report"]
+    Run --> Report["Local final report"]
+    Chain --> Report
     Hooks["Hooks and execpolicy"] -.->|"Guard supported operations"| CLI
 ```
 
@@ -121,7 +118,6 @@ sequence, using the common-lock helper without owning a CLI merge chain.
 | Fresh reviewer evaluations | [`forge_cli/fresh_evals.py`](scripts/forge/forge_cli/fresh_evals.py) | Candidate-bound evaluation requests and evidence validation |
 | Machine responses | [`forge_cli/envelope.py`](scripts/forge/forge_cli/envelope.py) | Structured outcomes and refusal reason codes |
 | Enforcement surfaces | [`hooks/`](hooks/), [`system/codex/`](system/codex/) | Claude tool hooks and installed Codex routing/policy surfaces |
-| Durable close | [`audit-commitments.py`](scripts/forge/audit-commitments.py), [`archive-run.py`](scripts/forge/archive-run.py) | Audit cited commitments and render the archive |
 
 The intended dependency direction is enforced in
 [`pyproject.toml`](pyproject.toml):
@@ -500,33 +496,13 @@ history without treating it as delivered evidence. An unrepairable closed journa
 cannot be made valid by editing old lines; use the prescribed successor or
 operator recovery procedure.
 
-### Step 10 — Audit and commit the durable archive
-
-**Purpose:** preserve the intent, evidence, and decisions in Git so the result can
-be understood without the original machine's working state.
-
-After successful post-close validation, capture the actual closing HEAD before
-other repository operations. Require a clean tree. In this plugin's own source
-repository, run the routing-conformance audit as well. Then audit commitments:
-referenced tasks, decisions, artifacts, and bound chain evidence must be resolvable.
-
-Render `.forge/history/runs/<run-id>.md` from the journal, audit results, captured
-closing SHA, and exact post-close validation result. The archive contains the
-goal, task acceptance criteria, decisions and their basis, gate evidence, risks,
-follow-ups, and provenance. Historical findings remain visible.
-
-The archive must be the only changed/staged path in its archive-only commit,
-which goes through the normal Forge commit chain. Existing archives are
-append-only durable records: do not overwrite, amend, or prune them.
-
-### Step 11 — Write the final report
+### Step 10 — Write the final report
 
 **Purpose:** give the user an accurate account of delivery and remaining work.
 The owning procedure is [`/forge:report`](skills/report/SKILL.md).
 
-The report skill reruns gated validation and proves the archive exists in HEAD
-without staged or unstaged changes. Only then does it write the run's local
-`report.md`. The report has five sections: Summary, Changes, Orchestration Graph,
+The report skill writes the run's local `report.md` from execution and chain
+evidence. The report has five sections: Summary, Changes, Orchestration Graph,
 Consensus, and Final Results. Its Mermaid graph reflects observed execution and
 decision history, including meaningful revision loops.
 
@@ -568,8 +544,7 @@ from an `AGENT_HALT` sentinel.
 | Execution `prompt.md`, `events.jsonl`, `handoff.md`, and `pid` | Local exact assignment, raw events, final agent message, and process identity |
 | `.forge/chains/` | Local persisted chain state, events, and evidence, rooted in the common repository context |
 | `.forge/tmp/` | Transient authorization markers, registry, drift output, audit logs, and telemetry |
-| `.forge/history/runs/<run-id>.md` | Committed durable run archive |
-| Run-local `report.md` | Final human-facing report, written after the archive commit |
+| Run-local `report.md` | Final human-facing report |
 | `.forge/history/drift/` | Committed periodic drift reports |
 
 The journal records lifecycle and judgment; command evidence supports verification;
@@ -595,8 +570,8 @@ the chain's mechanical evidence.
 | Produced commit differs from intent | Preserve the commit and frozen chain for operator disposition; do not automatically reset or amend it |
 | Reintegration failure | Preserve the branch and worktree; report the observed failure and lock outcome |
 | Foreign/live owner or stale reintegration lock | Follow the specific ownership/lock recovery procedure; do not delete state to force progress |
-| Post-close validation or archive audit failure | Do not generate a final report claiming delivery |
-| Machine move | Close and archive on the original host, then start a fresh run using the committed archive |
+| Post-close validation failure | Do not generate a final report claiming delivery |
+| Machine move | Preserve the run journal and chain evidence needed for a final report |
 
 Ordinary non-mutation policy commands run from the repository root as one complete
 `bash -c` cell, with arguments passed separately. They use an isolated process
