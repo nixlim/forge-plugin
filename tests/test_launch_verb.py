@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import concurrent.futures
-import copy
-import dataclasses
 import errno
 import json
 import os
@@ -106,24 +104,29 @@ class LaunchVerbPreflightTests(_LaunchVerbSupport, unittest.TestCase):
             with self.assertRaises(AssertionError):
                 assertion()
 
-    def test_initialization_and_active_task_checks_leave_no_attempt(self) -> None:
-        engine = self.ready_engine()
-        before = self.records()
-        with self.assertRaises(ENGINE.Refusal) as inactive:
-            VERBS_LAUNCH.launch(
-                engine,
-                role="implementer",
-                task="task-99",
-                worktree=str(self.linked_worktree),
-                brief=str(self.brief),
-            )
-        self.assertEqual(
-            inactive.exception.message,
+    def _assert_inactive_task_refused(self, engine: object) -> None:
+        refusal = self._assert_clean_refusal(
+            engine,
+            lambda: VERBS_LAUNCH.launch(
+                engine, role="implementer", task="task-99",
+                worktree=str(self.linked_worktree), brief=str(self.brief),
+            ),
+            ENGINE.V2ReasonCode.STATE_PRECONDITION,
             "forge: journal builder refused — task task-99 is not active",
         )
-        self.assertEqual(self.records(), before)
-        self._assert_no_attempt()
+        self.assertEqual(refusal.outcome().exit_code, 1)
 
+    def test_inactive_task_refusal_does_not_block_next_launch(self) -> None:
+        engine = self.ready_engine()
+        for _attempt in range(2):
+            self._assert_inactive_task_refused(engine)
+        self.assertTrue(self.seed_launch(engine=engine).ok)
+        self.assertEqual(len(self.execution_records()), 1)
+        self.assertEqual(self.execution_records()[0]["execution"], "execution-01")
+
+    def test_initialization_and_active_task_checks_leave_no_attempt(self) -> None:
+        engine = self.ready_engine()
+        self._assert_inactive_task_refused(engine)
         manifest = self.linked_worktree / ".forge-manifest"
         manifest.write_text("init_completed: false\n", encoding="utf-8")
         subprocess.run(
@@ -160,87 +163,6 @@ class LaunchVerbPreflightTests(_LaunchVerbSupport, unittest.TestCase):
             ENGINE.V2ReasonCode.STATE_PRECONDITION,
             "forge: routes file refused — missing schema",
         )
-
-    def test_every_snapshot_divergence_is_named_before_writes(self) -> None:
-        engine = self.ready_engine()
-        route = VERBS_LAUNCH.route_config.resolve(
-            self.linked_worktree, "implementer", self.head
-        )
-        cases = {
-            "provider": "claude",
-            "model": "different-model",
-            "effort": "low",
-            "route_source": "local",
-            "route_sha256": "0" * 64,
-        }
-        for field, value in cases.items():
-            with self.subTest(field=field), mock.patch.object(
-                VERBS_LAUNCH.route_config,
-                "resolve",
-                return_value=dataclasses.replace(route, **{field: value}),
-            ):
-                self._assert_clean_refusal(
-                    engine,
-                    lambda: self.seed_launch(engine=engine),
-                    ENGINE.V2ReasonCode.INGEST_PROOF_INVALID,
-                    "forge: execution refused — route diverges from run snapshot "
-                    f"for implementer: {field}",
-                )
-        with mock.patch.object(
-            VERBS_LAUNCH, "_resolve_route", return_value=(route, "read-only")
-        ):
-            self._assert_clean_refusal(
-                engine,
-                lambda: self.seed_launch(engine=engine),
-                ENGINE.V2ReasonCode.INGEST_PROOF_INVALID,
-                "forge: execution refused — route diverges from run snapshot "
-                "for implementer: sandbox",
-            )
-
-    def test_missing_frozen_route_refuses_before_writes(self) -> None:
-        engine = self.ready_engine()
-        run = LAUNCH_LANE.run_state(engine.ctx, self.run_id)
-        state = run.state
-        records = list(state.records)
-        opening = copy.deepcopy(records[0])
-        opening["route"].pop("implementer")
-        records[0] = opening
-        synthetic = dataclasses.replace(state, records=tuple(records))
-        with mock.patch.object(
-            LAUNCH_LANE,
-            "run_state",
-            return_value=dataclasses.replace(run, state=synthetic),
-        ):
-            self._assert_clean_refusal(
-                engine,
-                lambda: self.seed_launch(engine=engine),
-                ENGINE.V2ReasonCode.INGEST_PROOF_INVALID,
-                "forge: execution refused — role implementer has no frozen route "
-                "in the run snapshot",
-            )
-
-    def test_snapshot_comparison_control_is_load_bearing(self) -> None:
-        engine = self.ready_engine()
-        route = VERBS_LAUNCH.route_config.resolve(
-            self.linked_worktree, "implementer", self.head
-        )
-
-        def assertion() -> None:
-            with self.assertRaises(ENGINE.Refusal) as caught:
-                self.seed_launch(engine=engine)
-            self.assertIn("route diverges", caught.exception.message)
-
-        with mock.patch.object(
-            VERBS_LAUNCH.route_config,
-            "resolve",
-            return_value=dataclasses.replace(route, model="different-model"),
-        ):
-            assertion()
-            with mock.patch.object(
-                VERBS_LAUNCH.route_evidence, "validate_execution", return_value=None
-            ):
-                with self.assertRaises(AssertionError):
-                    assertion()
 
     def test_missing_cli_and_floor_refusals_use_explicit_executables(self) -> None:
         engine = self.ready_engine()
@@ -509,10 +431,31 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
                 "execution_start",
                 side_effect=journal.CoordinationRefusal("synthetic builder refusal"),
             ),
-            self.assertRaises(ENGINE.Refusal),
+            self.assertRaises(ENGINE.Refusal) as caught,
         ):
             self.seed_launch(engine=engine)
+        self.assertEqual(caught.exception.message, "synthetic builder refusal")
+        self.assertIs(caught.exception.reason_code, ENGINE.V2ReasonCode.STATE_PRECONDITION)
+        self.assertEqual(caught.exception.outcome().exit_code, 1)
         self.assertEqual(list(agent.iterdir()), [sentinel])
+        self.assertFalse(self.execution_records())
+        self.assertTrue(self.seed_launch(engine=engine).ok)
+        self.assertEqual(sentinel.read_text(), "keep\n")
+        self.assertEqual(self.execution_records()[0]["execution"], "execution-01")
+
+    def test_diverged_builder_refusal_preserves_attempt_files(self) -> None:
+        engine = self.ready_engine()
+        with (
+            mock.patch.object(builders, "execution_start",
+                              side_effect=journal.CoordinationRefusal(journal.BATCH_DIVERGED)),
+            self.assertRaises(ENGINE.Refusal) as caught,
+        ):
+            self.seed_launch(engine=engine)
+        self.assertEqual(caught.exception.message, journal.BATCH_DIVERGED)
+        agent = self.run_dir(self.repo, self.run_id) / "codex-implementer-01"
+        markers = list(agent.rglob(LAUNCH_LANE.MARKER_NAME))
+        self.assertEqual(len(markers), 1)
+        self.assertTrue(markers[0].read_bytes())
         self.assertFalse(self.execution_records())
 
     def test_popen_failure_publishes_completion_and_clears_record(self) -> None:

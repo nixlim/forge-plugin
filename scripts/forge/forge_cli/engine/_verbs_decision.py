@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from forge_cli import chain_core, runtime
 from forge_cli.engine._approval import _issue_authorization as _issue_authorization
 from forge_cli.engine._approval import _success as _success
@@ -18,36 +16,6 @@ from forge_cli.engine._gate_checks import (
 from forge_cli.engine._gate_checks import _mechanical_complete as _mechanical_complete
 from forge_cli.engine._gate_checks import _next_incomplete as _next_incomplete
 from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal
-
-
-def _verify_close_preflight_line(
-    self, state: Mapping[str, object], message: str
-) -> str:
-    run_binding = state.get("run_binding")
-    if not isinstance(run_binding, Mapping):
-        return message
-    chain_id = str(state.get("chain_id") or "")
-    fallback = (
-        f"close preflight (journal-only, projecting {chain_id}): unavailable"
-    )
-    try:
-        _batch, _builders, journal = runtime._coordination_modules()
-        from codex_orchestrator import close_preflight
-
-        run_id = run_binding.get("run_id")
-        if not journal._valid_run_id(run_id) or not chain_id:
-            raise ValueError("run-bound chain identity is incomplete")
-        assert isinstance(run_id, str)
-        run_dir = (
-            self.ctx.store.common_root
-            / ".codex-orchestrator"
-            / "runs"
-            / run_id
-        )
-        line = close_preflight.summary_line(run_dir, chain_id, dict(state))
-    except Exception:
-        line = fallback
-    return f"{message}; {line}" if line else message
 
 
 def verify(self) -> Outcome:
@@ -155,11 +123,7 @@ def verify(self) -> Outcome:
                 "retained_review": retained_pass,
             },
         )
-    message = _verify_close_preflight_line(
-        self,
-        state,
-        "all required mechanical verification steps are complete",
-    )
+    message = "all required mechanical verification steps are complete"
     return _success(state, message, self.next_step(state))
 
 def review_disposition(

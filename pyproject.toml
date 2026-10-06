@@ -71,15 +71,15 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "scripts/forge/forge_cli/app/_candidate_observation.py" = ["C901", "I001", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_dispatch.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
 "scripts/forge/forge_cli/app/_engine_abort.py" = ["B905", "C901", "E501", "PLR0912", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/app/_engine_bootstrap.py" = ["C901", "E501", "PLR0913", "PLR0915", "UP035"]
-"scripts/forge/forge_cli/app/_engine_cleanup.py" = ["C901", "F841", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/app/_engine_bootstrap.py" = ["C901", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/app/_engine_cleanup.py" = ["C901", "F841", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_engine_cleanup_child.py" = ["PLR0913", "UP035"]
 "scripts/forge/forge_cli/app/_engine_conflict_observation.py" = ["B023", "C901", "PLR0911", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_engine_epoch_ancestry.py" = ["C901", "UP035"]
 "scripts/forge/forge_cli/app/_engine_epoch_fetch.py" = ["C901", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_engine_epoch_push.py" = ["C901", "E501", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_engine_epoch_rebase.py" = ["C901", "E501", "PLR0911", "PLR0915", "UP035"]
-"scripts/forge/forge_cli/app/_engine_epoch_suite.py" = ["B023", "C901", "E731", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/app/_engine_epoch_suite.py" = ["B023", "C901", "PLR0912", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/app/_engine_final_mode.py" = ["C901", "PLR0911", "PLR0912", "UP035"]
 "scripts/forge/forge_cli/app/_engine_finalize.py" = ["E501", "UP035"]
 "scripts/forge/forge_cli/app/_engine_gate.py" = ["PLR0913", "UP035"]
@@ -100,27 +100,19 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "scripts/forge/forge_cli/app/_engine_review_verdict.py" = ["C901", "E501", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/app/_engine_start_chain.py" = ["UP035"]
 "scripts/forge/forge_cli/app/_merge_engine.py" = ["E501", "I001", "UP035"]
-"scripts/forge/forge_cli/app/_mutation_journal.py" = ["C901", "I001", "UP035"]
 "scripts/forge/forge_cli/candidate.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 # chain_core/ package (split 2026-09-13; narrowed per module 2026-09-14, bead forge-plugin-r0b):
 # each entry lists only the codes that module trips, so the ratchet can tighten per file.
 "scripts/forge/forge_cli/chain_core/__init__.py" = ["E501", "I001"]
-"scripts/forge/forge_cli/chain_core/_activation.py" = ["C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/chain_core/_activation_outbox.py" = ["C901", "E501", "I001", "PLR0913", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py" = ["E501", "I001", "UP035"]
-"scripts/forge/forge_cli/chain_core/_candidate_v2.py" = ["E501", "I001", "PLR0913", "UP035"]
-"scripts/forge/forge_cli/chain_core/_chain_batch_authorize.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915"]
-"scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
+"scripts/forge/forge_cli/chain_core/_candidate_v2.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/chain_core/_chain_state.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915"]
-"scripts/forge/forge_cli/chain_core/_commit_chain.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/chain_core/_commit_chain.py" = ["C901", "E501", "I001", "UP035"]
 "scripts/forge/forge_cli/chain_core/_common_lock.py" = ["B904", "C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/chain_core/_controls.py" = ["I001"]
 "scripts/forge/forge_cli/chain_core/_core.py" = ["E501", "I001", "PLR0913", "UP035", "UP037"]
 "scripts/forge/forge_cli/chain_core/_fenced_child.py" = ["C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/chain_core/_fenced_process.py" = ["B904", "C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/chain_core/_ingest_capture.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/chain_core/_ingest_currency.py" = ["E501", "I001", "UP035"]
-"scripts/forge/forge_cli/chain_core/_ingest_merge.py" = ["B905", "C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/chain_core/_lock_owner.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/chain_core/_lock_record_io.py" = ["C901", "E501", "I001", "PLR0911", "UP035"]
 "scripts/forge/forge_cli/chain_core/_lock_record_validators.py" = ["C901", "E501", "I001"]
@@ -140,32 +132,29 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "scripts/forge/forge_cli/chain_core/_merge_recovery_lifecycle.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/chain_core/_merge_recovery_proof.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
 "scripts/forge/forge_cli/chain_core/_merge_release.py" = ["B905", "C901", "E501", "I001", "PLR0911", "UP035"]
-"scripts/forge/forge_cli/chain_core/_merge_replay.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/chain_core/_merge_scope.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
+"scripts/forge/forge_cli/chain_core/_merge_replay.py" = ["E501", "I001"]
+"scripts/forge/forge_cli/chain_core/_merge_scope.py" = ["E501", "I001", "PLR0911", "UP035"]
 "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/chain_core/_merge_state_shape.py" = ["C901", "E501", "I001", "PLR0912", "UP035"]
 "scripts/forge/forge_cli/chain_core/_merge_transition.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/chain_core/_receipt_snapshot.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/chain_core/_remote_observation.py" = ["B905", "C901", "E501", "I001", "PLR0911", "UP035"]
 "scripts/forge/forge_cli/chain_core/_repository.py" = ["B904", "E501", "I001", "UP022", "UP035", "UP037"]
 "scripts/forge/forge_cli/chain_core/_state.py" = ["C901", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/chain_core/_storage.py" = ["B904", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/engine/__init__.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_approval.py" = ["E501", "I001", "PLR0911", "UP035"]
-"scripts/forge/forge_cli/engine/_archive.py" = ["C901", "E501", "I001", "PLR0912", "PLR1702", "UP035"]
 "scripts/forge/forge_cli/engine/_candidate_ops.py" = ["B904", "E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_classification.py" = ["C901", "E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_cli_options.py" = ["C901", "E501", "I001", "PLR0912"]
-"scripts/forge/forge_cli/engine/_command_lock.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR1702", "UP035", "UP037"]
+"scripts/forge/forge_cli/engine/_command_lock.py" = ["I001", "UP035", "UP037"]
 "scripts/forge/forge_cli/engine/_core.py" = ["E501", "I001", "PLR0913", "UP035"]
 "scripts/forge/forge_cli/engine/_engine.py" = ["C901", "E501", "I001", "PLR0911", "UP035"]
 "scripts/forge/forge_cli/engine/_finalize.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_fresh_eval.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py" = ["E501", "I001", "PLR0913", "UP012", "UP035"]
 "scripts/forge/forge_cli/engine/_gate_checks.py" = ["C901", "E501", "I001", "UP035"]
-"scripts/forge/forge_cli/engine/_journal.py" = ["C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_merge_bootstrap_child.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
-"scripts/forge/forge_cli/engine/_merge_bootstrap_result.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "PLR1702", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_bootstrap_result.py" = ["C901", "I001", "PLR0912", "UP035"]
 "scripts/forge/forge_cli/engine/_merge_candidate.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_merge_candidate_generation.py" = ["C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_merge_candidate_observation.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP012", "UP035"]
@@ -173,8 +162,8 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "scripts/forge/forge_cli/engine/_merge_conflict.py" = ["E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_merge_epoch.py" = ["B904", "E501", "I001", "UP035"]
 "scripts/forge/forge_cli/engine/_merge_rebase_integrated.py" = ["B905", "C901", "E501", "I001", "PLR0911", "PLR0912", "UP035"]
-"scripts/forge/forge_cli/engine/_merge_scope_binding.py" = ["E501", "I001", "PLR0913", "PLR0915", "UP035"]
-"scripts/forge/forge_cli/engine/_merge_scope_derive.py" = ["C901", "E501", "I001", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_scope_binding.py" = ["I001", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_merge_scope_derive.py" = ["I001", "UP035"]
 "scripts/forge/forge_cli/engine/_merge_worktree.py" = ["C901", "E501", "I001", "PLR0911", "UP012", "UP035"]
 "scripts/forge/forge_cli/engine/_parser.py" = ["C901", "E501", "I001", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_review_transport.py" = ["C901", "E501", "I001", "PLR0912", "UP012", "UP035"]
@@ -183,11 +172,11 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "scripts/forge/forge_cli/engine/_verbs_finalize.py" = ["C901", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_verbs_gate.py" = ["C901", "E501", "PLR0912", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_verbs_gate_evals.py" = ["B904", "C901", "PLR0912", "PLR0915", "UP035"]
-"scripts/forge/forge_cli/engine/_verbs_lifecycle.py" = ["C901", "E501", "PLR0912", "PLR0913", "PLR0915", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_lifecycle.py" = ["C901", "E501", "PLR0915", "UP035"]
 "scripts/forge/forge_cli/engine/_verbs_review_collect.py" = ["C901", "UP035"]
 "scripts/forge/forge_cli/engine/_verbs_review_request.py" = ["C901", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP012", "UP035"]
-"scripts/forge/forge_cli/engine/_verbs_status.py" = ["C901", "E501", "PLR0911", "PLR0912", "PLR0913"]
-"scripts/forge/forge_cli/engine/_verbs_tombstone.py" = ["C901", "E501", "UP035"]
+"scripts/forge/forge_cli/engine/_verbs_status.py" = ["C901", "E501", "PLR0911", "PLR0912"]
+"scripts/forge/forge_cli/engine/_verbs_tombstone.py" = ["C901", "UP035"]
 "scripts/forge/forge_cli/envelope.py" = ["PLR0913", "UP035"]
 "scripts/forge/forge_cli/fresh_evals.py" = ["B905", "C901", "E501", "F401", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035", "UP037"]
 "scripts/forge/forge_cli/policy.py" = ["B904", "C901", "I001", "UP035"]
@@ -212,7 +201,7 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "tests/test_cli_merge_adapters.py" = ["E402", "E501", "F401", "I001", "PLR0915"]
 "tests/test_cli_merge_integration.py" = ["B023", "B905", "C901", "E501", "F841", "I001", "PLR0904", "PLR0913", "PLR0915"]
 "tests/test_cli_merge_lifecycle.py" = ["B023", "C901", "E501", "F401", "I001", "PLR0904", "PLR0915"]
-"tests/test_cli_merge_store.py" = ["E402", "F401", "I001", "PLR0915"]
+"tests/test_cli_merge_store.py" = ["E402", "F401", "I001"]
 "tests/test_cli_phase0_contracts.py" = ["B009", "E402", "E501", "I001"]
 "tests/test_cli_policy_fences.py" = ["E402", "E501", "F401", "I001"]
 "tests/test_cli_runtime.py" = ["B023", "I001", "UP035"]
@@ -229,7 +218,7 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "tests/test_fr223_v3_hook.py" = ["I001"]
 "tests/test_fr230_phase3_manifest.py" = ["B023", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702", "UP035"]
 "tests/test_fresh_eval_policy.py" = ["E501", "I001"]
-"tests/test_fresh_reviewer_cli.py" = ["B023", "C901", "I001", "UP012"]
+"tests/test_fresh_reviewer_cli.py" = ["B023", "C901", "I001"]
 "tests/test_fresh_reviewer_evals.py" = ["B023", "B905", "C901", "I001", "PLR0904", "PLR0912", "PLR0915", "PLR1702", "UP012", "UP022"]
 "tests/test_gate1_shard_cell.py" = ["E501"]
 "tests/test_governance_content.py" = ["E501"]
@@ -245,30 +234,18 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "tests/test_revision8_append_schema.py" = ["PLR0915"]
 "tests/test_revision8_coordination.py" = ["I001"]
 "tests/test_revision8_interruptions.py" = ["C901", "PLR0915", "UP012"]
-"tests/test_revision8_orphan_identity.py" = ["B023", "C901", "PLR0912", "PLR0915", "PLR1702", "UP012"]
-"tests/test_revision8_precedence.py" = ["B023", "PLR1702", "UP012"]
 "tests/test_revision8_registry_races.py" = ["B023", "PLR0915", "UP012"]
 "tests/test_revision8_rollback.py" = ["B023", "UP012"]
-"tests/test_revision9_archive.py" = ["C901", "I001", "PLR0904", "PLR0915"]
-"tests/test_revision9_cli_surfaces.py" = ["B023", "E402", "E501", "F401", "I001", "PLR0904", "PLR0915", "PLR1702"]
 "tests/test_revision9_coordination.py" = ["C901", "E501", "I001", "PLR0913", "PLR0915", "UP012"]
-"tests/test_revision9_coordination_activation_outbox.py" = ["B023", "E731", "F841", "PLR0915"]
-"tests/test_revision9_coordination_activation_scan.py" = ["B023", "PLR1702"]
 "tests/test_revision9_coordination_batch_builder.py" = ["E501"]
 "tests/test_revision9_coordination_chain_drain.py" = ["B023", "E731"]
 "tests/test_revision9_coordination_gap_repair.py" = ["C901", "PLR0912", "PLR0915", "PLR1702"]
 "tests/test_revision9_coordination_ledger_recovery.py" = ["B023", "PLR1702"]
 "tests/test_revision9_coordination_legacy_activation.py" = ["B023", "PLR0915", "PLR1702"]
-"tests/test_revision9_coordination_receipted_chain.py" = ["C901", "PLR0915"]
-"tests/test_revision9_coordination_scope_change.py" = ["B023", "B905", "PLR1702"]
 "tests/test_revision9_coordination_staging_crashes.py" = ["B023", "F841", "PLR1702"]
 "tests/test_revision9_coordination_terminal_builder.py" = ["E501", "E702"]
-"tests/test_revision9_ingest_negatives.py" = ["C901", "E402", "F401", "I001", "PLR0904", "PLR0915"]
-"tests/test_revision9_matrix.py" = ["E402", "E501", "F401", "I001", "PLR0913", "PLR0915", "UP012"]
 "tests/test_revision9_reason_codes.py" = ["I001"]
-"tests/test_revision9_terminal_races.py" = ["C901", "E402", "E501", "F401", "I001", "PLR0904", "PLR0912", "PLR0913", "PLR0915", "PLR1702"]
 "tests/test_risk_tier.py" = ["E501", "I001", "PLR0904"]
-"tests/test_run_coordination.py" = ["E402", "E501", "PLR0904", "PLR1702"]
 "tests/test_test_quality.py" = ["PLR0904"]
 "tests/test_validation.py" = ["E501", "PLR0904"]
 "tests/test_worktree_merge_skill.py" = ["E501", "PLR0904"]
@@ -323,9 +300,8 @@ layers = [
     "_lock_recovery",
     "_lock_owner | _lock_reservation",
     "_commit_chain",
-    "_activation_outbox | _chain_batch_authorize",
-    "_activation | _chain_batch_carrier | _storage",
-    "_ingest_merge | _merge_replay",
+    "_storage",
+    "_merge_replay",
     "_merge_transition",
     "_merge_recovery_proof",
     "_merge_recovery_lifecycle",
@@ -333,7 +309,23 @@ layers = [
     "_merge_candidate_observation",
     "_merge_candidate_observation_steps | _merge_cleanup_result | _merge_release | _merge_scope",
     "_lock_record_io | _merge_cleanup_history | _merge_cleanup_observation | _merge_scope_binding | _remote_observation",
-    "_bootstrap_observation | _candidate_v2 | _chain_state | _fenced_child | _ingest_capture | _ingest_currency | _lock_record_validators | _merge_cleanup_intent | _merge_events | _merge_plan | _merge_rebase | _merge_state_shape | _receipt_snapshot | _repository",
+    "_bootstrap_observation | _candidate_v2 | _chain_state | _fenced_child | _lock_record_validators | _merge_cleanup_intent | _merge_events | _merge_plan | _merge_rebase | _merge_state_shape | _repository",
+    "_commit_replay",
+    "_replay_grammar",
+    "_replay_merge_transitions",
+    "_replay_merge_event_evidence",
+    "_replay_state_shape",
+    "_replay_merge_bootstrap_evidence",
+    "_replay_merge_state",
+    "_replay_merge_push_evidence",
+    "_replay_merge_lifecycle_evidence",
+    "_replay_merge_observations",
+    "_replay_merge_authority",
+    "_replay_merge_payload",
+    "_replay_merge_candidates",
+    "_replay_vocabulary",
+    "_replay_values",
+    "_replay_frames",
     "_core",
     "_controls",
     "_state",
@@ -361,7 +353,7 @@ layers = [
     "_review_lane_api",
     "_finalize | _merge_candidate_generation",
     "_approval | _candidate_ops | _fresh_eval_evidence | _gate_checks | _merge_bootstrap_child | _merge_candidate_observation | _review_attempt",
-    "_archive | _classification | _cli_options | _command_lock | _fresh_eval | _journal | _merge_bootstrap_result | _merge_candidate | _merge_claim | _merge_conflict | _merge_epoch | _merge_rebase_integrated | _merge_scope_binding | _merge_scope_derive | _merge_worktree | _parser | _review_transport",
+    "_classification | _cli_options | _command_lock | _fresh_eval | _merge_bootstrap_result | _merge_candidate | _merge_claim | _merge_conflict | _merge_epoch | _merge_rebase_integrated | _merge_scope_binding | _merge_scope_derive | _merge_worktree | _parser | _review_transport",
     "_review_attempt_proc",
     "_review_wrapper",
     "_review_wrapper_io",
@@ -387,7 +379,7 @@ layers = [
     # _merge_engine only under TYPE_CHECKING (excluded above); the _steps siblings hold tier-2 helpers.
     "_engine_abort | _engine_bootstrap | _engine_cleanup | _engine_cleanup_child | _engine_conflict_observation | _engine_epoch_ancestry | _engine_epoch_fetch | _engine_epoch_push | _engine_epoch_rebase | _engine_epoch_suite | _engine_final_mode | _engine_finalize | _engine_gate | _engine_lifecycle | _engine_lock | _engine_observation | _engine_observe_remote | _engine_rebase_recovery | _engine_recover | _engine_recover_bootstrap | _engine_recover_conflict | _engine_refresh | _engine_release_aborted | _engine_release_pending | _engine_review_launch | _engine_review_request | _engine_review_verdict | _engine_start_chain",
     "_engine_lock_steps | _engine_observe_remote_steps | _engine_recover_steps",
-    "_admission | _candidate_observation | _mutation_journal",
+    "_admission | _candidate_observation",
 ]
 ignore_imports = [
     "forge_cli.runtime -> codex_orchestrator.batch",
@@ -395,7 +387,7 @@ ignore_imports = [
     "forge_cli.runtime -> codex_orchestrator.journal",
 ]
 
-# codex_orchestrator must not depend on forge_cli at module import time. The four
+# codex_orchestrator must not depend on forge_cli at module import time. The three
 # function-level imports below are pre-existing lazy cross-links (2026-09-13); they
 # are ignored here so the contract tracks today's shape. TODO: remove each ignore
 # once the cross-link is gone (runtime.py:74 is the mirror-image lazy import from
@@ -409,5 +401,4 @@ ignore_imports = [
     "codex_orchestrator.builders -> forge_cli.candidate",
     "codex_orchestrator.builders -> forge_cli.fresh_evals",
     "codex_orchestrator.builders -> forge_cli.policy",
-    "codex_orchestrator.journal -> forge_cli.chain_core",
 ]

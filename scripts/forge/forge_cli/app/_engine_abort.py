@@ -98,11 +98,8 @@ def abort(self: MergeEngine, reason: str | None = None) -> Outcome:
             chain=state,
         )
     self._halt(state)
-    binding = state.get("run_binding")
     terminal_disposition = "ordinary"
-    with self.store._journal_outer(
-        binding if isinstance(binding, Mapping) else None
-    ), self._recording_common_lock(
+    with self._recording_common_lock(
         Path(str(state["worktree"]["common_dir"])),
         chain_id=str(state["chain_id"]),
         operation="abort",
@@ -374,7 +371,7 @@ def _attempted_release_preconditions_locked(
         if event.get("event") == "push_intent"
     ]
     push_result_digests: list[str] = []
-    for event, prior, current, _records, _source in replay.entries:
+    for event, prior, current in replay.entries:
         prior_push = (
             prior.get("integration", {}).get("push")
             if isinstance(prior, Mapping)

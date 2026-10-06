@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tests._cli_loader import package_module, patch_engine
@@ -24,8 +26,31 @@ ATTEMPT = package_module("engine._review_attempt")
 LANE_API = package_module("engine._review_lane_api")
 
 
+class LaunchReservedReasonTests(unittest.TestCase):
+    def test_cli_modules_have_no_reserved_reason_emitters(self):
+        reserved = {
+            "archive-rerender-mismatch", "archive-size-limit", "batch-idempotency-conflict",
+            "citation-out-of-root",
+            "batch-pending", "binding-invalid", "execution-result-pending", "ingest-proof-invalid",
+            "journal-outbox-pending", "legacy-recovery-approval-required", "lzma-unavailable",
+            "run-task-binding-invalid", "run-task-binding-required", "run-scope-exceeded",
+        }
+        members = {code.name for code in ENGINE.V2ReasonCode if code.value in reserved}
+        self.assertEqual(len(members), len(reserved))
+        pattern = re.compile(r"\b(?:" + "|".join(sorted(members | reserved)) + r")\b")
+        modules = sorted(Path(LAUNCH_LANE.__file__).parent.parent.rglob("*.py"))
+        self.assertTrue(modules)
+        for path in modules:
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                if path.name == "envelope.py":
+                    source = re.sub(r'^    [A-Z_]+ = "[a-z-]+"$', "", source, flags=re.MULTILINE)
+                self.assertIsNone(pattern.search(source))
+                self.assertNotIn("journal batch-recover", source)
+
+
 class LaunchRecoveryTests(LaunchLaneSupport, unittest.TestCase):
-    def test_malformed_owner_outcome_names_batch_recovery(self) -> None:
+    def test_malformed_owner_outcome_preserves_evidence(self) -> None:
         with (
             mock.patch.object(
                 VERBS_LAUNCH, "_builder_start", return_value=mock.Mock(records=[])
@@ -36,12 +61,11 @@ class LaunchRecoveryTests(LaunchLaneSupport, unittest.TestCase):
         self.assertIs(caught.exception.reason_code, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE)
         self.assertEqual(
             caught.exception.message,
-            "forge: launch refused — owner record outcome is ambiguous; run "
-            "journal batch-recover",
+            "forge: launch refused — owner record outcome is ambiguous",
         )
         self.assertEqual(
             caught.exception.remediation,
-            "run journal batch-recover for the named run",
+            "inspect the launch owner record before retrying",
         )
 
     def test_spawn_result_refusal_rereads_state_and_uses_structured_recovery(self) -> None:
@@ -70,11 +94,36 @@ class LaunchRecoveryTests(LaunchLaneSupport, unittest.TestCase):
         ):
             self.launch_direct(engine=engine)
         self.assertEqual(caught.exception.message, journal.BATCH_PENDING)
-        self.assertIs(caught.exception.reason_code, ENGINE.V2ReasonCode.BATCH_PENDING)
+        self.assertIs(caught.exception.reason_code, ENGINE.V2ReasonCode.STATE_PRECONDITION)
         self.assertEqual(
-            caught.exception.remediation, "run journal batch-recover for the named run"
+            caught.exception.remediation, "inspect the launch result record before retrying"
         )
         self.assertEqual(post_refusal_scans, [True])
+        self.assertEqual(caught.exception.outcome().exit_code, 1)
+
+    def test_spawn_result_refusal_recovers_an_already_written_result(self) -> None:
+        engine = self.ready_engine()
+        append_result = builders.execution_result
+
+        def append_then_refuse(*args: object, **kwargs: object) -> object:
+            append_result(*args, **kwargs)
+            raise journal.CoordinationRefusal("synthetic post-append refusal")
+
+        with (
+            patch_engine("spawn_wrapper", side_effect=OSError("fixture spawn failure")),
+            mock.patch.object(builders, "execution_result", side_effect=append_then_refuse),
+        ):
+            recovered = self.launch_direct(engine=engine)
+        self.assertEqual(recovered.message, "launch collect: failed")
+        self.assertEqual(recovered.state, "failed")
+        self.assertTrue(recovered.ok)
+        self.assertEqual(self.marker()["collected_status"], "failed")
+        results = [record for record in self.records() if record.get("type") == "execution_result"]
+        self.assertEqual(len(results), 1)
+        repeated = VERBS_LAUNCH_COLLECT.launch_collect(engine, "execution-01")
+        self.assertEqual(repeated.state, "failed")
+        self.assertEqual([record for record in self.records()
+                          if record.get("type") == "execution_result"], results)
 
     def _assert_cleanup_failure_is_explicit(self) -> None:
         engine = self.ready_engine()

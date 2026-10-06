@@ -15,7 +15,7 @@ import route_config
 import route_evidence
 import route_floor
 
-from forge_cli import chain_core, runtime
+from forge_cli import chain_core
 from forge_cli.engine import _review_lane_api
 from forge_cli.engine._state import CLAUDE_EXECUTABLE as CLAUDE_EXECUTABLE
 from forge_cli.engine._state import CODEX_EXECUTABLE as CODEX_EXECUTABLE
@@ -128,45 +128,6 @@ def _review_refusal(
                    observed=message, remediation=remediation, chain=state)
 
 
-def _run_snapshot(
-    ctx: chain_core.CommandContext, state: Mapping[str, Any] | None
-) -> dict[str, object] | None:
-    binding = state.get("run_binding") if state is not None else None
-    if not isinstance(binding, Mapping):
-        return None
-    _batch, _builders, journal = runtime._coordination_modules()
-    journal_path = (ctx.store.common_root / ".codex-orchestrator" / "runs"
-                    / str(binding["run_id"]) / "journal.jsonl")
-    records, issues = journal.read_journal(journal_path)
-    if issues:
-        raise _review_refusal("forge: review request refused — bound run journal is unreadable",
-                              state, expected="a readable bound run route snapshot")
-    return route_evidence._opening_snapshot(tuple(records))
-
-
-def _check_snapshot(
-    route: ReviewRoute,
-    snapshot: dict[str, object] | None,
-    state: Mapping[str, Any] | None,
-) -> None:
-    if snapshot is None:
-        return
-    expected = snapshot.get(route.role)
-    if not isinstance(expected, dict):
-        message = (
-            f"forge: review request refused — role {route.role} has no frozen route "
-            "in the run snapshot"
-        )
-        raise _review_refusal(message, state)
-    for field, value in route.route_fields().items():
-        if expected.get(field) != value:
-            message = (
-                "forge: review request refused — route diverges from run snapshot "
-                f"for {route.role}: {field}"
-            )
-            raise _review_refusal(message, state)
-
-
 def resolve_review_route(
     ctx: chain_core.CommandContext,
     role: str,
@@ -180,7 +141,6 @@ def resolve_review_route(
         raise _review_refusal(str(exc), state) from exc
     route = ReviewRoute(role, resolved.provider, resolved.model, resolved.effort,
                         resolved.route_source, resolved.route_sha256, sandbox)
-    _check_snapshot(route, _run_snapshot(ctx, state), state)
     return route
 
 

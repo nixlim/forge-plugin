@@ -4,11 +4,10 @@ import copy
 import os
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from forge_cli import chain_core, engine, runtime
 from forge_cli.app._candidate_observation import _observe_current_merge_candidate
-from forge_cli.app._mutation_journal import _persist_deferred_mutation_result
 from forge_cli.envelope import REVISION9_OUTPUT_SCHEMA, FrozenError, Refusal, V2ReasonCode
 from forge_cli.policy import sha256_bytes
 
@@ -82,13 +81,6 @@ def _run_epoch_suite(
             gate_id=gate_id,
             authorizing_event_digest=authorizing_digest,
         )
-        mutation_result_transform: (
-            Callable[
-                [chain_core.FencedProcessResult],
-                chain_core.FencedProcessResult,
-            ]
-            | None
-        ) = None
         if member["kind"] == "scoped-mutation":
             argv = [
                 sys.executable,
@@ -98,34 +90,6 @@ def _run_epoch_suite(
                 "--head",
                 str(state["candidate"]["candidate_head"]),
             ]
-            bound = engine._merge_run_directory(state)
-            if bound is not None:
-                bound_repository, _run_dir = bound
-                bound_run_id = str(state["run_binding"]["run_id"])
-                bound_task = str(state["run_binding"]["task_id"])
-                candidate_base = str(state["candidate"]["remote_tip"])
-                candidate_head = str(state["candidate"]["candidate_head"])
-                argv.extend(
-                    [
-                        "--repository",
-                        str(bound_repository),
-                        "--run-id",
-                        bound_run_id,
-                        "--task",
-                        bound_task,
-                        "--defer-journal",
-                    ]
-                )
-                mutation_result_transform = lambda result: (
-                    _persist_deferred_mutation_result(
-                        result,
-                        repository=bound_repository,
-                        run_id=bound_run_id,
-                        task=bound_task,
-                        base=candidate_base,
-                        head=candidate_head,
-                    )
-                )
             details: dict[str, Any] = {"kind": "scoped-mutation"}
         else:
             argv, remaining, details = self._resolve_gate(
@@ -233,13 +197,7 @@ def _run_epoch_suite(
             holder["passed"] = passed or member["kind"] == "scoped-mutation"
 
         environment = os.environ.copy()
-        if mutation_result_transform is None:
-            environment.pop("FORGE_SESSION_PID", None)
-        transform_options = (
-            {"result_transform": mutation_result_transform}
-            if mutation_result_transform is not None
-            else {}
-        )
+        environment.pop("FORGE_SESSION_PID", None)
         chain_core.run_fenced_command(
             lock,
             operation="gate",
@@ -252,7 +210,6 @@ def _run_epoch_suite(
             timeout=runtime.COMMAND_TIMEOUT_SECONDS,
             cap=runtime.OUTPUT_CAP_BYTES,
             verbose=self.ctx.options.verbose,
-            **transform_options,
         )
         try:
             state, candidate_observation = (

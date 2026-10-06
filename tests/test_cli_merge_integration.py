@@ -60,7 +60,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         original_replay = CLI._replay_merge_event_bytes
         original_transition_valid = CLI._merge_transition_valid
         original_prepare_event = CLI.MergeChainStore._prepare_event
-        _batch, builders, _journal = CLI._coordination_modules()
+        builders = package_module("chain_core._replay_grammar")
         baseline_controls = (
             frozenset(CLI.MERGE_STORE_CONTROLS),
             frozenset(CLI._REQUIRED_MERGE_STORE_CONTROLS),
@@ -70,10 +70,8 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         baseline_functions = (
             id(CLI.reduce_merge_event),
             id(CLI._merge_state_shape_valid),
-            id(builders._merge_transition_valid),
+            id(builders._validate_merge_transition),
             id(builders._state_shape_valid),
-            id(builders._event_batch_records),
-            id(builders._binding_matches_source_fact),
         )
         replay_cache = OrderedDict()
         replay_cache_observations = {"hits": 0}
@@ -96,11 +94,9 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 == (
                     id(CLI.reduce_merge_event),
                     id(CLI._merge_state_shape_valid),
-                    id(builders._merge_transition_valid),
+                    id(builders._validate_merge_transition),
                     id(builders._state_shape_valid),
-                    id(builders._event_batch_records),
-                    id(builders._binding_matches_source_fact),
-                )
+                                )
                 and CLI._merge_transition_valid is capture_transition_context
             )
 
@@ -108,7 +104,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return bool(
                 replay.state.get("run_binding") is None
                 and replay.state.get("journal_outbox") is None
-                and not any(entry[3] for entry in replay.entries)
                 and not any(
                     event.get("event") == "journal_receipted"
                     for event in replay.events
@@ -122,7 +117,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 replay_cache.popitem(last=False)
 
         def capture_transition_context(
-            replay_builders,
             event,
             prior,
             current,
@@ -131,7 +125,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             history=(),
         ):
             result = original_transition_valid(
-                replay_builders,
                 event,
                 prior,
                 current,
@@ -150,13 +143,12 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             return result
 
         def cached_unbound_replay(
-            chain_id, raw_events, *, verify_receipts=True
+            chain_id, raw_events
         ):
             if not controls_and_validators_pristine():
                 return original_replay(
                     chain_id,
                     raw_events,
-                    verify_receipts=verify_receipts,
                 )
             key = (chain_id, raw_events)
             cached = replay_cache.get(key)
@@ -167,7 +159,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             replay = original_replay(
                 chain_id,
                 raw_events,
-                verify_receipts=verify_receipts,
             )
             if replay_cache_eligible(replay):
                 remember_replay(key, replay)
@@ -181,13 +172,11 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 result = original_prepare_event(store, replay, **kwargs)
             finally:
                 preparing_event -= 1
-            event, current, records, pending_outbox = result
+            event, current = result
             context = captured_context.pop(event.get("digest"), None)
             if not (
                 controls_and_validators_pristine()
                 and context is not None
-                and not records
-                and pending_outbox is None
                 and current.get("run_binding") is None
                 and current.get("journal_outbox") is None
                 and (replay is None or replay_cache_eligible(replay))
@@ -214,8 +203,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                             else None
                         ),
                         copy.deepcopy(current),
-                        (),
-                        None,
                     ),
                 ),
                 prefix_state_bytes=(
@@ -920,7 +907,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         self.assertIsNone(failed["candidate"])
         self.assertIsNone(failed["tier"])
         self.assertIsNone(failed["run"])
-        self.assertIsNone(failed["run_binding"])
+        self.assertNotIn("run_binding", failed)
         self.assertEqual(
             [event["event"] for event in events],
             [
@@ -933,7 +920,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
         self.assertEqual([event["sequence"] for event in events], [1, 2, 3, 4, 5])
         self.assertTrue(all(event["generation_digest"] is None for event in events))
-        self.assertIsNone(events[3]["payload"]["scope_request"])
+        self.assertNotIn("scope_request", events[3]["payload"])
         self.assertIsNone(events[4]["payload"]["scope_fetch_binding"])
         self.assertIsNone(events[4]["payload"]["scope_proof"])
         remote_after = subprocess.run(
@@ -1308,283 +1295,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         ):
             store._read_replay_locked(chain_id)
 
-    def test_scope_abort_release_cutoffs_recover_without_rerunning_children(
-        self,
-    ) -> None:
-        self.open_run()
-        outside = self.worktree / "outside" / "scope-cutoff.py"
-        outside.parent.mkdir()
-        outside.write_text("OUTSIDE = True\n", encoding="utf-8")
-        self.git_at(self.worktree, "add", "outside/scope-cutoff.py")
-        self.git_at(
-            self.worktree, "commit", "--quiet", "-m", "scope cutoff fixture"
-        )
-        remote_before = self.git_at(
-            self.origin, "rev-parse", "refs/heads/fixture-main"
-        )
-        branch_before = self.git("rev-parse", "refs/heads/feature")
-
-        def park_scope_release(cutoff: str):
-            starter = CLI.MergeEngine(self.context(run_id=self.run_id))
-            ids_before = set(starter.store.list_ids(family="merge"))
-            original_transition = starter.store.transition
-            stopped = False
-
-            def stop_after_cutoff(snapshot, event_name, *args, **kwargs):
-                nonlocal stopped
-                current = original_transition(
-                    snapshot, event_name, *args, **kwargs
-                )
-                if event_name == cutoff and not stopped:
-                    stopped = True
-                    raise RuntimeError(f"scope cutoff after {cutoff}")
-                return current
-
-            with mock.patch.object(
-                starter.store,
-                "transition",
-                side_effect=stop_after_cutoff,
-            ), self.assertRaisesRegex(
-                RuntimeError, rf"scope cutoff after {cutoff}"
-            ):
-                starter.start_chain(
-                    str(self.worktree),
-                    task=self.task_id,
-                    remote_tip=self.base,
-                )
-            created = set(starter.store.list_ids(family="merge")) - ids_before
-            self.assertEqual(len(created), 1)
-            chain_id = created.pop()
-            engine = CLI.MergeEngine(self.context(chain_id=chain_id))
-            pending = engine.store.load(chain_id)
-            events = self.events(engine.store, chain_id)
-            self.assertEqual(events[-1]["event"], cutoff)
-            return engine, pending, events
-
-        def assert_scope_preimage(engine, events):
-            chain_id = str(events[0]["chain_id"])
-            replay = self._original_merge_replay(
-                chain_id, engine.store.events_path(chain_id).read_bytes()
-            )
-            release_entry = next(
-                entry
-                for entry in replay.entries
-                if entry[0]["event"] == "ownership_release_intent"
-            )
-            release, prior = release_entry[:2]
-            release_index = next(
-                index
-                for index, event in enumerate(replay.events)
-                if event["digest"] == release["digest"]
-            )
-            history = list(replay.events[:release_index])
-            scope_event = next(
-                event
-                for event in history
-                if event["event"] == "fetch_result"
-                and event["payload"]["scope_proof"]["result"] == "exceeded"
-            )
-            proof = scope_event["payload"]["scope_proof"]
-            candidate = prior["candidate"]
-            worktree = prior["worktree"]
-            preconditions = {
-                "schema": "forge-run-scope-abort-preconditions/1",
-                "target_terminal": "aborted",
-                "terminal_disposition": "ordinary",
-                "release_mode": "acquired",
-                "source_state": "classifying",
-                "scope_proof_digest": proof["digest"],
-                "fetch_result_event_digest": scope_event["digest"],
-                "generation_digest": candidate["generation_digest"],
-                "worktree_identity": {
-                    name: worktree[name]
-                    for name in ("path", "git_dir", "common_dir")
-                },
-                "branch": prior["branch"],
-                "candidate_head": candidate["candidate_head"],
-                "current_head": candidate["candidate_head"],
-                "status_output_digest": CLI.sha256_bytes(b""),
-                "push_intent_event_digests": [],
-                "git_mutation_intent_event_digests": [],
-                "unresolved_fence_digests": [],
-            }
-            self.assertEqual(history[-1]["digest"], scope_event["digest"])
-            self.assertEqual(
-                release["payload"]["terminal_preconditions_digest"],
-                CLI.sha256_bytes(CLI.canonical_bytes(preconditions)),
-            )
-            self.assertTrue(
-                CLI._merge_release_preconditions_valid(release, prior, history)
-            )
-            return release, prior, history, scope_event
-
-        mutation_carriers = (
-            {"event": "rebase_intent", "payload": {}},
-            {"event": "push_intent", "payload": {}},
-            {"event": "cleanup_intent", "payload": {}},
-            {
-                "event": "condition_recorded",
-                "payload": {
-                    "delta": {
-                        "integration": {
-                            "intent": {
-                                "schema": "forge-remote-observation-progress/1",
-                                "stage": "containment-intent",
-                            }
-                        }
-                    }
-                },
-            },
-            {
-                "event": "condition_recorded",
-                "payload": {
-                    "delta": {
-                        "integration": {
-                            "intent": {
-                                "schema": "forge-epoch-ancestry-intent/1",
-                                "phase": "intent",
-                            }
-                        }
-                    }
-                },
-            },
-        )
-        for ordinal, cutoff in enumerate(
-            ("ownership_release_intent", "ownership_released")
-        ):
-            with self.subTest(cutoff=cutoff):
-                engine, pending, before = park_scope_release(cutoff)
-                chain_id = str(pending["chain_id"])
-                release, prior, history, scope_event = assert_scope_preimage(
-                    engine, before
-                )
-                release_payload = copy.deepcopy(release["payload"])
-                scope_payload = copy.deepcopy(scope_event["payload"])
-                claim_path = Path(str(pending["worktree"]["claim"]["path"]))
-                self.assertTrue(claim_path.exists())
-                self.assertEqual(
-                    pending["worktree"]["claim"]["status"],
-                    "releasing" if ordinal == 0 else "released",
-                )
-
-                if ordinal == 0:
-                    for carrier in mutation_carriers:
-                        retained = [*history[:-1], carrier, history[-1]]
-                        self.assertFalse(
-                            CLI._merge_release_preconditions_valid(
-                                release, prior, retained
-                            )
-                        )
-                    tampered = copy.deepcopy(before)
-                    release_index = next(
-                        index
-                        for index, event in enumerate(tampered)
-                        if event["digest"] == release["digest"]
-                    )
-                    digest = tampered[release_index]["payload"][
-                        "terminal_preconditions_digest"
-                    ]
-                    tampered[release_index]["payload"][
-                        "terminal_preconditions_digest"
-                    ] = ("0" if digest[0] != "0" else "1") + digest[1:]
-                    raw = self.reseal_suffix(tampered, release_index)
-                    with mock.patch.object(
-                        engine.store, "_read_root_bytes", return_value=raw
-                    ), self.assertRaisesRegex(
-                        CLI.FrozenError,
-                        rf"merge event {release['sequence']} transition is invalid",
-                    ):
-                        engine.store._read_replay_locked(chain_id)
-
-                original_remove = CLI._remove_merge_claim
-                bounded_calls: list[list[str]] = []
-                tombstone_failures = 0
-
-                def record_bounded(argv, **kwargs):
-                    bounded_calls.append(list(argv))
-                    return original_bounded(argv, **kwargs)
-
-                def retain_second_tombstone(
-                    selected_store, selected_state, *, unlink=True
-                ):
-                    nonlocal tombstone_failures
-                    if ordinal == 1 and unlink:
-                        tombstone_failures += 1
-                        raise OSError("retain released scope tombstone")
-                    return original_remove(
-                        selected_store, selected_state, unlink=unlink
-                    )
-
-                original_bounded = CLI.run_bounded
-                with patch_chain_core("run_fenced_command",
-                    side_effect=AssertionError(
-                        "scope release recovery reran a fenced Git child"
-                    ),
-                ) as fenced, patch_chain_core("acquire_common_lock",
-                    side_effect=AssertionError(
-                        "scope release recovery acquired the common lock"
-                    ),
-                ) as common, mock.patch.object(
-                    RUNTIME, "run_bounded", side_effect=record_bounded
-                ), patch_engine(
-                    "_remove_merge_claim",
-                    side_effect=retain_second_tombstone,
-                ), mock.patch.object(
-                    engine,
-                    "_recover_classifying_bootstrap_locked",
-                    side_effect=AssertionError(
-                        "scope release recovery resumed bootstrap"
-                    ),
-                ) as bootstrap:
-                    recovered = engine.recover()
-                fenced.assert_not_called()
-                common.assert_not_called()
-                bootstrap.assert_not_called()
-
-                terminal = engine.store.load(chain_id)
-                after = self.events(engine.store, chain_id)
-                expected_suffix = (
-                    ["ownership_released", "aborted"]
-                    if ordinal == 0
-                    else ["aborted"]
-                )
-                self.assertTrue(recovered.ok)
-                self.assertEqual(terminal["state"], "aborted")
-                self.assertEqual(
-                    [event["event"] for event in after[len(before) :]],
-                    expected_suffix,
-                )
-                self.assertEqual(
-                    next(
-                        event["payload"]
-                        for event in after
-                        if event["event"] == "ownership_release_intent"
-                    ),
-                    release_payload,
-                )
-                self.assertEqual(
-                    next(
-                        event["payload"]
-                        for event in after
-                        if event["digest"] == scope_event["digest"]
-                    ),
-                    scope_payload,
-                )
-                self.assertEqual(
-                    [Path(argv[1]).name for argv in bounded_calls],
-                    ["check-halt.sh"],
-                )
-                self.assertEqual(tombstone_failures, ordinal)
-                self.assertEqual(claim_path.exists(), ordinal == 1)
-                self.assertEqual(
-                    self.git_at(
-                        self.origin, "rev-parse", "refs/heads/fixture-main"
-                    ),
-                    remote_before,
-                )
-                self.assertEqual(
-                    self.git("rev-parse", "refs/heads/feature"), branch_before
-                )
 
     def test_pending_release_stale_lease_routes_through_recovery_lock(self) -> None:
         engine, store, authorized = self.authorize()
@@ -2237,7 +1947,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         target_reached = False
 
         def disable_observation_control_only_at_target(
-            replay_builders,
             event,
             prior,
             current,
@@ -2248,7 +1957,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             nonlocal target_reached
             if event.get("sequence") != target_sequence:
                 return validated_transition(
-                    replay_builders,
                     event,
                     prior,
                     current,
@@ -2265,7 +1973,6 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
                 "observation-first-recovery",
             ):
                 validated_transition(
-                    replay_builders,
                     event,
                     prior,
                     current,
@@ -4225,7 +3932,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             "closed",
             "aborted",
         )
-        _batch, builders, _journal = CLI._coordination_modules()
+        builders = package_module("chain_core._replay_grammar")
         self.assertEqual(
             frozenset(legal_scalar_states),
             builders._MERGE_STATES,
@@ -4335,7 +4042,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
             ),
             ("malformed", "replace-head-name", b"x" * 4097, False),
         )
-        _batch, builders, _journal = CLI._coordination_modules()
+        builders = package_module("chain_core._replay_grammar")
         legal_scalar_states = tuple(sorted(builders._MERGE_STATES))
         bare_routes = {
             "classifying": "_recover_classifying_bootstrap_locked",
@@ -5628,7 +5335,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
         rebase_projection = next(
             current
-            for event, _prior, current, _records, _source in replay.entries
+            for event, _prior, current in replay.entries
             if event["digest"] == rebase_result["digest"]
         )
         self.assertEqual(
@@ -5639,7 +5346,7 @@ class MergeIntegrationEpochTests(ADAPTERS.MergeAdapterFixture):
         )
         carried_fetch_projection = next(
             current
-            for event, _prior, current, _records, _source in reversed(
+            for event, _prior, current in reversed(
                 replay.entries
             )
             if event["event"] == "fetch_result"

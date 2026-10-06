@@ -68,18 +68,9 @@ def _prepare_bootstrap_git_no_lazy_fetch_qualification(
             engine._merge_scope_environment(),
         )
     except OSError as exc:
-        run_bound = admission.run_task is not None
         raise chain_core._merge_refusal(
-            (
-                V2ReasonCode.RUN_TASK_BINDING_INVALID
-                if run_bound
-                else V2ReasonCode.FETCH_FAILED
-            ),
-            (
-                f"forge: {verb} refused — run/task scope derivation is invalid"
-                if run_bound
-                else f"forge: {verb} refused — fixed target fetch failed"
-            ),
+            V2ReasonCode.FETCH_FAILED,
+            f"forge: {verb} refused — fixed target fetch failed",
             expected="Git with proven GIT_NO_LAZY_FETCH support",
             observed=str(exc),
         ) from exc
@@ -302,14 +293,6 @@ def _recover_can_reach_final_mode(
 def _read_only_recovery_flag_state(self: MergeEngine) -> dict[str, Any]:
     """Read replay truth without repairing bytes before a loud-flag refusal."""
 
-    if self.ctx.options.run_id is not None:
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge transition refused — later verbs inherit the immutable run/task binding",
-            expected="no --run-id or --task after merge start",
-            observed=self.ctx.options.run_id,
-            remediation="retry with only the recorded --chain-id",
-        )
     chain_id = self.ctx.options.chain_id
     if chain_id is None:
         raise Refusal(
@@ -327,4 +310,4 @@ def _read_only_recovery_flag_state(self: MergeEngine) -> dict[str, Any]:
         )
     with self.store.event_lock(chain_id):
         replay = self.store._read_replay_locked(chain_id)
-        return self.store._resolve_replayed_projection(replay)
+        return copy.deepcopy(replay.state)

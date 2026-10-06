@@ -11,11 +11,8 @@ def prepare_merge_admission(
     ctx: chain_core.CommandContext,
     worktree: str,
     declared_tier: str | None,
-    *,
-    task: str | None = None,
-    create_run_lock: bool = False,
 ) -> engine.MergeAdmission:
-    """Prove FR-231 admission, reserving only an opted-in start run lock."""
+    """Prove FR-231 worktree and committed-policy admission."""
 
     chain_core._require_merge_adapter_control("admission-and-generation")
     chain_core._require_merge_adapter_control("halt")
@@ -26,14 +23,6 @@ def prepare_merge_admission(
             "forge: merge start refused — declared tier is invalid",
             expected="fast, standard, hard, or no declaration",
             observed=str(declared_tier),
-        )
-    if (ctx.options.run_id is None) != (task is None):
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
-            "forge: merge start refused — --run-id and --task must be supplied together",
-            expected="both binding flags or neither binding flag",
-            observed=f"run_id={ctx.options.run_id!r}, task={task!r}",
-            remediation="retry start with the exact paired --run-id and --task",
         )
     supplied = Path(worktree)
     lexical = Path(os.path.abspath(os.fspath(supplied)))
@@ -175,16 +164,6 @@ def prepare_merge_admission(
             expected=f"valid {candidate_head}:forge-project.md",
             observed=str(exc),
         ) from exc
-    run_task = None
-    if ctx.options.run_id is not None and task is not None:
-        run_task = chain_core._prove_merge_run_task_binding(
-            main.root,
-            ctx.store.common_root,
-            ctx.options.run_id,
-            task,
-            policy.digest,
-            create_batch_lock=create_run_lock,
-        )
     return engine.MergeAdmission(
         repository=main.root,
         worktree=candidate.root,
@@ -202,6 +181,5 @@ def prepare_merge_admission(
         candidate_head=candidate_head,
         policy=policy,
         declared_tier=declared_tier,
-        run_task=run_task,
         status_output_digest=sha256_bytes(status),
     )

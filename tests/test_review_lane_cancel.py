@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager, nullcontext
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -15,13 +14,11 @@ ATTEMPT = package_module("engine._review_attempt")
 CANCEL = package_module("engine._verbs_review_cancel")
 COLLECT = package_module("engine._verbs_review_collect")
 LANE_API = package_module("engine._review_lane_api")
-LOCK = package_module("engine._command_lock")
 PARSER = package_module("engine._parser")
 REQUEST = package_module("engine._verbs_review_request")
 STATE = package_module("engine._state")
 ATTEMPT_ID = "attempt-" + "a" * 16
 FUTURE = "2999-01-01T00:00:00Z"
-RUN_ID = "run-20260927-review-cancel-lock"
 
 
 def reviewing(request: dict[str, object]) -> dict[str, object]:
@@ -497,91 +494,6 @@ class CommitReviewRecoveryAuditTests(unittest.TestCase):
         self.assertIn(
             f"finding: MAJOR {expected}\n".encode(), write.call_args.args[3]
         )
-
-
-class _LockStore:
-    def __init__(self, root: Path, order: list[str]) -> None:
-        self.common_root = root / "common"
-        self.order = order
-        self.state = {
-            "state": "aborted",
-            "created_at": "2026-09-27T01:02:03Z",
-            "staging": {"worktree_root": str(root)},
-            "run_binding": {"run_id": RUN_ID},
-        }
-
-    def list_ids(self, *, family: str):
-        return ["c-terminal"] if family == "commit" else []
-
-    def chain_family(self, _chain_id: str) -> str:
-        return "commit"
-
-    def _events_unlocked(self, _chain_id: str):
-        return [{"payload": {"state": self.state}}]
-
-    def event_lock(self, _chain_id: str):
-        return nullcontext()
-
-    @contextmanager
-    def admission_lock(self, _root: Path):
-        self.order.append("worktree-enter")
-        try:
-            yield
-        finally:
-            self.order.append("worktree-exit")
-
-
-class CommitReviewCancelLockTests(unittest.TestCase):
-    def test_terminal_bound_cancel_takes_journal_before_worktree_lock(self) -> None:
-        order: list[str] = []
-        root = Path("/fixture/repository")
-        store = _LockStore(root, order)
-        options = SimpleNamespace(
-            chain_id=None, run_id=None, revision9_face=False
-        )
-        fake = SimpleNamespace(
-            ctx=SimpleNamespace(store=store, repo=SimpleNamespace(root=root), options=options)
-        )
-        expected_result = object()
-
-        def review_cancel(_self):
-            order.append("verb")
-            return expected_result
-
-        @contextmanager
-        def journal_lock(*_args, **_kwargs):
-            order.append("journal-enter")
-            try:
-                yield
-            finally:
-                order.append("journal-exit")
-
-        journal = SimpleNamespace(CoordinationRefusal=RuntimeError)
-        wrapped = LOCK._serialize_worktree_command(review_cancel)
-        expected = [
-            "journal-enter", "worktree-enter", "verb",
-            "worktree-exit", "journal-exit",
-        ]
-
-        def assert_control() -> None:
-            order.clear()
-            self.assertIs(wrapped(fake), expected_result)
-            self.assertEqual(order, expected)
-
-        with (
-            mock.patch.object(LOCK.chain_core, "register_coordination_seams"),
-            mock.patch.object(LOCK.chain_core, "_chain_batch_lock", journal_lock),
-            mock.patch.object(
-                LOCK.runtime, "_coordination_modules",
-                return_value=(SimpleNamespace(), SimpleNamespace(), journal),
-            ),
-        ):
-            assert_control()
-            disabled = LOCK._TERMINAL_SELECTION_METHODS - {"review_cancel"}
-            with mock.patch.object(LOCK, "_TERMINAL_SELECTION_METHODS", disabled):
-                with self.assertRaises(AssertionError):
-                    assert_control()
-                self.assertEqual(order, ["worktree-enter", "verb", "worktree-exit"])
 
 
 if __name__ == "__main__":

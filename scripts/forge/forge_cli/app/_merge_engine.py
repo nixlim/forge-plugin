@@ -59,14 +59,6 @@ class MergeEngine:
         return self.ctx.store
 
     def _load(self) -> dict[str, Any]:
-        if self.ctx.options.run_id is not None:
-            raise chain_core._merge_refusal(
-                V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                "forge: merge transition refused — later verbs inherit the immutable run/task binding",
-                expected="no --run-id or --task after merge start",
-                observed=self.ctx.options.run_id,
-                remediation="retry with only the recorded --chain-id",
-            )
         chain_id = self.ctx.options.chain_id
         if chain_id is None:
             raise Refusal(
@@ -76,8 +68,6 @@ class MergeEngine:
                 schema=REVISION9_OUTPUT_SCHEMA,
             )
         state = self.store.load(chain_id)
-        if state.get("journal_outbox") is not None:
-            state = self.store.recover_pending_outbox(chain_id)
         return state
     _read_only_recovery_flag_state = _engine_final_mode._read_only_recovery_flag_state
 
@@ -109,7 +99,6 @@ class MergeEngine:
     _claim_slot = _engine_start_chain._claim_slot
     _allocate_chain_id = _engine_start_chain._allocate_chain_id
     _initial_merge_state = _engine_start_chain._initial_merge_state
-    _record_bootstrap_failure = _engine_start_chain._record_bootstrap_failure
     _bootstrap_fetch_argv = staticmethod(_engine_bootstrap._bootstrap_fetch_argv)
     _resolved_fetch_tip = staticmethod(_engine_bootstrap._resolved_fetch_tip)
     _recover_merge_bootstrap_scope_binding = _engine_recover_bootstrap._recover_merge_bootstrap_scope_binding
@@ -124,7 +113,6 @@ class MergeEngine:
     approve = _engine_lifecycle.approve
     _release_to_aborted = _engine_release_aborted._release_to_aborted
     _release_to_aborted_locked = _engine_release_aborted._release_to_aborted_locked
-    _release_scope_exceeded = _engine_release_aborted._release_scope_exceeded
     abort = _engine_abort.abort
     status = _engine_lifecycle.status
 

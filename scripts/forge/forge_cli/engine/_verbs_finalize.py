@@ -7,7 +7,6 @@ from typing import Any, MutableMapping
 from forge_cli import chain_core, runtime
 from forge_cli.engine._approval import _authorization_problem as _authorization_problem
 from forge_cli.engine._approval import _success as _success
-from forge_cli.engine._archive import _archive_recheck as _archive_recheck
 from forge_cli.engine._classification import _classification_argv as _classification_argv
 from forge_cli.engine._classification import (
     _classification_environment as _classification_environment,
@@ -69,7 +68,6 @@ def finalize(self, message: str) -> Outcome:
             return primary
         if state["state"] != "authorized":
             self._wrong_state(state, "authorized", "commit finalize")
-        _archive_recheck(self.ctx, state, "commit")
         current_head = self.ctx.repo.head()
         if current_head != state["repo_head"]:
             self._record_head_moved(state, current_head)
@@ -135,7 +133,6 @@ def finalize(self, message: str) -> Outcome:
                     chain=state,
                     evidence_refs=[record["transcript"]],
                 )
-        _archive_recheck(self.ctx, state, "commit")
         # Candidate identity is the last observation before the durable
         # intent.  This closes the window in which a slow fast-tier
         # recomputation could otherwise allow a later CLI restage to race
@@ -187,7 +184,6 @@ def finalize(self, message: str) -> Outcome:
         # This is the last observation before Git receives commit
         # authority.  A failure leaves the durable intent recoverable and
         # performs no commit side effect.
-        _archive_recheck(self.ctx, state, "commit")
         commit = self.ctx.repo.git(
             ["commit", "--cleanup=verbatim", "-m", message], check=False
         )

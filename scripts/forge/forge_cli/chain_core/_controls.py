@@ -146,13 +146,8 @@ _REQUIRED_MERGE_STORE_CONTROLS = frozenset(
         "family-isolated-enumeration",
         "separate-merge-grammar",
         "lease-tail-authentication",
-        "nonrecursive-source-digest",
-        "typed-journal-builders",
-        "consequential-event-set",
-        "projected-journal-outbox",
         "builder-transition-validation",
         "event-before-state",
-        "post-serialization-journal-drain",
         "replay-projection-repair",
     }
 )
@@ -167,7 +162,6 @@ _REQUIRED_MERGE_ADAPTER_CONTROLS = frozenset(
         "halt",
         "ordered-gate-suite",
         "mandatory-review-final",
-        "run-relative-evidence",
     }
 )
 
@@ -184,12 +178,11 @@ _REQUIRED_MERGE_INTEGRATION_CONTROLS = frozenset(
         "loud-recover-flags",
         "nonmovement-counter-reset",
         "sealed-gate-plan",
-        "post-fetch-scope-proof",
+        "post-fetch-binding",
         "observation-first-recovery",
         "nonforce-cleanup",
         "push-retry",
         "rebase-result-proof",
-        "scope-release-clean-status",
         "scope-sidecar-recovery",
         "successor-ancestry-observation",
     }
@@ -197,32 +190,6 @@ _REQUIRED_MERGE_INTEGRATION_CONTROLS = frozenset(
 
 
 MERGE_INTEGRATION_CONTROLS = _REQUIRED_MERGE_INTEGRATION_CONTROLS
-
-
-INGEST_PROOF_ORDER = (
-    "chain-schema-and-digest-replay",
-    "materialized-state",
-    "repository",
-    "policy",
-    "generation",
-    "current-gates",
-    "review-package",
-    "reviewer-role",
-    "reviewer-iteration",
-    "reviewer-verdict",
-    "operator-approval",
-    "landing-proof",
-    "monotonic-transitions",
-    "closing-head-containment",
-    "task-membership",
-    "scope-membership",
-)
-
-
-_REQUIRED_INGEST_PROOF_CONTROLS = frozenset(INGEST_PROOF_ORDER)
-
-
-INGEST_PROOF_CONTROLS = _REQUIRED_INGEST_PROOF_CONTROLS
 
 
 _MERGE_CLEANUP_INTENT_SCHEMA = "forge-merge-cleanup-step-intent/1"

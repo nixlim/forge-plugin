@@ -2,12 +2,8 @@
 from __future__ import annotations
 from forge_cli import chain_core, engine as _engine_module, runtime, engine
 from forge_cli.app._merge_engine import MergeEngine
-from forge_cli.engine._cli_options import (
-    _BACKFILL_APPROVAL_REFUSAL as _BACKFILL_APPROVAL_REFUSAL,
-    _validate_commit_start_closing_options as _validate_commit_start_closing_options,
-)
 import argparse
-from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal, V2ReasonCode, OUTPUT_SCHEMA, REVISION9_OUTPUT_SCHEMA
+from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal, OUTPUT_SCHEMA, REVISION9_OUTPUT_SCHEMA
 import dataclasses
 import sys
 from typing import Sequence
@@ -62,67 +58,7 @@ def _dispatch_launch(engine: engine.Engine, args: argparse.Namespace) -> Outcome
 def _dispatch_commit_start(
     command_engine: engine.Engine, args: argparse.Namespace
 ) -> Outcome:
-    legacy_pair, backfill_pair = _validate_commit_start_closing_options(args)
-    if (command_engine.ctx.options.run_id is None) != (args.task is None):
-        raise Refusal(
-            V2ReasonCode.RUN_TASK_BINDING_REQUIRED,
-            "forge: commit start refused — --run-id and --task must be supplied together",
-            expected="both --run-id and --task, or neither",
-            observed="exactly one run/task binding flag",
-            remediation="rerun commit start with both binding flags or neither",
-        )
-    if legacy_pair[0] != legacy_pair[1]:
-        raise Refusal(
-            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
-            "forge: archive refused — legacy recovery approval missing or mismatched",
-            expected="paired --legacy-recovered-head and --legacy-approval",
-            observed="exactly one legacy recovery flag",
-            remediation="supply both legacy recovery flags with the reviewed tuple",
-        )
-    if args.archive_run_id is not None and (
-        args.task is not None or command_engine.ctx.options.run_id is not None
-    ):
-        raise Refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: archive refused — archive-only chains cannot carry a run/task binding",
-            expected="--archive-run-id without --run-id or --task",
-            observed="archive and run/task binding flags",
-            remediation="remove --run-id and --task from archive commit start",
-        )
-    if args.archive_run_id is None and any(backfill_pair):
-        raise Refusal(
-            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
-            _BACKFILL_APPROVAL_REFUSAL,
-            expected="backfill flags only with --archive-run-id",
-            observed="backfill flag on an ordinary commit start",
-            remediation="supply --archive-run-id or remove backfill flags",
-        )
-    if args.archive_run_id is None and (
-        args.closing_head is not None
-        or any(legacy_pair)
-        or args.dispense_citation
-        or args.dispense_reason
-    ):
-        raise Refusal(
-            V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED,
-            "forge: archive refused — legacy recovery approval missing or mismatched",
-            expected="archive flags only with --archive-run-id",
-            observed="archive-only flag on an ordinary commit start",
-            remediation="supply --archive-run-id or remove archive-only flags",
-        )
-    return command_engine.start(
-        args.paths or (),
-        args.declare_tier,
-        task=args.task,
-        archive_run_id=args.archive_run_id,
-        closing_head=args.closing_head,
-        legacy_recovered_head=args.legacy_recovered_head,
-        legacy_approval=args.legacy_approval,
-        backfill_closing_head=args.backfill_closing_head,
-        backfill_approval=args.backfill_approval,
-        dispense_targets=tuple(args.dispense_citation),
-        dispense_reason=args.dispense_reason,
-    )
+    return command_engine.start(args.paths, args.declare_tier)
 
 
 def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
@@ -144,7 +80,6 @@ def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
             return merge_engine.start_chain(
                 args.worktree,
                 args.declare_tier,
-                task=args.task,
             )
         if args.merge_command == "refresh":
             return merge_engine.refresh()
@@ -188,19 +123,6 @@ def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
             return routed.review_disposition(
                 args.finding, args.severity, args.resolution
             )
-    if args.command == "journal":
-        if args.journal_command == "batch-recover":
-            return engine.journal_batch_recover()
-        if args.journal_command == "ingest-chain":
-            return engine.journal_ingest_chain(
-                task=args.task,
-                state_file=args.state_file,
-                events_file=args.events_file,
-                outcome_map=args.outcome_map,
-                closing_head=args.closing_head,
-                task_status=args.task_status,
-                idempotency_key=args.idempotency_key,
-            )
     if args.command == "launch":
         return _dispatch_launch(engine, args)
     if args.command == "commit":
@@ -212,8 +134,6 @@ def dispatch(engine: engine.Engine, args: argparse.Namespace) -> Outcome:
             return engine.rebase()
         if args.commit_command == "abort":
             return engine.abort(args.reason)
-        if args.commit_command == "abort-disposition":
-            return engine.abort_disposition()
         if args.commit_command == "approve":
             if not chain_core.SHA256_RE.fullmatch(args.candidate):
                 raise Refusal(
@@ -249,85 +169,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         # malformed new face.  Old phase-1 commands that merely use --repo or
         # --chain-id remain v1.
         options.revision9_face = bool(
-            options.run_id is not None
-            or "journal" in command_argv
-            or bool(command_argv and command_argv[0] == "launch")
+            bool(command_argv and command_argv[0] == "launch")
             or bool(command_argv and command_argv[0] == "common-lock")
             or bool(
                 runtime.MERGE_LIFECYCLE_ACTIVE
                 and command_argv
                 and command_argv[0] == "merge"
             )
-            or any(
-                token == name or token.startswith(f"{name}=")
-                for token in command_argv
-                for name in (
-                    "--task",
-                    "--archive-run-id",
-                    "--closing-head",
-                    "--backfill-closing-head",
-                    "--backfill-approval",
-                    "--legacy-recovered-head",
-                    "--legacy-approval",
-                    "--dispense-citation",
-                    "--dispense-reason",
-                )
-            )
         )
         args = engine.build_parser().parse_args(command_argv)
-        options.revision9_face = options.revision9_face or bool(
-            args.command in {"journal", "common-lock", "launch"}
-            or (runtime.MERGE_LIFECYCLE_ACTIVE and args.command == "merge")
-            or (
-                args.command == "commit"
-                and args.commit_command == "start"
-                and (
-                    args.archive_run_id is not None
-                    or args.task is not None
-                    or options.run_id is not None
-                )
-            )
-        )
-        run_id_admitted = bool(
-            args.command == "journal"
-            or args.command == "launch"
-            or (
-                runtime.MERGE_LIFECYCLE_ACTIVE
-                and args.command == "merge"
-                and args.merge_command == "start"
-            )
-            or (
-                args.command == "commit"
-                and args.commit_command == "start"
-                and getattr(args, "archive_run_id", None) is None
-            )
-            # bead forge-plugin-11a: a tombstoned chain has no state to inherit
-            # a run from, so the disposition verb names the run explicitly.
-            or (args.command == "commit" and args.commit_command == "abort-disposition")
-        )
-        if options.run_id is not None and not run_id_admitted:
-            options.revision9_face = True
-            raise Refusal(
-                V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                "forge: CLI run/task binding refused — later chain verbs inherit state and take no --run-id",
-                expected="no --run-id on a later chain verb",
-                observed="--run-id supplied outside chain start or journal operation",
-                remediation="remove --run-id and select the immutable chain binding",
-            )
-        if args.command == "journal" and (
-            options.repo is None or options.run_id is None
-        ):
-            options.revision9_face = True
-            raise Refusal(
-                V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                "forge: journal operation refused — explicit --repo and --run-id are required",
-                expected="one nonempty --repo and --run-id",
-                observed="missing journal repository or run identity",
-                remediation="rerun with the exact --repo and --run-id",
-            )
         engine._validate_revision9_cross_options(options, args)
-        if options.revision9_face:
-            chain_core.register_coordination_seams()
         repo = chain_core.Repository.discover(options.repo)
         store = chain_core.ChainStore(repo.common_root())
         ctx = chain_core.CommandContext(repo=repo, store=store, options=options)

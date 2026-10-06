@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import datetime as dt
 import hashlib
 import os
@@ -16,7 +15,6 @@ from tests._cli_loader import package_module
 
 
 CANDIDATE = package_module("candidate")
-ENGINE = package_module("engine")
 
 
 class CandidateIdentityTests(unittest.TestCase):
@@ -184,30 +182,6 @@ class CandidateIdentityTests(unittest.TestCase):
                 self.assertFalse(CANDIDATE.valid_scope_path(value))
         for value in ("src/ordinary file.txt", ".forge/evals/tasks/x.json"):
             self.assertTrue(CANDIDATE.valid_scope_path(value), value)
-
-    def test_run_bound_snapshot_install_rejects_actual_noncanonical_path(self) -> None:
-        (self.root / "tracked.txt").write_text("candidate\n", encoding="utf-8")
-        self.git("add", "tracked.txt")
-        baseline = self.snapshot()
-        hostile = dataclasses.replace(
-            baseline,
-            paths=("src/trailing ",),
-            path_bytes=(b"src/trailing ",),
-        )
-        state = {
-            "chain_id": "c-2026-09-07T120000Z-abcd",
-            "run_binding": {"run_id": "run-bound"},
-            "candidate": {},
-            "paths": [],
-            "staging": {"staged_paths": []},
-        }
-
-        with self.assertRaises(ENGINE.Refusal) as caught:
-            ENGINE._install_candidate_snapshot(mock.Mock(), state, hostile)
-
-        self.assertEqual(caught.exception.reason_code.value, "run-task-binding-invalid")
-        self.assertEqual(state["candidate"], {})
-        self.assertEqual(state["paths"], [])
 
     def test_global_diff_driver_cannot_change_candidate_tree_attributes(self) -> None:
         (self.root / "tracked.txt").write_text("changed\n", encoding="utf-8")

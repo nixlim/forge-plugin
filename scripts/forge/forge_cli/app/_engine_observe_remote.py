@@ -357,10 +357,6 @@ def _run_remote_observation(
                             for name in chain_core._MERGE_REMOTE_ONLY_IDENTITY_FIELDS
                         )
                         and proposed.tier == state.get("tier")
-                        and not (
-                            proposed.scope is not None
-                            and proposed.scope.result == "exceeded"
-                        )
                     ):
                         carried_generation = proposed
                         next_integration["epoch"] = None

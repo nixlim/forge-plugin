@@ -291,8 +291,6 @@ class HookChainIntegrationTests(unittest.TestCase):
             "approval": {},
             "authorization": authorization,
             "commit_result": {},
-            "run_binding": None,
-            "journal_outbox": None,
         }
         path = self.repo / ".forge" / "chains" / f"{CHAIN_ID}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,6 +354,73 @@ class HookChainIntegrationTests(unittest.TestCase):
         chain_path.write_text("{corrupt\n", encoding="utf-8")
         self.write_marker()
         self.assert_allowed(self.invoke("git commit -m marker-over-corrupt-chain"))
+
+    def test_legacy_binding_keys_still_allow_exact_candidate_authorization(self) -> None:
+        for populated in (False, True):
+            with self.subTest(populated=populated):
+                chain_path = self.write_chain()
+                state = json.loads(chain_path.read_text(encoding="utf-8"))
+                state.update(run_binding=None, journal_outbox=None)
+                if populated:
+                    state["run_binding"] = {
+                        "run_id": "legacy-run",
+                        "task_id": "task-01",
+                        "repository": str(self.repo),
+                        "policy_digest": state["policy_source"]["digest"],
+                    }
+                chain_path.write_text(json.dumps(state) + "\n", encoding="utf-8")
+                self.assert_allowed(self.invoke("git commit -m legacy-binding"))
+                state["candidate"]["authorization_id"] = "0" * 64
+                chain_path.write_text(json.dumps(state) + "\n", encoding="utf-8")
+                self.assert_denied(
+                    self.invoke("git commit -m stale-legacy-binding"),
+                    f"{MARKER_REASON} (marker missing)",
+                )
+
+    def test_malformed_legacy_fields_are_inert_for_authorization(self) -> None:
+        chain_path = self.write_chain()
+        state = json.loads(chain_path.read_bytes())
+        for legacy in (
+            {"run_binding": "malformed binding", "journal_outbox": ["not an outbox"]},
+            {"run_binding": {"run_id": "../unavailable", "repository": "/wrong",
+                             "policy_digest": "wrong"}, "journal_outbox": 7},
+            {"run_binding": False, "journal_outbox": {"record_count": -1,
+                                                    "source_event_digest": "wrong"}},
+        ):
+            with self.subTest(legacy=legacy):
+                state.pop("run_binding", None)
+                state.pop("journal_outbox", None)
+                state.update(legacy)
+                raw = json.dumps(state) + "\n"
+                chain_path.write_text(raw, encoding="utf-8")
+                self.assert_allowed(self.invoke("git commit -m inert-legacy-fields"))
+                self.assertEqual(chain_path.read_text(encoding="utf-8"), raw)
+
+        module = load_guard_module(self, "forge_guard_inert_legacy_disable")
+        action = module.GitAction(
+            subcommand="commit", executable="git", shell_cwd=self.repo,
+            structural_globals=(), assignments=(), subcommand_args=("-m", "inert"),
+        )
+        context = module.resolve_repo_context(action)
+        observation = module.candidate_observation(context)
+        self.assertIsNotNone(observation)
+        original = module._read_chain_state
+
+        def restored_legacy_shape_check(directory, name):
+            loaded = original(directory, name)
+            if loaded and loaded.get("run_binding") is not None:
+                if not isinstance(loaded["run_binding"], dict):
+                    return None
+            return loaded
+
+        def authorizes():
+            self.assertTrue(module.chain_authorizes_commit(context, observation))
+
+        authorizes()
+        # Restore the retired binding-type permission check in memory only.
+        with mock.patch.object(module, "_read_chain_state", side_effect=restored_legacy_shape_check):
+            with self.assertRaises(AssertionError):
+                authorizes()
 
     def test_quarantine_latch_overrides_both_marker_and_chain_authorization(self) -> None:
         self.write_chain()
@@ -422,25 +487,15 @@ class HookChainIntegrationTests(unittest.TestCase):
                 )
 
     def test_only_canonical_current_top_level_chain_shape_can_authorize_v2(self) -> None:
-        def legacy_shape(state: dict[str, object]) -> None:
-            state.pop("run_binding")
-            state.pop("journal_outbox")
-
         mutations = {
-            "partial-current-shape": lambda state: state.pop("journal_outbox"),
-            "legacy-top-level-shape": legacy_shape,
+            "missing-steps": lambda state: state.pop("steps"),
             "extra-top-level-key": lambda state: state.__setitem__("unexpected", None),
-            "malformed-run-binding": lambda state: state.__setitem__(
-                "run_binding", {"run_id": "run-only"}
-            ),
-            "malformed-journal-outbox": lambda state: state.__setitem__(
-                "journal_outbox",
-                {
-                    "idempotency_key": "4" * 64,
-                    "batch_digest": "5" * 64,
-                    "record_count": True,
-                    "source_event_digest": "4" * 64,
-                },
+            "partial-binding-only": lambda state: state.__setitem__("run_binding", None),
+            "partial-outbox-only": lambda state: state.__setitem__("journal_outbox", None),
+            "renamed-current-key": lambda state: state.__setitem__("old_steps", state.pop("steps")),
+            "renamed-legacy-key": lambda state: state.update(run_binding=None, old_outbox=None),
+            "legacy-plus-unknown": lambda state: state.update(
+                run_binding="junk", journal_outbox=["junk"], unexpected=None
             ),
         }
         for name, mutate in mutations.items():
@@ -456,6 +511,30 @@ class HookChainIntegrationTests(unittest.TestCase):
                     self.invoke(f"git commit -m {name}"),
                     f"{MARKER_REASON} (marker missing)",
                 )
+
+    def test_chain_shape_refusal_is_load_bearing(self) -> None:
+        for key in ("run_binding", "journal_outbox"):
+            with self.subTest(key=key):
+                chain_path = self.write_chain()
+                state = json.loads(chain_path.read_bytes())
+                state[key] = "junk"
+                chain_path.write_text(json.dumps(state) + "\n", encoding="utf-8")
+                module = load_guard_module(self, "forge_guard_chain_shape_disable")
+                action = module.GitAction(
+                    subcommand="commit", executable="git", shell_cwd=self.repo,
+                    structural_globals=(), assignments=(), subcommand_args=("-m", "partial"),
+                )
+                context = module.resolve_repo_context(action)
+                observation = module.candidate_observation(context)
+                self.assertIsNotNone(observation)
+
+                def refuses(module=module, context=context, observation=observation):
+                    self.assertFalse(module.chain_authorizes_commit(context, observation))
+
+                refuses()
+                with mock.patch.object(module, "_chain_state_shape_valid", return_value=True):
+                    with self.assertRaises(AssertionError):
+                        refuses()
 
     def test_operator_denial_emits_one_guard_event_after_exact_decision(self) -> None:
         result = self.invoke(

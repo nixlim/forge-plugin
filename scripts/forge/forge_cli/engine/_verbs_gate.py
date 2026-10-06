@@ -23,19 +23,15 @@ from forge_cli.engine._candidate_ops import (
     _invalidate_candidate_evidence as _invalidate_candidate_evidence,
 )
 from forge_cli.engine._classification import _run_classification as _run_classification
-from forge_cli.engine._core import _archive_metadata as _archive_metadata
 from forge_cli.engine._core import _evidence_record as _evidence_record
 from forge_cli.engine._core import _record_process_step as _record_process_step
 from forge_cli.engine._core import _transition_state as _transition_state
 from forge_cli.engine._gate_checks import _current_test_paths as _current_test_paths
 from forge_cli.engine._gate_checks import (
-    _docs_class_skip_admitted as _docs_class_skip_admitted,
-)
-from forge_cli.engine._gate_checks import (
     _record_docs_class_gate_one_skip as _record_docs_class_gate_one_skip,
 )
 from forge_cli.engine._gate_checks import scan_added_secrets as scan_added_secrets
-from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal, V2ReasonCode
+from forge_cli.envelope import FrozenError, Outcome, ReasonCode, Refusal
 from forge_cli.policy import sha256_bytes
 
 
@@ -136,15 +132,6 @@ def gate_run(self, gate_id: str) -> Outcome:
             remediation=chain_core._forge_command(state, f"gate run {pending}"),
             chain=state,
         )
-    if gate_id == "changelog" and _archive_metadata(state) is not None:
-        raise Refusal(
-            V2ReasonCode.BINDING_INVALID,
-            "forge: archive refused — archive-only index cannot admit a mutating gate",
-            expected="no staged path except the deterministic run archive",
-            observed="configured changelog mutation",
-            remediation=chain_core._forge_command(state, "commit abort --reason archive-policy"),
-            chain=state,
-        )
     if gate_id == "assertion-sensor":
         drift = self.ctx.repo.tree_index_drift(list(state.get("paths", [])))
         if drift and chain_core._user_skip(state, "index-drift") is None:
@@ -201,7 +188,7 @@ def gate_run(self, gate_id: str) -> Outcome:
         return self.scan_secrets(state=state, preflight=False)
     if gate_id == chain_core.FRESH_REVIEWER_EVALS_GATE:
         return self._run_fresh_reviewer_evals(state)
-    if gate_id == "gate-1" and _docs_class_skip_admitted(state):
+    if gate_id == "gate-1" and chain_core._docs_class_candidate(state):
         # A candidate whose every classified path is docs-class (the same
         # test the changelog gate applies) runs no test process; the skip is
         # recorded under the gate-1 ID so the chain evidence stays complete.

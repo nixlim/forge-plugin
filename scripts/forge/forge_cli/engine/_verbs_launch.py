@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import route_config
-import route_evidence
 import route_floor
 
 from forge_cli import chain_core
@@ -24,10 +23,6 @@ if TYPE_CHECKING:
     from forge_cli.engine._engine import Engine
 
 INIT_INCOMPLETE = "forge: forge initialization incomplete — run /forge:init"
-_BATCH_REASON = {
-    "BATCH_PENDING": V2ReasonCode.BATCH_PENDING,
-    "BATCH_DIVERGED": V2ReasonCode.EVIDENCE_INCOMPLETE,
-}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -123,13 +118,6 @@ def _require_initialized(worktree: Path, head: str) -> None:
         raise Refusal(V2ReasonCode.STATE_PRECONDITION, INIT_INCOMPLETE)
 
 
-def _require_active(builders: Any, journal: Any, state: Any, task: str) -> None:
-    try:
-        builders._require_active_task(state, task)
-    except journal.CoordinationRefusal as exc:
-        raise chain_core._coordination_refusal(exc) from exc
-
-
 def _require_no_inflight(state: Any, worktree: Path) -> None:
     execution = _launch_lane.in_flight_execution(state.records, worktree)
     if execution is not None:
@@ -162,35 +150,6 @@ def _execution_fields(
         "route_sha256": facts.route.route_sha256,
         "launch_marker": paths.reference(_launch_lane.MARKER_NAME),
     }
-
-
-def _proposed_record(
-    facts: StartFacts, agent: str, execution: str
-) -> dict[str, object]:
-    paths = _launch_lane.LaunchPaths(facts.run_dir, agent, execution)
-    return {
-        "type": "execution",
-        "execution": execution,
-        **_execution_fields(facts, paths),
-    }
-
-
-def _validate_snapshot(facts: StartFacts, state: Any, builders: Any, journal: Any) -> None:
-    try:
-        agent = _launch_lane.allocate_agent(
-            state.records,
-            facts.route.provider,
-            facts.role,
-            facts.task,
-        )
-        execution = builders._allocate_id(state.records, "execution")
-        route_evidence.validate_execution(
-            _proposed_record(facts, agent, execution),
-            state.records,
-            refusal=journal.CoordinationRefusal,
-        )
-    except journal.CoordinationRefusal as exc:
-        raise chain_core._coordination_refusal(exc) from exc
 
 
 def _resolve_route(
@@ -233,13 +192,11 @@ def _preflight(
 ) -> StartFacts:
     """Validate a start before writes, checking the brief before route resolution."""
 
-    chain_core.register_coordination_seams()
     _launch_lane.require_no_halt(ctx)
     run_id = _launch_lane.require_run_id(ctx)
     worktree, head = _validate_worktree(ctx, worktree_value, role)
     _require_initialized(worktree, head)
     run = _launch_lane.run_state(ctx, run_id)
-    _require_active(run.builders, run.journal, run.state, task)
     _launch_lane.read_brief(Path(brief_value))
     route, sandbox = _resolve_route(worktree, head, role)
     prompt = _launch_lane.prepare_prompt(
@@ -262,7 +219,6 @@ def _preflight(
         environment_names=names,
         omitted_short=omitted,
     )
-    _validate_snapshot(facts, run.state, run.builders, run.journal)
     _provider_checks(route, environment, worktree)
     _require_no_inflight(run.state, worktree)
     return facts
@@ -446,15 +402,6 @@ def _close_attempt(descriptor: int) -> None:
         pass
 
 
-def _batch_reason(journal: Any, message: str) -> V2ReasonCode | None:
-    """Resolve lazy journal refusal constants through the named reason map."""
-
-    for attribute, reason in _BATCH_REASON.items():
-        if message == getattr(journal, attribute):
-            return reason
-    return None
-
-
 def _append_draft(
     builders: Any, journal: Any, facts: StartFacts, draft: OwnerDraft
 ) -> OwnerLaunch:
@@ -462,15 +409,9 @@ def _append_draft(
         outcome = _builder_start(builders, facts, draft.paths, draft.marker)
     except journal.CoordinationRefusal as exc:
         _close_attempt(draft.attempt_fd)
-        reason = _batch_reason(journal, str(exc))
-        if reason is not None:
-            raise Refusal(
-                reason,
-                str(exc),
-                remediation="run journal batch-recover for the named run before retrying",
-            ) from exc
-        _cleanup(draft.paths, draft.created_agent)
-        raise chain_core._coordination_refusal(exc) from exc
+        if str(exc) != journal.BATCH_DIVERGED:
+            _cleanup(draft.paths, draft.created_agent)
+        raise Refusal(V2ReasonCode.STATE_PRECONDITION, str(exc)) from exc
     except BaseException as exc:
         _close_attempt(draft.attempt_fd)
         raise _ambiguous_owner_outcome() from exc
@@ -487,8 +428,8 @@ def _append_draft(
 def _ambiguous_owner_outcome() -> Refusal:
     return Refusal(
         V2ReasonCode.EVIDENCE_INCOMPLETE,
-        "forge: launch refused — owner record outcome is ambiguous; run journal batch-recover",
-        remediation="run journal batch-recover for the named run",
+        "forge: launch refused — owner record outcome is ambiguous",
+        remediation="inspect the launch owner record before retrying",
     )
 
 
@@ -498,7 +439,6 @@ def _owner_record(ctx: chain_core.CommandContext, facts: StartFacts) -> OwnerLau
     run = _launch_lane.run_state(ctx, facts.run_id)
     with run.batch.batch_lock(facts.run_dir, create=True):
         state = run.journal._scan_run(facts.run_dir)
-        _require_active(run.builders, run.journal, state, facts.task)
         _require_no_inflight(state, facts.worktree)
         try:
             paths, created_agent = _create_paths(facts, state, run.builders)

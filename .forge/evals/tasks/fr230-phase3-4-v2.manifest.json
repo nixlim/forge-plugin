@@ -84,26 +84,19 @@
       "scripts/forge/forge_cli/app/_engine_review_verdict.py",
       "scripts/forge/forge_cli/app/_engine_start_chain.py",
       "scripts/forge/forge_cli/app/_merge_engine.py",
-      "scripts/forge/forge_cli/app/_mutation_journal.py",
       "scripts/forge/forge_cli/candidate.py",
       "scripts/forge/forge_cli/chain_core/__init__.py",
-      "scripts/forge/forge_cli/chain_core/_activation.py",
-      "scripts/forge/forge_cli/chain_core/_activation_outbox.py",
       "scripts/forge/forge_cli/chain_core/_bootstrap_observation.py",
       "scripts/forge/forge_cli/chain_core/_candidate_v2.py",
-      "scripts/forge/forge_cli/chain_core/_chain_batch_authorize.py",
-      "scripts/forge/forge_cli/chain_core/_chain_batch_carrier.py",
       "scripts/forge/forge_cli/chain_core/_chain_state.py",
       "scripts/forge/forge_cli/chain_core/_commit_chain.py",
+      "scripts/forge/forge_cli/chain_core/_commit_replay.py",
       "scripts/forge/forge_cli/chain_core/_common_lock.py",
       "scripts/forge/forge_cli/chain_core/_controls.py",
       "scripts/forge/forge_cli/chain_core/_core.py",
       "scripts/forge/forge_cli/chain_core/_fenced_child.py",
       "scripts/forge/forge_cli/chain_core/_fenced_process.py",
       "scripts/forge/forge_cli/chain_core/_gate_evidence.py",
-      "scripts/forge/forge_cli/chain_core/_ingest_capture.py",
-      "scripts/forge/forge_cli/chain_core/_ingest_currency.py",
-      "scripts/forge/forge_cli/chain_core/_ingest_merge.py",
       "scripts/forge/forge_cli/chain_core/_lock_owner.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_io.py",
       "scripts/forge/forge_cli/chain_core/_lock_record_validators.py",
@@ -128,14 +121,27 @@
       "scripts/forge/forge_cli/chain_core/_merge_scope_binding.py",
       "scripts/forge/forge_cli/chain_core/_merge_state_shape.py",
       "scripts/forge/forge_cli/chain_core/_merge_transition.py",
-      "scripts/forge/forge_cli/chain_core/_receipt_snapshot.py",
       "scripts/forge/forge_cli/chain_core/_remote_observation.py",
+      "scripts/forge/forge_cli/chain_core/_replay_frames.py",
+      "scripts/forge/forge_cli/chain_core/_replay_grammar.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_authority.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_bootstrap_evidence.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_candidates.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_event_evidence.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_lifecycle_evidence.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_observations.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_payload.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_push_evidence.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_state.py",
+      "scripts/forge/forge_cli/chain_core/_replay_merge_transitions.py",
+      "scripts/forge/forge_cli/chain_core/_replay_state_shape.py",
+      "scripts/forge/forge_cli/chain_core/_replay_values.py",
+      "scripts/forge/forge_cli/chain_core/_replay_vocabulary.py",
       "scripts/forge/forge_cli/chain_core/_repository.py",
       "scripts/forge/forge_cli/chain_core/_state.py",
       "scripts/forge/forge_cli/chain_core/_storage.py",
       "scripts/forge/forge_cli/engine/__init__.py",
       "scripts/forge/forge_cli/engine/_approval.py",
-      "scripts/forge/forge_cli/engine/_archive.py",
       "scripts/forge/forge_cli/engine/_candidate_ops.py",
       "scripts/forge/forge_cli/engine/_classification.py",
       "scripts/forge/forge_cli/engine/_cli_options.py",
@@ -146,7 +152,6 @@
       "scripts/forge/forge_cli/engine/_fresh_eval.py",
       "scripts/forge/forge_cli/engine/_fresh_eval_evidence.py",
       "scripts/forge/forge_cli/engine/_gate_checks.py",
-      "scripts/forge/forge_cli/engine/_journal.py",
       "scripts/forge/forge_cli/engine/_launch_lane.py",
       "scripts/forge/forge_cli/engine/_merge_bootstrap_child.py",
       "scripts/forge/forge_cli/engine/_merge_bootstrap_result.py",
@@ -206,19 +211,19 @@
       "slot": "cleanup",
       "status": "PASS",
       "result_id": "fr230-phase-3-cleanup",
-      "result_sha256": "446726934b6a6abac8778a7f2c3b18c383321c7c05804a62fafdfacde2e872d9"
+      "result_sha256": "284aa12fb73c3da1e4e9c957fdb0ce17a5bf1e0d9ccaedbfe2a3d47aa978c8a1"
     },
     {
       "slot": "merge-last-line",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-last-line",
-      "result_sha256": "3044b485362e5aa197c6b9b8e6e56e0faf1808451e77bc3a9a5d468caede584e"
+      "result_sha256": "03beda8ab19ff56645c9245c434489795a42bd73e7f919aefda9afd867338cff"
     },
     {
       "slot": "merge-transition",
       "status": "PASS",
       "result_id": "fr230-phase-3-merge-transition",
-      "result_sha256": "3c8c3cd71b31517aa256b02929481614404881d400a7cd3525c02664419491e9"
+      "result_sha256": "259641d3d0bf2c30b5f064a688f7a2cd9a99179f1845fd1d3d328ee085e55db9"
     },
     {
       "slot": "push",
@@ -236,13 +241,13 @@
       "slot": "re-verification-matrix",
       "status": "PASS",
       "result_id": "fr230-phase-3-re-verification-matrix",
-      "result_sha256": "a900c390a92ac72acaa182becd2b468f38f41a7ef30b269e8ae25811b0449355"
+      "result_sha256": "7c288c8e4dac0c67429a871c3113a625a75548431d823a55a9aeba46b1da3849"
     },
     {
       "slot": "recovery",
       "status": "PASS",
       "result_id": "fr230-phase-3-recovery",
-      "result_sha256": "59043e101bc9aabe43782add6a25ac1bfdcf533d2d21f2c466d67b395f26dfc0"
+      "result_sha256": "e5e8d82d61d96f942d1c9abcec6303965c4156faf89376a3a316363bea0a72e9"
     }
   ]
 }

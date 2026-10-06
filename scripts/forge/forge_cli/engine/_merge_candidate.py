@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Any, Mapping
 from forge_cli import chain_core
-from forge_cli.engine._core import MergeAdmission as MergeAdmission, MergeScopeResult as MergeScopeResult
+from forge_cli.engine._core import MergeAdmission as MergeAdmission
 from forge_cli.engine._state import _MERGE_CANDIDATE_IDENTITY_FIELDS as _MERGE_CANDIDATE_IDENTITY_FIELDS
 import copy
 from forge_cli.policy import sha256_bytes
@@ -71,59 +71,6 @@ def _retain_or_advance_merge_candidate(
     ):
         return copy.deepcopy(dict(prior_candidate))
     return proposed
-
-
-def _merge_scope_request(admission: MergeAdmission) -> dict[str, Any] | None:
-    snapshot = admission.run_task
-    if snapshot is None:
-        return None
-    template = {
-        "schema": "forge-run-scope-command-template/1",
-        "worktree": str(admission.worktree),
-        "candidate_head": admission.candidate_head,
-        "remote_tip_source": "scope_fetch_binding.remote_tip",
-    }
-    return {
-        "run_id": snapshot.binding["run_id"],
-        "task_id": snapshot.binding["task_id"],
-        "task_files": list(snapshot.task_files),
-        "admitted_scope": list(snapshot.admitted_scope),
-        "command_template": template,
-        "command_template_digest": sha256_bytes(chain_core.canonical_bytes(template)),
-        "environment_digest": sha256_bytes(
-            chain_core.canonical_bytes(chain_core._merge_scope_environment_contract())
-        ),
-    }
-
-
-def _merge_scope_proof(
-    admission: MergeAdmission,
-    candidate: Mapping[str, Any],
-    scope: MergeScopeResult,
-    binding: Mapping[str, Any],
-) -> dict[str, Any]:
-    snapshot = admission.run_task
-    if snapshot is None:
-        raise ValueError("scope proof requires an immutable run/task snapshot")
-    body = {
-        "schema": "forge-run-scope-proof/1",
-        "run_id": snapshot.binding["run_id"],
-        "task_id": snapshot.binding["task_id"],
-        "generation_digest": candidate["generation_digest"],
-        "remote_tip": candidate["remote_tip"],
-        "candidate_head": candidate["candidate_head"],
-        "command_template_digest": binding["command_template_digest"],
-        "command_digest": binding["command_digest"],
-        "environment_digest": binding["environment_digest"],
-        "scope_fetch_binding_digest": binding["digest"],
-        "output_digest": scope.output_digest,
-        "task_files": list(snapshot.task_files),
-        "admitted_scope": list(snapshot.admitted_scope),
-        "changed_paths": list(scope.changed_paths),
-        "out_of_scope_paths": list(scope.out_of_scope_paths),
-        "result": scope.result,
-    }
-    return {**body, "digest": sha256_bytes(chain_core.canonical_bytes(body))}
 
 
 def _merge_released_predecessor(

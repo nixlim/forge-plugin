@@ -134,13 +134,6 @@ def _recording_common_lock(
                     schema=REVISION9_OUTPUT_SCHEMA,
                 )
             if attributed.get("generation_digest") is None:
-                request = attributed_payload.get("scope_request")
-                if request is not None and not isinstance(request, Mapping):
-                    raise FrozenError(
-                        "reserved bootstrap scope request is malformed",
-                        chain_id=chain_id,
-                        schema=REVISION9_OUTPUT_SCHEMA,
-                    )
                 classification_state = copy.deepcopy(dict(state))
                 classification_integration = copy.deepcopy(
                     classification_state.get("integration")
@@ -160,9 +153,6 @@ def _recording_common_lock(
                     self.store,
                     classification_state,
                     fetch_intent_digest=intent_digest,
-                    scope_request=(
-                        request if isinstance(request, Mapping) else None
-                    ),
                     fence=fence,
                 )
                 result_events = [

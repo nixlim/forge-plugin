@@ -388,7 +388,6 @@ CHAIN_SCHEMA = "forge-chain/1"
 CHAIN_KIND = "commit"
 CHAIN_ID = re.compile(r"c-\d{4}-\d{2}-\d{2}T\d{6}Z-[0-9a-f]{4}")
 CHAIN_TOKEN = re.compile(r"[0-9a-f]{32}")
-RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 CHAIN_STATES = frozenset(
     {
         "classifying",
@@ -423,11 +422,9 @@ CHAIN_STATE_KEYS = frozenset(
         "approval",
         "authorization",
         "commit_result",
-        "run_binding",
-        "journal_outbox",
     }
 )
-LEGACY_CHAIN_STATE_KEYS = CHAIN_STATE_KEYS - {"run_binding", "journal_outbox"}
+LEGACY_CHAIN_KEYS = frozenset({"run_binding", "journal_outbox"})
 CHAIN_OBJECT_KEYS = (
     "policy_source",
     "staging",
@@ -454,12 +451,6 @@ CANDIDATE_V2_KEYS = frozenset(
         "review_diff_byte_count",
         "computed_at",
     }
-)
-RUN_BINDING_KEYS = frozenset(
-    {"run_id", "task_id", "repository", "policy_digest"}
-)
-JOURNAL_OUTBOX_KEYS = frozenset(
-    {"idempotency_key", "batch_digest", "record_count", "source_event_digest"}
 )
 CHAIN_STATE_MAX_BYTES = 1024 * 1024
 
@@ -4225,6 +4216,10 @@ def _chain_timestamp(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _chain_state_shape_valid(state: dict[str, object]) -> bool:
+    return set(state) in (CHAIN_STATE_KEYS, CHAIN_STATE_KEYS | LEGACY_CHAIN_KEYS)
+
+
 def _read_chain_state(directory: int, name: str) -> dict[str, object] | None:
     descriptor: int | None = None
     try:
@@ -4263,8 +4258,7 @@ def _read_chain_state(directory: int, name: str) -> dict[str, object] | None:
     chain_id = name[:-5]
     if not isinstance(loaded, dict):
         return None
-    state_keys = set(loaded)
-    if state_keys not in (CHAIN_STATE_KEYS, LEGACY_CHAIN_STATE_KEYS):
+    if not _chain_state_shape_valid(loaded):
         return None
     if (
         loaded.get("schema") != CHAIN_SCHEMA
@@ -4280,37 +4274,6 @@ def _read_chain_state(directory: int, name: str) -> dict[str, object] | None:
         return None
     if any(not isinstance(loaded.get(key), dict) for key in CHAIN_OBJECT_KEYS):
         return None
-    if state_keys == CHAIN_STATE_KEYS:
-        run_binding = loaded.get("run_binding")
-        if run_binding is not None and (
-            not isinstance(run_binding, dict)
-            or set(run_binding) != RUN_BINDING_KEYS
-            or not isinstance(run_binding.get("run_id"), str)
-            or RUN_ID.fullmatch(run_binding["run_id"]) is None
-            or not isinstance(run_binding.get("task_id"), str)
-            or not run_binding["task_id"]
-            or not isinstance(run_binding.get("repository"), str)
-            or not Path(run_binding["repository"]).is_absolute()
-            or run_binding["repository"] != loaded["staging"].get("worktree_root")
-            or not isinstance(run_binding.get("policy_digest"), str)
-            or HASH.fullmatch(run_binding["policy_digest"]) is None
-            or run_binding["policy_digest"] != loaded["policy_source"].get("digest")
-        ):
-            return None
-        journal_outbox = loaded.get("journal_outbox")
-        if journal_outbox is not None and (
-            not isinstance(journal_outbox, dict)
-            or set(journal_outbox) != JOURNAL_OUTBOX_KEYS
-            or not isinstance(journal_outbox.get("idempotency_key"), str)
-            or HASH.fullmatch(journal_outbox["idempotency_key"]) is None
-            or not isinstance(journal_outbox.get("batch_digest"), str)
-            or HASH.fullmatch(journal_outbox["batch_digest"]) is None
-            or type(journal_outbox.get("record_count")) is not int
-            or journal_outbox["record_count"] <= 0
-            or journal_outbox.get("source_event_digest")
-            != journal_outbox.get("idempotency_key")
-        ):
-            return None
     if any(
         _chain_timestamp(loaded.get(key)) is None
         for key in ("created_at", "last_event_at", "inactive_after")
@@ -4392,7 +4355,7 @@ def chain_authorizes_commit(
     for state in _live_chain_states(context):
         if state["state"] != "authorized":
             continue
-        if set(state) != CHAIN_STATE_KEYS:
+        if not _chain_state_shape_valid(state):
             continue
         candidate_record = state["candidate"]
         if set(candidate_record) != CANDIDATE_V2_KEYS:

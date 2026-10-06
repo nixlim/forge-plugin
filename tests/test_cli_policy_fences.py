@@ -11,6 +11,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from tests import test_chain_compatibility as compatibility
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts/forge/cli.py"
@@ -355,29 +356,29 @@ class HelpTextTests(unittest.TestCase):
             self.assertIn(option, text)
         # --task is a verb option, never a pre-argparse global; the help must
         # say so rather than list it among the globals.
-        self.assertIn("--task TASK_ID is not global", text)
+        self.assertIn("--task TASK_ID is a launch option", text)
         globals_block = text.partition("global options")[2].partition("--task")[0]
         self.assertNotIn("--task", globals_block)
 
     def test_task_before_the_verb_is_refused(self) -> None:
-        _options, remaining = CLI._extract_global_options(
-            ["--task", "task-01", "commit", "start", "--paths", "a"]
-        )
-        self.assertEqual(remaining[:2], ["--task", "task-01"])
-        with self.assertRaises(CLI.Refusal):
-            CLI.build_parser().parse_args(remaining)
+        argv = ["--task", "task-01", "commit", "start", "--paths", "a"]
+        code, result = compatibility.ChainParsingTests().invoke_before_repository(argv)
+        self.assertEqual((code, result["reason_code"]), (1, "state-precondition"))
+        with self.assertRaises(CLI.Refusal) as refused:
+            CLI.build_parser().parse_args(argv)
+        self.assertEqual(result["message"], refused.exception.message)
 
-    def test_commit_start_help_names_run_binding(self) -> None:
+    def test_commit_start_help_has_no_binding_flags(self) -> None:
         text = self._help(["commit", "start", "--help"])
         self.assertIn("--run-id", text)
-        self.assertIn("requires --task", text)
+        self.assertNotIn("requires --task", text)
 
     def test_help_epilog_does_not_change_option_parsing(self) -> None:
         options, remaining = CLI._extract_global_options(
-            ["--run-id", "run-1", "commit", "start", "--paths", "a", "--task", "task-01"]
+            ["--run-id", "run-1", "launch", "--task", "task-01"]
         )
         self.assertEqual(options.run_id, "run-1")
-        self.assertEqual(remaining, ["commit", "start", "--paths", "a", "--task", "task-01"])
+        self.assertEqual(remaining, ["launch", "--task", "task-01"])
 
     def test_fresh_gate_identifier_cannot_change_help_bytes(self) -> None:
         arguments = (["--help"], ["gate", "--help"], ["gate", "run", "--help"])

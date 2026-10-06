@@ -1,6 +1,6 @@
 """Extracted from scripts/forge/forge_cli/engine/__init__.py."""
 from __future__ import annotations
-from forge_cli.engine._state import STATE_TRANSITIONS as STATE_TRANSITIONS, _REQUIRED_MERGE_LIFECYCLE_CONTROLS as _REQUIRED_MERGE_LIFECYCLE_CONTROLS, MERGE_LIFECYCLE_CONTROLS as MERGE_LIFECYCLE_CONTROLS, ARCHIVE_CONTAMINATION as ARCHIVE_CONTAMINATION
+from forge_cli.engine._state import STATE_TRANSITIONS as STATE_TRANSITIONS, _REQUIRED_MERGE_LIFECYCLE_CONTROLS as _REQUIRED_MERGE_LIFECYCLE_CONTROLS, MERGE_LIFECYCLE_CONTROLS as MERGE_LIFECYCLE_CONTROLS
 import datetime as dt
 import secrets
 from forge_cli import runtime, chain_core
@@ -66,57 +66,6 @@ def inspect_common_lock(common_dir: Path) -> chain_core.CommonLockInspection:
         return chain_core._inspect_common_lock_fd(descriptor, canonical)
     finally:
         os.close(descriptor)
-
-
-def _commit_start_binding_refusal(exc: BaseException) -> Refusal:
-    return Refusal(
-        V2ReasonCode.RUN_TASK_BINDING_INVALID,
-        "forge: commit start refused — run/task binding is invalid",
-        expected="matching repository, active task, admitted paths, and committed policy",
-        observed=str(exc),
-        remediation="inspect the named run/task and retry the exact paired start",
-    )
-
-
-def _archive_refusal(message: str, *, chain: Mapping[str, Any] | None = None) -> Refusal:
-    if "exceeds 16 MiB" in message or "16,777,216" in message:
-        reason = V2ReasonCode.ARCHIVE_SIZE_LIMIT
-    elif "legacy" in message.lower() and (
-        "approval" in message.lower() or "recovered" in message.lower()
-    ):
-        reason = V2ReasonCode.LEGACY_RECOVERY_APPROVAL_REQUIRED
-    elif "differ" in message.lower() or "mismatch" in message.lower():
-        reason = V2ReasonCode.ARCHIVE_RERENDER_MISMATCH
-    else:
-        reason = V2ReasonCode.BINDING_INVALID
-    return Refusal(
-        reason,
-        message,
-        expected="a safe archive-only candidate equal to deterministic rerender",
-        observed=message,
-        remediation="repair the immutable archive inputs and retry archive commit start",
-        chain=chain,
-    )
-
-
-def _archive_contamination_refusal(
-    *, chain: Mapping[str, Any] | None = None
-) -> Refusal:
-    return Refusal(
-        ReasonCode.STATE_PRECONDITION,
-        ARCHIVE_CONTAMINATION,
-        expected="only the deterministic archive candidate in the index",
-        observed="unrelated staged, tracked, or untracked close-tree content",
-        remediation="restore a clean close tree and restart archive commit",
-        chain=chain,
-        schema=REVISION9_OUTPUT_SCHEMA,
-    )
-
-
-def _archive_metadata(state: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    staging = state.get("staging")
-    metadata = staging.get("archive") if isinstance(staging, Mapping) else None
-    return metadata if isinstance(metadata, Mapping) else None
 
 
 def _env_fingerprint(
@@ -225,7 +174,7 @@ def _read_bound_artifact(
         inner = Path(relative).relative_to(prefix).as_posix()
     except ValueError as exc:
         raise Refusal(
-            ReasonCode.CITATION_OUT_OF_ROOT,
+            ReasonCode.EVIDENCE_INCOMPLETE,
             f"{label} path escapes the chain artifact directory",
             expected=prefix.as_posix(),
             observed=relative,
@@ -413,19 +362,7 @@ class MergeAdmission:
     candidate_head: str
     policy: Policy
     declared_tier: str | None
-    run_task: chain_core.MergeRunTaskSnapshot | None
     status_output_digest: str
-
-
-@dataclasses.dataclass(frozen=True)
-class MergeScopeResult:
-    argv: tuple[str, ...]
-    command_digest: str
-    environment_digest: str
-    output_digest: str
-    changed_paths: tuple[str, ...]
-    out_of_scope_paths: tuple[str, ...]
-    result: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -434,7 +371,6 @@ class MergeCandidateGeneration:
     tier: dict[str, Any]
     classification: dict[str, Any]
     changed_paths: tuple[str, ...]
-    scope: MergeScopeResult | None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -442,8 +378,6 @@ class MergeBootstrapClassification:
     """Durable candidate inputs awaiting post-common-lock classification."""
 
     candidate: dict[str, Any]
-    scope: MergeScopeResult | None
     full_patch_output_digest: str
-    scope_proof_digest: str | None = None
     fetch_result_event_digest: str | None = None
     verb: str = "merge start"

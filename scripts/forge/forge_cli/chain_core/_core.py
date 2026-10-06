@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json
 from typing import Any, Mapping, Callable, Sequence
-from forge_cli.chain_core._controls import _REQUIRED_COMMON_LOCK_CONTROLS, COMMON_LOCK_CONTROLS, _REQUIRED_MERGE_STORE_CONTROLS, MERGE_STORE_CONTROLS, _REQUIRED_MERGE_ADAPTER_CONTROLS, MERGE_ADAPTER_CONTROLS, _REQUIRED_MERGE_INTEGRATION_CONTROLS, MERGE_INTEGRATION_CONTROLS, INGEST_PROOF_ORDER, _REQUIRED_INGEST_PROOF_CONTROLS, INGEST_PROOF_CONTROLS
+from forge_cli.chain_core._controls import _REQUIRED_COMMON_LOCK_CONTROLS, COMMON_LOCK_CONTROLS, _REQUIRED_MERGE_STORE_CONTROLS, MERGE_STORE_CONTROLS, _REQUIRED_MERGE_ADAPTER_CONTROLS, MERGE_ADAPTER_CONTROLS, _REQUIRED_MERGE_INTEGRATION_CONTROLS, MERGE_INTEGRATION_CONTROLS
 from forge_cli.chain_core._state import COMMON_LOCK_POLL_SECONDS, CHAIN_ID_RE, SHA256_RE
 from pathlib import Path
 from forge_cli import runtime
@@ -20,79 +20,6 @@ def canonical_bytes(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
-
-
-def _chain_storage_root(repository: Path) -> Path:
-    """Resolve the shared Git-common DM-012/DM-014 authority root."""
-
-    runtime._coordination_modules()
-    from codex_orchestrator.chain_paths import chain_storage_root
-
-    return chain_storage_root(repository)
-
-
-def _validated_commitment_path(
-    label: str,
-    value: str,
-    *,
-    repository: Path,
-    run_dir: Path | None = None,
-    direct_parent: Path | None = None,
-    require_file: bool = False,
-) -> object | None:
-    """Project one CLI path decision through the shared FR-017 inventory."""
-
-    runtime._coordination_modules()
-    from commitment_paths import commitment_surface, validate_surface_path
-
-    try:
-        surface = commitment_surface(label)
-    except KeyError:
-        return None
-    return validate_surface_path(
-        surface,
-        value,
-        repository=repository,
-        run_dir=run_dir,
-        direct_parent=direct_parent,
-        require_file=require_file,
-    )
-
-
-def _parsed_run_captured_path(value: str, run_id: str) -> object | None:
-    """Apply the shared grammar for run-relative ingest captures."""
-
-    runtime._coordination_modules()
-    from commitment_paths import parse_run_captured_path
-
-    return parse_run_captured_path(value, run_id=run_id)
-
-
-def _require_ingest_proof(
-    name: str, completed: list[str] | None = None
-) -> None:
-    """Fail closed when a named proof is disabled or reached out of order."""
-
-    _batch, builders, journal = runtime._coordination_modules()
-    from codex_orchestrator import ingest_refusal
-
-    if completed is not None and not completed:
-        ingest_refusal.reset_progress()
-    if (
-        name not in _REQUIRED_INGEST_PROOF_CONTROLS
-        or name not in INGEST_PROOF_CONTROLS
-        or (
-            completed is not None
-            and (
-                len(completed) >= len(INGEST_PROOF_ORDER)
-                or INGEST_PROOF_ORDER[len(completed)] != name
-            )
-        )
-    ):
-        raise journal.CoordinationRefusal(builders.INGEST_PROOF_INVALID)
-    if completed is not None:
-        completed.append(name)
-        ingest_refusal.record_progress(completed)
 
 
 def iso_z(value: dt.datetime | None = None) -> str:
@@ -463,15 +390,6 @@ def _forge_command(state: Mapping[str, Any] | None, verb: str) -> str:
     return f"forge {verb}{suffix}"
 
 
-@dataclasses.dataclass(frozen=True)
-class MergeRunTaskSnapshot:
-    """Immutable journal values captured before a run-bound merge fetch."""
-
-    binding: dict[str, str]
-    task_files: tuple[str, ...]
-    admitted_scope: tuple[str, ...]
-
-
 def _merge_refusal(
     reason: V2ReasonCode,
     message: str,
@@ -491,13 +409,4 @@ def _merge_refusal(
         chain=chain,
         evidence_refs=evidence_refs,
         schema=REVISION9_OUTPUT_SCHEMA,
-    )
-
-
-def _valid_sorted_unique_strings(value: object) -> bool:
-    return bool(
-        isinstance(value, list)
-        and all(isinstance(item, str) for item in value)
-        and value
-        == sorted(set(value), key=lambda item: item.encode("utf-8"))
     )

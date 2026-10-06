@@ -80,7 +80,7 @@ def _run_bootstrap_generation_composite(
     """Run Revision-12's child and retain a post-lock classification input."""
 
     chain_core._require_merge_integration_control("composite-bootstrap-streaming")
-    chain_core._require_merge_integration_control("post-fetch-scope-proof")
+    chain_core._require_merge_integration_control("post-fetch-binding")
     fetch_intent_digest = engine._merge_event_digest(
         self.store, str(state["chain_id"]), "fetch_intent"
     )
@@ -91,7 +91,6 @@ def _run_bootstrap_generation_composite(
             schema=REVISION9_OUTPUT_SCHEMA,
         )
     operation, fetch_argv = self._bootstrap_fetch_argv(admission, remote_tip)
-    scope_request = engine._merge_scope_request(admission)
     holder: dict[str, Any] = {}
 
     def intent_current() -> bool:
@@ -109,15 +108,7 @@ def _run_bootstrap_generation_composite(
         integration = copy.deepcopy(state["integration"])
         integration.update(
             {
-                # A run-bound composite failure takes the established
-                # run-task-binding-invalid ordinary-abort edge; only the
-                # unbound pre-sidecar failure remains classifying with
-                # the durable fetch-failed condition.
-                "condition": (
-                    "none"
-                    if admission.run_task is not None
-                    else "fetch-failed"
-                ),
+                "condition": "fetch-failed",
                 "primary_condition": "none",
                 "intent": {
                     "operation": "fetch-result",
@@ -133,12 +124,12 @@ def _run_bootstrap_generation_composite(
             "fetch_result",
             {
                 "delta": {"integration": integration},
+                "scope_proof": None,
                 "scope_fetch_binding": (
                     copy.deepcopy(dict(binding))
                     if isinstance(binding, Mapping)
                     else None
                 ),
-                "scope_proof": None,
             },
             generation_digest=(
                 str(state["candidate"]["generation_digest"])
@@ -150,67 +141,17 @@ def _run_bootstrap_generation_composite(
 
     def materialize_success(
         binding: Mapping[str, Any],
-        metadata: Mapping[str, Any],
         fixed_tip: str,
-    ) -> tuple[dict[str, Any], engine.MergeScopeResult | None, object]:
+    ) -> dict[str, Any]:
         """Materialize the complete candidate while the child fence survives."""
 
         nonlocal state
-        scope: engine.MergeScopeResult | None = None
-        if admission.run_task is not None:
-            scope_record = metadata.get("scope")
-            changed = metadata.get("scope_changed_paths")
-            if (
-                not isinstance(scope_record, Mapping)
-                or not chain_core._valid_sorted_unique_strings(changed)
-            ):
-                raise FrozenError(
-                    "composite bootstrap scope evidence is malformed",
-                    chain_id=str(state["chain_id"]),
-                    schema=REVISION9_OUTPUT_SCHEMA,
-                )
-            _batch, _builders, journal = runtime._coordination_modules()
-            snapshot = admission.run_task
-            out_of_scope = tuple(
-                path
-                for path in changed
-                if not any(
-                    journal.pathspec_contained(path, pattern)
-                    for pattern in snapshot.task_files
-                )
-                or not any(
-                    journal.pathspec_contained(path, pattern)
-                    for pattern in snapshot.admitted_scope
-                )
-            )
-            scope = engine.MergeScopeResult(
-                argv=tuple(
-                    chain_core._merge_scope_argv(
-                        admission.worktree,
-                        fixed_tip,
-                        admission.candidate_head,
-                    )
-                ),
-                command_digest=str(binding["command_digest"]),
-                environment_digest=str(binding["environment_digest"]),
-                output_digest=str(scope_record["output_digest"]),
-                changed_paths=tuple(changed),
-                out_of_scope_paths=out_of_scope,
-                result="exceeded" if out_of_scope else "contained",
-            )
         candidate = engine._retain_or_advance_merge_candidate(
             admission,
             fixed_tip,
             prior_candidate=state.get("candidate"),
             generation=generation_number,
             diff_output_digest=str(binding["full_patch_output_digest"]),
-        )
-        proof = (
-            engine._merge_scope_proof(
-                admission, candidate, scope, binding
-            )
-            if scope is not None
-            else None
         )
         integration = copy.deepcopy(state["integration"])
         integration.update(
@@ -256,13 +197,13 @@ def _run_bootstrap_generation_composite(
                     for name, value in desired.items()
                     if state.get(name) != value or name == "state"
                 },
+                "scope_proof": None,
                 "scope_fetch_binding": copy.deepcopy(dict(binding)),
-                "scope_proof": copy.deepcopy(proof),
             },
             generation_digest=str(candidate["generation_digest"]),
             at=chain_core.iso_z(),
         )
-        return candidate, scope, proof
+        return candidate
 
     def persist(result: chain_core.FencedProcessResult) -> None:
         metadata = result.metadata
@@ -279,8 +220,6 @@ def _run_bootstrap_generation_composite(
         )
         binding: dict[str, Any] | None = None
         candidate: dict[str, Any] | None = None
-        scope: engine.MergeScopeResult | None = None
-        proof: object = None
         error: str | None = None
         fixed_tip = (
             str(metadata["resolved_tip"])
@@ -307,7 +246,6 @@ def _run_bootstrap_generation_composite(
                     self.store,
                     state,
                     fetch_intent_digest=fetch_intent_digest,
-                    scope_request=scope_request,
                     remote_tip=fixed_tip,
                     fence=fence,
                     result=result,
@@ -317,8 +255,8 @@ def _run_bootstrap_generation_composite(
                 # the fenced composite: after the /2 sidecar is durable,
                 # materialize its complete candidate before the original
                 # fence is cleared.
-                candidate, scope, proof = materialize_success(
-                    binding, metadata, fixed_tip
+                candidate = materialize_success(
+                    binding, fixed_tip
                 )
             except (OSError, TypeError, ValueError, Refusal) as exc:
                 error = str(exc)
@@ -335,8 +273,6 @@ def _run_bootstrap_generation_composite(
                 "fixed_tip": fixed_tip,
                 "binding": copy.deepcopy(binding),
                 "candidate": copy.deepcopy(candidate),
-                "scope": copy.deepcopy(scope),
-                "proof": copy.deepcopy(proof),
                 "error": error,
                 "metadata": copy.deepcopy(metadata),
             }
@@ -360,28 +296,13 @@ def _run_bootstrap_generation_composite(
                 "metadata": None,
             }
         )
-        scope_failure = admission.run_task is not None
-        reason = (
-            V2ReasonCode.RUN_TASK_BINDING_INVALID
-            if scope_failure
-            else V2ReasonCode.FETCH_FAILED
-        )
         refusal = chain_core._merge_refusal(
-            reason,
-            (
-                f"forge: {verb} refused — run/task scope derivation is invalid"
-                if scope_failure
-                else f"forge: {verb} refused — fixed target fetch failed"
-            ),
+            V2ReasonCode.FETCH_FAILED,
+            f"forge: {verb} refused — fixed target fetch failed",
             expected="the pre-lock Git qualification to remain exact",
             observed=str(exc),
             chain=state,
         )
-        if scope_failure:
-            state = self._release_to_aborted(
-                state, reason="run/task scope derivation is invalid"
-            )
-            refusal.chain = state
         raise refusal from exc
     composite_result = chain_core.run_fenced_command(
         lock,
@@ -401,7 +322,6 @@ def _run_bootstrap_generation_composite(
         verbose=False,
         result_transform=lambda raw: engine._decode_merge_bootstrap_result(
             raw,
-            run_bound=admission.run_task is not None,
             fetch_argv=fetch_argv,
             worktree=admission.worktree,
             candidate_head=admission.candidate_head,
@@ -409,33 +329,22 @@ def _run_bootstrap_generation_composite(
         ),
     )
     if not holder.get("complete"):
-        scope_failure = admission.run_task is not None
-        refusal = _incomplete_bootstrap_refusal(scope_failure, verb, holder, composite_result, state)
-        if scope_failure:
-            state = self._release_to_aborted(
-                state, reason="run/task scope derivation is invalid"
-            )
-            refusal.chain = state
+        refusal = _incomplete_bootstrap_refusal(verb, holder, composite_result, state)
         raise refusal
 
     binding = holder.get("binding")
     candidate = holder.get("candidate")
-    scope = holder.get("scope")
-    proof = holder.get("proof")
     if (
         not isinstance(binding, Mapping)
         or not isinstance(candidate, Mapping)
-        or (scope is not None and not isinstance(scope, engine.MergeScopeResult))
     ):
         raise FrozenError(
             "composite bootstrap sidecar was not durably retained",
             chain_id=str(state["chain_id"]),
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    state = _refuse_exceeded_bootstrap_scope(scope, self, state, proof, verb)
     return state, engine.MergeBootstrapClassification(
         candidate=copy.deepcopy(dict(candidate)),
-        scope=copy.deepcopy(scope),
         full_patch_output_digest=str(binding["full_patch_output_digest"]),
         verb=verb,
     )
@@ -465,46 +374,11 @@ def _run_bootstrap_generation(
         verb=verb,
     )
 
-def _refuse_exceeded_bootstrap_scope(scope, self, state, proof, verb):
-    exceeded = bool(scope is not None and scope.result == "exceeded")
-    if exceeded:
-        fetch_digest = engine._merge_event_digest(
-            self.store, str(state["chain_id"]), "fetch_result"
-        )
-        if not isinstance(proof, Mapping) or fetch_digest is None:
-            raise FrozenError(
-                "run-scope refusal lacks its authenticated result proof",
-                chain_id=str(state["chain_id"]),
-                schema=REVISION9_OUTPUT_SCHEMA,
-            )
-        state = self._release_scope_exceeded(
-            state,
-            scope_proof_digest=str(proof["digest"]),
-            fetch_result_event_digest=fetch_digest,
-            verb=verb,
-        )
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_SCOPE_EXCEEDED,
-            f"forge: {verb} refused — changed paths exceed bound task scope",
-            expected="every changed path within task files and admitted run scope",
-            observed=str(scope.out_of_scope_paths if scope is not None else ()),
-            chain=state,
-        )
-    return state
 
-def _incomplete_bootstrap_refusal(scope_failure, verb, holder, composite_result, state):
-    reason = (
-        V2ReasonCode.RUN_TASK_BINDING_INVALID
-        if scope_failure
-        else V2ReasonCode.FETCH_FAILED
-    )
+def _incomplete_bootstrap_refusal(verb, holder, composite_result, state):
     refusal = chain_core._merge_refusal(
-        reason,
-        (
-            f"forge: {verb} refused — run/task scope derivation is invalid"
-            if scope_failure
-            else f"forge: {verb} refused — fixed target fetch failed"
-        ),
+        V2ReasonCode.FETCH_FAILED,
+        f"forge: {verb} refused — fixed target fetch failed",
         expected="one complete composite bootstrap child",
         observed=str(holder.get("error") or composite_result.evidence()),
         chain=state,

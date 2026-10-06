@@ -69,14 +69,15 @@ class VocabularyWriterTests(unittest.TestCase):
         )
         self.environment.start()
         self.addCleanup(self.environment.stop)
-        builders.run_open(
-            self.repo,
-            RUN_ID,
-            idempotency_key=key("open"),
-            goal="Exercise canonical route writes",
-            scope=["src/**"],
-            plugin_ref="forge-test-route-v2",
+        opened = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/codex_orch_tools.py"),
+             "run-open", "--repo", str(self.repo), "--run-id", RUN_ID,
+             "--idempotency-key", key("open"), "--goal", "Exercise canonical route writes",
+             "--scope", "src/**", "--plugin-ref", "forge-test-route-v2"],
+            capture_output=True, text=True, check=False,
         )
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        self.assertEqual(opened.stderr, "")
         builders.task_start(
             self.repo,
             RUN_ID,

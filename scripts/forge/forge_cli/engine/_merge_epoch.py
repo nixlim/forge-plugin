@@ -4,24 +4,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from forge_cli.engine._core import inspect_common_lock as inspect_common_lock, _write_artifact as _write_artifact, _read_bound_artifact as _read_bound_artifact
 from forge_cli import chain_core, runtime
-from forge_cli.policy import sha256_bytes, Policy
+from forge_cli.policy import Policy
 from forge_cli.envelope import V2ReasonCode, FrozenError, REVISION9_OUTPUT_SCHEMA
 import os
 import dataclasses
 
 
-def _merge_run_directory(state: Mapping[str, Any]) -> tuple[Path, Path] | None:
-    binding = state.get("run_binding")
-    if not isinstance(binding, Mapping):
-        return None
-    repository = Path(str(binding["repository"]))
-    return (
-        repository,
-        repository
-        / ".codex-orchestrator"
-        / "runs"
-        / str(binding["run_id"]),
-    )
 
 
 def _write_merge_artifact(
@@ -32,18 +20,7 @@ def _write_merge_artifact(
     *,
     master_package: bool = False,
 ) -> str:
-    bound = _merge_run_directory(state)
-    if bound is None:
-        return _write_artifact(ctx, state, relative, data, exclusive=True)
-    repository, run_dir = bound
-    chain_core._require_merge_adapter_control("run-relative-evidence")
-    return chain_core._capture_ingest_blob(
-        repository,
-        run_dir,
-        digest=sha256_bytes(data),
-        name="state.json" if master_package else "events.jsonl",
-        data=data,
-    )
+    return _write_artifact(ctx, state, relative, data, exclusive=True)
 
 
 def _read_merge_artifact(
@@ -53,34 +30,7 @@ def _read_merge_artifact(
     expected_digest: str,
     label: str,
 ) -> bytes:
-    bound = _merge_run_directory(state)
-    parsed = (
-        chain_core._parsed_run_captured_path(relative, str(state["run_binding"]["run_id"]))
-        if bound is not None
-        else None
-    )
-    if bound is None or parsed is None:
-        return _read_bound_artifact(
-            ctx, state, relative, expected_digest, label
-        )
-    repository, run_dir = bound
-    data = chain_core._read_ingest_input(
-        repository,
-        relative,
-        "ingest.captured_package",
-        run_dir=run_dir,
-        expected_capture_name=parsed.name,
-    )
-    if sha256_bytes(data) != expected_digest:
-        raise chain_core._merge_refusal(
-            V2ReasonCode.REVIEW_VERDICT_INVALID,
-            f"{label} artifact changed after review request",
-            expected=expected_digest,
-            observed=sha256_bytes(data),
-            chain=state,
-            evidence_refs=[relative],
-        )
-    return data
+    return _read_bound_artifact(ctx, state, relative, expected_digest, label)
 
 
 def _merge_gate_suite(

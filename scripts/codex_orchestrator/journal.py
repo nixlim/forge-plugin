@@ -210,24 +210,6 @@ def _mark_batch_lock(run_dir: Path, *, held: bool) -> None:
     key = os.path.abspath(os.fspath(run_dir))
     locks = _held_batch_locks()
     if held:
-        # forge: modified from upstream — every typed mutation enters here
-        # under its stable outer lock, including direct builder callers.  Bind
-        # legacy first-use reservation to the current commit/merge grammars
-        # before the lock becomes visible to journal mutation code.
-        try:
-            from forge_cli import chain_core
-        except ModuleNotFoundError as exc:
-            # Minimal upstream-only fixture installations contain no Forge CLI
-            # and cannot produce its additive merge grammar.
-            if exc.name != "forge_cli":
-                raise CoordinationRefusal(BATCH_DIVERGED) from exc
-        except ImportError as exc:
-            raise CoordinationRefusal(BATCH_DIVERGED) from exc
-        else:
-            try:
-                chain_core.register_activation_reservation_seam()
-            except (AttributeError, RuntimeError) as exc:
-                raise CoordinationRefusal(BATCH_DIVERGED) from exc
         locks.add(key)
     else:
         locks.discard(key)

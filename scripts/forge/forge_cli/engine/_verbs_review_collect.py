@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import datetime as dt
 import json
 import os
@@ -26,38 +25,6 @@ NEWER_REQUEST_LITERAL = (
 )
 
 
-def _review_collect_close_preflight_line(
-    self, state: MutableMapping[str, Any], outcome: Any
-) -> Any:
-    if not isinstance(outcome, Outcome) or outcome.message != "review PASS recorded":
-        return outcome
-    run_binding = state.get("run_binding")
-    if not isinstance(run_binding, Mapping):
-        return outcome
-    chain_id = str(state.get("chain_id") or "")
-    fallback = (
-        f"close preflight (journal-only, projecting {chain_id}): unavailable"
-    )
-    try:
-        _batch, _builders, journal = runtime._coordination_modules()
-        from codex_orchestrator import close_preflight
-
-        run_id = run_binding.get("run_id")
-        if not journal._valid_run_id(run_id) or not chain_id:
-            raise ValueError("run-bound chain identity is incomplete")
-        assert isinstance(run_id, str)
-        run_dir = (
-            self.ctx.store.common_root
-            / ".codex-orchestrator"
-            / "runs"
-            / run_id
-        )
-        line = close_preflight.summary_line(run_dir, chain_id, dict(state))
-    except Exception:
-        line = fallback
-    if not line:
-        return outcome
-    return dataclasses.replace(outcome, message=f"{outcome.message}; {line}")
 
 
 def _parse_verdict(data: bytes, candidate: str, package: str) -> dict[str, Any]:
@@ -292,9 +259,7 @@ def _legacy_collect(self, state: MutableMapping[str, Any], request: Mapping[str,
             remediation=chain_core._forge_command(state, "review request"), chain=state,
             evidence_refs=[verdict_ref],
         ) from exc
-    return _review_collect_close_preflight_line(
-        self, state, self._apply_verdict(state, verdict, verdict_ref)
-    )
+    return self._apply_verdict(state, verdict, verdict_ref)
 
 
 def _synthetic_block(
@@ -432,9 +397,7 @@ def _new_lane_collect(
             _synthetic_block(self, state, request, f"invalid verdict: {exc}"), stale
         )
     return _review_attempt.with_stale_evidence(
-        _review_collect_close_preflight_line(
-            self, state, self._apply_verdict(state, verdict, verdict_ref)
-        ),
+        self._apply_verdict(state, verdict, verdict_ref),
         stale,
     )
 

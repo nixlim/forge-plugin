@@ -269,10 +269,7 @@ def review_request(self: MergeEngine) -> Outcome:
         self.ctx, state, f"{relative}/package.txt",
         package, master_package=True,
     )
-    bound = engine._merge_run_directory(state)
-    package_path = (
-        self.ctx.store.common_root / package_ref if bound is None else bound[1] / package_ref
-    )
+    package_path = self.ctx.store.common_root / package_ref
     prompt = _review_prompt(state, package, package_path, package_digest, route, paths)
     launch = engine.prepare_review_launch(self.ctx, state, paths, route, prompt)
     package_info = (package_ref, package_digest, profiles, profile_map, len(package))

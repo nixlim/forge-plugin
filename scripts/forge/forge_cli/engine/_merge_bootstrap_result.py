@@ -6,13 +6,12 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from forge_cli import chain_core, runtime
+from forge_cli import chain_core
 
 
 def _decode_merge_bootstrap_result(
     raw: chain_core.FencedProcessResult,
     *,
-    run_bound: bool,
     fetch_argv: Sequence[str] | None = None,
     worktree: Path | None = None,
     candidate_head: str | None = None,
@@ -109,7 +108,6 @@ def _decode_merge_bootstrap_result(
         if fetch_argv is not None and fetch.get("argv") != list(fetch_argv):
             raise ValueError("composite fetch argv diverges from admission")
         resolved_tip = protocol.get("resolved_tip")
-        scope: dict[str, Any] | None = None
         patch: dict[str, Any] | None = None
         records: list[dict[str, Any]] = [fetch]
         expected_order = ["fetch"]
@@ -122,39 +120,19 @@ def _decode_merge_bootstrap_result(
                 raise ValueError("composite resolved tip is malformed")
             if worktree is None or candidate_head is None:
                 raise ValueError("composite argv context is unavailable")
-            if run_bound:
-                expected_order.append("name-status")
-                scope = constituent(protocol.get("scope"), "name-status")
-                records.append(scope)
-                if scope.get("argv") != chain_core._merge_scope_argv(
-                    worktree, resolved_tip, candidate_head
-                ):
-                    raise ValueError("composite name-status argv diverges")
-                paths = protocol.get("scope_changed_paths")
-                if passed(scope):
-                    _batch, _builders, journal = runtime._coordination_modules()
-                    if not chain_core._valid_sorted_unique_strings(paths) or not all(
-                        journal._valid_scope_item(path) for path in paths
-                    ):
-                        raise ValueError("scope changed-path set is malformed")
-                elif paths is not None:
-                    raise ValueError("failed name-status invented changed paths")
-            elif (
+            if (
                 protocol.get("scope") is not None
                 or protocol.get("scope_changed_paths") is not None
             ):
                 raise ValueError("unbound composite invented a scope constituent")
 
-            if scope is None or passed(scope):
-                expected_order.append("full-patch")
-                patch = constituent(protocol.get("full_patch"), "full-patch")
-                records.append(patch)
-                if patch.get("argv") != chain_core._merge_full_patch_argv(
-                    worktree, resolved_tip, candidate_head
-                ):
-                    raise ValueError("composite full-patch argv diverges")
-            elif protocol.get("full_patch") is not None:
-                raise ValueError("full-patch ran after failed name-status")
+            expected_order.append("full-patch")
+            patch = constituent(protocol.get("full_patch"), "full-patch")
+            records.append(patch)
+            if patch.get("argv") != chain_core._merge_full_patch_argv(
+                worktree, resolved_tip, candidate_head
+            ):
+                raise ValueError("composite full-patch argv diverges")
         else:
             if resolved_tip is not None:
                 raise ValueError("failed fetch invented a resolved tip")
@@ -170,7 +148,6 @@ def _decode_merge_bootstrap_result(
         complete = bool(
             expected_order[-1] == "full-patch" and all(passed(record) for record in records)
         )
-        slot_digest = str(scope["output_digest"]) if scope is not None else zero_digest
         return dataclasses.replace(
             raw,
             returncode=(
@@ -187,7 +164,7 @@ def _decode_merge_bootstrap_result(
                 )
             ),
             output=b"",
-            output_digest=slot_digest,
+            output_digest=zero_digest,
             output_limit=any(
                 record.get("output_limit_exceeded") is True for record in records
             ),

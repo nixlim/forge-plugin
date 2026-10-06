@@ -25,6 +25,7 @@ from forge_cli.engine._state import CLAUDE_EXECUTABLE as CLAUDE_EXECUTABLE
 from forge_cli.engine._state import CODEX_EXECUTABLE as CODEX_EXECUTABLE
 from forge_cli.envelope import (
     REVISION9_OUTPUT_SCHEMA,
+    FrozenError,
     Outcome,
     ReasonCode,
     Refusal,
@@ -243,7 +244,7 @@ def require_run_id(ctx: chain_core.CommandContext) -> str:
     run_id = ctx.options.run_id
     if run_id is None:
         raise Refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
+            V2ReasonCode.STATE_PRECONDITION,
             _cli_options.LAUNCH_RUN_ID_REQUIRED,
         )
     return run_id
@@ -1042,10 +1043,7 @@ def append_execution_result(
     """Append one idempotent result, returning its record and repeat status."""
 
     key = completion_idempotency(
-        paths.run_dir.name,
-        paths.execution,
-        sha256_bytes(completion_raw),
-    )
+        paths.run_dir.name, paths.execution, sha256_bytes(completion_raw))
     with run.batch.batch_lock(run.run_dir, create=True):
         state = run.journal._scan_run(run.run_dir)
         existing = result_record(state, paths.execution, paths.agent)
@@ -1056,13 +1054,9 @@ def append_execution_result(
                 run.repository,
                 paths.run_dir.name,
                 idempotency_key=key,
-                execution=paths.execution,
-                agent=paths.agent,
-                task=task,
-                status=result.status,
-                summary=result.summary,
-                files_changed=result.files_changed,
-                caveats=result.caveats,
+                execution=paths.execution, agent=paths.agent, task=task,
+                status=result.status, summary=result.summary,
+                files_changed=result.files_changed, caveats=result.caveats,
                 handoff=result.handoff,
             )
         except run.journal.CoordinationRefusal as exc:
@@ -1070,14 +1064,15 @@ def append_execution_result(
             existing = result_record(fresh, paths.execution, paths.agent)
             if existing is not None:
                 return existing, True
-            raise chain_core._coordination_refusal(exc) from exc
+            raise Refusal(V2ReasonCode.STATE_PRECONDITION, str(exc),
+                remediation="inspect the launch result record before retrying") from exc
     records = [
         record for record in outcome.records if record.get("type") == "execution_result"
     ]
     if len(records) != 1:
-        raise chain_core._coordination_refusal(
-            run.journal.CoordinationRefusal(run.journal.BATCH_DIVERGED)
-        )
+        raise FrozenError("launch execution result is malformed",
+            observed=f"expected one execution_result record; got {len(records)}",
+            schema=REVISION9_OUTPUT_SCHEMA)
     return dict(records[0]), bool(outcome.repeated)
 
 

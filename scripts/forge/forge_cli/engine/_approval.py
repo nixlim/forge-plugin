@@ -1,10 +1,9 @@
 """Extracted from scripts/forge/forge_cli/engine/__init__.py."""
 from __future__ import annotations
 from typing import Any, Iterable, Mapping, MutableMapping
-from forge_cli.engine._archive import _archive_recheck as _archive_recheck
-from forge_cli.engine._core import _transition_state as _transition_state, _archive_metadata as _archive_metadata, _record_process_step as _record_process_step
+from forge_cli.engine._core import _transition_state as _transition_state, _record_process_step as _record_process_step
 from forge_cli.engine._state import TOKEN_TTL_SECONDS as TOKEN_TTL_SECONDS
-from forge_cli.envelope import OUTPUT_SCHEMA, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, V2ReasonCode, FrozenError, Refusal
+from forge_cli.envelope import OUTPUT_SCHEMA, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, V2ReasonCode, Refusal
 import datetime as dt
 import secrets
 from forge_cli import chain_core, runtime
@@ -28,9 +27,6 @@ def _success(
         and (
             state.get("kind") == "merge"
             or state.get("schema") == "forge-merge-chain/1"
-            or state.get("run_binding") is not None
-            or isinstance(state.get("staging"), Mapping)
-            and state.get("staging", {}).get("archive") is not None
         )
     )
     return Outcome(
@@ -48,15 +44,6 @@ def _success(
 def _issue_authorization(
     state: MutableMapping[str, Any], ctx: chain_core.CommandContext | None = None
 ) -> None:
-    if _archive_metadata(state) is not None:
-        if ctx is None:
-            raise FrozenError(
-                "archive authorization lacks its rerender context",
-                chain_id=str(state.get("chain_id") or "") or None,
-                state=str(state.get("state") or "") or None,
-                schema=REVISION9_OUTPUT_SCHEMA,
-            )
-        _archive_recheck(ctx, state, "authorization")
     issued = runtime.utc_now()
     state["authorization"] = {
         "token": secrets.token_hex(16),

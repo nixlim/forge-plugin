@@ -112,438 +112,358 @@ def recover(
         abort_rebase=abort_rebase,
     ):
         self._prepare_git_no_lazy_fetch_qualification(state)
-    binding = state.get("run_binding")
     action = "observed"
     pending_admission: engine.MergeAdmission | None = None
     pending_classification: engine.MergeBootstrapClassification | None = None
     budget = engine._MergeEpochBudget()
-    with self.store._journal_outer(
-        binding if isinstance(binding, Mapping) else None
-    ):
-        with self._recording_common_lock(
-            Path(str(state["worktree"]["common_dir"])),
+    with self._recording_common_lock(
+        Path(str(state["worktree"]["common_dir"])),
+        chain_id=str(state["chain_id"]),
+        operation="recover",
+    ) as common_lock:
+        with chain_core.acquire_chain_lease(
+            self.store.root,
             chain_id=str(state["chain_id"]),
-            operation="recover",
-        ) as common_lock:
-            with chain_core.acquire_chain_lease(
-                self.store.root,
-                chain_id=str(state["chain_id"]),
-                session=self.store._session(None),
-                exclusion=common_lock,
-            ) as lease:
-                current = self.store.load_locked(
-                    str(state["chain_id"]), lease=lease
+            session=self.store._session(None),
+            exclusion=common_lock,
+        ) as lease:
+            current = self.store.load_locked(
+                str(state["chain_id"]), lease=lease
+            )
+            engine._require_loud_merge_recovery_mode(
+                current,
+                continue_rebase=continue_rebase,
+                abort_rebase=abort_rebase,
+            )
+            claim_status = current.get("worktree", {}).get(
+                "claim", {}
+            ).get("status")
+            if claim_status in {"releasing", "released"} and current[
+                "state"
+            ] not in {"closed", "aborted"}:
+                current, completed_disposition = (
+                    self._complete_pending_release_locked(current, lease)
                 )
-                engine._require_loud_merge_recovery_mode(
+                historical = (
+                    completed_disposition
+                    == "historical-landed-superseded"
+                )
+                return engine._success(
                     current,
-                    continue_rebase=continue_rebase,
-                    abort_rebase=abort_rebase,
+                    "merge recovery "
+                    f"{'historical-landed-superseded' if historical else 'terminal'} "
+                    f"for chain {current['chain_id']}",
+                    (
+                        "forge merge start --worktree "
+                        f"{current['worktree']['path']}"
+                        if historical
+                        else "none — merge chain closed"
+                        if current["state"] == "closed"
+                        else "none — merge chain aborted"
+                    ),
                 )
-                claim_status = current.get("worktree", {}).get(
-                    "claim", {}
-                ).get("status")
-                if claim_status in {"releasing", "released"} and current[
-                    "state"
-                ] not in {"closed", "aborted"}:
-                    current, completed_disposition = (
-                        self._complete_pending_release_locked(current, lease)
+            if engine._merge_inactive(current) and current.get("state") in {
+                "rebasing",
+                "reverifying",
+            }:
+                with self.store.event_lock(str(current["chain_id"])):
+                    inactive_replay = self.store._read_replay_locked(
+                        str(current["chain_id"])
                     )
-                    historical = (
-                        completed_disposition
-                        == "historical-landed-superseded"
-                    )
-                    return engine._success(
-                        current,
-                        "merge recovery "
-                        f"{'historical-landed-superseded' if historical else 'terminal'} "
-                        f"for chain {current['chain_id']}",
-                        (
-                            "forge merge start --worktree "
-                            f"{current['worktree']['path']}"
-                            if historical
-                            else "none — merge chain closed"
-                            if current["state"] == "closed"
-                            else "none — merge chain aborted"
+                if engine._merge_inactive_epoch_has_no_started_child(
+                    current, inactive_replay.events
+                ):
+                    raise chain_core._merge_refusal(
+                        V2ReasonCode.STATE_PRECONDITION,
+                        "forge: merge recover refused — inactive epoch has no started child",
+                        expected="status or safe abort after inactivity",
+                        observed=str(current["state"]),
+                        remediation=(
+                            "forge status --chain-id "
+                            f"{current['chain_id']}"
                         ),
+                        chain=current,
                     )
-                if engine._merge_inactive(current) and current.get("state") in {
-                    "rebasing",
-                    "reverifying",
-                }:
-                    with self.store.event_lock(str(current["chain_id"])):
-                        inactive_replay = self.store._read_replay_locked(
-                            str(current["chain_id"])
-                        )
-                    if engine._merge_inactive_epoch_has_no_started_child(
-                        current, inactive_replay.events
-                    ):
-                        raise chain_core._merge_refusal(
-                            V2ReasonCode.STATE_PRECONDITION,
-                            "forge: merge recover refused — inactive epoch has no started child",
-                            expected="status or safe abort after inactivity",
-                            observed=str(current["state"]),
-                            remediation=(
-                                "forge status --chain-id "
-                                f"{current['chain_id']}"
-                            ),
-                            chain=current,
-                        )
-                interrupted_candidate_observation = bool(
-                    isinstance(
-                        current.get("integration", {}).get("intent"),
+            interrupted_candidate_observation = bool(
+                isinstance(
+                    current.get("integration", {}).get("intent"),
+                    Mapping,
+                )
+                and current["integration"]["intent"].get("schema")
+                == chain_core._MERGE_CANDIDATE_OBSERVATION_SCHEMA
+            )
+            current, _source_intent, observation_restored = (
+                self._restore_candidate_observation_intent_locked(
+                    current, lease
+                )
+            )
+            if not observation_restored:
+                current = self._record_foreign_git_locked(
+                    current, lease
+                )
+            bootstrap_intent = current.get("integration", {}).get(
+                "intent"
+            )
+            if (
+                isinstance(bootstrap_intent, Mapping)
+                and bootstrap_intent.get("schema")
+                == chain_core._BOOTSTRAP_FETCH_OBSERVATION_SCHEMA
+                and not chain_core._bootstrap_fetch_observation_record_valid(
+                    current, bootstrap_intent
+                )
+            ):
+                current = self._record_foreign_git_locked(
+                    current, lease
+                )
+            inactive_post_attempt_ready = False
+            if engine._merge_inactive(current) and engine._merge_has_attempt(current):
+                with self.store.event_lock(str(current["chain_id"])):
+                    current_replay = self.store._read_replay_locked(
+                        str(current["chain_id"])
+                    )
+                inactive_post_attempt_ready = (
+                    chain_core._merge_inactive_post_attempt_recovery_ready(
+                        current, current_replay.events
+                    )
+                )
+            if current.get("integration", {}).get("condition") == (
+                "lock-release-failed"
+            ):
+                integration = copy.deepcopy(current["integration"])
+                integration.update(
+                    {
+                        "condition": integration["primary_condition"],
+                        "primary_condition": "none",
+                    }
+                )
+                current = self._epoch_transition(
+                    current,
+                    lease,
+                    "lock_release_result",
+                    {"delta": {"integration": integration}},
+                )
+                action = "lock-release"
+            elif (
+                inactive_post_attempt_ready
+            ):
+                prior_observation_digest = self._tail_event_digest(
+                    current, "push_observed"
+                )
+                current = self._run_remote_observation(
+                    current,
+                    common_lock,
+                    lease,
+                    budget,
+                    phase="post-push",
+                    allow_inactive_observation=True,
+                )
+                fresh_observation_digest = self._tail_event_digest(
+                    current, "push_observed"
+                )
+                if fresh_observation_digest == prior_observation_digest:
+                    raise FrozenError(
+                        "inactive merge recovery did not retain a fresh remote observation",
+                        chain_id=str(current["chain_id"]),
+                        schema=REVISION9_OUTPUT_SCHEMA,
+                    )
+                containment, _containment_vector = chain_core._merge_containment(
+                    current
+                )
+                if containment == "older":
+                    current = self._release_historical_landing_locked(
+                        current,
+                        common_lock,
+                        lease,
+                        observation_event_digest=fresh_observation_digest,
+                    )
+                    action = "historical-landed-superseded"
+                elif containment == "all-false":
+                    action = "inactive-not-landed"
+                else:
+                    action = (
+                        "pushed"
+                        if current.get("state") == "pushed"
+                        else "observed"
+                    )
+            elif current["state"] == "classifying":
+                if continue_rebase or abort_rebase:
+                    self._wrong_state(
+                        current,
+                        "bare recovery for an interrupted bootstrap",
+                        "merge recover",
+                    )
+                (
+                    current,
+                    action,
+                    pending_admission,
+                    pending_classification,
+                ) = self._recover_classifying_bootstrap_locked(
+                    current, common_lock, lease
+                )
+            elif current["state"] == "pushing":
+                retry_candidate = bool(
+                    not engine._merge_inactive(current)
+                    and chain_core._merge_old_tip_all_false(current)
+                    and isinstance(
+                        current.get("integration", {}).get("push"),
                         Mapping,
                     )
-                    and current["integration"]["intent"].get("schema")
-                    == chain_core._MERGE_CANDIDATE_OBSERVATION_SCHEMA
-                )
-                current, _source_intent, observation_restored = (
-                    self._restore_candidate_observation_intent_locked(
-                        current, lease
-                    )
-                )
-                if not observation_restored:
-                    current = self._record_foreign_git_locked(
-                        current, lease
-                    )
-                bootstrap_intent = current.get("integration", {}).get(
-                    "intent"
-                )
-                if (
-                    isinstance(bootstrap_intent, Mapping)
-                    and bootstrap_intent.get("schema")
-                    == chain_core._BOOTSTRAP_FETCH_OBSERVATION_SCHEMA
-                    and not chain_core._bootstrap_fetch_observation_record_valid(
-                        current, bootstrap_intent
-                    )
-                ):
-                    current = self._record_foreign_git_locked(
-                        current, lease
-                    )
-                inactive_post_attempt_ready = False
-                if engine._merge_inactive(current) and engine._merge_has_attempt(current):
-                    with self.store.event_lock(str(current["chain_id"])):
-                        current_replay = self.store._read_replay_locked(
-                            str(current["chain_id"])
-                        )
-                    inactive_post_attempt_ready = (
-                        chain_core._merge_inactive_post_attempt_recovery_ready(
-                            current, current_replay.events
-                        )
-                    )
-                if current.get("integration", {}).get("condition") == (
-                    "lock-release-failed"
-                ):
-                    integration = copy.deepcopy(current["integration"])
-                    integration.update(
-                        {
-                            "condition": integration["primary_condition"],
-                            "primary_condition": "none",
-                        }
-                    )
-                    current = self._epoch_transition(
-                        current,
-                        lease,
-                        "lock_release_result",
-                        {"delta": {"integration": integration}},
-                    )
-                    action = "lock-release"
-                elif (
-                    inactive_post_attempt_ready
-                ):
-                    prior_observation_digest = self._tail_event_digest(
-                        current, "push_observed"
-                    )
-                    current = self._run_remote_observation(
-                        current,
-                        common_lock,
-                        lease,
-                        budget,
-                        phase="post-push",
-                        allow_inactive_observation=True,
-                    )
-                    fresh_observation_digest = self._tail_event_digest(
-                        current, "push_observed"
-                    )
-                    if fresh_observation_digest == prior_observation_digest:
-                        raise FrozenError(
-                            "inactive merge recovery did not retain a fresh remote observation",
-                            chain_id=str(current["chain_id"]),
-                            schema=REVISION9_OUTPUT_SCHEMA,
-                        )
-                    containment, _containment_vector = chain_core._merge_containment(
-                        current
-                    )
-                    if containment == "older":
-                        current = self._release_historical_landing_locked(
-                            current,
-                            common_lock,
-                            lease,
-                            observation_event_digest=fresh_observation_digest,
-                        )
-                        action = "historical-landed-superseded"
-                    elif containment == "all-false":
-                        action = "inactive-not-landed"
-                    else:
-                        action = (
-                            "pushed"
-                            if current.get("state") == "pushed"
-                            else "observed"
-                        )
-                elif current["state"] == "classifying":
-                    if continue_rebase or abort_rebase:
-                        self._wrong_state(
-                            current,
-                            "bare recovery for an interrupted bootstrap",
-                            "merge recover",
-                        )
-                    (
-                        current,
-                        action,
-                        pending_admission,
-                        pending_classification,
-                    ) = self._recover_classifying_bootstrap_locked(
-                        current, common_lock, lease
-                    )
-                elif current["state"] == "pushing":
-                    retry_candidate = bool(
-                        not engine._merge_inactive(current)
-                        and chain_core._merge_old_tip_all_false(current)
-                        and isinstance(
-                            current.get("integration", {}).get("push"),
-                            Mapping,
-                        )
-                        and (
+                    and (
+                        current.get("integration", {})
+                        .get("push", {})
+                        .get("result")
+                        is None
+                        or isinstance(
                             current.get("integration", {})
                             .get("push", {})
-                            .get("result")
-                            is None
-                            or isinstance(
-                                current.get("integration", {})
-                                .get("push", {})
-                                .get("result"),
-                                Mapping,
-                            )
+                            .get("result"),
+                            Mapping,
                         )
                     )
-                    prior_observation_digest = self._tail_event_digest(
-                        current, "push_observed"
+                )
+                prior_observation_digest = self._tail_event_digest(
+                    current, "push_observed"
+                )
+                current = self._run_remote_observation(
+                    current,
+                    common_lock,
+                    lease,
+                    budget,
+                    phase="post-push",
+                    budget_member=(
+                        "pre_observations" if retry_candidate else None
+                    ),
+                    allow_inactive_observation=True,
+                )
+                fresh_observation_digest = self._tail_event_digest(
+                    current, "push_observed"
+                )
+                containment, _containment_vector = chain_core._merge_containment(current)
+                if (
+                    containment == "older"
+                    and engine._merge_inactive(current)
+                    and fresh_observation_digest != prior_observation_digest
+                ):
+                    current = self._release_historical_landing_locked(
+                        current,
+                        common_lock,
+                        lease,
+                        observation_event_digest=fresh_observation_digest,
                     )
-                    current = self._run_remote_observation(
+                    action = "historical-landed-superseded"
+                elif (
+                    containment == "all-false"
+                    and engine._merge_inactive(current)
+                    and fresh_observation_digest
+                    != prior_observation_digest
+                ):
+                    action = "inactive-not-landed"
+                elif (
+                    retry_candidate
+                    and fresh_observation_digest
+                    != prior_observation_digest
+                    and current["state"] == "pushing"
+                    and not engine._merge_inactive(current)
+                    and chain_core._merge_old_tip_all_false(current)
+                ):
+                    current = self._run_epoch_push(
                         current,
                         common_lock,
                         lease,
                         budget,
-                        phase="post-push",
-                        budget_member=(
-                            "pre_observations" if retry_candidate else None
-                        ),
-                        allow_inactive_observation=True,
-                    )
-                    fresh_observation_digest = self._tail_event_digest(
-                        current, "push_observed"
-                    )
-                    containment, _containment_vector = chain_core._merge_containment(current)
-                    if (
-                        containment == "older"
-                        and engine._merge_inactive(current)
-                        and fresh_observation_digest != prior_observation_digest
-                    ):
-                        current = self._release_historical_landing_locked(
-                            current,
-                            common_lock,
-                            lease,
-                            observation_event_digest=fresh_observation_digest,
-                        )
-                        action = "historical-landed-superseded"
-                    elif (
-                        containment == "all-false"
-                        and engine._merge_inactive(current)
-                        and fresh_observation_digest
-                        != prior_observation_digest
-                    ):
-                        action = "inactive-not-landed"
-                    elif (
-                        retry_candidate
-                        and fresh_observation_digest
-                        != prior_observation_digest
-                        and current["state"] == "pushing"
-                        and not engine._merge_inactive(current)
-                        and chain_core._merge_old_tip_all_false(current)
-                    ):
-                        current = self._run_epoch_push(
-                            current,
-                            common_lock,
-                            lease,
-                            budget,
-                            retry=True,
-                        )
-                    if action not in {
-                        "historical-landed-superseded",
-                        "inactive-not-landed",
-                    }:
-                        action = (
-                            "pushed"
-                            if current["state"] == "pushed"
-                            else "observed"
-                        )
-                elif current["state"] == "reverification_failed":
-                    current, candidate_observation = (
-                        self._run_candidate_observation_locked(
-                            current,
-                            common_lock,
-                            lease,
-                            verb="merge recover",
-                            remote_tip=str(
-                                current["candidate"]["remote_tip"]
-                            ),
-                            expected_head=str(
-                                current["candidate"]["candidate_head"]
-                            ),
-                            classify=False,
-                        )
-                    )
-                    _repository, observed_policy, _paths = (
-                        _observe_current_merge_candidate(
-                            self.ctx,
-                            current,
-                            verb="merge recover",
-                            observation=candidate_observation,
-                        )
-                    )
-                    current = self._begin_epoch(
-                        current,
-                        lease,
                         retry=True,
-                        observed_policy=observed_policy,
                     )
-                    current, action = self._finish_recovered_epoch_locked(
-                        current, common_lock, lease, budget
+                if action not in {
+                    "historical-landed-superseded",
+                    "inactive-not-landed",
+                }:
+                    action = (
+                        "pushed"
+                        if current["state"] == "pushed"
+                        else "observed"
                     )
-                elif current["state"] == "reverifying":
-                    current, action = self._finish_recovered_epoch_locked(
-                        current, common_lock, lease, budget
-                    )
-                elif current["state"] == "rebase_conflict":
-                    current = self._recover_conflict_locked(
+            elif current["state"] == "reverification_failed":
+                current, candidate_observation = (
+                    self._run_candidate_observation_locked(
                         current,
                         common_lock,
                         lease,
-                        continue_rebase=continue_rebase,
-                        abort_rebase=abort_rebase,
-                        paths=paths,
+                        verb="merge recover",
+                        remote_tip=str(
+                            current["candidate"]["remote_tip"]
+                        ),
+                        expected_head=str(
+                            current["candidate"]["candidate_head"]
+                        ),
+                        classify=False,
                     )
-                    if current["state"] == "reverifying":
-                        current, action = self._finish_recovered_epoch_locked(
-                            current, common_lock, lease, budget
-                        )
-                    else:
-                        action = "conflict"
-                elif current["state"] == "rebasing":
-                    intent = current.get("integration", {}).get("intent")
-                    plan = current.get("integration", {}).get("epoch", {}).get(
-                        "gate_plan"
+                )
+                _repository, observed_policy, _paths = (
+                    _observe_current_merge_candidate(
+                        self.ctx,
+                        current,
+                        verb="merge recover",
+                        observation=candidate_observation,
                     )
-                    fetch_observation_phase = bool(
-                        isinstance(intent, Mapping)
-                        and (
+                )
+                current = self._begin_epoch(
+                    current,
+                    lease,
+                    retry=True,
+                    observed_policy=observed_policy,
+                )
+                current, action = self._finish_recovered_epoch_locked(
+                    current, common_lock, lease, budget
+                )
+            elif current["state"] == "reverifying":
+                current, action = self._finish_recovered_epoch_locked(
+                    current, common_lock, lease, budget
+                )
+            elif current["state"] == "rebase_conflict":
+                current = self._recover_conflict_locked(
+                    current,
+                    common_lock,
+                    lease,
+                    continue_rebase=continue_rebase,
+                    abort_rebase=abort_rebase,
+                    paths=paths,
+                )
+                if current["state"] == "reverifying":
+                    current, action = self._finish_recovered_epoch_locked(
+                        current, common_lock, lease, budget
+                    )
+                else:
+                    action = "conflict"
+            elif current["state"] == "rebasing":
+                intent = current.get("integration", {}).get("intent")
+                plan = current.get("integration", {}).get("epoch", {}).get(
+                    "gate_plan"
+                )
+                fetch_observation_phase = bool(
+                    isinstance(intent, Mapping)
+                    and (
+                        intent.get("schema")
+                        == chain_core._EPOCH_FETCH_OBSERVATION_SCHEMA
+                        or intent.get("schema")
+                        == "forge-epoch-ancestry-intent/1"
+                        or (
                             intent.get("schema")
-                            == chain_core._EPOCH_FETCH_OBSERVATION_SCHEMA
-                            or intent.get("schema")
-                            == "forge-epoch-ancestry-intent/1"
-                            or (
-                                intent.get("schema")
-                                == chain_core._MERGE_CANDIDATE_OBSERVATION_SCHEMA
-                                and isinstance(
-                                    intent.get("source_intent"), Mapping
-                                )
-                                and intent.get("source_intent", {}).get(
-                                    "schema"
-                                )
-                                == chain_core._EPOCH_FETCH_OBSERVATION_SCHEMA
+                            == chain_core._MERGE_CANDIDATE_OBSERVATION_SCHEMA
+                            and isinstance(
+                                intent.get("source_intent"), Mapping
                             )
+                            and intent.get("source_intent", {}).get(
+                                "schema"
+                            )
+                            == chain_core._EPOCH_FETCH_OBSERVATION_SCHEMA
                         )
                     )
-                    if fetch_observation_phase:
-                        current, fetched_tip, unchanged = (
-                            self._complete_epoch_fetch_locked(
-                                current, common_lock, lease
-                            )
-                        )
-                        if not unchanged:
-                            current = self._run_epoch_rebase(
-                                current,
-                                fetched_tip,
-                                common_lock,
-                                lease,
-                                budget,
-                            )
-                        current, action = self._finish_recovered_epoch_locked(
-                            current, common_lock, lease, budget
-                        )
-                    elif isinstance(plan, Mapping) and plan.get("status") == "sealed":
-                        current, action = self._finish_recovered_epoch_locked(
-                            current, common_lock, lease, budget
-                        )
-                    elif isinstance(intent, Mapping) and (
-                        intent.get("operation") in {"rebase", "rebase-result"}
-                        or intent.get("operation") == "continue"
-                        and isinstance(intent.get("phase"), str)
-                        and str(intent["phase"]).startswith(
-                            "forge-conflict-observation:"
-                        )
-                    ):
-                        current = self._recover_rebase_observation_locked(
+                )
+                if fetch_observation_phase:
+                    current, fetched_tip, unchanged = (
+                        self._complete_epoch_fetch_locked(
                             current, common_lock, lease
                         )
-                        if current["state"] == "reverifying":
-                            current, action = self._finish_recovered_epoch_locked(
-                                current, common_lock, lease, budget
-                            )
-                    elif isinstance(intent, Mapping) and intent.get(
-                        "operation"
-                    ) == "fetch-result" and intent.get("result") == "success":
-                        current = self._run_epoch_rebase(
-                            current,
-                            str(intent["resolved_tip"]),
-                            common_lock,
-                            lease,
-                            budget,
-                        )
-                        current, action = self._finish_recovered_epoch_locked(
-                            current, common_lock, lease, budget
-                        )
-                    else:
-                        current, fetched_tip, unchanged = self._run_epoch_fetch(
-                            current,
-                            common_lock,
-                            lease,
-                            budget,
-                            resume_intent=bool(
-                                isinstance(intent, Mapping)
-                                and intent.get("operation") == "fetch"
-                            ),
-                        )
-                        if not unchanged:
-                            current = self._run_epoch_rebase(
-                                current,
-                                fetched_tip,
-                                common_lock,
-                                lease,
-                                budget,
-                            )
-                        current, action = self._finish_recovered_epoch_locked(
-                            current, common_lock, lease, budget
-                        )
-                elif current["state"] == "authorized" and current.get(
-                    "integration", {}
-                ).get("condition") in {
-                    "fetch-failed",
-                    "remote-moved",
-                    "non-fast-forward",
-                }:
-                    current = self._begin_epoch(current, lease)
-                    current, fetched_tip, unchanged = self._run_epoch_fetch(
-                        current, common_lock, lease, budget
                     )
                     if not unchanged:
                         current = self._run_epoch_rebase(
@@ -556,19 +476,95 @@ def recover(
                     current, action = self._finish_recovered_epoch_locked(
                         current, common_lock, lease, budget
                     )
-                elif current.get("integration", {}).get("condition") == (
-                    "foreign-git-state"
-                ):
-                    current = self._record_foreign_git_locked(current, lease)
-                    action = "foreign"
-                elif interrupted_candidate_observation:
-                    action = "observed"
-                else:
-                    self._wrong_state(
-                        current,
-                        "a recoverable merge condition or interrupted epoch",
-                        "merge recover",
+                elif isinstance(plan, Mapping) and plan.get("status") == "sealed":
+                    current, action = self._finish_recovered_epoch_locked(
+                        current, common_lock, lease, budget
                     )
+                elif isinstance(intent, Mapping) and (
+                    intent.get("operation") in {"rebase", "rebase-result"}
+                    or intent.get("operation") == "continue"
+                    and isinstance(intent.get("phase"), str)
+                    and str(intent["phase"]).startswith(
+                        "forge-conflict-observation:"
+                    )
+                ):
+                    current = self._recover_rebase_observation_locked(
+                        current, common_lock, lease
+                    )
+                    if current["state"] == "reverifying":
+                        current, action = self._finish_recovered_epoch_locked(
+                            current, common_lock, lease, budget
+                        )
+                elif isinstance(intent, Mapping) and intent.get(
+                    "operation"
+                ) == "fetch-result" and intent.get("result") == "success":
+                    current = self._run_epoch_rebase(
+                        current,
+                        str(intent["resolved_tip"]),
+                        common_lock,
+                        lease,
+                        budget,
+                    )
+                    current, action = self._finish_recovered_epoch_locked(
+                        current, common_lock, lease, budget
+                    )
+                else:
+                    current, fetched_tip, unchanged = self._run_epoch_fetch(
+                        current,
+                        common_lock,
+                        lease,
+                        budget,
+                        resume_intent=bool(
+                            isinstance(intent, Mapping)
+                            and intent.get("operation") == "fetch"
+                        ),
+                    )
+                    if not unchanged:
+                        current = self._run_epoch_rebase(
+                            current,
+                            fetched_tip,
+                            common_lock,
+                            lease,
+                            budget,
+                        )
+                    current, action = self._finish_recovered_epoch_locked(
+                        current, common_lock, lease, budget
+                    )
+            elif current["state"] == "authorized" and current.get(
+                "integration", {}
+            ).get("condition") in {
+                "fetch-failed",
+                "remote-moved",
+                "non-fast-forward",
+            }:
+                current = self._begin_epoch(current, lease)
+                current, fetched_tip, unchanged = self._run_epoch_fetch(
+                    current, common_lock, lease, budget
+                )
+                if not unchanged:
+                    current = self._run_epoch_rebase(
+                        current,
+                        fetched_tip,
+                        common_lock,
+                        lease,
+                        budget,
+                    )
+                current, action = self._finish_recovered_epoch_locked(
+                    current, common_lock, lease, budget
+                )
+            elif current.get("integration", {}).get("condition") == (
+                "foreign-git-state"
+            ):
+                current = self._record_foreign_git_locked(current, lease)
+                action = "foreign"
+            elif interrupted_candidate_observation:
+                action = "observed"
+            else:
+                self._wrong_state(
+                    current,
+                    "a recoverable merge condition or interrupted epoch",
+                    "merge recover",
+                )
     if pending_classification is not None:
         if pending_admission is None:
             raise FrozenError(

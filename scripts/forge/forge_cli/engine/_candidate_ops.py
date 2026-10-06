@@ -5,7 +5,7 @@ from forge_cli.engine._classification import _run_classification as _run_classif
 from forge_cli.engine._core import _transition_state as _transition_state, _write_artifact as _write_artifact, _read_bound_artifact as _read_bound_artifact
 from pathlib import Path
 from forge_cli import candidate as candidate_module, chain_core
-from forge_cli.envelope import ReasonCode, Refusal, FrozenError, V2ReasonCode
+from forge_cli.envelope import ReasonCode, Refusal, FrozenError
 
 
 def _invalidate_candidate_evidence(
@@ -77,24 +77,6 @@ def _install_candidate_snapshot(
     state: MutableMapping[str, Any],
     snapshot: candidate_module.CandidateSnapshot,
 ) -> None:
-    if state.get("run_binding") is not None:
-        invalid_paths = [
-            path
-            for path in snapshot.paths
-            if not candidate_module.valid_scope_path(path)
-        ]
-        if invalid_paths:
-            raise Refusal(
-                V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                "forge: commit start refused — run/task binding is invalid",
-                expected=(
-                    "every concrete candidate path satisfies the committed "
-                    "run-scope pathname contract"
-                ),
-                observed=", ".join(repr(path) for path in invalid_paths),
-                remediation="inspect the named run/task and retry the exact paired start",
-                chain=state,
-            )
     state["candidate"] = snapshot.state_record()
     state["paths"] = list(snapshot.paths)
     state["staging"]["staged_paths"] = list(snapshot.paths)

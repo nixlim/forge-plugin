@@ -53,19 +53,14 @@ PENDING_ADOPTION = frozenset(
         "tests/test_fr223_v2_hook.py",
         "tests/test_gate_one_once.py",
         "tests/test_governance_scripts.py",
-        # Landed after this candidate's repository-creation adoption sweep.
-        "tests/test_ingest_changed_paths_renames.py",
         "tests/test_installer.py",
         "tests/test_invariant_guard.py",
         "tests/test_launch_init_step.py",
         "tests/test_migration.py",
         "tests/test_mutation_runner.py",
-        "tests/test_revision9_archive.py",
         "tests/test_revision9_coordination.py",
-        "tests/test_revision9_matrix.py",
         "tests/test_risk_tier.py",
         "tests/test_route_config_ownership.py",
-        "tests/test_run_coordination.py",
         "tests/test_tree_index_drift_flags.py",
         "tests/test_vocab_readers.py",
         "tests/test_vocab_writers.py",
@@ -537,7 +532,7 @@ class GitEnvironmentTests(_GitMaintenanceFixture):
                 quiet_repository(disabled_linked)
 
     def test_repository_creation_adoption_is_an_exact_ratchet(self) -> None:
-        self.assertEqual(len(PENDING_ADOPTION), 31)
+        self.assertEqual(len(PENDING_ADOPTION), 27)
         self.assertEqual(_adoption_issues(_test_sources()), [])
 
     def test_repo_conformance_imports_in_commitment_audit_script_mode(self) -> None:

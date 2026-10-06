@@ -18,6 +18,7 @@ from types import ModuleType
 from unittest import mock
 
 
+
 ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts" / "forge" / "cli.py"
 
@@ -51,8 +52,6 @@ class MergeStoreFixture(unittest.TestCase):
     def initial_merge(
         self,
         chain_id: str = "c-2026-08-30T120000Z-a001",
-        *,
-        run_binding: dict[str, object] | None = None,
     ) -> tuple[dict[str, object], dict[str, object]]:
         at = "2026-01-01T12:00:00Z"
         worktree_identity = {
@@ -90,11 +89,7 @@ class MergeStoreFixture(unittest.TestCase):
             "state": "classifying",
             "created_at": at,
             "owner": owner,
-            "run": (
-                str(run_binding["run_id"])
-                if isinstance(run_binding, dict)
-                else None
-            ),
+            "run": None,
             "repository": str(self.root),
             "worktree": {
                 **worktree_identity,
@@ -130,7 +125,6 @@ class MergeStoreFixture(unittest.TestCase):
                 "push": None,
             },
             "cleanup": {"condition": "none"},
-            "run_binding": copy.deepcopy(run_binding),
         }
         metadata = {
             "at": at,
@@ -186,7 +180,7 @@ class MergeStoreFixture(unittest.TestCase):
                 ["docs/example.md"],
                 "standard",
             )
-            details = {"fixture": "byte-identity"}
+            details = {"paths": list(state["paths"])}
             store = CLI.ChainStore(self.root)
             store.create(state, event, details)
         return store, state, {
@@ -302,8 +296,6 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
                 "authorization",
                 "integration",
                 "cleanup",
-                "run_binding",
-                "journal_outbox",
             },
         )
         self.assertEqual(
@@ -337,16 +329,6 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
                 "aborted",
                 "closed",
                 "journal_receipted",
-            },
-        )
-        self.assertEqual(
-            CLI.MERGE_CONSEQUENTIAL_EVENTS,
-            {
-                "gate_recorded",
-                "review_attached",
-                "approval_recorded",
-                "generation_carried_forward",
-                "push_observed",
             },
         )
         self.assertEqual(
@@ -388,8 +370,6 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
                 "approval",
                 "authorization",
                 "commit_result",
-                "run_binding",
-                "journal_outbox",
             },
         )
         self.assertIs(CLI.validate_merge_state(merge_state), merge_state)
@@ -441,50 +421,6 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
         self.assertEqual(outcome.schema, "forge-cli/2")
         self.assertEqual(store.events_path(chain_id).read_bytes(), events_before_refusal)
 
-    def test_new_merge_record_currentness_wrapper_is_isolated(self) -> None:
-        builders = mock.Mock()
-        builders._binding_is_current.return_value = False
-        builders._merge_current_head_contained.return_value = True
-        builders._binding_matches_source_fact.return_value = True
-        state = {"state": "pushed"}
-        binding = {"candidate": {"kind": "git-range", "value": {}}}
-        source_event = {"event": "fixture"}
-        source_state = {"state": "pushed"}
-        replay_entries = ()
-
-        self.assertFalse(
-            CLI._new_merge_record_is_current(
-                builders,
-                state,
-                binding,
-                {"type": "verification"},
-                source_event,
-                None,
-                source_state,
-                replay_entries,
-            )
-        )
-        self.assertTrue(
-            CLI._new_merge_record_is_current(
-                builders,
-                state,
-                binding,
-                {"type": "decision", "outcome": "chain-landing"},
-                source_event,
-                None,
-                source_state,
-                replay_entries,
-            )
-        )
-        builders._merge_current_head_contained.assert_called_once_with(state)
-        builders._binding_matches_source_fact.assert_called_once_with(
-            binding,
-            {"type": "decision", "outcome": "chain-landing"},
-            source_event,
-            None,
-            source_state,
-            family="merge",
-        )
 
     def test_commit_persist_transition_bytes_remain_identical(self) -> None:
         store, state, fixture = self.create_commit(
@@ -693,10 +629,10 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
             "c-2026-08-30T120000Z-a007"
         )
         state = self.ownership_intent(store, state, metadata)
-        _batch, builders, _journal = CLI._coordination_modules()
+        builders = package_module("chain_core._replay_grammar")
         projection = store.state_path(str(state["chain_id"])).read_bytes()
         with mock.patch.object(
-            builders, "_merge_transition_valid", return_value=False
+            builders, "_validate_merge_transition", return_value=False
         ), self.assertRaises(CLI.FrozenError):
             store.load(str(state["chain_id"]), session="builder-mutant")
         self.assertEqual(
@@ -704,449 +640,6 @@ class MergeStoreFamilyAndReplayTests(MergeStoreFixture):
         )
 
 
-class BoundMergeOutboxTests(CLI_FIXTURE_SUPPORT.ForgeCLIFixture):
-    run_id = "run-20260830-merge-store"
-    task_id = "task-merge-store"
-    chain_id = "c-2026-08-30T130000Z-b001"
-
-    def setUp(self) -> None:
-        super().setUp()
-        CLI.register_coordination_seams()
-        self.boundaries: list[str] = []
-
-    def initial_bound_merge(
-        self,
-    ) -> tuple[dict[str, object], dict[str, object]]:
-        head = self.git("rev-parse", "HEAD")
-        policy_raw = self.git_bytes("show", f"{head}:forge-project.md")
-        policy_digest = digest(policy_raw)
-        git_dir = (self.repo / self.git("rev-parse", "--git-dir")).resolve()
-        common_dir = (
-            self.repo / self.git("rev-parse", "--git-common-dir")
-        ).resolve()
-        worktree_identity = {
-            "path": str(self.repo.resolve()),
-            "git_dir": str(git_dir),
-            "common_dir": str(common_dir),
-        }
-        worktree_digest = digest(CLI.canonical_bytes(worktree_identity))
-        claim_path = str(
-            common_dir.parent
-            / ".forge"
-            / "chains"
-            / "owners"
-            / f"{worktree_digest}.claim"
-        )
-        at = "2026-01-01T13:00:00Z"
-        owner = {
-            "pid": os.getpid(),
-            "host": "bound-merge-store-test",
-            "session": "bound-merge-session",
-            "started_at": at,
-        }
-        claim_record = {
-            "chain_id": self.chain_id,
-            "host": owner["host"],
-            "pid": owner["pid"],
-            "session": owner["session"],
-            "started_at": owner["started_at"],
-            "worktree_digest": worktree_digest,
-        }
-        run_binding = {
-            "run_id": self.run_id,
-            "task_id": self.task_id,
-            "repository": str(self.repo.resolve()),
-            "policy_digest": policy_digest,
-        }
-        initial = {
-            "schema": "forge-merge-chain/1",
-            "chain_id": self.chain_id,
-            "kind": "merge",
-            "state": "classifying",
-            "created_at": at,
-            "owner": owner,
-            "run": self.run_id,
-            "repository": str(self.repo.resolve()),
-            "worktree": {
-                **worktree_identity,
-                "claim": {
-                    "status": "unpublished",
-                    "path": claim_path,
-                    "inode": None,
-                    "digest": None,
-                },
-            },
-            "branch": "refs/heads/fixture-main",
-            "target": {
-                "remote": "origin",
-                "destination_ref": "refs/heads/fixture-main",
-                "manifest_commit": head,
-            },
-            "policy_source": {"commit": head, "digest": policy_digest},
-            "candidate": None,
-            "tier": None,
-            "steps": {},
-            "review": {},
-            "approval": {},
-            "authorization": {},
-            "integration": {
-                "condition": "none",
-                "primary_condition": "none",
-                "epoch": None,
-                "remote_movement_count": 0,
-                "intent": None,
-                "observed": None,
-                "pre_rebase": None,
-                "conflict": None,
-                "push": None,
-            },
-            "cleanup": {"condition": "none"},
-            "run_binding": run_binding,
-        }
-        metadata = {
-            "at": at,
-            "head": head,
-            "policy_digest": policy_digest,
-            "worktree_identity": worktree_identity,
-            "worktree_digest": worktree_digest,
-            "claim_path": claim_path,
-            "claim_digest": digest(CLI.canonical_bytes(claim_record)),
-        }
-        return initial, metadata
-
-    def transition(
-        self,
-        store: object,
-        state: dict[str, object],
-        event: str,
-        payload: dict[str, object],
-        *,
-        generation_digest: str | None,
-        second: int,
-    ) -> dict[str, object]:
-        return store.transition(
-            state,
-            event,
-            payload,
-            generation_digest=generation_digest,
-            at=f"2026-01-01T13:00:{second:02d}Z",
-            session="bound-merge-session",
-        )
-
-    def test_event_first_carrier_crash_recovery_and_receipt_sequence(self) -> None:
-        environment = self.environment(FORGE_SESSION_PID=str(os.getpid()))
-        with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
-            RUNTIME, "PLUGIN_ROOT", ROOT
-        ):
-            _batch, builders, journal = CLI._coordination_modules()
-            builders.run_open(
-                self.repo,
-                self.run_id,
-                idempotency_key=digest(b"merge-store-run-open"),
-                goal="Exercise the live DM-014 event carrier",
-                scope=["docs/**"],
-                plugin_ref="forge-merge-store-test",
-            )
-            builders.task_start(
-                self.repo,
-                self.run_id,
-                idempotency_key=digest(b"merge-store-task-start"),
-                task=self.task_id,
-                goal="Persist and recover one consequential merge fact",
-                acceptance=["The exact event-carried batch is receipted once"],
-                files=["docs/guide.md"],
-            )
-            initial, metadata = self.initial_bound_merge()
-            store = CLI.MergeChainStore(
-                CLI.Repository(self.repo).common_root(),
-                boundary=self.boundaries.append,
-            )
-            state = store.create(
-                initial,
-                at=str(metadata["at"]),
-                session="bound-merge-session",
-            )
-            state = self.transition(
-                store,
-                state,
-                "ownership_intent",
-                {
-                    "worktree_digest": metadata["worktree_digest"],
-                    "claim_path": metadata["claim_path"],
-                    "intended_claim_digest": metadata["claim_digest"],
-                    "predecessor_chain_id": None,
-                    "predecessor_release_digest": None,
-                },
-                generation_digest=None,
-                second=1,
-            )
-            ownership_intent_digest = json.loads(
-                store.events_path(self.chain_id).read_text().splitlines()[-1]
-            )["digest"]
-            state = self.transition(
-                store,
-                state,
-                "ownership_claimed",
-                {
-                    "ownership_intent_digest": ownership_intent_digest,
-                    "claim_inode": 1,
-                    "claim_digest": metadata["claim_digest"],
-                    "predecessor_chain_id": None,
-                    "predecessor_release_digest": None,
-                },
-                generation_digest=None,
-                second=2,
-            )
-            bootstrap_nonce = digest(b"merge-store-bootstrap")[:32]
-            state = self.transition(
-                store,
-                state,
-                "fetch_intent",
-                {
-                    "repository": str(self.repo.resolve()),
-                    "worktree": metadata["worktree_identity"],
-                    "branch": initial["branch"],
-                    "target": initial["target"],
-                    "pre_fetch_head": metadata["head"],
-                    "policy_digest": metadata["policy_digest"],
-                    "operation_nonce": bootstrap_nonce,
-                    "attempt": 1,
-                },
-                generation_digest=None,
-                second=3,
-            )
-            generation_preimage = {
-                "remote": "origin",
-                "destination_ref": "refs/heads/fixture-main",
-                "remote_tip": metadata["head"],
-                "candidate_head": metadata["head"],
-                "diff_sha256": digest(b""),
-                "policy_commit": metadata["head"],
-                "policy_digest": metadata["policy_digest"],
-                "worktree_identity": metadata["worktree_identity"],
-                "generation": 1,
-            }
-            generation_digest = digest(CLI.canonical_bytes(generation_preimage))
-            candidate = {
-                **generation_preimage,
-                "generation_digest": generation_digest,
-            }
-            integration = copy.deepcopy(initial["integration"])
-            integration["intent"] = {
-                "operation": "fetch-result",
-                "operation_nonce": bootstrap_nonce,
-                "attempt": 1,
-                "result": "success",
-                "resolved_tip": metadata["head"],
-            }
-            state = self.transition(
-                store,
-                state,
-                "fetch_result",
-                {
-                    "delta": {
-                        "candidate": candidate,
-                        "tier": {"control": False, "categories": []},
-                        "state": "verifying",
-                        "integration": integration,
-                    }
-                },
-                generation_digest=generation_digest,
-                second=4,
-            )
-
-            gate = {
-                "result": "passed",
-                "generation_digest": generation_digest,
-                "criterion": "gate-1: full unittest discovery",
-                "command_argv": [
-                    "python3",
-                    "-m",
-                    "unittest",
-                    "discover",
-                    "-s",
-                    "tests",
-                ],
-            }
-            before_rejected_append = store.events_path(self.chain_id).read_bytes()
-            with mock.patch.object(
-                builders, "_binding_is_current", return_value=False
-            ), self.assertRaises(CLI.FrozenError) as rejected:
-                self.transition(
-                    store,
-                    state,
-                    "gate_recorded",
-                    {"delta": {"steps": {"gate-1": [gate]}}},
-                    generation_digest=generation_digest,
-                    second=5,
-                )
-            self.assertEqual(
-                rejected.exception.message,
-                "new merge journal binding is not current",
-            )
-            self.assertEqual(
-                store.events_path(self.chain_id).read_bytes(),
-                before_rejected_append,
-            )
-            run_dir = (
-                self.repo / ".codex-orchestrator" / "runs" / self.run_id
-            )
-            lease_path = store.root / f"{self.chain_id}.lock"
-            original_drain = CLI._drain_chain_batch_capability
-            drain_observation: list[tuple[bool, bool]] = []
-
-            def crash_after_persistence(*args, **kwargs):
-                active = _batch._active_locks()
-                drain_observation.append(
-                    (
-                        lease_path.exists(),
-                        os.path.abspath(os.fspath(run_dir)) in active,
-                    )
-                )
-                raise RuntimeError("simulated drain crash")
-
-            self.boundaries.clear()
-            with patch_chain_core("_drain_chain_batch_capability",
-                side_effect=crash_after_persistence,
-            ), self.assertRaisesRegex(RuntimeError, "simulated drain crash"):
-                self.transition(
-                    store,
-                    state,
-                    "gate_recorded",
-                    {"delta": {"steps": {"gate-1": [gate]}}},
-                    generation_digest=generation_digest,
-                    second=5,
-                )
-            self.assertEqual(drain_observation, [(False, True)])
-            self.assertEqual(
-                self.boundaries,
-                [
-                    "merge-event-appended",
-                    "merge-state-replaced",
-                    "merge-directory-fsynced",
-                    "merge-chain-serialization-released",
-                ],
-            )
-
-            pending = json.loads(store.state_path(self.chain_id).read_text())
-            self.assertIsNotNone(pending["journal_outbox"])
-            events = [
-                json.loads(line)
-                for line in store.events_path(self.chain_id).read_text().splitlines()
-            ]
-            carrier = events[-1]
-            self.assertEqual(carrier["event"], "gate_recorded")
-            self.assertEqual(
-                set(carrier["payload"]),
-                {"delta", "source_event_digest", "journal_batch"},
-            )
-            source_projection = {
-                name: copy.deepcopy(value)
-                for name, value in carrier.items()
-                if name != "digest"
-            }
-            source_projection["payload"].pop("source_event_digest")
-            source_projection["payload"].pop("journal_batch")
-            source_digest = digest(CLI.canonical_bytes(source_projection))
-            self.assertEqual(
-                source_digest, carrier["payload"]["source_event_digest"]
-            )
-            outer_projection = {
-                name: value for name, value in carrier.items() if name != "digest"
-            }
-            self.assertEqual(
-                carrier["digest"], digest(CLI.canonical_bytes(outer_projection))
-            )
-            self.assertNotEqual(source_digest, carrier["digest"])
-            carried = carrier["payload"]["journal_batch"]
-            self.assertEqual(
-                set(carried),
-                {"idempotency_key", "batch_digest", "record_count", "records"},
-            )
-            self.assertEqual(carried["idempotency_key"], source_digest)
-            self.assertEqual(carried["record_count"], 1)
-
-            self.boundaries.clear()
-            with patch_chain_core("_drain_chain_batch_capability", wraps=original_drain
-            ):
-                recovered = store.recover_pending_outbox(
-                    self.chain_id, session="bound-merge-session"
-                )
-            self.assertIsNone(recovered["journal_outbox"])
-            self.assertEqual(
-                self.boundaries,
-                [
-                    "merge-journal-drained",
-                    "merge-receipt-appended",
-                    "merge-receipt-state-replaced",
-                ],
-            )
-            events = [
-                json.loads(line)
-                for line in store.events_path(self.chain_id).read_text().splitlines()
-            ]
-            receipt = events[-1]
-            self.assertEqual(receipt["event"], "journal_receipted")
-            self.assertEqual(
-                set(receipt["payload"]),
-                {"idempotency_key", "batch_digest", "receipt_digest"},
-            )
-            self.assertNotIn("journal_batch", receipt["payload"])
-            consequential = [
-                event
-                for event in events
-                if "journal_batch" in event.get("payload", {})
-            ]
-            self.assertEqual([event["event"] for event in consequential], ["gate_recorded"])
-
-            run_state = journal._scan_run(run_dir)
-            verifications = [
-                record
-                for record in run_state.records
-                if record.get("type") == "verification"
-                and record.get("binding", {}).get("source_record", {}).get(
-                    "event_digest"
-                )
-                == source_digest
-            ]
-            self.assertEqual(len(verifications), 1)
-            self.assertEqual(verifications[0]["task"], self.task_id)
-
-            original_verify_receipt = builders._verify_receipted_batch
-            receipt_lock_observations: list[bool] = []
-
-            def verify_receipt_under_outer_lock(*args, **kwargs):
-                receipt_lock_observations.append(
-                    os.path.abspath(os.fspath(run_dir))
-                    in _batch._active_locks()
-                )
-                return original_verify_receipt(*args, **kwargs)
-
-            with mock.patch.object(
-                builders,
-                "_verify_receipted_batch",
-                side_effect=verify_receipt_under_outer_lock,
-            ):
-                loaded = store.load(
-                    self.chain_id, session="bound-merge-session"
-                )
-            self.assertEqual(loaded, recovered)
-            self.assertTrue(receipt_lock_observations)
-            self.assertTrue(all(receipt_lock_observations))
-
-            # Historical carried facts were checked when appended and are not
-            # subjected to a new-currentness predicate during replay.
-            with mock.patch.object(
-                builders,
-                "_binding_is_current",
-                side_effect=AssertionError("historical currentness was rechecked"),
-            ):
-                self.assertEqual(
-                    store.load(
-                        self.chain_id, session="bound-merge-session"
-                    ),
-                    recovered,
-                )
 
 if __name__ == "__main__":
     unittest.main()

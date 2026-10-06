@@ -3,11 +3,9 @@ from __future__ import annotations
 import copy
 from typing import Any, Mapping
 from forge_cli import chain_core, runtime
-from forge_cli.engine._core import MergeAdmission as MergeAdmission, MergeScopeResult as MergeScopeResult, MergeCandidateGeneration as MergeCandidateGeneration
+from forge_cli.engine._core import MergeAdmission as MergeAdmission, MergeCandidateGeneration as MergeCandidateGeneration
 from forge_cli.engine._merge_candidate_observation import _merge_candidate_observation_outputs as _merge_candidate_observation_outputs, _parse_merge_candidate_observation as _parse_merge_candidate_observation
-from forge_cli.engine._merge_scope_derive import _parse_merge_scope_output as _parse_merge_scope_output, _derive_merge_scope as _derive_merge_scope
 from forge_cli.engine._merge_worktree import _merge_worktree_status as _merge_worktree_status
-from forge_cli.engine._state import _DERIVE_MERGE_SCOPE as _DERIVE_MERGE_SCOPE
 from forge_cli.envelope import V2ReasonCode
 from forge_cli.policy import sha256_bytes
 import json
@@ -15,75 +13,6 @@ import sys
 from pathlib import Path
 
 
-def _merge_scope_from_candidate_observation(
-    admission: MergeAdmission, observation: Mapping[str, Any]
-) -> MergeScopeResult | None:
-    snapshot = admission.run_task
-    if snapshot is None:
-        return None
-    synthetic_state = {
-        "chain_id": observation.get("chain_id"),
-        "repository": str(admission.repository),
-        "worktree": copy.deepcopy(admission.worktree_identity),
-        "branch": admission.branch,
-        "target": copy.deepcopy(admission.target),
-        "run_binding": copy.deepcopy(snapshot.binding),
-        "candidate": (
-            {"generation_digest": observation.get("generation_digest")}
-            if observation.get("generation_digest") is not None
-            else None
-        ),
-    }
-    outputs = _merge_candidate_observation_outputs(
-        synthetic_state, observation
-    )
-    if outputs is None or "scope" not in outputs:
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge start refused — durable run/task scope evidence is unavailable",
-        )
-    try:
-        changed_paths = _parse_merge_scope_output(outputs["scope"])
-    except ValueError as exc:
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge start refused — durable run/task scope evidence is malformed",
-            observed=str(exc),
-        ) from exc
-    _batch, _builders, journal = runtime._coordination_modules()
-    out_of_scope = tuple(
-        path
-        for path in changed_paths
-        if not any(
-            journal.pathspec_contained(path, pattern)
-            for pattern in snapshot.task_files
-        )
-        or not any(
-            journal.pathspec_contained(path, pattern)
-            for pattern in snapshot.admitted_scope
-        )
-    )
-    argv = chain_core._merge_scope_argv(
-        admission.worktree,
-        str(observation["remote_tip"]),
-        admission.candidate_head,
-    )
-    scope_record = next(
-        record
-        for record in observation["steps"]
-        if record.get("step") == "scope"
-    )
-    return MergeScopeResult(
-        argv=tuple(argv),
-        command_digest=sha256_bytes(chain_core.canonical_bytes(argv)),
-        environment_digest=sha256_bytes(
-            chain_core.canonical_bytes(chain_core._merge_scope_environment_contract())
-        ),
-        output_digest=str(scope_record["child_result"]["output_digest"]),
-        changed_paths=changed_paths,
-        out_of_scope_paths=out_of_scope,
-        result="exceeded" if out_of_scope else "contained",
-    )
 
 
 def bind_merge_candidate_generation(
@@ -92,7 +21,6 @@ def bind_merge_candidate_generation(
     remote_tip: str,
     *,
     generation: int = 1,
-    scope_result: MergeScopeResult | None | object = _DERIVE_MERGE_SCOPE,
     fixed_tip_bound: bool = False,
     observation: Mapping[str, Any] | None = None,
     diff_output_digest: str | None = None,
@@ -125,11 +53,6 @@ def bind_merge_candidate_generation(
             "worktree": copy.deepcopy(admission.worktree_identity),
             "branch": admission.branch,
             "target": copy.deepcopy(admission.target),
-            "run_binding": (
-                copy.deepcopy(admission.run_task.binding)
-                if admission.run_task is not None
-                else None
-            ),
             "candidate": (
                 {"generation_digest": observation_generation}
                 if observation_generation is not None
@@ -226,21 +149,7 @@ def bind_merge_candidate_generation(
         **generation_preimage,
         "generation_digest": sha256_bytes(chain_core.canonical_bytes(generation_preimage)),
     }
-    # FR-231 requires the run-bound scope proof before classification.  The
-    # lifecycle adapter invokes this function immediately after its fenced
-    # fixed-tip fetch; this pure adapter must not reverse those two judgments.
-    scope = (
-        _merge_scope_from_candidate_observation(admission, observation)
-        if observation is not None and scope_result is _DERIVE_MERGE_SCOPE
-        else _derive_merge_scope(admission, remote_tip)
-        if scope_result is _DERIVE_MERGE_SCOPE
-        else scope_result
-    )
-    if scope is not None and not isinstance(scope, MergeScopeResult):
-        raise TypeError("merge scope override is malformed")
-    if scope is not None:
-        changed_paths = scope.changed_paths
-    elif observed_paths is not None:
+    if observed_paths is not None:
         changed_paths = observed_paths
     else:
         try:
@@ -400,5 +309,4 @@ def bind_merge_candidate_generation(
         tier={"control": control, "categories": sorted(categories)},
         classification=copy.deepcopy(evidence),
         changed_paths=changed_paths,
-        scope=scope,
     )

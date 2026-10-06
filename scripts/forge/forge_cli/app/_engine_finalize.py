@@ -77,106 +77,102 @@ def finalize(self: MergeEngine) -> Outcome:
     if state["state"] != "authorized":
         self._wrong_state(state, "authorized", "merge finalize")
     self._prepare_git_no_lazy_fetch_qualification(state)
-    binding = state.get("run_binding")
     budget = engine._MergeEpochBudget()
-    with self.store._journal_outer(
-        binding if isinstance(binding, Mapping) else None
-    ):
-        with self._recording_common_lock(
-            Path(str(state["worktree"]["common_dir"])),
+    with self._recording_common_lock(
+        Path(str(state["worktree"]["common_dir"])),
+        chain_id=str(state["chain_id"]),
+        operation="finalize",
+    ) as common_lock:
+        with chain_core.acquire_chain_lease(
+            self.store.root,
             chain_id=str(state["chain_id"]),
-            operation="finalize",
-        ) as common_lock:
-            with chain_core.acquire_chain_lease(
-                self.store.root,
-                chain_id=str(state["chain_id"]),
-                session=self.store._session(None),
-                exclusion=common_lock,
-            ) as lease:
-                current = self.store.load_locked(
-                    str(state["chain_id"]), lease=lease
-                )
-                if current["state"] != "authorized":
-                    self._wrong_state(current, "authorized", "merge finalize")
-                current, candidate_observation = (
-                    self._run_candidate_observation_locked(
-                        current,
-                        common_lock,
-                        lease,
-                        verb="merge finalize",
-                        remote_tip=str(current["candidate"]["remote_tip"]),
-                        expected_head=str(
-                            current["candidate"]["candidate_head"]
-                        ),
-                        classify=False,
-                    )
-                )
-                _observe_current_merge_candidate(
-                    self.ctx,
-                    current,
-                    verb="merge finalize",
-                    observation=candidate_observation,
-                )
-                starting_generation = str(
-                    current["candidate"]["generation_digest"]
-                )
-                current = self._begin_epoch(current, lease)
-                current, fetched_tip, unchanged = self._run_epoch_fetch(
-                    current, common_lock, lease, budget
-                )
-                if not unchanged:
-                    current = self._run_epoch_rebase(
-                        current,
-                        fetched_tip,
-                        common_lock,
-                        lease,
-                        budget,
-                    )
-                current = self._run_epoch_suite(
-                    current, common_lock, lease, budget
-                )
-                if (
-                    str(current["candidate"]["generation_digest"])
-                    != starting_generation
-                ):
-                    current = self._park_integrated_review(current, lease)
-                    return engine._success(
-                        current,
-                        "integrated generation passed its mechanical suite and is parked for fresh review",
-                        f"forge review request --chain-id {current['chain_id']}",
-                    )
-                current = self._run_remote_observation(
+            session=self.store._session(None),
+            exclusion=common_lock,
+        ) as lease:
+            current = self.store.load_locked(
+                str(state["chain_id"]), lease=lease
+            )
+            if current["state"] != "authorized":
+                self._wrong_state(current, "authorized", "merge finalize")
+            current, candidate_observation = (
+                self._run_candidate_observation_locked(
                     current,
                     common_lock,
                     lease,
+                    verb="merge finalize",
+                    remote_tip=str(current["candidate"]["remote_tip"]),
+                    expected_head=str(
+                        current["candidate"]["candidate_head"]
+                    ),
+                    classify=False,
+                )
+            )
+            _observe_current_merge_candidate(
+                self.ctx,
+                current,
+                verb="merge finalize",
+                observation=candidate_observation,
+            )
+            starting_generation = str(
+                current["candidate"]["generation_digest"]
+            )
+            current = self._begin_epoch(current, lease)
+            current, fetched_tip, unchanged = self._run_epoch_fetch(
+                current, common_lock, lease, budget
+            )
+            if not unchanged:
+                current = self._run_epoch_rebase(
+                    current,
+                    fetched_tip,
+                    common_lock,
+                    lease,
                     budget,
-                    phase="final-prepush",
                 )
-                if current["state"] == "authorized":
-                    return engine._success(
-                        current,
-                        "merge epoch parked after authoritative remote movement",
-                        f"forge merge finalize --chain-id {current['chain_id']}",
-                    )
-                if current["state"] == "awaiting_approval":
-                    raise chain_core._merge_refusal(
-                        V2ReasonCode.REMOTE_CHURN,
-                        "forge: merge finalize refused — remote churn exhausted the bounded retry counter",
-                        remediation=(
-                            "forge merge approve --candidate "
-                            f"{current['candidate']['candidate_head']} --chain-id {current['chain_id']}"
-                        ),
-                        chain=current,
-                    )
-                if current["state"] not in {"rebasing", "reverifying"}:
-                    self._wrong_state(
-                        current,
-                        "an unchanged post-observation epoch",
-                        "merge finalize",
-                    )
-                current = self._run_epoch_push(
-                    current, common_lock, lease, budget
+            current = self._run_epoch_suite(
+                current, common_lock, lease, budget
+            )
+            if (
+                str(current["candidate"]["generation_digest"])
+                != starting_generation
+            ):
+                current = self._park_integrated_review(current, lease)
+                return engine._success(
+                    current,
+                    "integrated generation passed its mechanical suite and is parked for fresh review",
+                    f"forge review request --chain-id {current['chain_id']}",
                 )
+            current = self._run_remote_observation(
+                current,
+                common_lock,
+                lease,
+                budget,
+                phase="final-prepush",
+            )
+            if current["state"] == "authorized":
+                return engine._success(
+                    current,
+                    "merge epoch parked after authoritative remote movement",
+                    f"forge merge finalize --chain-id {current['chain_id']}",
+                )
+            if current["state"] == "awaiting_approval":
+                raise chain_core._merge_refusal(
+                    V2ReasonCode.REMOTE_CHURN,
+                    "forge: merge finalize refused — remote churn exhausted the bounded retry counter",
+                    remediation=(
+                        "forge merge approve --candidate "
+                        f"{current['candidate']['candidate_head']} --chain-id {current['chain_id']}"
+                    ),
+                    chain=current,
+                )
+            if current["state"] not in {"rebasing", "reverifying"}:
+                self._wrong_state(
+                    current,
+                    "an unchanged post-observation epoch",
+                    "merge finalize",
+                )
+            current = self._run_epoch_push(
+                current, common_lock, lease, budget
+            )
     if current["state"] == "pushing":
         return engine._success(
             current,

@@ -112,11 +112,6 @@ def _initial_merge_state(
         "session": session,
         "started_at": at,
     }
-    binding = (
-        copy.deepcopy(admission.run_task.binding)
-        if admission.run_task is not None
-        else None
-    )
     return {
         "schema": "forge-merge-chain/1",
         "chain_id": chain_id,
@@ -124,7 +119,7 @@ def _initial_merge_state(
         "state": "classifying",
         "created_at": at,
         "owner": owner,
-        "run": binding["run_id"] if binding is not None else None,
+        "run": None,
         "repository": str(admission.repository),
         "worktree": {
             **copy.deepcopy(admission.worktree_identity),
@@ -149,51 +144,7 @@ def _initial_merge_state(
         "authorization": {},
         "integration": copy.deepcopy(engine._MERGE_INITIAL_INTEGRATION),
         "cleanup": {"condition": "none"},
-        "run_binding": binding,
     }
-
-def _record_bootstrap_failure(
-    self: MergeEngine,
-    state: dict[str, Any],
-    operation_nonce: str,
-    refusal: Refusal,
-    *,
-    attempt: int = 1,
-) -> Refusal:
-    integration = copy.deepcopy(state["integration"])
-    integration.update(
-        {
-            "condition": "fetch-failed",
-            "primary_condition": "none",
-            "intent": {
-                "operation": "fetch-result",
-                "operation_nonce": operation_nonce,
-                "attempt": attempt,
-                "result": "failed",
-                "resolved_tip": None,
-            },
-        }
-    )
-    current = self.store.transition(
-        state,
-        "fetch_result",
-        {
-            "delta": {"integration": integration},
-            "scope_fetch_binding": None,
-            "scope_proof": None,
-        },
-        generation_digest=None,
-        at=chain_core.iso_z(),
-    )
-    return chain_core._merge_refusal(
-        refusal.reason_code,
-        refusal.message,
-        expected=refusal.expected,
-        observed=refusal.observed,
-        remediation=f"forge merge refresh --chain-id {state['chain_id']}",
-        chain=current,
-        evidence_refs=refusal.evidence_refs,
-    )
 
 def _complete_bootstrap_classification(
     self: MergeEngine,
@@ -214,36 +165,8 @@ def _complete_bootstrap_classification(
             chain_id=str(state.get("chain_id", "")) or None,
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    if pending.scope is not None and pending.scope.result == "exceeded":
-        if (
-            pending.scope_proof_digest is None
-            or pending.fetch_result_event_digest is None
-        ):
-            raise FrozenError(
-                "run-scope refusal lacks its authenticated result proof",
-                chain_id=str(state["chain_id"]),
-                schema=REVISION9_OUTPUT_SCHEMA,
-            )
-        terminal = self._release_scope_exceeded(
-            state,
-            scope_proof_digest=pending.scope_proof_digest,
-            fetch_result_event_digest=pending.fetch_result_event_digest,
-            verb="merge recover",
-        )
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_SCOPE_EXCEEDED,
-            "forge: merge recover refused — changed paths exceed bound task scope",
-            expected="every changed path within task files and admitted run scope",
-            observed=str(pending.scope.out_of_scope_paths),
-            chain=terminal,
-        )
-    binding = state.get("run_binding")
-    with self.store._journal_outer(
-        binding if isinstance(binding, Mapping) else None
-    ), chain_core.acquire_chain_lease(
-        self.store.root,
-        chain_id=str(state["chain_id"]),
-        session=self.store._session(None),
+    with chain_core.acquire_chain_lease(
+        self.store.root, chain_id=str(state['chain_id']), session=self.store._session(None),
     ) as lease:
         current = self.store.load_locked(str(state["chain_id"]), lease=lease)
         if current != state or not chain_core._merge_bootstrap_classification_pending(current):
@@ -257,7 +180,6 @@ def _complete_bootstrap_classification(
             admission,
             str(pending.candidate["remote_tip"]),
             generation=int(pending.candidate["generation"]),
-            scope_result=pending.scope,
             fixed_tip_bound=True,
             observation=None,
             diff_output_digest=pending.full_patch_output_digest,
@@ -309,7 +231,6 @@ def start_chain(
     worktree: str,
     declared_tier: str | None = None,
     *,
-    task: str | None = None,
     remote_tip: str | None = None,
 ) -> Outcome:
     """Create and classify one dormant DM-014 chain."""
@@ -325,137 +246,130 @@ def start_chain(
         self.ctx,
         worktree,
         declared_tier,
-        task=task,
-        create_run_lock=True,
     )
     self._prepare_bootstrap_git_no_lazy_fetch_qualification(
         admission,
         verb="merge start",
     )
     chain_id = self._allocate_chain_id()
-    journal_binding = (
-        admission.run_task.binding if admission.run_task is not None else None
-    )
-    with self.store._journal_outer(journal_binding):
-        with self.store.admission_lock(
-            admission.worktree
-        ), self._recording_common_lock(
-            Path(admission.worktree_identity["common_dir"]),
-            chain_id=chain_id,
-            operation="start",
-        ) as common_lock:
-            (
-                worktree_digest,
-                claim_name,
-                claim_path,
-                predecessor_id,
-                predecessor_digest,
-            ) = self._claim_slot(admission)
-            started_at = chain_core.iso_z()
-            initial = self._initial_merge_state(
-                chain_id, admission, claim_path, at=started_at
-            )
-            state = self.store.create(initial, at=started_at)
-            claim_record = {
-                "chain_id": chain_id,
-                "host": initial["owner"]["host"],
-                "pid": initial["owner"]["pid"],
-                "session": initial["owner"]["session"],
-                "started_at": started_at,
+    with self.store.admission_lock(
+        admission.worktree
+    ), self._recording_common_lock(
+        Path(admission.worktree_identity["common_dir"]),
+        chain_id=chain_id,
+        operation="start",
+    ) as common_lock:
+        (
+            worktree_digest,
+            claim_name,
+            claim_path,
+            predecessor_id,
+            predecessor_digest,
+        ) = self._claim_slot(admission)
+        started_at = chain_core.iso_z()
+        initial = self._initial_merge_state(
+            chain_id, admission, claim_path, at=started_at
+        )
+        state = self.store.create(initial, at=started_at)
+        claim_record = {
+            "chain_id": chain_id,
+            "host": initial["owner"]["host"],
+            "pid": initial["owner"]["pid"],
+            "session": initial["owner"]["session"],
+            "started_at": started_at,
+            "worktree_digest": worktree_digest,
+        }
+        claim_digest = sha256_bytes(chain_core.canonical_bytes(claim_record))
+        state = self.store.transition(
+            state,
+            "ownership_intent",
+            {
                 "worktree_digest": worktree_digest,
-            }
-            claim_digest = sha256_bytes(chain_core.canonical_bytes(claim_record))
-            state = self.store.transition(
+                "claim_path": str(claim_path),
+                "intended_claim_digest": claim_digest,
+                "predecessor_chain_id": predecessor_id,
+                "predecessor_release_digest": predecessor_digest,
+            },
+            generation_digest=None,
+            at=chain_core.iso_z(),
+        )
+        ownership_intent_digest = engine._merge_event_digest(
+            self.store, chain_id, "ownership_intent"
+        )
+        if ownership_intent_digest is None:
+            raise FrozenError(
+                "merge ownership intent digest is unavailable",
+                chain_id=chain_id,
+                schema=REVISION9_OUTPUT_SCHEMA,
+            )
+        try:
+            published = engine._publish_merge_claim(
+                self.store, claim_name, claim_path, claim_record
+            )
+        except OSError as exc:
+            raise engine._merge_publication_failure(
+                self.store,
                 state,
-                "ownership_intent",
-                {
-                    "worktree_digest": worktree_digest,
-                    "claim_path": str(claim_path),
-                    "intended_claim_digest": claim_digest,
-                    "predecessor_chain_id": predecessor_id,
-                    "predecessor_release_digest": predecessor_digest,
-                },
-                generation_digest=None,
-                at=chain_core.iso_z(),
+                claim_path,
+                claim_record,
+                exc,
+            ) from exc
+        state = self.store.transition(
+            state,
+            "ownership_claimed",
+            {
+                "ownership_intent_digest": ownership_intent_digest,
+                "claim_inode": published.inode,
+                "claim_digest": published.digest,
+                "predecessor_chain_id": predecessor_id,
+                "predecessor_release_digest": predecessor_digest,
+            },
+            generation_digest=None,
+            at=chain_core.iso_z(),
+        )
+        observed_admission = prepare_merge_admission(
+            self.ctx, worktree, declared_tier
+        )
+        if observed_admission != admission:
+            raise chain_core._merge_refusal(
+                V2ReasonCode.WORKTREE_INVALID,
+                "forge: merge start refused — admission changed under the common lock",
+                expected=str(admission),
+                observed=str(observed_admission),
+                chain=state,
             )
-            ownership_intent_digest = engine._merge_event_digest(
-                self.store, chain_id, "ownership_intent"
-            )
-            if ownership_intent_digest is None:
-                raise FrozenError(
-                    "merge ownership intent digest is unavailable",
-                    chain_id=chain_id,
-                    schema=REVISION9_OUTPUT_SCHEMA,
-                )
-            try:
-                published = engine._publish_merge_claim(
-                    self.store, claim_name, claim_path, claim_record
-                )
-            except OSError as exc:
-                raise engine._merge_publication_failure(
-                    self.store,
-                    state,
-                    claim_path,
-                    claim_record,
-                    exc,
-                ) from exc
-            state = self.store.transition(
-                state,
-                "ownership_claimed",
-                {
-                    "ownership_intent_digest": ownership_intent_digest,
-                    "claim_inode": published.inode,
-                    "claim_digest": published.digest,
-                    "predecessor_chain_id": predecessor_id,
-                    "predecessor_release_digest": predecessor_digest,
-                },
-                generation_digest=None,
-                at=chain_core.iso_z(),
-            )
-            observed_admission = prepare_merge_admission(
-                self.ctx, worktree, declared_tier, task=task
-            )
-            if observed_admission != admission:
-                raise chain_core._merge_refusal(
-                    V2ReasonCode.WORKTREE_INVALID,
-                    "forge: merge start refused — admission changed under the common lock",
-                    expected=str(admission),
-                    observed=str(observed_admission),
-                    chain=state,
-                )
-            admission = observed_admission
-            engine._require_git_no_lazy_fetch_qualification(
-                self._git_no_lazy_fetch_qualification,
-                admission.worktree,
-                engine._merge_scope_environment(),
-            )
-            operation_nonce = secrets.token_hex(16)
-            state = self.store.transition(
-                state,
-                "fetch_intent",
-                {
-                    "repository": str(admission.repository),
-                    "worktree": copy.deepcopy(admission.worktree_identity),
-                    "branch": admission.branch,
-                    "target": copy.deepcopy(admission.target),
-                    "pre_fetch_head": admission.candidate_head,
-                    "policy_digest": admission.policy.digest,
-                    "operation_nonce": operation_nonce,
-                    "attempt": 1,
-                    "scope_request": engine._merge_scope_request(admission),
-                },
-                generation_digest=None,
-                at=chain_core.iso_z(),
-            )
-            state, pending = self._run_bootstrap_generation(
-                state,
-                admission,
-                common_lock,
-                operation_nonce=operation_nonce,
-                attempt=1,
-                remote_tip=remote_tip,
-                generation_number=1,
-            )
+        admission = observed_admission
+        engine._require_git_no_lazy_fetch_qualification(
+            self._git_no_lazy_fetch_qualification,
+            admission.worktree,
+            engine._merge_scope_environment(),
+        )
+        operation_nonce = secrets.token_hex(16)
+        state = self.store.transition(
+            state,
+            "fetch_intent",
+            {
+                "repository": str(admission.repository),
+                "worktree": copy.deepcopy(admission.worktree_identity),
+                "branch": admission.branch,
+                "target": copy.deepcopy(admission.target),
+                "pre_fetch_head": admission.candidate_head,
+                "policy_digest": admission.policy.digest,
+                "operation_nonce": operation_nonce,
+                "attempt": 1,
+            },
+            generation_digest=None,
+            at=chain_core.iso_z(),
+        )
+        state, pending = self._run_bootstrap_generation(
+            state,
+            admission,
+            common_lock,
+            operation_nonce=operation_nonce,
+            attempt=1,
+            remote_tip=remote_tip,
+            generation_number=1,
+        )
     state, generation = self._complete_bootstrap_classification(
         state, admission, pending
     )

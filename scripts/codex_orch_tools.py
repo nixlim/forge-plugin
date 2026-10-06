@@ -359,13 +359,6 @@ def _typed_main(argv: list[str]) -> int:
             raise CoordinationRefusal(
                 "forge: journal builder refused — repository must be absolute"
             )
-        # forge: modified from upstream — typed builders share the current
-        # additive-aware first-use reservation scanner with commit/merge CLI.
-        # The import is delayed so raw compatibility commands keep their small
-        # journal-only surface and this entry point remains independently usable.
-        from forge_cli import chain_core
-
-        chain_core.register_coordination_seams()
         if getattr(args, "journal_command", None) == "close-preflight":
             return close_preflight.main(repo, args.run_id, chain=args.chain)
         if args.command == "run-open":

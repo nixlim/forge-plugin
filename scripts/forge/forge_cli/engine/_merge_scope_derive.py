@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 from forge_cli import chain_core, runtime
-from forge_cli.engine._core import MergeAdmission as MergeAdmission, MergeScopeResult as MergeScopeResult
+from forge_cli.engine._core import MergeAdmission as MergeAdmission
 import dataclasses
 import hashlib
 from typing import Mapping, Any
@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 from forge_cli.policy import sha256_bytes
 import copy
-from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal, V2ReasonCode
+from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, Refusal
 
 
 def _merge_scope_environment() -> dict[str, str]:
@@ -275,121 +275,3 @@ def _discover_merge_scope_fence_from_sidecar(
             schema=REVISION9_OUTPUT_SCHEMA,
         )
     return recovered
-
-
-def _parse_merge_name_status_output(raw: bytes) -> tuple[str, ...]:
-    """Parse one exact ``git diff --name-status -z`` byte stream."""
-
-    if raw and not raw.endswith(b"\0"):
-        raise ValueError("scope output is not NUL terminated")
-    fields = raw.split(b"\0")[:-1] if raw else []
-    paths: list[str] = []
-    index = 0
-    _batch, _builders, journal = runtime._coordination_modules()
-    while index < len(fields):
-        try:
-            status = fields[index].decode("ascii")
-        except UnicodeDecodeError as exc:
-            raise ValueError("scope status is not ASCII") from exc
-        index += 1
-        path_count = 1
-        if re.fullmatch(r"[RC][0-9]{1,3}", status):
-            score = int(status[1:])
-            if score > 100:
-                raise ValueError("scope rename/copy score is invalid")
-            path_count = 2
-        elif re.fullmatch(r"[ADMTUXB]", status) is None:
-            raise ValueError("scope status is invalid")
-        if index + path_count > len(fields):
-            raise ValueError("scope status lacks its path field")
-        for raw_path in fields[index : index + path_count]:
-            try:
-                path = raw_path.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise ValueError("scope path is not UTF-8") from exc
-            if not journal._valid_scope_item(path):
-                raise ValueError("scope path is not a canonical repository path")
-            paths.append(path)
-        index += path_count
-    return tuple(sorted(set(paths), key=lambda value: value.encode("utf-8")))
-
-
-def _parse_merge_scope_output(raw: bytes) -> tuple[str, ...]:
-    """Retain the parent adapter name while sharing the composite parser."""
-
-    return _parse_merge_name_status_output(raw)
-
-
-def _derive_merge_scope(
-    admission: MergeAdmission,
-    remote_tip: str,
-) -> MergeScopeResult | None:
-    snapshot = admission.run_task
-    if snapshot is None:
-        return None
-    argv = chain_core._merge_scope_argv(
-        admission.worktree, remote_tip, admission.candidate_head
-    )
-    environment = _merge_scope_environment()
-    try:
-        process = runtime.run_bounded(
-            argv,
-            cwd=admission.worktree,
-            env=environment,
-            timeout=runtime.COMMAND_TIMEOUT_SECONDS,
-            cap=runtime.OUTPUT_CAP_BYTES,
-        )
-    except OSError as exc:
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge start refused — run/task scope derivation is invalid",
-            expected="the exact fixed-object scope child to launch",
-            observed=str(exc),
-        ) from exc
-    if (
-        process.returncode != 0
-        or process.timed_out
-        or process.output_limit
-    ):
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge start refused — run/task scope derivation is invalid",
-            expected="complete exit 0 scope derivation within the fixed bounds",
-            observed=(
-                f"exit={process.returncode}, timeout={process.timed_out}, "
-                f"output_limit={process.output_limit}"
-            ),
-        )
-    try:
-        changed_paths = _parse_merge_scope_output(process.output)
-    except ValueError as exc:
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge start refused — run/task scope derivation is invalid",
-            expected="the exact NUL-delimited name-status grammar",
-            observed=str(exc),
-        ) from exc
-    _batch, _builders, journal = runtime._coordination_modules()
-    out_of_scope = tuple(
-        path
-        for path in changed_paths
-        if not any(
-            journal.pathspec_contained(path, pattern)
-            for pattern in snapshot.task_files
-        )
-        or not any(
-            journal.pathspec_contained(path, pattern)
-            for pattern in snapshot.admitted_scope
-        )
-    )
-    return MergeScopeResult(
-        argv=tuple(argv),
-        command_digest=sha256_bytes(chain_core.canonical_bytes(argv)),
-        environment_digest=sha256_bytes(
-            chain_core.canonical_bytes(chain_core._merge_scope_environment_contract())
-        ),
-        output_digest=process.output_digest,
-        changed_paths=changed_paths,
-        out_of_scope_paths=out_of_scope,
-        result="exceeded" if out_of_scope else "contained",
-    )

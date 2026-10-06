@@ -112,7 +112,7 @@ class LaunchCLIParsingTests(LaunchLaneSupport, unittest.TestCase):
         cases = (
             (
                 self._start(),
-                "run-task-binding-invalid",
+                "state-precondition",
                 "forge: launch refused — explicit --repo and --run-id are required",
             ),
             (
@@ -122,12 +122,12 @@ class LaunchCLIParsingTests(LaunchLaneSupport, unittest.TestCase):
                     "c-2026-08-28T120000Z-cafe",
                     *self._start(),
                 ],
-                "run-task-binding-invalid",
+                "state-precondition",
                 "forge: launch refused — --chain-id is not admitted",
             ),
             (
                 [*self._globals(), "--chain-id", "malformed", *self._start()],
-                "run-task-binding-invalid",
+                "state-precondition",
                 "forge: launch refused — --chain-id is not admitted",
             ),
             (
@@ -196,9 +196,9 @@ class LaunchCLIParsingTests(LaunchLaneSupport, unittest.TestCase):
 
     def test_help_names_launch_run_and_task_options(self) -> None:
         help_text = CLI.build_parser().format_help()
-        self.assertIn("`commit start` then requires --task", help_text)
-        self.assertIn("`journal` and `launch` name the run directly", help_text)
-        self.assertIn("`journal ingest-chain`, and `launch`", help_text)
+        self.assertIn("--run-id RUN_ID    name the launch journal", help_text)
+        self.assertIn("--task TASK_ID is a launch option naming the task.", help_text)
+        self.assertNotIn("journal ingest-chain", help_text)
         launch = CLI.build_parser().parse_args(self._start())
         self.assertEqual((launch.role, launch.task), ("implementer", self.task_id))
 
@@ -212,11 +212,10 @@ class LaunchCLIParsingTests(LaunchLaneSupport, unittest.TestCase):
 
     def test_run_id_remains_refused_for_an_unrelated_later_verb(self) -> None:
         payload = self._refusal(["--run-id", self.run_id, "status"])
-        self.assertEqual(payload["reason_code"], "run-task-binding-invalid")
+        self.assertEqual(payload["reason_code"], "state-precondition")
         self.assertEqual(
             payload["message"],
-            "forge: CLI run/task binding refused — later chain verbs inherit "
-            "state and take no --run-id",
+            "forge: status refused — --run-id and --task are not admitted",
         )
 
 

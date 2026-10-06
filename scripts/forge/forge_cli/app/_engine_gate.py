@@ -100,22 +100,8 @@ def _run_scoped_mutation(
         "--head",
         str(candidate["candidate_head"]),
     ]
-    bound = engine._merge_run_directory(state)
-    if bound is not None:
-        bound_repository, _run_dir = bound
-        argv.extend(
-            [
-                "--repository",
-                str(bound_repository),
-                "--run-id",
-                str(state["run_binding"]["run_id"]),
-                "--task",
-                str(state["run_binding"]["task_id"]),
-            ]
-        )
     environment = os.environ.copy()
-    if bound is None:
-        environment.pop("FORGE_SESSION_PID", None)
+    environment.pop("FORGE_SESSION_PID", None)
     try:
         process = runtime.run_bounded(
             argv,

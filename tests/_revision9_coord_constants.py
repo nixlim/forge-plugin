@@ -19,10 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "scripts/codex_orch_tools.py"
 FIXTURES = ROOT / "tests/fixtures"
 PREFIX_WEDGE_FIXTURE = ROOT / "tests/_fixtures/prefix-wedge-d77d997"
-UNREPLAYABLE_CHAIN_ID = "c-2026-08-21T223925Z-1490"
-UNREPLAYABLE_CHAIN_FIXTURE = (
-    ROOT / "tests/_fixtures/unreplayable-chain-1490"
-)
 
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -39,14 +35,6 @@ PREFIX_WEDGE_FIXTURE_SHA256 = {
     "owner.txt": "e0766d0114f351c944033ff4d0025cceed6b6ba7a33ede13be40239bbfeee284",
     "receipts.jsonl": "bcbb1b44db79cfa604fb520def49c4dd80b50d82af6f78ea69dcae799fc4aae7",
     "registry.json": "d92f7d6301da5f0aa5adbc54ca13dc726ee258f758fb798e3d6879bd721f1e25",
-}
-UNREPLAYABLE_CHAIN_FIXTURE_SHA256 = {
-    f"{UNREPLAYABLE_CHAIN_ID}.events.jsonl": (
-        "7563e6cdeca3f2218a288c70520e15136db38e9648cae462ffab0259b8c471f3"
-    ),
-    f"{UNREPLAYABLE_CHAIN_ID}.json": (
-        "db0fae7dd4337fb36e14a50b833a48ba0ed5ff19bc93c6adac21a0e60e87658f"
-    ),
 }
 
 

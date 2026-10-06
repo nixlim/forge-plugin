@@ -62,7 +62,7 @@ def _execution_record(state: Any, execution: str, verb: str) -> dict[str, object
 
 def _binding_refusal(verb: str, execution: str, field: str) -> Refusal:
     return Refusal(
-        V2ReasonCode.BINDING_INVALID,
+        V2ReasonCode.EVIDENCE_INCOMPLETE,
         f"forge: launch {verb} refused — launch marker does not bind execution "
         f"{execution}: {field}",
     )
@@ -119,7 +119,6 @@ def _load_marker(
 def _bound_execution(self: Engine, execution: str, verb: str) -> BoundExecution:
     """Bind a journal owner to its validated marker after shared checkpoints."""
 
-    chain_core.register_coordination_seams()
     _launch_lane.require_no_halt(self.ctx)
     run_id = _launch_lane.require_run_id(self.ctx)
     run = _launch_lane.run_state(self.ctx, run_id)
@@ -144,7 +143,7 @@ def _binding_field(exc: Exception) -> str:
 
 def _completion_binding_refusal(verb: str, execution: str, field: str) -> Refusal:
     return Refusal(
-        V2ReasonCode.BINDING_INVALID,
+        V2ReasonCode.EVIDENCE_INCOMPLETE,
         f"forge: launch {verb} refused — completion does not bind execution "
         f"{execution}: {field}",
     )

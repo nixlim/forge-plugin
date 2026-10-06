@@ -15,8 +15,6 @@ def start(
     self: MergeEngine,
     worktree: str,
     declared_tier: str | None = None,
-    *,
-    task: str | None = None,
 ) -> engine.MergeAdmission:
     """Expose dormant read-only admission without creating a chain."""
 
@@ -24,7 +22,6 @@ def start(
         self.ctx,
         worktree,
         declared_tier,
-        task=task,
     )
 
 def bind_candidate(

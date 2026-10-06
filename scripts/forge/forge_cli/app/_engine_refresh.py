@@ -30,24 +30,6 @@ def _admission_from_candidate_observation(
             require_current_generation=require_current_generation,
         )
     )
-    binding = state.get("run_binding")
-    run_task = None
-    if isinstance(binding, Mapping):
-        run_task = chain_core._prove_merge_run_task_binding(
-            Path(str(state["repository"])),
-            self.store.common_root,
-            str(binding["run_id"]),
-            str(binding["task_id"]),
-            policy.digest,
-        )
-        if run_task.binding != dict(binding):
-            raise chain_core._merge_refusal(
-                V2ReasonCode.RUN_TASK_BINDING_INVALID,
-                f"forge: {verb} refused — run/task binding changed during observation",
-                expected=str(dict(binding)),
-                observed=str(run_task.binding),
-                chain=state,
-            )
     return engine.MergeAdmission(
         repository=Path(str(state["repository"])),
         worktree=repository.root,
@@ -64,7 +46,6 @@ def _admission_from_candidate_observation(
             if observation.get("declared_tier") is not None
             else None
         ),
-        run_task=run_task,
         status_output_digest=sha256_bytes(b""),
     )
 
@@ -82,11 +63,10 @@ def _admission_for_refresh(
             verb=verb,
             require_current_generation=True,
         )
-    binding = state.get("run_binding")
     options = dataclasses.replace(
         self.ctx.options,
         chain_id=None,
-        run_id=(str(binding["run_id"]) if isinstance(binding, Mapping) else None),
+        run_id=None,
     )
     context = chain_core.CommandContext(
         repo=self.ctx.repo,
@@ -98,11 +78,6 @@ def _admission_for_refresh(
         context,
         str(state["worktree"]["path"]),
         None,
-        task=(
-            str(binding["task_id"])
-            if isinstance(binding, Mapping)
-            else None
-        ),
     )
     if (
         admission.repository != Path(str(state["repository"]))
@@ -185,13 +160,9 @@ def refresh(self: MergeEngine, *, remote_tip: str | None = None) -> Outcome:
         prelock_admission,
         verb="merge refresh",
     )
-    binding = state.get("run_binding")
-    with self.store._journal_outer(
-        binding if isinstance(binding, Mapping) else None
-    ), self._recording_common_lock(
+    with self._recording_common_lock(
         Path(str(state["worktree"]["common_dir"])),
-        chain_id=str(state["chain_id"]),
-        operation="refresh",
+        chain_id=str(state["chain_id"]), operation="refresh",
     ) as common_lock:
         state = self._preflight_lifecycle(self._load(), "merge refresh")
         iteration = self._refresh_iteration(state)
@@ -229,7 +200,6 @@ def refresh(self: MergeEngine, *, remote_tip: str | None = None) -> Outcome:
         ) is int:
             attempt = int(prior_intent["attempt"]) + 1
         operation_nonce = secrets.token_hex(16)
-        scope_request = engine._merge_scope_request(admission)
         if prior_candidate is None:
             state = self.store.transition(
                 state,
@@ -243,7 +213,6 @@ def refresh(self: MergeEngine, *, remote_tip: str | None = None) -> Outcome:
                     "policy_digest": admission.policy.digest,
                     "operation_nonce": operation_nonce,
                     "attempt": attempt,
-                    "scope_request": scope_request,
                 },
                 generation_digest=None,
                 at=chain_core.iso_z(),
@@ -262,7 +231,6 @@ def refresh(self: MergeEngine, *, remote_tip: str | None = None) -> Outcome:
                         "attempt": attempt,
                         "target": copy.deepcopy(admission.target),
                         "pre_fetch_head": admission.candidate_head,
-                        "scope_request": scope_request,
                     },
                 }
             )

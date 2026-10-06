@@ -1,6 +1,7 @@
 """Extracted from scripts/forge/forge_cli/engine/__init__.py."""
 from __future__ import annotations
 import argparse
+import re
 from forge_cli.engine._core import _require_merge_lifecycle_control as _require_merge_lifecycle_control
 from forge_cli.engine._state import GLOBAL_OPTIONS_HELP as GLOBAL_OPTIONS_HELP
 from forge_cli.envelope import ReasonCode, Refusal, Revision9ReasonCode
@@ -10,6 +11,9 @@ from forge_cli import chain_core, runtime
 
 class ContractArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
+        message = re.sub(
+            r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", lambda match: f"\\x{ord(match[0]):02x}", message
+        )
         raise Refusal(
             ReasonCode.STATE_PRECONDITION,
             f"invalid CLI invocation: {message}",
@@ -37,19 +41,6 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[chain_core.CLIOptions,
         "--severity",
         "--resolution",
         "--task",
-        "--state-file",
-        "--events-file",
-        "--outcome-map",
-        "--closing-head",
-        "--task-status",
-        "--idempotency-key",
-        "--archive-run-id",
-        "--backfill-closing-head",
-        "--backfill-approval",
-        "--legacy-recovered-head",
-        "--legacy-approval",
-        "--dispense-citation",
-        "--dispense-reason",
     }
     if runtime.MERGE_LIFECYCLE_ACTIVE:
         verb_value_options.add("--worktree")
@@ -154,14 +145,6 @@ def _extract_global_options(argv: Sequence[str]) -> tuple[chain_core.CLIOptions,
             observed=options.chain_id,
             remediation="forge status",
         )
-    if options.run_id and not chain_core.RUN_ID_RE.fullmatch(options.run_id):
-        raise Refusal(
-            ReasonCode.CITATION_OUT_OF_ROOT,
-            "invalid --run-id grammar",
-            expected="repository-local run identifier",
-            observed=options.run_id,
-            remediation="rerun with the exact open run id",
-        )
     return options, remaining
 
 
@@ -174,9 +157,9 @@ def _attach_merge_lifecycle_parser(
     merge = commands.add_parser("merge")
     merge_commands = merge.add_subparsers(dest="merge_command", required=True)
     start = merge_commands.add_parser("start")
+    start.add_argument("--task", help=argparse.SUPPRESS)
     start.add_argument("--worktree", required=True)
     start.add_argument("--declare-tier", choices=tuple(chain_core.TIER_RANK))
-    start.add_argument("--task")
     merge_commands.add_parser("refresh")
     merge_commands.add_parser("verify")
     gate = merge_commands.add_parser("gate")
@@ -219,26 +202,14 @@ def build_parser() -> ContractArgumentParser:
         epilog=GLOBAL_OPTIONS_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    start_target = start.add_mutually_exclusive_group(required=True)
-    start_target.add_argument("--paths", nargs="+", help="explicit target paths")
-    start_target.add_argument("--archive-run-id", help="archive-only chain for this run")
+    start.add_argument("--paths", nargs="+", required=True, help="explicit target paths")
+    start.add_argument("--task", help=argparse.SUPPRESS)
     start.add_argument("--declare-tier", choices=tuple(chain_core.TIER_RANK))
-    start.add_argument(
-        "--task", help="run task to bind (required with the global --run-id)"
-    )
-    start.add_argument("--closing-head")
-    start.add_argument("--backfill-closing-head")
-    start.add_argument("--backfill-approval")
-    start.add_argument("--legacy-recovered-head")
-    start.add_argument("--legacy-approval")
-    start.add_argument("--dispense-citation", action="append", default=[])
-    start.add_argument("--dispense-reason")
     restage = commit_commands.add_parser("restage")
     restage.add_argument("--paths", nargs="+", required=True)
     commit_commands.add_parser("rebase")
     abort = commit_commands.add_parser("abort")
     abort.add_argument("--reason")
-    commit_commands.add_parser("abort-disposition")
     approve = commit_commands.add_parser("approve")
     approve.add_argument("--candidate", required=True)
     skip = commit_commands.add_parser("skip")
@@ -274,22 +245,6 @@ def build_parser() -> ContractArgumentParser:
     )
     disposition.add_argument("--resolution", required=True)
 
-    journal_command = commands.add_parser("journal")
-    journal_commands = journal_command.add_subparsers(
-        dest="journal_command", required=True
-    )
-    ingest = journal_commands.add_parser("ingest-chain")
-    ingest.add_argument("--task", required=True)
-    ingest.add_argument("--state-file", required=True)
-    ingest.add_argument("--events-file", required=True)
-    ingest.add_argument("--outcome-map", required=True)
-    ingest.add_argument("--closing-head", required=True)
-    ingest.add_argument(
-        "--task-status", choices=("complete", "blocked", "failed"), required=True
-    )
-    ingest.add_argument("--idempotency-key", required=True)
-    journal_commands.add_parser("batch-recover")
-
     chain = commands.add_parser("chain")
     chain_commands = chain.add_subparsers(dest="chain_command", required=True)
     tombstone = chain_commands.add_parser("tombstone")
@@ -308,7 +263,7 @@ def build_parser() -> ContractArgumentParser:
     )
     common_lock_hold.add_argument("--ready-fd", type=int, required=True)
 
-    launch = commands.add_parser("launch")
+    launch = commands.add_parser("launch", allow_abbrev=False)
     launch.add_argument("launch_command", nargs="?", choices=("collect", "cancel"))
     launch.add_argument("--role", choices=("implementer", "plan"))
     launch.add_argument("--task")

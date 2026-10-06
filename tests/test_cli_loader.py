@@ -151,7 +151,7 @@ class CliLoaderTests(unittest.TestCase):
             self.assertIs(second.Outcome, original)
             self.assertIs(first.Outcome, sentinel)
         # The canonical in-memory control seams remain attributes of each load.
-        self.assertTrue(hasattr(first, "REVISION9_STATE_CONTROLS"))
+        self.assertTrue(hasattr(first, "OUTPUT_CAP_BYTES"))
         self.assertTrue(callable(getattr(first, "validate_state", None)))
 
     def test_cached_loader_returns_the_registered_module(self) -> None:
@@ -398,31 +398,19 @@ mock.patch.object(CLI.MergeEngine, "_recording_common_lock", value)
         other = _cli_loader.load_cli("_cli_loader_test_core_other")
         for name in ("ChainStore", "MergeChainStore", "Repository", "CommandContext", "CLIOptions",
                      "run_fenced_command", "acquire_common_lock", "hold_common_lock",
-                     "_verify_and_build_ingest_records", "_merge_transition_valid"):
+                     "reduce_merge_event", "_merge_transition_valid"):
             with self.subTest(name=name):
                 self.assertIn(name, core.__all__)
                 self.assertIs(getattr(cli, name), getattr(core, name))
                 self.assertIs(getattr(other, name), getattr(core, name))
                 self.assertNotIn(name, vars(cli))
-        # Phase 3 moves the journal-record builder to the canonical engine. Loading another
-        # shim must leave the runtime seam bound to that same engine function.
-        self.assertIs(runtime._build_chain_journal_records, engine._build_chain_journal_records)
-        self.assertIs(cli._build_chain_journal_records, engine._build_chain_journal_records)
-        self.assertNotIn("_build_chain_journal_records", vars(cli))
-        again = _cli_loader.load_cli("_cli_loader_test_core_again")
-        self.assertIs(runtime._build_chain_journal_records, engine._build_chain_journal_records)
-        self.assertIs(again._build_chain_journal_records, engine._build_chain_journal_records)
-        self.assertIn(
-            "runtime._build_chain_journal_records = _build_chain_journal_records",
-            Path(engine._journal.__file__).read_text(encoding="utf-8"),
-        )
-        self.assertNotIn("_build_chain_journal_records", core.__all__)
-        for seam in (
-            core.reduce_merge_event,
-            core._authorize_chain_batch,
-            core._ingest_proof_verifier,
+        for name in (
+            "_verify_and_build_ingest_records", "_build_chain_journal_records",
+            "_authorize_chain_batch", "_ingest_proof_verifier",
         ):
-            self.assertIs(getattr(seam, "_forge_cli_revision9_seam", False), True)
+            for module in (core, runtime, engine, cli, other):
+                with self.subTest(module=module.__name__, retired=name):
+                    self.assertFalse(hasattr(module, name))
         # A patch on the canonical module is what the shim's remaining callers observe.
         sentinel = object()
         with mock.patch.object(core, "run_fenced_command", lambda *a, **k: sentinel):
@@ -461,8 +449,6 @@ mock.patch.object(CLI.MergeEngine, "_recording_common_lock", value)
         cli = _cli_loader.load_cli("_cli_loader_test_runtime")
         other = _cli_loader.load_cli("_cli_loader_test_runtime_other")
         for name in runtime.__all__:
-            if name == "_build_chain_journal_records":
-                continue  # the late-bound seam: asserted separately below
             with self.subTest(name=name):
                 self.assertIs(getattr(cli, name), getattr(runtime, name))
         self.assertNotIn("utc_now", vars(cli))
@@ -479,12 +465,11 @@ mock.patch.object(CLI.MergeEngine, "_recording_common_lock", value)
             self.assertIs(cli.MERGE_LIFECYCLE_ACTIVE, True)
             self.assertIs(other.MERGE_LIFECYCLE_ACTIVE, True)
         self.assertIs(cli.MERGE_LIFECYCLE_ACTIVE, False)
-        # The spec-required in-memory disable of a Revision-9 state control still works
-        # through the canonical module.
-        with mock.patch.object(
-            runtime, "REVISION9_STATE_CONTROLS", runtime.REVISION9_STATE_CONTROLS - {"run-binding-shape"}
-        ):
-            self.assertNotIn("run-binding-shape", cli.REVISION9_STATE_CONTROLS)
+        # Kept bounded-output controls remain shared through every loaded shim.
+        with mock.patch.object(runtime, "OUTPUT_CAP_BYTES", 1):
+            self.assertEqual(cli.OUTPUT_CAP_BYTES, 1)
+            self.assertEqual(other.OUTPUT_CAP_BYTES, 1)
+        self.assertFalse(hasattr(cli, "REVISION9_STATE_CONTROLS"))
         self.assertEqual(runtime.SCRIPT_DIR, _cli_loader.SCRIPTS_DIR)
         self.assertEqual(runtime.PLUGIN_ROOT, ROOT)
 

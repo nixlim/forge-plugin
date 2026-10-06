@@ -69,7 +69,6 @@ def _classify_merge_scope_binding_at(
     parent: int,
     *,
     fetch_intent_digest: str,
-    scope_request: Mapping[str, Any] | None,
     fence: chain_core.PublishedLockRecord,
     result: chain_core.FencedProcessResult | None = None,
 ) -> MergeScopeBindingInspection:
@@ -81,7 +80,6 @@ def _classify_merge_scope_binding_at(
     validator = chain_core._merge_scope_binding_validator(
         state,
         fetch_intent_digest=fetch_intent_digest,
-        scope_request=scope_request,
         fence=fence,
         result=result,
     )
@@ -118,7 +116,6 @@ def _classify_merge_scope_binding(
     state: Mapping[str, Any],
     *,
     fetch_intent_digest: str,
-    scope_request: Mapping[str, Any] | None,
     fence: chain_core.PublishedLockRecord,
 ) -> MergeScopeBindingInspection:
     """Classify the deterministic sidecar names without changing either name."""
@@ -137,7 +134,6 @@ def _classify_merge_scope_binding(
                 state,
                 parent,
                 fetch_intent_digest=fetch_intent_digest,
-                scope_request=scope_request,
                 fence=fence,
             )
     except FileNotFoundError:
@@ -158,7 +154,6 @@ def _resume_merge_scope_binding(
     state: Mapping[str, Any],
     *,
     fetch_intent_digest: str,
-    scope_request: Mapping[str, Any] | None,
     fence: chain_core.PublishedLockRecord,
 ) -> dict[str, Any] | None:
     """Resume only FR-236's admitted link/unlink publication suffix."""
@@ -172,7 +167,6 @@ def _resume_merge_scope_binding(
     validator = chain_core._merge_scope_binding_validator(
         state,
         fetch_intent_digest=fetch_intent_digest,
-        scope_request=scope_request,
         fence=fence,
     )
     try:
@@ -184,7 +178,6 @@ def _resume_merge_scope_binding(
                 state,
                 parent,
                 fetch_intent_digest=fetch_intent_digest,
-                scope_request=scope_request,
                 fence=fence,
             )
             if inspection.topology == "absent":
@@ -209,7 +202,6 @@ def _resume_merge_scope_binding(
                     state,
                     parent,
                     fetch_intent_digest=fetch_intent_digest,
-                    scope_request=scope_request,
                     fence=fence,
                 )
             if inspection.topology == "same-inode-two-link":
@@ -227,7 +219,6 @@ def _resume_merge_scope_binding(
                     state,
                     parent,
                     fetch_intent_digest=fetch_intent_digest,
-                    scope_request=scope_request,
                     fence=fence,
                 )
             if inspection.topology != "canonical-one-link" or inspection.canonical is None:
@@ -249,23 +240,17 @@ def _publish_merge_scope_binding(
     state: Mapping[str, Any],
     *,
     fetch_intent_digest: str,
-    scope_request: Mapping[str, Any] | None,
     remote_tip: str,
     fence: chain_core.PublishedLockRecord,
     result: chain_core.FencedProcessResult,
 ) -> dict[str, Any]:
     """Publish FR-231's inode-bound immutable sidecar while the fence lives."""
 
-    chain_core._require_merge_integration_control("post-fetch-scope-proof")
+    chain_core._require_merge_integration_control("post-fetch-binding")
     chain_core._require_merge_integration_control("composite-bootstrap-streaming")
     chain_id = str(state["chain_id"])
     candidate_head = str(state["integration"]["intent"]["pre_fetch_head"])
     worktree = Path(str(state["worktree"]["path"]))
-    command = (
-        chain_core._merge_scope_argv(worktree, remote_tip, candidate_head)
-        if scope_request is not None
-        else None
-    )
     full_patch_command = chain_core._merge_full_patch_argv(
         worktree, remote_tip, candidate_head
     )
@@ -313,23 +298,11 @@ def _publish_merge_scope_binding(
                 "schema": "forge-run-scope-fetch-binding/2",
                 "chain_id": chain_id,
                 "fetch_intent_digest": fetch_intent_digest,
-                "scope_request_digest": (
-                    sha256_bytes(chain_core.canonical_bytes(dict(scope_request)))
-                    if scope_request is not None
-                    else None
-                ),
+                "scope_request_digest": None,
                 "candidate_head": candidate_head,
                 "remote_tip": remote_tip,
-                "command_template_digest": (
-                    scope_request["command_template_digest"]
-                    if scope_request is not None
-                    else None
-                ),
-                "command_digest": (
-                    sha256_bytes(chain_core.canonical_bytes(command))
-                    if command is not None
-                    else None
-                ),
+                "command_template_digest": None,
+                "command_digest": None,
                 "full_patch_command_digest": sha256_bytes(
                     chain_core.canonical_bytes(full_patch_command)
                 ),

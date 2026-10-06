@@ -32,11 +32,6 @@
  "tests/test_governance_scripts.py": 1307,
  "tests/test_installer.py": 1446,
  "tests/test_mutation_runner.py": 1537,
- "tests/test_revision9_archive.py": 2275,
- "tests/test_revision9_cli_surfaces.py": 5456,
  "tests/test_revision9_coordination.py": 4931,
- "tests/test_revision9_ingest_negatives.py": 1054,
- "tests/test_revision9_matrix.py": 1270,
- "tests/test_run_coordination.py": 1587,
  "tests/test_validation.py": 1599
 }

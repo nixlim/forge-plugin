@@ -34,7 +34,7 @@ class LaunchMarkerSchemaTests(LaunchLaneSupport, unittest.TestCase):
             )
         self.assertIs(
             caught.exception.reason_code,
-            ENGINE.V2ReasonCode.BINDING_INVALID,
+            ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
         )
         self.assertEqual(
             caught.exception.message,

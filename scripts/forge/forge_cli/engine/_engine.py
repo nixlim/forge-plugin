@@ -3,10 +3,9 @@ from __future__ import annotations
 import sys
 from typing import Any, Mapping, MutableMapping
 from forge_cli import candidate as candidate_module, chain_core, runtime
-from forge_cli.engine._archive import _archive_recheck as _archive_recheck
 from forge_cli.engine._candidate_ops import _adopt_out_of_band_candidate as _adopt_out_of_band_candidate
 from forge_cli.engine._command_lock import _serialize_worktree_command as _serialize_worktree_command
-from forge_cli.engine._core import _archive_metadata as _archive_metadata, _run_halt as _run_halt
+from forge_cli.engine._core import _run_halt as _run_halt
 from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES, TERMINAL_TOUCH_VERBS as TERMINAL_TOUCH_VERBS
 from forge_cli.envelope import FrozenError, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal
 from . import _verbs_tombstone
@@ -29,8 +28,6 @@ class Engine:
     _require_tombstone_control = staticmethod(_verbs_tombstone._require_tombstone_control)
     _tombstone_outcome = _verbs_tombstone._tombstone_outcome
     operator_tombstone = _serialize_worktree_command(_verbs_tombstone.operator_tombstone)
-    journal_batch_recover = _verbs_status.journal_batch_recover
-    journal_ingest_chain = _verbs_status.journal_ingest_chain
     launch = _verbs_launch.launch
     launch_collect = _verbs_launch_collect.launch_collect
     launch_cancel = _verbs_launch_collect.launch_cancel
@@ -70,8 +67,6 @@ class Engine:
             state = self.ctx.store.load(
                 self.ctx.options.chain_id, family_proven=family_proven
             )
-            if state.get("journal_outbox") is not None:
-                state = self.ctx.store.recover_pending_outbox(state)
             if state["staging"].get("worktree_root") != str(self.ctx.repo.root):
                 raise Refusal(
                     ReasonCode.CANDIDATE_STALE,
@@ -94,8 +89,6 @@ class Engine:
                 remediation="forge commit start --paths <path>...",
             )
         selected = max(candidates, key=lambda item: str(item["created_at"]))
-        if selected.get("journal_outbox") is not None:
-            selected = self.ctx.store.recover_pending_outbox(selected)
         return selected
     _live_chain = _verbs_lifecycle._live_chain
 
@@ -132,16 +125,6 @@ class Engine:
     ) -> None:
         if mutating:
             _run_halt(self.ctx, state)
-        if _archive_metadata(state) is not None and verb not in {
-            "status",
-            "commit abort",
-        }:
-            # Archive chains are immutable single-path candidates.  Recheck
-            # before generic candidate adoption or any other state mutation,
-            # so an edited renderer input/index cannot erase archive mode.
-            _archive_recheck(self.ctx, state, "transition")
-        if state.get("run_binding") is not None:
-            chain_core._validate_bound_chain_state(state)
         if (
             state.get("candidate", {}).get("sha256")
             and not chain_core.candidate_is_v2(state)
@@ -285,8 +268,6 @@ class Engine:
     classify = _serialize_worktree_command(_verbs_lifecycle.classify)
     restage = _serialize_worktree_command(_verbs_lifecycle.restage)
     abort = _serialize_worktree_command(_verbs_tombstone.abort)
-    abort_disposition = _serialize_worktree_command(_verbs_tombstone.abort_disposition)
-    _tombstone_abort_disposition = _verbs_tombstone._tombstone_abort_disposition
 
     def _wrong_state(self, state: Mapping[str, Any], expected: str, verb: str) -> None:
         reason = (

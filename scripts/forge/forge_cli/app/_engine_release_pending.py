@@ -164,40 +164,36 @@ def _resume_pending_release(
         return None
     else:
         return None
-    binding = state.get("run_binding")
-    with self.store._journal_outer(
-        binding if isinstance(binding, Mapping) else None
-    ):
-        with chain_core.acquire_chain_lease(
-            self.store.root,
-            chain_id=str(state["chain_id"]),
-            session=self.store._session(None),
-            single_attempt=True,
-        ) as lease:
-            current = self.store.load_locked(
-                str(state["chain_id"]), lease=lease
+    with chain_core.acquire_chain_lease(
+        self.store.root,
+        chain_id=str(state["chain_id"]),
+        session=self.store._session(None),
+        single_attempt=True,
+    ) as lease:
+        current = self.store.load_locked(
+            str(state["chain_id"]), lease=lease
+        )
+        current_claim = current.get("worktree", {}).get("claim")
+        if (
+            not isinstance(current_claim, Mapping)
+            or current_claim.get("status") not in {"releasing", "released"}
+            or current.get("state") in {"closed", "aborted"}
+        ):
+            raise chain_core._merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: pending ownership release changed before completion",
+                expected=str(claim.get("status")),
+                observed=str(
+                    current_claim.get("status")
+                    if isinstance(current_claim, Mapping)
+                    else None
+                ),
+                remediation=f"forge status --chain-id {state['chain_id']}",
+                chain=current,
             )
-            current_claim = current.get("worktree", {}).get("claim")
-            if (
-                not isinstance(current_claim, Mapping)
-                or current_claim.get("status") not in {"releasing", "released"}
-                or current.get("state") in {"closed", "aborted"}
-            ):
-                raise chain_core._merge_refusal(
-                    V2ReasonCode.STATE_PRECONDITION,
-                    "forge: pending ownership release changed before completion",
-                    expected=str(claim.get("status")),
-                    observed=str(
-                        current_claim.get("status")
-                        if isinstance(current_claim, Mapping)
-                        else None
-                    ),
-                    remediation=f"forge status --chain-id {state['chain_id']}",
-                    chain=current,
-                )
-            return self._complete_pending_release_locked(
-                current, lease, expected_target=expected_target
-            )
+        return self._complete_pending_release_locked(
+            current, lease, expected_target=expected_target
+        )
 
 def _release_historical_landing_locked(
     self: MergeEngine,

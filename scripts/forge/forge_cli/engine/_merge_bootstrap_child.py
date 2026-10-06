@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from forge_cli import chain_core, runtime
 from forge_cli.engine._core import MergeAdmission as MergeAdmission
-from forge_cli.engine._merge_scope_derive import _git_environment_digest as _git_environment_digest, _parse_merge_name_status_output as _parse_merge_name_status_output
+from forge_cli.engine._merge_scope_derive import _git_environment_digest as _git_environment_digest
 from forge_cli.engine._state import _MERGE_BOOTSTRAP_CHILD_SOURCE as _MERGE_BOOTSTRAP_CHILD_SOURCE
 import sys
 
@@ -32,7 +32,6 @@ def _merge_bootstrap_child_main(encoded_payload: str) -> int:
     worktree = Path(str(payload["worktree"]))
     candidate_head = str(payload["candidate_head"])
     supplied_tip = payload.get("remote_tip")
-    run_bound = payload.get("run_bound") is True
 
     def stop(process: subprocess.Popen[bytes]) -> None:
         try:
@@ -173,26 +172,10 @@ def _merge_bootstrap_child_main(encoded_payload: str) -> int:
             except (OSError, UnicodeError, ValueError, IndexError):
                 fetch = {**fetch, "exit": 1}
 
-    scope: dict[str, Any] | None = None
-    changed_paths: list[str] | None = None
-    if passed(fetch) and resolved_tip is not None and run_bound:
-        constituent_order.append("name-status")
-        scope_argv = chain_core._merge_scope_argv(worktree, resolved_tip, candidate_head)
-        scope, scope_output = run_constituent(
-            scope_argv, retain_stdout=True, stream_stdout=False
-        )
-        if passed(scope):
-            try:
-                changed_paths = list(_parse_merge_name_status_output(scope_output))
-            except (UnicodeError, ValueError):
-                scope = {**scope, "exit": 1}
-                changed_paths = None
-
     full_patch: dict[str, Any] | None = None
     if (
         passed(fetch)
         and resolved_tip is not None
-        and (scope is None or passed(scope))
     ):
         constituent_order.append("full-patch")
         full_patch, _never_retained = run_constituent(
@@ -206,8 +189,8 @@ def _merge_bootstrap_child_main(encoded_payload: str) -> int:
         "environment_digest": _git_environment_digest(os.environ),
         "resolved_tip": resolved_tip,
         "fetch": fetch,
-        "scope": scope,
-        "scope_changed_paths": changed_paths,
+        "scope": None,
+        "scope_changed_paths": None,
         "full_patch": full_patch,
     }
     encoded = chain_core.canonical_bytes(protocol)
@@ -229,7 +212,6 @@ def _merge_bootstrap_child_argv(
         "git_dir": str(admission.worktree_identity["git_dir"]),
         "candidate_head": admission.candidate_head,
         "remote_tip": remote_tip,
-        "run_bound": admission.run_task is not None,
         "fetch_argv": list(fetch_argv),
         "cap": runtime.OUTPUT_CAP_BYTES,
     }

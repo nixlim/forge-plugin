@@ -9,7 +9,7 @@ TERMINAL_STATES = {"closed", "aborted"}
 
 
 TERMINAL_TOUCH_VERBS = frozenset(
-    {"status", "commit abort", "commit abort-disposition", "review cancel"}
+    {"status", "commit abort", "review cancel"}
 )
 
 
@@ -44,14 +44,6 @@ _REQUIRED_MERGE_LIFECYCLE_CONTROLS = frozenset(
 
 
 MERGE_LIFECYCLE_CONTROLS = _REQUIRED_MERGE_LIFECYCLE_CONTROLS
-
-
-_REQUIRED_ARCHIVE_RECHECK_CONTROLS = frozenset(
-    {"start", "authorization", "commit"}
-)
-
-
-ARCHIVE_RECHECK_CONTROLS = _REQUIRED_ARCHIVE_RECHECK_CONTROLS
 
 
 _CHAIN_CAPABILITY_LOCK = threading.Lock()
@@ -124,24 +116,16 @@ provide a PASS or BLOCK verdict with severity-ranked findings.
 GLOBAL_OPTIONS_HELP = """\
 global options (accepted before or after the verb; parsed ahead of argparse):
   --repo PATH        a directory inside the target repository (default: cwd)
-  --run-id RUN_ID    bind a new chain to this explicitly identified open
-                     orchestration run; `commit start` then requires --task,
-                     `journal` and `launch` name the run directly, and later
-                     chain verbs inherit the binding (no --run-id)
+  --run-id RUN_ID    name the launch journal
   --chain-id ID      select the chain a shared verb addresses; required by
                      merge shared verbs and `chain tombstone`
   --json             machine-readable JSON output
   --verbose          include diagnostic detail in refusals and receipts
 
---task TASK_ID is not global: it is a verb option of `commit start`, `merge start`,
-`journal ingest-chain`, and `launch` (accepted only after the verb) naming the run
-task the chain's gate verifications cite.
+--task TASK_ID is a launch option naming the task.
 """
 
 
-ARCHIVE_CONTAMINATION = (
-    "forge: archive refused — close tree contains unrelated changes"
-)
 
 
 SECRET_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -162,16 +146,6 @@ PLACEHOLDER_RE = re.compile(
 )
 
 
-ABORT_DISPOSITION_PRECONDITIONS = (
-    "run-bound",
-    "aborted",
-    "null-outbox",
-    "candidate",
-    "never-landed",
-    "uncarried-abort",
-    "journal-readable",
-    "no-journaled-decision",
-)
 
 
 _MERGE_CANDIDATE_IDENTITY_FIELDS = (
@@ -197,7 +171,6 @@ _MERGE_BOOTSTRAP_CHILD_SOURCE = (
 )
 
 
-_DERIVE_MERGE_SCOPE = object()
 
 
 _MERGE_INITIAL_INTEGRATION = {

@@ -23,7 +23,6 @@ def _admission() -> object:
         candidate_head="0" * 40,
         policy=None,
         declared_tier=None,
-        run_task=None,
         status_output_digest="0" * 64,
     )
 

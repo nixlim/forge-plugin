@@ -202,16 +202,8 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
         started = self.start("scripts/tool.py")
         chain_id = str(started["chain_id"])
 
-        def record_gate_one_pass(state):
-            state["steps"]["gate-1"] = [
-                {
-                    "candidate": state["candidate"]["sha256"],
-                    "result": "passed",
-                    "stdout_stderr_digest": sha256(b"revision-10 gate-1 fixture\n"),
-                }
-            ]
-
-        state = self.force_state(chain_id, "reviewing", record_gate_one_pass)
+        self.cli("verify", "--chain-id", chain_id, expected=0)
+        state = self.state(chain_id)
         repository = CLI.Repository(self.repo)
         context = CLI.CommandContext(
             repository,
@@ -238,9 +230,7 @@ class Revision10CommitReviewTransportTests(FIXTURE_SUPPORT.ForgeCLIFixture):
             b"fixture fresh reviewer evidence\n",
             candidate_diff,
         )
-        with patch_engine("_mechanical_complete", return_value=True), mock.patch.object(
-            engine, "_review_package", return_value=package_parts
-        ):
+        with mock.patch.object(engine, "_review_package", return_value=package_parts):
             outcome = engine.review_request()
         request = self.state(chain_id)["review"]["request"]
         master = self.repo / str(request["package"])

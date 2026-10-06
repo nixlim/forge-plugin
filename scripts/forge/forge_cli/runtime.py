@@ -30,14 +30,6 @@ COMMAND_TIMEOUT_SECONDS = 1200.0
 OUTPUT_CAP_BYTES = 65536
 
 
-_REQUIRED_REVISION9_STATE_CONTROLS = frozenset(
-    {"run-binding-shape", "journal-outbox-shape"}
-)
-
-
-REVISION9_STATE_CONTROLS = _REQUIRED_REVISION9_STATE_CONTROLS
-
-
 MERGE_LIFECYCLE_ACTIVE = False
 
 
@@ -437,26 +429,15 @@ def _fast_mechanical_skips(state: Mapping[str, Any]) -> list[str]:
     return sorted(str(gate_id) for gate_id in skips if gate_id != "review")
 
 
-# Late-bound seam (cli split phase 2b): the shim assigns its
-# _build_chain_journal_records here at import time so chain_core can drain chain
-# outboxes without importing the shim; tests patch the seam on this module. When
-# several shim instances are loaded in one process (tests only), the seam holds the
-# most recently loaded shim's builder; production runs exactly one shim.
-_build_chain_journal_records: Any = None
-
-
 __all__ = [
-    '_build_chain_journal_records',
     'COMMAND_TIMEOUT_SECONDS',
     'MERGE_LIFECYCLE_ACTIVE',
     'OUTPUT_CAP_BYTES',
     'PLUGIN_ROOT',
     'ProcessResult',
-    'REVISION9_STATE_CONTROLS',
     'SCRIPT_DIR',
     '_COORDINATION_MODULE_CACHE',
     '_COORDINATION_MODULE_LOCK',
-    '_REQUIRED_REVISION9_STATE_CONTROLS',
     '_coordination_modules',
     '_fast_mechanical_skips',
     '_kill_process_group',

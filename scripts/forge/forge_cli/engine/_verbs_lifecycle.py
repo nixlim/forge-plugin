@@ -6,29 +6,21 @@ from typing import Any, Sequence
 from forge_cli import chain_core
 from forge_cli.engine._approval import _authorization_problem as _authorization_problem
 from forge_cli.engine._approval import _success as _success
-from forge_cli.engine._archive import ArchiveClosingOptions as ArchiveClosingOptions
-from forge_cli.engine._archive import _archive_recheck as _archive_recheck
-from forge_cli.engine._archive import _prepare_archive_candidate as _prepare_archive_candidate
 from forge_cli.engine._candidate_ops import (
     _invalidate_candidate_evidence as _invalidate_candidate_evidence,
 )
 from forge_cli.engine._candidate_ops import _stage_paths as _stage_paths
 from forge_cli.engine._classification import _run_classification as _run_classification
 from forge_cli.engine._command_lock import _new_state as _new_state
-from forge_cli.engine._command_lock import _prove_run_task_binding as _prove_run_task_binding
-from forge_cli.engine._core import _archive_contamination_refusal as _archive_contamination_refusal
-from forge_cli.engine._core import _archive_metadata as _archive_metadata
 from forge_cli.engine._core import _run_halt as _run_halt
 from forge_cli.engine._core import _transition_state as _transition_state
 from forge_cli.engine._core import chain_id_now as chain_id_now
 from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES
 from forge_cli.envelope import (
-    REVISION9_OUTPUT_SCHEMA,
     FrozenError,
     Outcome,
     ReasonCode,
     Refusal,
-    V2ReasonCode,
 )
 from forge_cli.policy import PolicyError, parse_policy, sha256_bytes
 
@@ -43,16 +35,6 @@ def start(
     self,
     paths: Sequence[str],
     declared_tier: str | None,
-    *,
-    task: str | None = None,
-    archive_run_id: str | None = None,
-    closing_head: str | None = None,
-    legacy_recovered_head: str | None = None,
-    legacy_approval: str | None = None,
-    backfill_closing_head: str | None = None,
-    backfill_approval: str | None = None,
-    dispense_targets: Sequence[str] = (),
-    dispense_reason: str | None = None,
 ) -> Outcome:
     _run_halt(self.ctx)
     with self.ctx.store.admission_lock(self.ctx.repo.root):
@@ -80,8 +62,6 @@ def start(
         staged = self.ctx.repo.staged_paths()
         if staged:
             names = ", ".join(staged)
-            if archive_run_id is not None:
-                raise _archive_contamination_refusal()
             raise Refusal(
                 ReasonCode.DIRTY_INDEX,
                 f"pre-existing staged content belongs to no chain: {names}",
@@ -89,38 +69,9 @@ def start(
                 observed=names,
                 remediation="unstage the named paths, then rerun commit start",
             )
-        if archive_run_id is not None:
-            normalized, archive_metadata = _prepare_archive_candidate(
-                self.ctx,
-                archive_run_id,
-                closing=ArchiveClosingOptions(
-                    closing_head=closing_head,
-                    legacy_recovered_head=legacy_recovered_head,
-                    legacy_approval=legacy_approval,
-                    backfill_closing_head=backfill_closing_head,
-                    backfill_approval=backfill_approval,
-                ),
-                dispense_targets=dispense_targets,
-                dispense_reason=dispense_reason,
-            )
-        else:
-            normalized = self.ctx.repo.normalize_paths(paths)
-            archive_metadata = None
-        pinned_archive_head = (
-            archive_metadata.get("archiving_head")
-            if archive_metadata is not None
-            and archive_metadata.get("backfill_approval") is not None
-            else None
-        )
-        if pinned_archive_head is not None and not isinstance(
-            pinned_archive_head, str
-        ):
-            raise FrozenError(
-                "backfill archive metadata has no pinned repository HEAD",
-                schema=REVISION9_OUTPUT_SCHEMA,
-            )
+        normalized = self.ctx.repo.normalize_paths(paths)
         try:
-            head, raw = self.ctx.repo.policy(pinned_archive_head)
+            head, raw = self.ctx.repo.policy()
             policy = parse_policy(head, raw)
         except (OSError, PolicyError, UnicodeError) as exc:
             raise Refusal(
@@ -131,15 +82,6 @@ def start(
                 remediation="commit a valid forge-project.md or use the separate bootstrap flow",
             ) from exc
         self.ctx.policy = policy
-        run_binding = None
-        if self.ctx.options.run_id is not None and task is not None:
-            run_binding = _prove_run_task_binding(
-                self.ctx,
-                self.ctx.options.run_id,
-                task,
-                normalized,
-                policy,
-            )
         for _attempt in range(32):
             chain_id = chain_id_now()
             if not self.ctx.store.state_path(chain_id).exists() and not self.ctx.store.events_path(chain_id).exists():
@@ -153,36 +95,16 @@ def start(
             policy,
             normalized,
             declared_tier,
-            run_binding,
         )
         self.ctx.store.create(state, "chain_started", {"paths": normalized})
         _old, candidate = _stage_paths(
             self.ctx, state, normalized, clear_old=False
         )
-        if run_binding is not None:
-            rebound = _prove_run_task_binding(
-                self.ctx,
-                str(run_binding["run_id"]),
-                str(run_binding["task_id"]),
-                list(state["paths"]),
-                policy,
-            )
-            if rebound != run_binding:
-                raise FrozenError(
-                    "staged candidate paths changed the run/task binding",
-                    chain_id=chain_id,
-                    state=str(state["state"]),
-                    schema=REVISION9_OUTPUT_SCHEMA,
-                )
-        if archive_metadata is not None:
-            state["staging"]["archive"] = archive_metadata
         self.ctx.store.persist(
             state,
             "candidate_staged",
             {"candidate": candidate, "paths": list(state["paths"])},
         )
-        if archive_metadata is not None:
-            _archive_recheck(self.ctx, state, "start")
     try:
         _run_classification(self.ctx, state)
     except Exception:
@@ -240,15 +162,6 @@ def restage(self, paths: Sequence[str]) -> Outcome:
         allow_head_moved=legacy_migration,
         check_candidate=False,
     )
-    if _archive_metadata(state) is not None:
-        raise Refusal(
-            V2ReasonCode.BINDING_INVALID,
-            "forge: archive refused — archive-only chain cannot be restaged",
-            expected="the immutable archive-only staged candidate",
-            observed="commit restage",
-            remediation=chain_core._forge_command(state, "commit abort --reason archive-restart"),
-            chain=state,
-        )
     if state["state"] not in {"revising", "classifying", "verifying", "reviewing", "awaiting_approval", "authorized"}:
         self._wrong_state(state, "a live pre-commit state", "commit restage")
     if int(state["review"].get("iteration", 0)) >= 8:
@@ -325,15 +238,6 @@ def rebase(self) -> Outcome:
         allow_head_moved=True,
         check_candidate=False,
     )
-    if _archive_metadata(state) is not None:
-        raise Refusal(
-            V2ReasonCode.BINDING_INVALID,
-            "forge: archive refused — archive-only chain cannot be rebased",
-            expected="the original archive closing-HEAD and renderer inputs",
-            observed="commit rebase",
-            remediation=chain_core._forge_command(state, "commit abort --reason archive-restart"),
-            chain=state,
-        )
     if state["state"] in TERMINAL_STATES:
         self._wrong_state(state, "a live pre-commit state", "commit rebase")
     current_head = self.ctx.repo.head()

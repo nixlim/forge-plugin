@@ -70,17 +70,6 @@ CLAUDE_TOOLS_ENTRY_REFUSALS = (
 
 
 class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
-    @staticmethod
-    def resolved_route() -> object:
-        return ROUTE_CONFIG.ResolvedRoute(
-            role="review-final",
-            provider="claude",
-            model="fable",
-            effort="high",
-            route_source="committed-default",
-            route_sha256="a" * 64,
-        )
-
     def test_committed_timeouts_and_probe_bounds_are_pinned(self) -> None:
         self.assertEqual(
             LAUNCH.PROFILE_TIMEOUT_SECONDS,
@@ -178,59 +167,6 @@ class ReviewLaunchProviderTests(ReviewLaneSupport, unittest.TestCase):
             LAUNCH.resolve_review_route(context, "review-cheap", "base-oid")
         self.assertEqual(caught.exception.reason_code, ENGINE.ReasonCode.EVIDENCE_INCOMPLETE)
         self.assertEqual(caught.exception.message, diagnostic)
-
-    def test_run_snapshot_missing_role_refusal_is_load_bearing(self) -> None:
-        context = SimpleNamespace(repo=SimpleNamespace(root=self.worktree))
-
-        def assert_refused() -> None:
-            with self.assertRaises(ENGINE.Refusal) as caught:
-                LAUNCH.resolve_review_route(context, "review-final", "base-oid")
-            self.assertEqual(
-                caught.exception.message,
-                "forge: review request refused — role review-final has no frozen route "
-                "in the run snapshot",
-            )
-
-        with (
-            mock.patch.object(LAUNCH.route_config, "resolve", return_value=self.resolved_route()),
-            mock.patch.object(LAUNCH, "_run_snapshot", return_value={}),
-        ):
-            assert_refused()
-            with (
-                mock.patch.object(LAUNCH, "_check_snapshot", return_value=None),
-                self.assertRaises(AssertionError),
-            ):
-                assert_refused()
-
-    def test_run_snapshot_refuses_each_divergent_dm018_field(self) -> None:
-        context = SimpleNamespace(repo=SimpleNamespace(root=self.worktree))
-        route = self.resolved_route()
-        expected = {
-            "provider": "claude",
-            "model": "fable",
-            "effort": "high",
-            "route_source": "committed-default",
-            "route_sha256": "a" * 64,
-        }
-        with mock.patch.object(LAUNCH.route_config, "resolve", return_value=route):
-            for field in expected:
-                snapshot_route = dict(expected)
-                snapshot_route[field] = "divergent"
-                with (
-                    self.subTest(field=field),
-                    mock.patch.object(
-                        LAUNCH,
-                        "_run_snapshot",
-                        return_value={"review-final": snapshot_route},
-                    ),
-                    self.assertRaises(ENGINE.Refusal) as caught,
-                ):
-                    LAUNCH.resolve_review_route(context, "review-final", "base-oid")
-                self.assertEqual(
-                    caught.exception.message,
-                    "forge: review request refused — route diverges from run snapshot "
-                    f"for review-final: {field}",
-                )
 
     def test_exact_codex_argv_for_both_review_roles(self) -> None:
         paths = self.paths()

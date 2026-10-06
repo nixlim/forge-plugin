@@ -16,8 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from tests._cli_loader import package_module
-
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts" / "forge" / "run-scoped-mutation.py"
 
@@ -1521,121 +1519,6 @@ class MutationRunnerTests(unittest.TestCase):
             verification["observation"][: 2_000 - len(marker)],
             observation[: 2_000 - len(marker)],
         )
-
-    def _assert_deferred_request_survives_fenced_cap(
-        self, mutation_output_size: int, expected_result: str
-    ) -> None:
-        changed_form = (
-            "python3 -c 'import sys; "
-            f"sys.stdout.write(\"x\" * {mutation_output_size})'"
-        )
-        base, head = self.establish_candidate(
-            mutation_table(f"| python | mutmut run | {changed_form} | 5 |"),
-            candidate_files={"tests/test_large_output.py": "def test_value():\n    assert True\n"},
-        )
-        journal_path = self.open_journal(
-            run_id=f"mutation-deferred-{mutation_output_size}"
-        )
-        app = package_module("app")
-        core = package_module("chain_core")
-        runtime = package_module("runtime")
-        prefix = app._MUTATION_JOURNAL_SIDEBAND_PREFIX
-        argv = [
-            "python3",
-            str(RUNNER),
-            "--base",
-            base,
-            "--head",
-            head,
-            "--repository",
-            str(self.repo.resolve()),
-            "--run-id",
-            journal_path.parent.name,
-            "--task",
-            "task-04",
-            "--defer-journal",
-        ]
-        raw_results: list[object] = []
-        persisted: list[object] = []
-
-        def transform(raw: object) -> object:
-            raw_results.append(raw)
-            with mock.patch.dict(
-                os.environ,
-                {"FORGE_SESSION_PID": str(os.getpid())},
-            ):
-                return app._persist_deferred_mutation_result(
-                    raw,
-                    repository=self.repo,
-                    run_id=journal_path.parent.name,
-                    task="task-04",
-                    base=base,
-                    head=head,
-                )
-
-        lock = core.acquire_common_lock(
-            self.repo / ".git",
-            owner_kind="merge",
-            chain_id="c-2026-09-10T050000Z-a105",
-            operation="finalize",
-            use_flock=False,
-            timeout=2,
-            no_transaction_record=True,
-        )
-        try:
-            transformed = core.run_fenced_command(
-                lock,
-                operation="gate",
-                intent_digest=hashlib.sha256(
-                    f"deferred-cap-{mutation_output_size}".encode("ascii")
-                ).hexdigest(),
-                intent_validator=lambda: True,
-                argv=argv,
-                cwd=self.repo,
-                persist_result=persisted.append,
-                env={
-                    **os.environ,
-                    "FORGE_SESSION_PID": str(os.getpid()),
-                    "PYTHONIOENCODING": "utf-8:strict",
-                },
-                timeout=8,
-                cap=runtime.OUTPUT_CAP_BYTES,
-                result_transform=transform,
-            )
-        finally:
-            lock.release()
-
-        self.assertTrue(transformed.output_limit)
-        self.assertEqual(persisted, [transformed])
-        self.assertEqual(len(raw_results), 1)
-        raw = raw_results[0]
-        self.assertTrue(raw.output.startswith(prefix))
-        request_end = raw.output.index(b"\n") + 1
-        self.assertLess(request_end, runtime.OUTPUT_CAP_BYTES)
-        self.assertEqual(len(raw.output), runtime.OUTPUT_CAP_BYTES)
-        self.assertNotIn(prefix, transformed.output)
-        verification = self.appended_record(journal_path)
-        self.assertEqual(
-            verification["id"],
-            "check-01",
-            transformed.output.decode("utf-8", "backslashreplace"),
-        )
-        self.assertEqual(verification["result"], expected_result)
-        self.assertEqual(len(verification["observation"]), 2_000)
-        self.assertTrue(
-            verification["observation"].endswith(
-                "... [truncated for journal; full observation retained in mutation evidence]"
-            )
-        )
-        receipts = self.receipts(journal_path)
-        self.assertEqual(len(receipts), 1)
-        self.assertEqual(receipts[0]["record_count"], 2)
-
-    def test_deferred_request_survives_fenced_cap_at_mutation_limit(self) -> None:
-        self._assert_deferred_request_survives_fenced_cap(65_536, "passed")
-
-    def test_deferred_request_survives_fenced_cap_over_mutation_limit(self) -> None:
-        self._assert_deferred_request_survives_fenced_cap(65_537, "inconclusive")
 
     def test_non_utf8_git_path_is_backslash_escaped_without_losing_evidence(self) -> None:
         changed_form = "true"

@@ -249,7 +249,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
                 LAUNCH_LANE.write_marker(marker_path, changed)
                 self.assert_refusal(
                     record,
-                    ENGINE.V2ReasonCode.BINDING_INVALID,
+                    ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
                     f"launch marker does not bind execution execution-01: {field}",
                 )
                 LAUNCH_LANE.write_marker(marker_path, baseline)
@@ -258,7 +258,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         prompt.write_bytes(original + b"mutated")
         self.assert_refusal(
             record,
-            ENGINE.V2ReasonCode.BINDING_INVALID,
+            ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
             "launch marker does not bind execution execution-01: prompt_digest",
         )
 
@@ -274,7 +274,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         ):
             self.assert_refusal(
                 record,
-                ENGINE.V2ReasonCode.BINDING_INVALID,
+                ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
                 "launch marker does not bind execution execution-01: launch_marker",
             )
         marker_path = self.paths(record).leaf("launch.json")
@@ -285,7 +285,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         ):
             self.assert_refusal(
                 record,
-                ENGINE.V2ReasonCode.BINDING_INVALID,
+                ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
                 "launch marker does not bind execution execution-01: provider",
             )
 
@@ -309,14 +309,14 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
                 self.write_private_json(path, dict(completion, **{field: value}))
                 self.assert_refusal(
                     record,
-                    ENGINE.V2ReasonCode.BINDING_INVALID,
+                    ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
                     f"completion does not bind execution execution-01: {field}",
                 )
         foreign = dict(completion, attempt="attempt-fedcba9876543210")
         self.write_private_json(path, foreign)
         self.assert_refusal(
             record,
-            ENGINE.V2ReasonCode.BINDING_INVALID,
+            ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
             "completion does not bind execution execution-01: attempt",
         )
         invalid = dict(completion, returncode=None, error=None, timed_out=False)
@@ -333,7 +333,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         ):
             self.assert_refusal(
                 record,
-                ENGINE.V2ReasonCode.BINDING_INVALID,
+                ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
                 "completion does not bind execution execution-01: provider",
             )
 

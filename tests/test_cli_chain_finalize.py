@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 
+
 ROOT = Path(__file__).resolve().parents[1]
 CLI_PATH = ROOT / "scripts/forge/cli.py"
 CHAIN_ID = "c-2026-08-21T120000Z-0001"
@@ -183,10 +184,7 @@ class FinalizeFixture(unittest.TestCase):
             "assertion-sensor": [dict(passed)],
             "secret-scan": [dict(passed)],
         }
-        self.state["review"]["verdict"] = {
-            "verdict": "PASS",
-            "candidate": self.candidate,
-        }
+        self.state["review"]["verdict"] = {"verdict": "PASS", "candidate": self.candidate}
         CLI._transition_state(self.state, "verifying")
         CLI._transition_state(self.state, "reviewing")
         CLI._issue_authorization(self.state)
@@ -501,7 +499,8 @@ class FinalizeCheckTests(FinalizeFixture):
                 b"",
             )
 
-    def test_fresh_reviewer_gate_records_operator_skip_and_verify_satisfies_it(self) -> None:
+    @mock.patch.object(package_module("fresh_evals"), "trigger_required", return_value=True)
+    def test_fresh_reviewer_gate_records_operator_skip_and_verify_satisfies_it(self, _trigger) -> None:
         self.state["state"] = "verifying"
         self.state["tier"]["control"] = True
         self.state["authorization"] = {}
@@ -510,14 +509,12 @@ class FinalizeCheckTests(FinalizeFixture):
         ]
         self.persist()
 
-        with patch_chain_core("_fresh_reviewer_evals_required", return_value=True
-        ):
-            skipped = self.engine.skip(
-                "fresh-reviewer-evals",
-                False,
-                "bootstrap the trigger region",
-            )
-            verified = self.engine.verify()
+        skipped = self.engine.skip(
+            "fresh-reviewer-evals",
+            False,
+            "bootstrap the trigger region",
+        )
+        verified = self.engine.verify()
 
         self.assertTrue(skipped.ok)
         self.assertEqual(

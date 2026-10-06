@@ -21,8 +21,6 @@ def _write_review_verdict(
     try:
         return engine._write_merge_artifact(self.ctx, state, relative, data)
     except FileExistsError:
-        if engine._merge_run_directory(state) is not None:
-            raise
         reference = (Path(".forge") / "chains" / str(state["chain_id"]) / relative).as_posix()
         existing = engine._read_merge_artifact(
             self.ctx, state, reference, sha256_bytes(data), "review verdict"
@@ -277,70 +275,66 @@ def review_disposition(
     # state so concurrent MINOR submissions serialize and two competing
     # above-MINOR submissions cannot both observe an empty slot.
     validated_review(state)
-    binding = state.get("run_binding")
-    with self.store._journal_outer(
-        binding if isinstance(binding, Mapping) else None
-    ):
-        with chain_core.acquire_chain_lease(
-            self.store.root,
-            chain_id=str(state["chain_id"]),
-            session=self.store._session(None),
-        ) as lease:
-            fresh = self.store.load_locked(
-                str(state["chain_id"]), lease=lease
+    with chain_core.acquire_chain_lease(
+        self.store.root,
+        chain_id=str(state["chain_id"]),
+        session=self.store._session(None),
+    ) as lease:
+        fresh = self.store.load_locked(
+            str(state["chain_id"]), lease=lease
+        )
+        fresh = self._preflight_lifecycle(
+            fresh, "review disposition", persist_missing=False
+        )
+        fresh_review, above_minor = validated_review(fresh)
+        slot_occupied = (
+            fresh_review.get("operator_cosign_required") is True
+        )
+        if above_minor and slot_occupied:
+            raise chain_core._merge_refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                "forge: review disposition refused — above-MINOR disposition already awaits operator co-sign",
+                expected="zero outstanding above-MINOR dispositions",
+                observed="one outstanding above-MINOR disposition",
+                chain=fresh,
             )
-            fresh = self._preflight_lifecycle(
-                fresh, "review disposition", persist_missing=False
+        dispositions = copy.deepcopy(
+            fresh_review.get("dispositions", [])
+        )
+        if not isinstance(dispositions, list):
+            raise FrozenError(
+                "merge review dispositions are malformed",
+                chain_id=str(fresh["chain_id"]),
+                schema=REVISION9_OUTPUT_SCHEMA,
             )
-            fresh_review, above_minor = validated_review(fresh)
-            slot_occupied = (
-                fresh_review.get("operator_cosign_required") is True
-            )
-            if above_minor and slot_occupied:
-                raise chain_core._merge_refusal(
-                    V2ReasonCode.STATE_PRECONDITION,
-                    "forge: review disposition refused — above-MINOR disposition already awaits operator co-sign",
-                    expected="zero outstanding above-MINOR dispositions",
-                    observed="one outstanding above-MINOR disposition",
-                    chain=fresh,
-                )
-            dispositions = copy.deepcopy(
-                fresh_review.get("dispositions", [])
-            )
-            if not isinstance(dispositions, list):
-                raise FrozenError(
-                    "merge review dispositions are malformed",
-                    chain_id=str(fresh["chain_id"]),
-                    schema=REVISION9_OUTPUT_SCHEMA,
-                )
-            recorded_at = chain_core.iso_z()
-            dispositions.append(
-                {
-                    "finding": finding,
-                    "severity": severity,
-                    "resolution": resolution.strip(),
-                    "candidate": fresh["candidate"]["candidate_head"],
-                    "generation_digest": fresh["candidate"][
-                        "generation_digest"
-                    ],
-                    "recorded_at": recorded_at,
-                }
-            )
-            current_review = {
-                **copy.deepcopy(fresh_review),
-                "dispositions": dispositions,
-                "operator_cosign_required": slot_occupied or above_minor,
+        recorded_at = chain_core.iso_z()
+        dispositions.append(
+            {
+                "finding": finding,
+                "severity": severity,
+                "resolution": resolution.strip(),
+                "candidate": fresh["candidate"]["candidate_head"],
+                "generation_digest": fresh["candidate"][
+                    "generation_digest"
+                ],
+                "recorded_at": recorded_at,
             }
-            current = self.store.transition_locked(
-                fresh,
-                "review_disposition",
-                {"delta": {"review": current_review}},
-                generation_digest=str(
-                    fresh["candidate"]["generation_digest"]
-                ),
-                lease=lease,
-                at=recorded_at,
-            )
+        )
+        current_review = {
+            **copy.deepcopy(fresh_review),
+            "dispositions": dispositions,
+            "operator_cosign_required": slot_occupied or above_minor,
+        }
+        current = self.store.transition_locked(
+            fresh,
+            "review_disposition",
+            {"delta": {"review": current_review}},
+            generation_digest=str(
+                fresh["candidate"]["generation_digest"]
+            ),
+            lease=lease,
+            at=recorded_at,
+        )
     if above_minor:
         raise chain_core._merge_refusal(
             V2ReasonCode.APPROVAL_REQUIRED,

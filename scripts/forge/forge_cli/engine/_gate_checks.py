@@ -14,53 +14,6 @@ import hashlib
 import re
 
 
-RUN_BOUND_GATE_ONE_CONTROLS = frozenset({"run-bound-gate-one"})
-
-
-def _docs_class_skip_admitted(state: Mapping[str, Any]) -> bool:
-    """Whether this chain may replace Gate 1 with the docs-class skip."""
-
-    return chain_core._docs_class_candidate(state) and not (
-        "run-bound-gate-one" in RUN_BOUND_GATE_ONE_CONTROLS
-        and isinstance(state.get("run_binding"), Mapping)
-    )
-
-
-def _gate_one_complete(state: Mapping[str, Any]) -> bool:
-    """Apply the run-bound Gate-1 rule without rewriting history semantics."""
-
-    if not chain_core._gate_one_complete(state):
-        return False
-    if (
-        "run-bound-gate-one" not in RUN_BOUND_GATE_ONE_CONTROLS
-        or not isinstance(state.get("run_binding"), Mapping)
-        or chain_core._user_skip(state, "gate-1") is not None
-    ):
-        return True
-    steps = state.get("steps")
-    runs = steps.get("gate-1") if isinstance(steps, Mapping) else None
-    candidate = state.get("candidate")
-    expected = candidate.get("sha256") if isinstance(candidate, Mapping) else None
-    newest = (
-        next(
-            (
-                record
-                for record in reversed(runs)
-                if isinstance(record, Mapping)
-                and record.get("candidate") == expected
-            ),
-            None,
-        )
-        if isinstance(runs, list)
-        else None
-    )
-    return not (
-        isinstance(newest, Mapping)
-        and newest.get("result") == "skipped"
-        and newest.get("reason") == chain_core.DOCS_CLASS_SKIP_REASON
-    )
-
-
 def _current_test_paths(
     ctx: chain_core.CommandContext, state: Mapping[str, Any] | None = None
 ) -> list[str]:
@@ -85,8 +38,8 @@ def _record_docs_class_gate_one_skip(
     """Record the docs-class Gate-1 skip as durable step evidence.
 
     The record sits in the ``gate-1`` step list under the same ID as a run,
-    with ``result`` ``skipped`` and the fixed reason, so replay, ingest, and
-    archives see why no test process was launched.  It is admitted only after
+    with ``result`` ``skipped`` and the fixed reason, so replay records
+    why no test process was launched.  It is admitted only after
     the classifier's per-path evidence proved every staged path docs-class.
     """
 
@@ -96,17 +49,6 @@ def _record_docs_class_gate_one_skip(
             "gate-1 docs-class skip refused: candidate is not docs-class",
             expected="every classified path carries only the docs category",
             observed=", ".join(str(path) for path in state.get("paths", [])),
-            remediation=chain_core._forge_command(state, "gate run gate-1"),
-            chain=state,
-        )
-    if (
-        "run-bound-gate-one" in RUN_BOUND_GATE_ONE_CONTROLS
-        and isinstance(state.get("run_binding"), Mapping)
-    ):
-        raise Refusal(
-            ReasonCode.STATE_PRECONDITION,
-            "gate-1 docs-class skip refused: a run-bound chain runs Gate 1",
-            expected="a chain with no run binding",
             remediation=chain_core._forge_command(state, "gate run gate-1"),
             chain=state,
         )
@@ -195,7 +137,7 @@ def _mechanical_complete(ctx: chain_core.CommandContext, state: Mapping[str, Any
     needed = chain_core._required_steps(ctx, state)
     for step_id in needed:
         if step_id == "gate-1":
-            if not _gate_one_complete(state):
+            if not chain_core._gate_one_complete(state):
                 return False
         elif step_id == chain_core.FRESH_REVIEWER_EVALS_GATE:
             if chain_core._user_skip(state, step_id) is not None:
@@ -220,7 +162,7 @@ def _mechanical_complete(ctx: chain_core.CommandContext, state: Mapping[str, Any
 def _next_incomplete(ctx: chain_core.CommandContext, state: Mapping[str, Any]) -> str | None:
     for step_id in chain_core._required_steps(ctx, state):
         if step_id == "gate-1":
-            if not _gate_one_complete(state):
+            if not chain_core._gate_one_complete(state):
                 return "gate-1"
             continue
         if step_id == chain_core.FRESH_REVIEWER_EVALS_GATE:

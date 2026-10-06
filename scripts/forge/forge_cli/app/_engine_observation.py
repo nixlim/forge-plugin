@@ -180,10 +180,8 @@ def _run_candidate_observation_locked(
                         str(state["chain_id"]), lease=lease
                     )
                     if lease is not None
-                    # The common lock and journal-outer transaction make
-                    # this invocation's just-persisted projection the
-                    # sole mutable value.  Reloading here can observe its
-                    # own not-yet-drained outbox descriptor.
+                    # The common lock protects this invocation's
+                    # just-persisted projection until the child starts.
                     else state
                 )
             except (FrozenError, OSError, Refusal):

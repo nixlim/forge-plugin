@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING, Any, MutableMapping, Callable, Mapping
 if TYPE_CHECKING:
     from forge_cli.engine._engine import Engine
 from forge_cli.engine._approval import _authorization_problem as _authorization_problem
-from forge_cli.engine._core import _archive_metadata as _archive_metadata, _write_artifact as _write_artifact, _run_halt as _run_halt, _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal
+from forge_cli.engine._core import _write_artifact as _write_artifact, _run_halt as _run_halt, _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal
 from forge_cli.engine._fresh_eval import _validated_fresh_reviewer_manifest as _validated_fresh_reviewer_manifest
 from forge_cli.engine._gate_checks import _mechanical_complete as _mechanical_complete, _next_incomplete as _next_incomplete
 from forge_cli.engine._state import PRODUCED_COMMIT_MISMATCH as PRODUCED_COMMIT_MISMATCH
 from forge_cli.policy import Policy, sha256_bytes
 from forge_cli import candidate as candidate_module, chain_core, runtime, fresh_evals as fresh_eval_module
 import copy
-from forge_cli.envelope import FrozenError, OUTPUT_SCHEMA, Outcome, REVISION9_OUTPUT_SCHEMA, ReasonCode, Refusal
+from forge_cli.envelope import FrozenError, OUTPUT_SCHEMA, Outcome, ReasonCode, Refusal
 import os
 import re
 
@@ -158,7 +158,6 @@ def _produced_mismatch_outcome(
     expected = chain_core.canonical_bytes(result.get("expected", {})).decode("utf-8")
     observed = chain_core.canonical_bytes(result.get("observed", {})).decode("utf-8")
     transcript = result.get("transcript")
-    revision9 = state.get("run_binding") is not None or _archive_metadata(state) is not None
     return Outcome(
         ok=False,
         reason_code=ReasonCode.FROZEN_CHAIN,
@@ -170,7 +169,7 @@ def _produced_mismatch_outcome(
         remediation=chain_core._forge_command(state, "status"),
         next_required_step=chain_core._forge_command(state, "status"),
         evidence_refs=(str(transcript),) if isinstance(transcript, str) else (),
-        schema=REVISION9_OUTPUT_SCHEMA if revision9 else OUTPUT_SCHEMA,
+        schema=OUTPUT_SCHEMA,
     )
 
 

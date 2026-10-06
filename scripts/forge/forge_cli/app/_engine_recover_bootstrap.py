@@ -16,7 +16,7 @@ def _recover_merge_bootstrap_scope_binding(
     *,
     fence: chain_core.PublishedLockRecord | None = None,
 ) -> dict[str, Any] | None:
-    """Resume a crashed run-bound sidecar without resolving a tip again.
+    """Resume a crashed bootstrap sidecar without resolving a tip again.
 
         ``None`` is the exact both-names-absent pre-publication result.  When
         common-lock recovery already cleared the dead fence, its complete
@@ -34,25 +34,6 @@ def _recover_merge_bootstrap_scope_binding(
             chain_id=str(state["chain_id"]),
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    intent = state.get("integration", {}).get("intent")
-    scope_request = (
-        intent.get("scope_request") if isinstance(intent, Mapping) else None
-    )
-    expected_request = engine._merge_scope_request(admission)
-    if (
-        (scope_request is not None and not isinstance(scope_request, Mapping))
-        or (
-            dict(scope_request)
-            if isinstance(scope_request, Mapping)
-            else None
-        )
-        != expected_request
-    ):
-        raise FrozenError(
-            "merge bootstrap scope request diverges from admission",
-            chain_id=str(state["chain_id"]),
-            schema=REVISION9_OUTPUT_SCHEMA,
-        )
     selected_fence = fence or engine._discover_merge_scope_fence_from_sidecar(
         self.store,
         state,
@@ -64,7 +45,6 @@ def _recover_merge_bootstrap_scope_binding(
         self.store,
         state,
         fetch_intent_digest=fetch_intent_digest,
-        scope_request=scope_request,
         fence=selected_fence,
     )
 
@@ -130,50 +110,9 @@ def _bootstrap_pending_classification_inputs_locked(
             chain_id=str(state["chain_id"]),
             schema=REVISION9_OUTPUT_SCHEMA,
         )
-    proof = payload.get("scope_proof")
-    scope: engine.MergeScopeResult | None = None
-    if admission.run_task is not None:
-        scope_request = engine._merge_scope_request(admission)
-        if not chain_core._validate_merge_scope_proof(
-            proof,
-            state=state,
-            binding=binding,
-            scope_request=scope_request,
-        ):
-            raise FrozenError(
-                "merge bootstrap classification scope proof is malformed",
-                chain_id=str(state["chain_id"]),
-                schema=REVISION9_OUTPUT_SCHEMA,
-            )
-        assert isinstance(proof, Mapping)
-        scope = engine.MergeScopeResult(
-            argv=tuple(
-                chain_core._merge_scope_argv(
-                    admission.worktree,
-                    str(candidate["remote_tip"]),
-                    str(candidate["candidate_head"]),
-                )
-            ),
-            command_digest=str(proof["command_digest"]),
-            environment_digest=str(proof["environment_digest"]),
-            output_digest=str(proof["output_digest"]),
-            changed_paths=tuple(proof["changed_paths"]),
-            out_of_scope_paths=tuple(proof["out_of_scope_paths"]),
-            result=str(proof["result"]),
-        )
-    elif proof is not None:
-        raise FrozenError(
-            "unbound merge bootstrap carried a scope proof",
-            chain_id=str(state["chain_id"]),
-            schema=REVISION9_OUTPUT_SCHEMA,
-        )
     return engine.MergeBootstrapClassification(
         candidate=copy.deepcopy(dict(candidate)),
-        scope=scope,
         full_patch_output_digest=str(binding["full_patch_output_digest"]),
-        scope_proof_digest=(
-            str(proof["digest"]) if isinstance(proof, Mapping) else None
-        ),
         fetch_result_event_digest=str(selected["digest"]),
         verb="merge recover",
     )
@@ -205,7 +144,6 @@ def _recover_classifying_bootstrap_v12_locked(
         and state.get("integration", {}).get("condition") == "fetch-failed"
         and state.get("candidate") is None
         and state.get("tier") is None
-        and not isinstance(state.get("run_binding"), Mapping)
         and isinstance(intent, Mapping)
         and set(intent)
         == {
@@ -245,7 +183,6 @@ def _recover_classifying_bootstrap_v12_locked(
         )
     operation_nonce = str(intent["operation_nonce"])
     attempt = int(intent["attempt"])
-    run_bound = isinstance(state.get("run_binding"), Mapping)
     admission = self._admission_for_refresh(
         state, verb="merge recover"
     )
@@ -259,7 +196,7 @@ def _recover_classifying_bootstrap_v12_locked(
         integration = copy.deepcopy(state["integration"])
         integration.update(
             {
-                "condition": "none" if run_bound else "fetch-failed",
+                "condition": "fetch-failed",
                 "primary_condition": "none",
                 "intent": {
                     "operation": "fetch-result",
@@ -276,12 +213,12 @@ def _recover_classifying_bootstrap_v12_locked(
             "fetch_result",
             {
                 "delta": {"integration": integration},
+                "scope_proof": None,
                 "scope_fetch_binding": (
                     copy.deepcopy(dict(sidecar))
                     if isinstance(sidecar, Mapping)
                     else None
                 ),
-                "scope_proof": None,
             },
             generation_digest=(
                 str(state["candidate"]["generation_digest"])
@@ -292,34 +229,7 @@ def _recover_classifying_bootstrap_v12_locked(
 
     if binding is None:
         failed = record_failure(None)
-        if not run_bound:
-            return failed, "fetch-failed", None, None
-        terminal = self._release_to_aborted_locked(
-            failed,
-            lease,
-            reason="run/task scope derivation is invalid",
-        )
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge recover refused — run/task scope derivation is invalid",
-            expected="a surviving authenticated composite-bootstrap sidecar",
-            observed="scope-fetch sidecar absent",
-            chain=terminal,
-        )
-    if run_bound:
-        failed = record_failure(binding)
-        terminal = self._release_to_aborted_locked(
-            failed,
-            lease,
-            reason="run/task scope derivation is invalid",
-        )
-        raise chain_core._merge_refusal(
-            V2ReasonCode.RUN_TASK_BINDING_INVALID,
-            "forge: merge recover refused — run/task scope derivation is invalid",
-            expected="ordinary abort after the surviving run-bound sidecar",
-            observed=str(binding.get("digest")),
-            chain=terminal,
-        )
+        return failed, "fetch-failed", None, None
 
     fixed_tip = str(binding["remote_tip"])
     generation_number = (
@@ -385,8 +295,8 @@ def _recover_classifying_bootstrap_v12_locked(
                 for name, value in desired.items()
                 if state.get(name) != value or name == "state"
             },
-            "scope_fetch_binding": copy.deepcopy(dict(binding)),
             "scope_proof": None,
+            "scope_fetch_binding": copy.deepcopy(dict(binding)),
         },
         generation_digest=str(candidate["generation_digest"]),
     )

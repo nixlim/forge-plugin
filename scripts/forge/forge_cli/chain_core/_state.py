@@ -59,8 +59,6 @@ STATE_KEYS = {
     "approval",
     "authorization",
     "commit_result",
-    "run_binding",
-    "journal_outbox",
 }
 
 
@@ -91,8 +89,6 @@ MERGE_STATE_KEYS = frozenset(
         "authorization",
         "integration",
         "cleanup",
-        "run_binding",
-        "journal_outbox",
     }
 )
 
@@ -162,17 +158,6 @@ MERGE_EVENT_NAMES = frozenset(
         "aborted",
         "closed",
         "journal_receipted",
-    }
-)
-
-
-MERGE_CONSEQUENTIAL_EVENTS = frozenset(
-    {
-        "gate_recorded",
-        "review_attached",
-        "approval_recorded",
-        "generation_carried_forward",
-        "push_observed",
     }
 )
 
