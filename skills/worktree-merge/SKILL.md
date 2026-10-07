@@ -72,20 +72,28 @@ git diff --no-renames --no-ext-diff --no-textconv --name-only "origin/${DEFAULT_
 
 The full merge-diff operation is `git diff origin/<default-branch>...HEAD`. Classify every changed
 path from that range against the committed `file-categories` region returned by
-`git show HEAD:forge-project.md` and the built-in `control` category. List those paths with the
+`git show HEAD:forge-project.md` and the built-in `control` and `review-final-floor` sets. List those paths with the
 `--no-renames` name listing above, so a rename lists both its source and its destination and a
 rename out of a guarded path still classifies its source. The built-in category always includes:
 
 - `forge-project.md`
 - `.forge-manifest`
+- `rules/**`, `agents/**`, `system/**`, `hooks/**`, `skills/**`, `.claude-plugin/**`
 - `.codex/**`
 - `.forge/evals/tasks/**`, including baselines
+- `docs/specs/**`, `.refactor/type-baseline.json`, `scripts/forge/route_config.py`
 - `AGENTS.md`
 - `CLAUDE.md`
 - `.claude/settings*.json`
 - `.github/workflows/**`, or equivalent CI configuration paths recorded in `file-categories`
 
 Project configuration may extend `control`; it must never remove or narrow a built-in entry.
+The built-in `review-final-floor` is `scripts/**`, `hooks/**`, `tests/fixtures/**`, and every
+control path including project extensions. Floor membership makes the candidate hard and requires
+binding `review-final` at commit and merge, while only control membership requires candidate-bound
+operator approval. Project `trigger-paths` and hard risk rows extend mandatory review and no-skip
+without adding approval; neither policy table may narrow either built-in set. Recorded-baseline
+integrity applies to control and built-in floor paths.
 `.forge/evals/candidates/**` is the sole eval-path exception: classify it as advisory/docs-class,
 not `control`, even when an older or broader project `control` pattern matches it. Moving or copying
 a candidate into `.forge/evals/tasks/**`, or creating or changing its baseline there, is a
@@ -113,12 +121,13 @@ If the task/journal supplies a declared/decomposed tier, set `declared_tier` to 
 `fast`, `standard`, or `hard` value before this block. Otherwise omit the advisory declaration;
 never pass an empty or invented tier.
 
-The compact JSON evidence must retain the exact path list, matched tier/trigger/category rows,
+The compact JSON evidence must retain the exact path list, matched tier/trigger/category rows and floor rows,
 formatting-category decisions, dependency-floor decision, declared, derived, and promote-only
 effective tiers, and full policy SHA. The effective tier is the higher of declared and derived and
-can never be demoted at gate time. Apply the same non-narrowable floors as commit: built-in plus
-project-extended control, after the sole `.forge/evals/candidates/**` carve-out above, and all
-`trigger-paths` matches are hard; malformed nonempty trigger rows
+can never be demoted at gate time. Apply the same non-narrowable floors as commit: the built-in
+review-final floor and project-extended control, after the sole `.forge/evals/candidates/**`
+carve-out above; all `trigger-paths` and project hard-row matches are hard and require final review;
+malformed nonempty trigger rows
 make the range hard; unmatched paths default standard; the committed dependency-manifest block and
 unknown manifest membership are at least standard; and no policy row can weaken FR-156's
 formatting-only exclusions. Do not reconstruct these predicates or read any working-tree policy.

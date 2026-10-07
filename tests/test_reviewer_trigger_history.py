@@ -11,12 +11,13 @@ RELEASED_DIGESTS = (
     "3d1be7b789a8ee5cc7b5f65ac7f77a5ce3622fe0214a09650c85424c91147d93",
     "9ad0623e2eb7c9d56df44a0c57cb4c7c79e30e4322d9bbc0ea2e50b8817c3ce2",
     "45e2e69e0067f06f99cb0e3d42f185d3fdc8ee45f6961100eb51f3298c9500c3",
+    "e347704d6b910b38c617b712c2eb14f0c4a512903c1a4cf3a72ecc30db629790",
 )
-RELEASED_LENGTHS = (606, 606, 681)
+RELEASED_LENGTHS = (606, 606, 681, 1143)
 PREVIOUS_RELEASED_CANONICAL_DIGEST = RELEASED_DIGESTS[-1]
-CURRENT_DIGEST = "e347704d6b910b38c617b712c2eb14f0c4a512903c1a4cf3a72ecc30db629790"
+CURRENT_DIGEST = "47462998cd02bda23f81475eafc2f8e5e471686235b22ac52fc962327d410d6e"
 CANONICAL_SUCCESSION_PIN = (
-    "e347704d6b910b38c617b712c2eb14f0c4a512903c1a4cf3a72ecc30db629790"
+    "47462998cd02bda23f81475eafc2f8e5e471686235b22ac52fc962327d410d6e"
 )
 UNRELEASED_DIGEST = "895486c4ef0392b704860dbfc3fe52fdf51583544e354d1375544c2e487bdea1"
 UNRELEASED_TABLE = (
@@ -71,6 +72,15 @@ def _parsed_policy(body: str):
 
 
 class ReviewerTriggerHistoryTests(unittest.TestCase):
+    def test_previous_canonical_body_is_pinned_in_spec_history(self) -> None:
+        digest, body = POLICY.SUPERSEDED_REVIEWER_EVAL_TRIGGER_TABLES[-1]
+        specification = (ROOT / "docs/specs/forge-plugin-spec.md").read_text()
+        heading = f"The previous complete canonical table, SHA-256 `{digest}`"
+        self.assertEqual(specification.count(heading), 1)
+        history = specification.split(heading, 1)[1].split("```text\n", 1)[1]
+        self.assertEqual(history.split("```", 1)[0], body)
+        self.assertEqual(sha256(body.encode()), digest)
+
     def test_released_tables_have_exact_pinned_bodies_and_digests(self) -> None:
         released = POLICY.SUPERSEDED_REVIEWER_EVAL_TRIGGER_TABLES
         self.assertEqual(tuple(digest for digest, _body in released), RELEASED_DIGESTS)
@@ -93,6 +103,10 @@ class ReviewerTriggerHistoryTests(unittest.TestCase):
             },
             RELEASED_DIGESTS[1]: {},
             RELEASED_DIGESTS[2]: {},
+            RELEASED_DIGESTS[3]: {
+                "reviewer-routing": ("scripts/forge/route_provenance.py",),
+                "model-provider-version": ("scripts/forge/route_provenance.py",),
+            },
         }
         for digest, body in POLICY.SUPERSEDED_REVIEWER_EVAL_TRIGGER_TABLES:
             with self.subTest(digest=digest):

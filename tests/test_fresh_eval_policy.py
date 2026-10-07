@@ -260,7 +260,6 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             "scripts/forge/route_config_probe.py",
             "scripts/forge/route_evidence.py",
             "scripts/forge/route_floor.py",
-            "scripts/forge/route_provenance.py",
             "scripts/forge/route_vocab.py",
             "skills/commit/SKILL.md",
             "skills/orchestrate/SKILL.md",
@@ -322,7 +321,6 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             ("reviewer-routing", "scripts/forge/route_config_probe.py", "scripts/forge/route_config_probe.py"),
             ("reviewer-routing", "scripts/forge/route_evidence.py", "scripts/forge/route_evidence.py"),
             ("reviewer-routing", "scripts/forge/route_floor.py", "scripts/forge/route_floor.py"),
-            ("reviewer-routing", "scripts/forge/route_provenance.py", "scripts/forge/route_provenance.py"),
             ("reviewer-routing", "scripts/forge/route_vocab.py", "scripts/forge/route_vocab.py"),
             (
                 "reviewer-routing",
@@ -373,7 +371,6 @@ class ReviewerEvalTriggerDerivationTests(unittest.TestCase):
             ("model-provider-version", "scripts/forge/route_config_probe.py", "scripts/forge/route_config_probe.py"),
             ("model-provider-version", "scripts/forge/route_evidence.py", "scripts/forge/route_evidence.py"),
             ("model-provider-version", "scripts/forge/route_floor.py", "scripts/forge/route_floor.py"),
-            ("model-provider-version", "scripts/forge/route_provenance.py", "scripts/forge/route_provenance.py"),
             ("model-provider-version", "scripts/forge/route_vocab.py", "scripts/forge/route_vocab.py"),
             (
                 "model-provider-version",

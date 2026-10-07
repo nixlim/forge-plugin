@@ -2583,6 +2583,29 @@ class MergeLifecycleRefreshTests(ADAPTERS.MergeAdapterFixture):
 
 
 class MergeLifecycleApprovalTests(ADAPTERS.MergeAdapterFixture):
+    def test_scripts_only_merge_gets_final_review_without_approval(self) -> None:
+        self.git_at(self.worktree, "reset", "--hard", self.base)
+        script = self.worktree / "scripts" / "tool.py"
+        script.parent.mkdir(exist_ok=True)
+        script.write_text("VALUE = 2\n", encoding="utf-8")
+        self.git_at(self.worktree, "add", "scripts/tool.py")
+        self.git_at(self.worktree, "commit", "--quiet", "-m", "scripts candidate")
+
+        _admission, generation, store, engine, _outcome, _calls = self.verify_chain()
+        verified = store.load(self.chain_id)
+        self.assertEqual(
+            [row["path"] for row in generation.classification["paths"]],
+            ["scripts/tool.py"],
+        )
+        self.assertEqual(generation.classification["effective_tier"], "hard")
+        self.assertFalse(verified["tier"]["control"])
+        self.assertTrue(generation.classification["paths"][0]["review_final_floor"])
+        _requested, request, _collected = self.complete_review(engine)
+        self.assertEqual(request["reviewer"], "review-final")
+        reviewed = store.load(self.chain_id)
+        self.assertEqual(reviewed["state"], "authorized")
+        self.assertEqual(reviewed["approval"], {})
+
     def test_nonmovement_counter_reset_control_is_load_bearing(self) -> None:
         integration = {"remote_movement_count": 7}
         CLI._reset_merge_nonmovement_counter(integration)
@@ -2599,10 +2622,10 @@ class MergeLifecycleApprovalTests(ADAPTERS.MergeAdapterFixture):
         self.assertEqual(retained["remote_movement_count"], 7)
 
     def awaiting_control_chain(self):
-        control = self.worktree / "scripts" / "control.py"
+        control = self.worktree / "rules" / "control.md"
         control.parent.mkdir(exist_ok=True)
         control.write_text("ENABLED = True\n", encoding="utf-8")
-        self.git_at(self.worktree, "add", "scripts/control.py")
+        self.git_at(self.worktree, "add", "rules/control.md")
         self.git_at(
             self.worktree, "commit", "--quiet", "-m", "control candidate"
         )

@@ -301,11 +301,11 @@ def _fresh_reviewer_evals_required(
     """Derive fresh-eval applicability from the pinned base policy and tree pair.
 
     A malformed/unreadable trigger derivation remains required for a control
-    candidate so the dedicated gate can surface its exit-2 INVALID result.  It
-    must never degrade into an untriggered fast path.
+    or built-in-floor candidate so the dedicated gate can surface INVALID.
     """
 
-    if not bool(state.get("tier", {}).get("control")):
+    tier = state.get("tier", {})
+    if not bool(tier.get("control") or tier.get("strict_floor")):
         return False
     policy = ctx.policy or _policy_for_state(ctx, state)
     try:
@@ -334,8 +334,8 @@ def _required_steps(ctx: CommandContext, state: Mapping[str, Any]) -> list[str]:
         if invariant["enforcement"] == "commit":
             result.append(f"invariant:{invariant['row_number']}")
     result.append("secret-scan")
-    if state["tier"].get("control"):
+    if state["tier"].get("control") or state["tier"].get("strict_floor"):
         result.append("strict-evals")
-        if _fresh_reviewer_evals_required(ctx, state):
-            result.append(FRESH_REVIEWER_EVALS_GATE)
+    if _fresh_reviewer_evals_required(ctx, state):
+        result.append(FRESH_REVIEWER_EVALS_GATE)
     return result

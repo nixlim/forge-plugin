@@ -154,7 +154,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
         canonical = POLICY.REVIEWER_EVAL_TRIGGER_TABLE.encode("utf-8")
         self.assertEqual(
             hashlib.sha256(canonical).hexdigest(),
-            "e347704d6b910b38c617b712c2eb14f0c4a512903c1a4cf3a72ecc30db629790",
+            "47462998cd02bda23f81475eafc2f8e5e471686235b22ac52fc962327d410d6e",
         )
         self.assertEqual(specification_match.group(1), canonical)
         for label, path in (
@@ -169,7 +169,7 @@ class ForgeProjectTemplateTests(unittest.TestCase):
                 self.assertEqual(body, canonical)
                 self.assertEqual(
                     hashlib.sha256(body).hexdigest(),
-                    "e347704d6b910b38c617b712c2eb14f0c4a512903c1a4cf3a72ecc30db629790",
+                    "47462998cd02bda23f81475eafc2f8e5e471686235b22ac52fc962327d410d6e",
                 )
 
     def test_sixteen_regions_are_complete_and_in_contract_order(self) -> None:
@@ -577,7 +577,8 @@ class CommitSkillTests(unittest.TestCase):
         ):
             self.assertIn(evidence, classifier)
         self.assertIn("no gate-time demotion is possible", classifier)
-        self.assertIn("non-narrowable hard floor", classifier)
+        self.assertIn("non-narrowable hard review-final floor", classifier)
+        self.assertIn("and floor row", classifier)
         self.assertIn("malformed nonempty trigger row makes the whole candidate hard", classifier)
         self.assertIn("matching no tier row defaults to standard", classifier)
         self.assertIn("unknown\nmanifest membership impose at least standard", classifier)

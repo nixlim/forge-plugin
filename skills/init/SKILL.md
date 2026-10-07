@@ -287,8 +287,10 @@ At minimum:
 6. Mine repository path categories, dependency manifests, expensive test boundaries, history, and
    control paths for `risk-tiers`. The initial fast allowlist is limited to `docs/**`,
    `.forge/history/**`, and `@formatting-only`; only the `docs` category initially opts into
-   formatting-only. Never remove or narrow the built-in control-path hard floors or the fixed
-   dependency-manifest standard floor.
+   formatting-only. Never remove or narrow the built-in control set, the built-in
+   `review-final-floor` (`scripts/**`, `hooks/**`, `tests/fixtures/**`, and every control path),
+   or the fixed dependency-manifest standard floor. Project control rows extend approval;
+   `trigger-paths` and hard risk rows extend mandatory `review-final` without adding approval.
 7. Inspect `git log` for recurring fix, revert, regression, migration, compatibility, and security
    patterns. Use evidenced patterns to form `project-triggers`, with real paths or history
    citations. Use churn, coupling, and dependency evidence to propose an always-run blast-radius
@@ -382,6 +384,9 @@ point of exactly `commit`, `merge`, or `hook`:
 ```
 
 Fill `risk-tiers` with a tier-to-path-pattern table and a formatting-only category opt-in table.
+Keep the built-in control paths in `file-categories`; `scripts/**` and `tests/fixtures/**`
+are review-final floor paths and become control only when the project explicitly extends that row.
+Neither this table nor `trigger-paths` may narrow the built-in control set or review-final floor.
 The `<!-- FORGE:DEPENDENCY-MANIFEST-PATHS BEGIN -->` / END block is plugin-owned: leave exactly one
 correctly ordered pair and do not edit its contents. Fill `drift-config` with exactly one `cadence`,
 `retention`, and `event-retention` line. Fill `trigger-paths` with zero or more positive,

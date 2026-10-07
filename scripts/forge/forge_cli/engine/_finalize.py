@@ -323,7 +323,11 @@ def _finalize_evidence(context: FinalizeContext) -> bool:
             isinstance(review, dict)
             and review.get("verdict") == "PASS"
             and review.get("candidate") == state["candidate"].get("sha256")
-        ) and not skipped_review:
+        ) and (
+            state["tier"].get("control")
+            or state["tier"].get("review_final_floor")
+            or not skipped_review
+        ):
             raise Refusal(
                 ReasonCode.EVIDENCE_INCOMPLETE,
                 "required reviewer PASS is absent or bound to a stale candidate",

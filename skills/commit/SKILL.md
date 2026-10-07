@@ -61,14 +61,22 @@ This preflight initialization is not a gate step.
 3. Classify every target against the `file-categories` region. A path may touch multiple categories;
    retain every match.
 4. Apply this built-in `control` category independently of the project region:
-   `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**` including baselines,
-   `AGENTS.md`, `CLAUDE.md`,
-   `.claude/settings*.json`, and CI workflow definitions at `.github/workflows/**` or the project's
-   equivalent CI paths recorded in `file-categories`. Project configuration may extend this list;
+   `forge-project.md`, `.forge-manifest`, `rules/**`, `agents/**`, `system/**`, `hooks/**`,
+   `skills/**`, `.claude-plugin/**`, `.codex/**`, `.claude/settings*.json`,
+   `.github/workflows/**`, `AGENTS.md`, `CLAUDE.md`, `docs/specs/**`,
+   `.forge/evals/tasks/**`, `.refactor/type-baseline.json`, and
+   `scripts/forge/route_config.py`. Project configuration may extend this list;
    it must never remove or narrow a built-in entry. `.forge/evals/candidates/**` is the sole
    eval-path exception: treat it as advisory/docs-class and never as `control`, even when an older
    or broader project `control` pattern would match it. Moving or copying a candidate into
    `.forge/evals/tasks/**`, or creating or changing its baseline there, is control-class promotion.
+
+Upgrade note: A malformed or invalid-pattern committed `file-categories` control row makes the
+risk-tier classifier exit 2 with `forge: risk-tier classification failed: invalid path pattern`
+and names the offending row. It also refuses the commit that would repair `forge-project.md`,
+because classification reads the committed policy. The operator must correct that policy through
+a separately authorized and independently reviewed recovery commit, then restart normal chains
+from the repaired committed policy. Do not skip or weaken the mechanical refusal.
 
 Record the task's declared/decomposed tier as `declared_tier`; it is advisory and may influence
 implementer routing only. If the task/journal supplies no tier, leave it absent; the committed
@@ -78,9 +86,13 @@ Do not use it to authorize a gate. Final tier derivation occurs from the exact s
 Step 4, where gate-time classification may promote this declaration but can never demote it.
 
 If any target is `control`, classify the whole commit as control-class. Control-class work is
-`gated-approval`, runs Recorded-baseline integrity in Step 2, runs Candidate-bound fresh reviewer
-evaluation after the Step 4 snapshot when the authenticated trigger matches, uses `review-final`
-in Step 4, and never commits autonomously.
+`gated-approval` and requires explicit operator approval bound to the reviewed candidate. The
+built-in `review-final-floor` is `scripts/**`, `hooks/**`, `tests/fixtures/**`, and every control
+path, including project control extensions. Every floor path is hard and requires `review-final`
+at commit and merge; floor membership alone adds no approval wait. Project `trigger-paths` and
+hard risk rows extend mandatory review and its no-skip rule without adding approval. Control and built-in floor candidates run Recorded-baseline integrity in Step 2.
+Control and built-in-floor candidates run candidate-bound fresh reviewer evaluation after the Step 4
+snapshot when the authenticated trigger matches.
 
 ## Step 2 — Validate
 
@@ -92,7 +104,7 @@ derived repository-relative test path or scope as a separate subsequent argv ele
 group, a 65,536-byte combined stdout/stderr cap, and the fixed 1200-second timeout. A nonzero exit,
 launch failure, output-limit breach, timeout, missing command, or malformed command blocks Step 2.
 Gate 1 runs once per candidate. When the classifier's recorded per-path evidence for the current
-candidate shows every staged path with exactly the `docs` category, no control floor, and no
+candidate shows every staged path with exactly the `docs` category, no review-final floor, and no
 trigger-path match, record a `gate-1` skip with reason `docs-class candidate` under the same gate ID
 instead of launching the cell; the docs-contract stack validation still runs for that candidate, and
 the merge chain's in-lock Gate 1 remains its own run on the reintegrated tree.
@@ -158,7 +170,8 @@ stable non-secret finding/disposition code as `--reason`. A clean sensor result 
 advisory disposition emits no assertion event. Event emission is advisory and occurs only after
 the sensor result is preserved; an emitter failure never changes Step 2's result or exit status.
 
-For every control-class commit, additionally run Recorded-baseline integrity in strict mode:
+For every control or built-in review-final-floor commit, additionally run Recorded-baseline
+integrity in strict mode:
 
 ```bash
 STRICT=1 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"
@@ -167,7 +180,7 @@ STRICT=1 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"
 An empty or malformed evaluation suite, missing result, or mismatched expected/result pair blocks
 the commit. This mechanical layer proves only that the committed suite is nonempty and structurally
 valid and that its recorded pairs agree; it does not launch an agent or claim that a reviewer still
-produces the expected judgment. It is mandatory for every control-class candidate and no user skip
+produces the expected judgment. It is mandatory for these candidates and no user skip
 directive covers it.
 
 Candidate-bound fresh reviewer evaluation is a separate Gate-2 requirement. Its applicability can
@@ -343,7 +356,7 @@ After the immutable artifact passes the secret scan, derive fresh-evaluation app
 shared policy parser and evaluator. Supply only the pinned `policy_sha` policy bytes and the exact
 bytewise-sorted `snapshot.paths`; never use target arguments, `git status`, working-tree paths, or a
 locally duplicated pattern list. A missing or malformed authenticated
-`reviewer-facing-eval-triggers` region blocks every control-class chain. For the fixed plugin-owned
+`reviewer-facing-eval-triggers` region blocks every control or review-final-floor chain. For the fixed plugin-owned
 first-policy bootstrap, where no authenticated base region exists, treat applicability as
 unconditionally true and run the complete supported fresh-review fixture set.
 
@@ -417,13 +430,14 @@ print(value)
 
 Preserve the classifier's compact JSON object as gate evidence and bind it alongside the snapshot's
 authorization ID and review-evidence digest. The classifier object must identify the exact snapshot
-path list, every matched tier/trigger/category row, every formatting-category decision, the
-dependency-floor decision, `declared_tier`, `derived_tier`, promote-only `effective_tier`, and the
+path list, every matched tier/trigger/category row and floor row, every formatting-category decision,
+the dependency-floor decision, `declared_tier`, `derived_tier`, promote-only `effective_tier`, and the
 full `policy_sha`. Treat an unknown tier or any snapshot/path mismatch as failure. `effective_tier`
 is the higher of declared and derived (`hard >
 standard > fast`): no gate-time demotion is possible. The classifier applies the
-non-narrowable hard floor formed by the built-in and project-extended control category, after the
-sole `.forge/evals/candidates/**` carve-out above, plus every `trigger-paths` match;
+non-narrowable hard review-final floor formed by the built-in floor and project-extended control
+category, after the sole `.forge/evals/candidates/**` carve-out above, plus every `trigger-paths`
+or hard risk-row match;
 a malformed nonempty trigger row makes the whole candidate hard. A path
 matching no tier row defaults to standard. The committed dependency-manifest block and unknown
 manifest membership impose at least standard, and the formatting-only exclusion/predicate in
@@ -440,7 +454,7 @@ Route the review as follows:
   follows the canonical committed-only prompt construction in
   [`orchestrate`](../orchestrate/SKILL.md#forge-isolation-and-prompt-construction). The resolved
   `review-cheap` route supplies its provider, model, and effort; the shipped default is Codex.
-- `hard`: select role `review-final`. Every control or trigger-path match is hard, and
+- `hard`: select role `review-final`. Every control, floor, trigger-path, or hard risk-row match is hard, and
   control-class hard candidates retain explicit candidate-bound human approval. The resolved
   `review-final` route supplies its provider, model, and effort; the shipped default is Claude with
   the plugin-owned `agents/review-final.md` body.
@@ -1146,9 +1160,13 @@ Map skip directives exactly:
 | `"skip review"` | Step 4 |
 | `"just commit"` or `"skip everything"` | Steps 2–4 |
 
+Refuse any directive that would skip `review-final` for a control path, a built-in
+review-final-floor path, a project `trigger-paths` match, or a project hard risk row. A skip
+never supplies candidate-bound control approval.
+
 Warn in the reply about every skipped step. Do not infer a skip from urgency or convenience. Steps
-1 and 5 are never skipped by these directives. For a control-class candidate, the table never skips
-Recorded-baseline integrity or an applicable `fresh-reviewer-evals` Gate-2 step; run both required
+1 and 5 are never skipped by these directives. For a control or built-in floor candidate,
+the table never skips Recorded-baseline integrity or an applicable `fresh-reviewer-evals` Gate-2 step; run both required
 layers even when the containing step otherwise has a user-directed skip.
 Record every user-directed skip durably as soon as the directive is accepted, before the next step
 can fail, including a Step

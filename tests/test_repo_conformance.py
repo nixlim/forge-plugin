@@ -19,7 +19,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts/forge") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts/forge"))
-import route_provenance  # noqa: E402
 import route_vocab  # noqa: E402
 
 POLICY_PATH = Path("forge-project.md")
@@ -479,13 +478,6 @@ def check_run(repo: Path, run_dir: Path) -> tuple[list[str], list[str]]:
             and route_vocab.model_family(record.get("model")) == orchestrator_family
         ):
             findings.append(f"{prefix}; same-model binding review")
-    if route_provenance.route_aware(records):
-        findings.extend(
-            f"task {task_id!r}: orchestrator-owned completion"
-            for task_id in route_provenance.complete_tasks(records)
-            if route_provenance.completion_provenance(records, task_id)
-            == route_provenance.ORCHESTRATOR_OWNED
-        )
     return errors, findings
 
 

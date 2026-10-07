@@ -215,7 +215,11 @@ def approve(self, candidate: str) -> Outcome:
         and review.get("candidate") == expected
     )
     review_skipped = chain_core._user_skip(state, "review") is not None
-    if not current_pass and (state["tier"].get("control") or not review_skipped):
+    if not current_pass and (
+        state["tier"].get("control")
+        or state["tier"].get("review_final_floor")
+        or not review_skipped
+    ):
         raise Refusal(
             ReasonCode.APPROVAL_REQUIRED,
             "approval cannot replace a current-candidate PASS review",
@@ -260,7 +264,10 @@ def skip(self, gate_id: str | None, index_drift: bool, reason: str) -> Outcome:
         "control-review",
         "review-final",
     } or (
-        target == "strict-evals" and bool(state.get("tier", {}).get("control"))
+        target == "strict-evals" and bool(
+            state.get("tier", {}).get("control")
+            or state.get("tier", {}).get("strict_floor")
+        )
     ):
         raise Refusal(
             ReasonCode.SKIP_NOT_PERMITTED,
@@ -271,7 +278,7 @@ def skip(self, gate_id: str | None, index_drift: bool, reason: str) -> Outcome:
             chain=state,
         )
     if target == "review":
-        if state["tier"].get("control"):
+        if state["tier"].get("control") or state["tier"].get("review_final_floor"):
             raise Refusal(
                 ReasonCode.SKIP_NOT_PERMITTED,
                 "control-class review cannot be skipped",

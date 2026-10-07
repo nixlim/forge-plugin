@@ -91,7 +91,7 @@ project-equivalent CI paths; project rows may extend but never narrow the built-
 | `bash` | `*.sh` |
 | `docs` | `*.md`, `docs/**`, `.forge/history/**`, `.forge/evals/candidates/**` |
 | `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, and recorded equivalent CI paths |
+| `control` | `forge-project.md`, `.forge-manifest`, `rules/**`, `agents/**`, `system/**`, `hooks/**`, `skills/**`, `.claude-plugin/**`, `.codex/**`, `.claude/settings*.json`, `.github/workflows/**`, `AGENTS.md`, `CLAUDE.md`, `docs/specs/**`, `.forge/evals/tasks/**`, `.refactor/type-baseline.json`, `scripts/forge/route_config.py`, and recorded equivalent CI paths |
 <!-- FORGE:REGION file-categories END -->
 
 ## Stack Validations
@@ -253,9 +253,9 @@ pathspec globs, one per Path pattern row, or retain the explicit no-trigger stat
 |---|---|
 | constitution | rules/** |
 | agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/local/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_vocab.py, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
-| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_vocab.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 

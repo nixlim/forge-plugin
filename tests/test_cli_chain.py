@@ -155,9 +155,9 @@ scripts/**
 |---|---|
 | constitution | rules/** |
 | agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/local/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_vocab.py, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
-| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_vocab.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 <!-- FORGE:REGION guard-denied-commands BEGIN -->
@@ -209,10 +209,12 @@ rank = {"fast": 0, "standard": 1, "hard": 2}
 path_records = []
 derived = "fast"
 for path in paths:
-    control = path.startswith("scripts/")
-    if control:
+    control = path in ("scripts/tool.py", "scripts/forge/route_config.py", "AGENTS.md")
+    floor = path.startswith("scripts/") or path in ("custom/trigger.py", "docs/floor.md") or control
+    strict_floor = path.startswith("scripts/") or control
+    if floor:
         tier = "hard"
-        categories = ["python"]
+        categories = ["docs"] if path.endswith(".md") else ["python"]
     elif path.endswith(".md"):
         tier = "fast"
         categories = ["docs"]
@@ -222,13 +224,14 @@ for path in paths:
     if rank[tier] > rank[derived]:
         derived = tier
     path_records.append(
-        {"path": path, "categories": categories, "control_floor": control, "tier": tier,
-         "trigger_matches": []}
+        {"path": path, "categories": categories, "control_floor": control,
+         "review_final_floor": floor, "strict_floor": strict_floor,
+         "tier": tier, "trigger_matches": []}
     )
 effective = derived
 if args.declared_tier and rank[args.declared_tier] > rank[effective]:
     effective = args.declared_tier
-if any(item["control_floor"] for item in path_records):
+if any(item["review_final_floor"] for item in path_records):
     effective = "hard"
 if args.require_effective and effective != args.require_effective:
     raise SystemExit(9)
@@ -651,6 +654,73 @@ class ForgeCLIFixture(unittest.TestCase):
 
 
 class ForgeCLIChainTests(ForgeCLIFixture):
+    def test_control_only_candidate_requires_candidate_approval(self) -> None:
+        self.change("AGENTS.md", "# Control\n")
+        chain_id = str(self.start("AGENTS.md")["chain_id"])
+        self.cli("verify", "--chain-id", chain_id, expected=0)
+        state = self.state(chain_id)
+        self.assertTrue(state["tier"]["control"])
+        self.assertTrue(state["tier"]["review_final_floor"])
+        self.cli("review", "request", "--chain-id", chain_id, expected=0)
+        request = self.state(chain_id)["review"]["request"]
+        self.assertEqual(request["reviewer"], "review-final")
+        self.wait_for_review_completion(request)
+        _result, collected = self.cli(
+            "review", "collect", "--chain-id", chain_id, expected=0,
+        )
+        self.assertEqual(collected["state"], "awaiting_approval")
+        self.assertEqual(
+            self.state(chain_id)["approval"]["required_for"], "control",
+        )
+
+    def test_scripts_floor_requires_final_review_without_approval(self) -> None:
+        self.change("scripts/ordinary.py", "VALUE = 2\n")
+        chain_id = str(self.start("scripts/ordinary.py")["chain_id"])
+        _result, strict_denied = self.cli(
+            "commit", "skip", "strict-evals", "--reason", "operator request",
+            "--chain-id", chain_id, expected=1,
+        )
+        self.assertEqual(strict_denied["reason_code"], "skip-not-permitted")
+        self.cli("verify", "--chain-id", chain_id, expected=0)
+        state = self.state(chain_id)
+        self.assertEqual(state["tier"]["effective"], "hard")
+        self.assertFalse(state["tier"]["control"])
+        self.assertTrue(state["tier"]["review_final_floor"])
+        self.assertEqual(state["steps"]["strict-evals"][-1]["result"], "passed")
+        _result, denied = self.cli(
+            "commit", "skip", "review", "--reason", "operator request",
+            "--chain-id", chain_id, expected=1,
+        )
+        self.assertEqual(denied["reason_code"], "skip-not-permitted")
+        self.assertEqual(
+            denied["message"], "control-class review cannot be skipped",
+        )
+        self.cli("review", "request", "--chain-id", chain_id, expected=0)
+        request = self.state(chain_id)["review"]["request"]
+        self.assertEqual(request["reviewer"], "review-final")
+        self.wait_for_review_completion(request)
+        _result, collected = self.cli(
+            "review", "collect", "--chain-id", chain_id, expected=0,
+        )
+        self.assertEqual(collected["state"], "authorized")
+        self.assertEqual(self.state(chain_id)["approval"], {})
+
+    def test_project_trigger_floor_bars_review_skip_without_strict(self) -> None:
+        (self.repo / "custom").mkdir()
+        self.change("custom/trigger.py", "VALUE = 2\n")
+        chain_id = str(self.start("custom/trigger.py")["chain_id"])
+        self.cli("verify", "--chain-id", chain_id, expected=0)
+        state = self.state(chain_id)
+        self.assertEqual(state["tier"]["effective"], "hard")
+        self.assertTrue(state["tier"]["review_final_floor"])
+        self.assertFalse(state["tier"]["strict_floor"])
+        self.assertNotIn("strict-evals", state["steps"])
+        _result, denied = self.cli(
+            "commit", "skip", "review", "--reason", "operator request",
+            "--chain-id", chain_id, expected=1,
+        )
+        self.assertEqual(denied["reason_code"], "skip-not-permitted")
+
     def _assert_structural_trigger_defect_is_fresh_invalid(self, kind: str) -> None:
         (self.repo / "forge-project.md").write_text(
             policy_with_structural_trigger_defect(kind), encoding="utf-8"

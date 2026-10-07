@@ -602,6 +602,226 @@ class RiskTierTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_advisory(mutant_evidence)
 
+    def test_scripts_floor_is_hard_without_control_and_is_not_fast_eligible(self) -> None:
+        sha = self.git("rev-parse", "HEAD")
+        self.stage("scripts/tool.py", b"VALUE = 1\n")
+        result, evidence = self.classify(sha=sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert evidence is not None
+        row = evidence["paths"][0]
+        self.assertEqual(evidence["effective_tier"], "hard")
+        self.assertFalse(row["control_floor"])
+        self.assertTrue(row["review_final_floor"])
+        self.assertTrue(row["strict_floor"])
+        self.assertEqual(row["floor_matches"], [
+            {"source": "builtin", "pattern": "scripts/**"},
+        ])
+        self.assertEqual(evidence["floor_matches"], [
+            {"path": "scripts/tool.py", "source": "builtin", "pattern": "scripts/**"},
+        ])
+        denied, _payload = self.classify(sha=sha, require="fast")
+        self.assertNotEqual(denied.returncode, 0)
+
+        parsed = RISK_TIER.parse_policy(policy(), sha)
+        entries = RISK_TIER.diff_entries(self.repo, staged=True, range_spec=None)
+        with mock.patch.object(
+            RISK_TIER, "BUILTIN_REVIEW_FINAL_FLOOR",
+            tuple(pattern for pattern in RISK_TIER.BUILTIN_REVIEW_FINAL_FLOOR
+                  if pattern != "scripts/**"),
+        ):
+            mutant = RISK_TIER.classify(
+                self.repo, parsed, entries, staged=True, range_spec=None,
+                declared_tier=None,
+            )
+        self.assertEqual(mutant["derived_tier"], "standard")
+        self.assertFalse(mutant["paths"][0]["review_final_floor"])
+
+    def test_route_config_is_builtin_control(self) -> None:
+        self.stage("scripts/forge/route_config.py", b"ROUTES = {}\n")
+        result, evidence = self.classify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert evidence is not None
+        row = evidence["paths"][0]
+        self.assertTrue(row["control_floor"])
+        self.assertIn("control", row["categories"])
+        self.assertIn(
+            {"source": "builtin", "pattern": "scripts/forge/route_config.py"},
+            row["floor_matches"],
+        )
+
+    def test_every_builtin_control_path_survives_project_omission(self) -> None:
+        representatives = {
+            "forge-project.md": "forge-project.md",
+            ".forge-manifest": ".forge-manifest",
+            "rules/**": "rules/review.md",
+            "agents/**": "agents/reviewer.md",
+            "system/**": "system/template.txt",
+            "hooks/**": "hooks/guard.sh",
+            "skills/**": "skills/commit/SKILL.md",
+            ".claude-plugin/**": ".claude-plugin/plugin.json",
+            ".codex/**": ".codex/config.toml",
+            ".claude/settings*.json": ".claude/settings.local.json",
+            ".github/workflows/**": ".github/workflows/check.yml",
+            "AGENTS.md": "AGENTS.md",
+            "CLAUDE.md": "CLAUDE.md",
+            "docs/specs/**": "docs/specs/rules.md",
+            ".forge/evals/tasks/**": ".forge/evals/tasks/check.json",
+            ".refactor/type-baseline.json": ".refactor/type-baseline.json",
+            "scripts/forge/route_config.py": "scripts/forge/route_config.py",
+        }
+        self.assertEqual(set(representatives), set(RISK_TIER.BUILTIN_CONTROL))
+        sha = self.commit_policy(category_rows=(("control", "custom/only/**"),))
+        for path in representatives.values():
+            self.stage(path, b"changed\n")
+
+        result, evidence = self.classify(sha=sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert evidence is not None
+        rows = {row["path"]: row for row in evidence["paths"]}
+        for pattern, path in representatives.items():
+            with self.subTest(pattern=pattern):
+                self.assertTrue(rows[path]["control_floor"])
+                self.assertTrue(rows[path]["review_final_floor"])
+                self.assertIn("control", rows[path]["categories"])
+                self.assertIn(
+                    {"source": "builtin", "pattern": pattern},
+                    rows[path]["floor_matches"],
+                )
+
+    def test_project_control_extension_has_floor_evidence(self) -> None:
+        sha = self.commit_policy(category_rows=(
+            ("docs", "*.md"),
+            ("control", "forge-project.md, custom/policy.txt"),
+        ))
+        self.stage("custom/policy.txt", b"policy\n")
+        result, evidence = self.classify(sha=sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert evidence is not None
+        row = evidence["paths"][0]
+        self.assertTrue(row["control_floor"])
+        self.assertEqual(row["floor_matches"], [
+            {"source": "project-control", "pattern": "custom/policy.txt"},
+        ])
+        self.assertEqual(row["path_tier"], "hard")
+
+    def test_consumer_scripts_control_extension_remains_authoritative(self) -> None:
+        sha = self.commit_policy(category_rows=(
+            ("python", "*.py"),
+            ("control", "forge-project.md, scripts/**"),
+        ))
+        self.stage("scripts/ordinary.py", b"ordinary\n")
+        result, evidence = self.classify(sha=sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert evidence is not None
+        row = evidence["paths"][0]
+        self.assertTrue(row["control_floor"])
+        self.assertIn(
+            {"source": "project-control", "pattern": "scripts/**"},
+            row["floor_matches"],
+        )
+
+    def test_fixture_floor_is_hard_without_control_in_dogfood_policy(self) -> None:
+        sha = self.commit_policy((ROOT / "forge-project.md").read_text())
+        self.stage("tests/fixtures/new.rules", b"allow\n")
+        result, evidence = self.classify(sha=sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert evidence is not None
+        row = evidence["paths"][0]
+        self.assertEqual(row["categories"], ["config"])
+        self.assertFalse(row["control_floor"])
+        self.assertTrue(row["strict_floor"])
+        self.assertEqual(row["path_tier"], "hard")
+
+    def test_project_trigger_and_hard_extensions_do_not_require_strict(self) -> None:
+        sha = self.commit_policy(
+            triggers="| path pattern |\n|---|\n| review/trigger.md |",
+            tiers="| tier | path patterns |\n|---|---|\n| fast | docs/** |\n"
+                  "| hard | review/hard.md |",
+        )
+        self.stage("review/trigger.md", b"trigger\n")
+        self.stage("review/hard.md", b"hard\n")
+        result, evidence = self.classify(sha=sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert evidence is not None
+        self.assertEqual(evidence["derived_tier"], "hard")
+        rows = {row["path"]: row for row in evidence["paths"]}
+        self.assertEqual(rows["review/trigger.md"]["floor_matches"], [
+            {"source": "project-trigger", "pattern": "review/trigger.md"},
+        ])
+        self.assertEqual(rows["review/hard.md"]["floor_matches"], [
+            {"source": "project-hard", "pattern": "review/hard.md"},
+        ])
+        self.assertFalse(rows["review/trigger.md"]["strict_floor"])
+        self.assertFalse(rows["review/hard.md"]["strict_floor"])
+
+    def test_project_fast_row_cannot_narrow_builtin_floor(self) -> None:
+        sha = self.commit_policy(fast_patterns="scripts/**")
+        self.stage("scripts/ordinary.py", b"ordinary\n")
+        denied, evidence = self.classify(sha=sha, require="fast")
+        self.assertNotEqual(denied.returncode, 0)
+        assert evidence is not None
+        self.assertEqual(evidence["effective_tier"], "hard")
+        self.assertEqual(evidence["paths"][0]["matched_rows"], [
+            {"tier": "fast", "pattern": "scripts/**"},
+        ])
+
+    def test_project_control_negation_is_refused(self) -> None:
+        bad_row = "| control | forge-project.md, :!scripts/** |"
+        original = policy(category_rows=(("control", "forge-project.md, :!scripts/**"),))
+        self.assert_invalid_control_policy(original, bad_row)
+
+    def assert_invalid_control_policy(self, corrupted: str, bad_row: str) -> None:
+        sha = self.commit_policy(corrupted)
+        self.stage("docs/guide.md", b"guide\n")
+        result, evidence = self.classify(sha=sha)
+        self.assertEqual(result.returncode, 2)
+        self.assertIsNone(evidence)
+        self.assertRegex(
+            result.stderr,
+            r"^forge: risk-tier classification failed: invalid path pattern "
+            r"in file-categories row [0-9]+\n$",
+        )
+        self.assertNotIn(bad_row.strip(), result.stderr)
+        self.stage("forge-project.md", policy().encode())
+        repaired, evidence = self.classify(sha=sha)
+        self.assertEqual(repaired.returncode, 2)
+        self.assertIsNone(evidence)
+        self.assertEqual(repaired.stderr, result.stderr)
+
+    def test_earlier_malformed_row_cannot_hide_control_extension(self) -> None:
+        source = policy()
+        row = "| docs | *.md, docs/**, .forge/evals/candidates/** |"
+        control = "| control | forge-project.md, .forge-manifest, .forge/evals/tasks/**, .github/workflows/** |"
+        self.assert_invalid_control_policy(source.replace(row, row[:-1]), control)
+
+    def test_comment_before_control_extension_is_refused(self) -> None:
+        source = policy()
+        control = "| control | forge-project.md, .forge-manifest, .forge/evals/tasks/**, .github/workflows/** |"
+        self.assert_invalid_control_policy(source.replace(control, "<!-- boundary -->\n" + control), control)
+
+    def test_blank_line_before_control_extension_is_refused(self) -> None:
+        source = policy()
+        control = "| control | forge-project.md, .forge-manifest, .forge/evals/tasks/**, .github/workflows/** |"
+        self.assert_invalid_control_policy(source.replace(control, "\n" + control), control)
+
+    def test_duplicate_category_header_is_refused(self) -> None:
+        source = policy()
+        header = "| category | file patterns |"
+        control = "| control | forge-project.md, .forge-manifest, .forge/evals/tasks/**, .github/workflows/** |"
+        self.assert_invalid_control_policy(source.replace(control, header + "\n" + control), header)
+
+    def test_malformed_control_rows_are_refused_before_silent_drop(self) -> None:
+        original = "| control | forge-project.md, .forge-manifest, .forge/evals/tasks/**, .github/workflows/** |"
+        for malformed in (
+            "| control |", "| control | |", "| control | rules/** | extra |",
+            "| control | rules/**", "control | rules/** |",
+        ):
+            with self.subTest(malformed=malformed):
+                corrupted = policy().replace(original, malformed)
+                self.assertNotEqual(corrupted, policy())
+                with self.assertRaisesRegex(RISK_TIER.PolicyError, "invalid path pattern"):
+                    RISK_TIER.parse_policy(corrupted, "a" * 40)
+
     def test_unknown_stack_promotes_the_entire_docs_only_diff(self) -> None:
         policy_sha = self.commit_policy(
             category_rows=(

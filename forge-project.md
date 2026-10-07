@@ -90,8 +90,8 @@ test gate. Installed repository surfaces are rendered from `system/`, `skills/`,
 | `python` | `*.py` |
 | `bash` | `*.sh` |
 | `docs` | `*.md`, `*.txt`, `UPSTREAM`, `docs/**`, `.forge/history/**`, `LICENSE`, `.forge/evals/candidates/**` |
-| `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `*.js`, `.claude-plugin/**`, `hooks/**`, `system/**`, `.beads/**` |
-| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/**`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**`, `tests/fixtures/**`, `.refactor/type-baseline.json` |
+| `config` | `.gitignore`, `*.yml`, `*.yaml`, `*.json`, `*.jsonl`, `*.toml`, `*.js`, `.claude-plugin/**`, `hooks/**`, `system/**`, `.beads/**`, `tests/fixtures/**` |
+| `control` | `forge-project.md`, `.forge-manifest`, `.codex/**`, `.forge/evals/tasks/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/settings*.json`, `.github/workflows/**`, `skills/**`, `hooks/**`, `scripts/forge/route_config.py`, `rules/**`, `agents/**`, `.claude-plugin/**`, `system/**`, `docs/specs/**`, `.refactor/type-baseline.json` |
 <!-- FORGE:REGION file-categories END -->
 
 ## Stack Validations
@@ -538,9 +538,9 @@ event-retention: 400d
 |---|---|
 | constitution | rules/** |
 | agent-prompt-template | agents/**, system/codex/prompts/**, system/claude/prompts/**, .claude/agents/** |
-| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/local/** |
+| reviewer-routing | system/codex/agents/**, system/codex/config.toml, .codex/agents/**, .codex/config.toml, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/forge_cli/app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_vocab.py, system/local/** |
 | execpolicy | system/codex/rules/**, .codex/rules/** |
-| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |
+| model-provider-version | docs/specs/forge-plugin-spec.md, agents/**, system/codex/agents/**, .codex/agents/**, skills/orchestrate/SKILL.md, scripts/forge/forge_cli/engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, scripts/forge/route_floor.py, scripts/forge/route_vocab.py |
 | commit-review-prompt | skills/commit/SKILL.md |
 <!-- FORGE:REGION reviewer-facing-eval-triggers END -->
 

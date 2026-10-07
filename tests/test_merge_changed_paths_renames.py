@@ -52,13 +52,19 @@ class MergeChangedPathsRenameTests(ADAPTERS.MergeAdapterFixture):
         self.assertIn("docs/tool.md", detected_paths)
         self.assertNotIn("scripts/tool.py", detected_paths)
 
-    def test_generation_includes_both_rename_sides_and_control_floor(self) -> None:
+    def test_generation_includes_both_rename_sides_and_review_floor(self) -> None:
         self.assertIs(package_module("runtime").MERGE_LIFECYCLE_ACTIVE, False)
         admission, generation = self.admission_and_generation()
 
         self.assertIn("docs/tool.md", generation.changed_paths)
         self.assertIn("scripts/tool.py", generation.changed_paths)
-        self.assertIs(generation.tier["control"], True)
+        self.assertIs(generation.tier["control"], False)
+        self.assertEqual(generation.classification["effective_tier"], "hard")
+        source = next(
+            row for row in generation.classification["paths"]
+            if row["path"] == "scripts/tool.py"
+        )
+        self.assertIs(source["review_final_floor"], True)
 
         (self.helpers / "risk_tier.py").write_text(
             self.stock_classifier, encoding="utf-8"
@@ -88,6 +94,7 @@ class MergeChangedPathsRenameTests(ADAPTERS.MergeAdapterFixture):
         self.assertIn("docs/tool.md", disabled.changed_paths)
         self.assertNotIn("scripts/tool.py", disabled.changed_paths)
         self.assertIs(disabled.tier["control"], False)
+        self.assertEqual(disabled.classification["effective_tier"], "standard")
 
     def test_current_candidate_observation_includes_both_rename_sides(self) -> None:
         admission, generation = self.admission_and_generation()

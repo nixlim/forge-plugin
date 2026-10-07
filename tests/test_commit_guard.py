@@ -2043,6 +2043,18 @@ class CommitGuardTests(unittest.TestCase):
         self.assertEqual(emitted[0]["reason"], "fast-path-eligibility-drift")
         self.assertFalse(any(item["event"] == "guard_deny" for item in emitted))
 
+    def test_fast_marker_cannot_narrow_builtin_scripts_floor(self) -> None:
+        policy_sha = self.commit_policy(fast_patterns="scripts/**")
+        self.stage_change(name="scripts/ordinary.py")
+        self.write_marker(
+            third_line="tier: fast",
+            fourth_line=f"policy: {policy_sha}",
+        )
+        self.assert_denied(
+            self.invoke("git commit"),
+            f"{MARKER_REASON} (fast-path eligibility drift)",
+        )
+
     def test_fast_classification_never_reads_working_tree_policy(self) -> None:
         policy_sha = self.commit_policy()
         self.stage_change(name="src/service.py")

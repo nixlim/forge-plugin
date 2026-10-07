@@ -23,14 +23,12 @@ REVIEWER_PATTERNS = (
     ("reviewer-routing", "scripts/forge/route_config_probe.py"),
     ("reviewer-routing", "scripts/forge/route_evidence.py"),
     ("reviewer-routing", "scripts/forge/route_floor.py"),
-    ("reviewer-routing", "scripts/forge/route_provenance.py"),
     ("reviewer-routing", "scripts/forge/route_vocab.py"),
     ("model-provider-version", "scripts/forge/route_config.py"),
     ("model-provider-version", "scripts/forge/route_config_git.py"),
     ("model-provider-version", "scripts/forge/route_config_probe.py"),
     ("model-provider-version", "scripts/forge/route_evidence.py"),
     ("model-provider-version", "scripts/forge/route_floor.py"),
-    ("model-provider-version", "scripts/forge/route_provenance.py"),
     ("model-provider-version", "scripts/forge/route_vocab.py"),
 )
 
@@ -454,95 +452,21 @@ class SpecificationRevision15Tests(unittest.TestCase):
             )
 
     def test_reviewer_pattern_assertions_detect_coherent_removal(self) -> None:
-        removals = {
-            ("agent-prompt-template", "system/claude/prompts/**"): (
-                "system/claude/prompts/**, ",
-                "",
-            ),
-            ("reviewer-routing", "scripts/forge/forge_cli/app/**"): (
-                "scripts/forge/forge_cli/app/**, ",
-                "",
-            ),
-            ("reviewer-routing", "system/local/**"): (", system/local/** |", " |"),
-            ("reviewer-routing", "scripts/forge/route_config.py"): (
-                "app/**, scripts/forge/route_config.py, ",
-                "app/**, ",
-            ),
-            ("reviewer-routing", "scripts/forge/route_config_git.py"): (
-                "app/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, ",
-                "app/**, scripts/forge/route_config.py, ",
-            ),
-            ("reviewer-routing", "scripts/forge/route_config_probe.py"): (
-                "scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, "
-                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
-                "scripts/forge/route_vocab.py, system/",
-                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
-            ),
-            ("reviewer-routing", "scripts/forge/route_evidence.py"): (
-                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
-                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
-                "scripts/forge/route_vocab.py, system/",
-            ),
-            ("reviewer-routing", "scripts/forge/route_floor.py"): (
-                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
-                "scripts/forge/route_evidence.py, scripts/forge/route_provenance.py, "
-                "scripts/forge/route_vocab.py, system/",
-            ),
-            ("reviewer-routing", "scripts/forge/route_provenance.py"): (
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py, system/",
-                "scripts/forge/route_vocab.py, system/",
-            ),
-            ("reviewer-routing", "scripts/forge/route_vocab.py"): (
-                "scripts/forge/route_vocab.py, system/local/** |",
-                "system/local/** |",
-            ),
-            ("model-provider-version", "scripts/forge/route_config.py"): (
-                "engine/**, scripts/forge/route_config.py, ",
-                "engine/**, ",
-            ),
-            ("model-provider-version", "scripts/forge/route_config_git.py"): (
-                "engine/**, scripts/forge/route_config.py, scripts/forge/route_config_git.py, ",
-                "engine/**, scripts/forge/route_config.py, ",
-            ),
-            ("model-provider-version", "scripts/forge/route_config_probe.py"): (
-                "scripts/forge/route_config_probe.py, scripts/forge/route_evidence.py, "
-                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
-                "scripts/forge/route_vocab.py |",
-                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
-            ),
-            ("model-provider-version", "scripts/forge/route_evidence.py"): (
-                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
-                "scripts/forge/route_floor.py, scripts/forge/route_provenance.py, "
-                "scripts/forge/route_vocab.py |",
-            ),
-            ("model-provider-version", "scripts/forge/route_floor.py"): (
-                "scripts/forge/route_evidence.py, scripts/forge/route_floor.py, "
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
-                "scripts/forge/route_evidence.py, scripts/forge/route_provenance.py, "
-                "scripts/forge/route_vocab.py |",
-            ),
-            ("model-provider-version", "scripts/forge/route_provenance.py"): (
-                "scripts/forge/route_provenance.py, scripts/forge/route_vocab.py |",
-                "scripts/forge/route_vocab.py |",
-            ),
-            ("model-provider-version", "scripts/forge/route_vocab.py"): (
-                ", scripts/forge/route_vocab.py |",
-                " |",
-            ),
-        }
-        self.assertEqual(sorted(removals), sorted(REVIEWER_PATTERNS))
-        for (control, pattern), (old, new) in removals.items():
+        canonical = canonical_reviewer_table(SPEC)
+        lines = canonical.splitlines(keepends=True)
+        for control, pattern in REVIEWER_PATTERNS:
             with self.subTest(control=control, pattern=pattern):
-                for label, document in (("spec", SPEC), *POLICIES.items()):
-                    self.assertEqual(document.count(old), 1, label)
-                mutant_spec = SPEC.replace(old, new, 1)
+                old_line = next(
+                    line for line in lines if line.startswith(f"| {control} |")
+                )
+                patterns = old_line.strip().split("|")[2].strip().split(", ")
+                self.assertIn(pattern, patterns)
+                remaining = ", ".join(item for item in patterns if item != pattern)
+                new_line = f"| {control} | {remaining} |\n"
+                mutant_table = canonical.replace(old_line, new_line, 1)
+                mutant_spec = SPEC.replace(canonical, mutant_table, 1)
                 mutant_policies = {
-                    label: document.replace(old, new, 1)
+                    label: document.replace(canonical, mutant_table, 1)
                     for label, document in POLICIES.items()
                 }
                 message = re.escape(f"canonical {control} lacks {pattern}")

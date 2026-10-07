@@ -105,6 +105,7 @@ def docs_evidence(path: str = "docs/guide.md", **overrides: object) -> dict[str,
         "dependency_decision": [],
         "unknown_manifest_floor": False,
         "control_floor": False,
+        "review_final_floor": False,
         "trigger_matches": [],
         "path_tier": "fast",
     }
@@ -196,6 +197,19 @@ class GateOneCompleteTests(unittest.TestCase):
 
 
 class DocsClassCandidateTests(unittest.TestCase):
+    def test_floor_strict_eval_skip_cannot_satisfy_gate(self) -> None:
+        state = state_with(
+            ["docs/floor.md"],
+            [docs_evidence("docs/floor.md", review_final_floor=True)],
+        )
+        state["tier"]["strict_floor"] = True
+        state["steps"]["user_skips"] = {
+            "strict-evals": {"directed_by": "operator", "reason": "skip"},
+        }
+        self.assertFalse(CHAIN_CORE._gate_satisfied(state, "strict-evals"))
+        state["tier"]["strict_floor"] = False
+        self.assertTrue(CHAIN_CORE._gate_satisfied(state, "strict-evals"))
+
     def test_all_docs_paths_with_current_classification_qualify(self) -> None:
         state = state_with(
             ["CHANGELOG.md", "docs/guide.md"],
@@ -221,6 +235,7 @@ class DocsClassCandidateTests(unittest.TestCase):
 
         mutant("control tier")["tier"]["control"] = True
         evidence("control floor on one path")[1]["control_floor"] = True
+        evidence("review-final floor on one path")[1]["review_final_floor"] = True
         evidence("second category")[0]["categories"] = ["docs", "control"]
         evidence("no category")[0]["categories"] = []
         evidence("trigger match")[1]["trigger_matches"] = ["docs/specs/**"]
@@ -328,13 +343,17 @@ class CommittedPolicyPinsTests(unittest.TestCase):
         self.assertEqual(mutant_result.returncode, 0, mutant_result.stderr)
         self.assertIsNotNone(mutant)
         assert mutant is not None
-        self.assertEqual(mutant["derived_tier"], "standard")
+        self.assertEqual(mutant["derived_tier"], "hard")
         mutant_paths = mutant["paths"]
         self.assertIsInstance(mutant_paths, list)
         self.assertEqual(len(mutant_paths), 1)
         mutant_path = mutant_paths[0]
-        self.assertIs(mutant_path["control_floor"], False)
-        self.assertEqual(mutant_path["categories"], ["config"])
+        self.assertIs(mutant_path["control_floor"], True)
+        self.assertEqual(mutant_path["categories"], ["config", "control"])
+        self.assertIn(
+            {"source": "builtin", "pattern": TYPE_BASELINE},
+            mutant_path["floor_matches"],
+        )
 
     def test_changelog_is_in_the_fast_tier_row(self) -> None:
         risk_tier = load_script("risk_tier_gate_once", ROOT / "scripts/forge/risk_tier.py")

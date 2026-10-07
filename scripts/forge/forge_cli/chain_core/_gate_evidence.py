@@ -29,7 +29,7 @@ def _docs_class_candidate(state: Mapping[str, Any]) -> bool:
 
     The proof is the classifier's own per-path evidence bound to the pinned
     policy: every recorded path carries exactly the ``docs`` category, no
-    control floor, and no trigger match, and the classification record is
+    control or review-final floor, and no trigger match, and the classification record is
     current for the staged candidate.  Anything less runs Gate 1.
     """
 
@@ -52,6 +52,7 @@ def _docs_class_candidate(state: Mapping[str, Any]) -> bool:
     return all(
         item.get("categories") == ["docs"]
         and item.get("control_floor") is False
+        and item.get("review_final_floor") is False
         and item.get("trigger_matches") == []
         for item in evidence
     )
@@ -115,10 +116,12 @@ def _stack_batch_satisfied(state: Mapping[str, Any], gate_id: str) -> bool:
 
 
 def _gate_satisfied(state: Mapping[str, Any], gate_id: str) -> bool:
-    # Recorded-baseline integrity is mandatory for control candidates.  Keep
+    # Recorded-baseline integrity is mandatory for control and built-in-floor candidates. Keep
     # the legacy generic skip behavior only where this gate is not a binding
     # control-class requirement.
-    if gate_id == "strict-evals" and bool(state.get("tier", {}).get("control")):
+    if gate_id == "strict-evals" and bool(
+        state.get("tier", {}).get("control") or state.get("tier", {}).get("strict_floor")
+    ):
         return _latest_current_pass(state, gate_id)
     if _user_skip(state, gate_id) is not None:
         return True

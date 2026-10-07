@@ -8,11 +8,23 @@ collected twice.
 
 from __future__ import annotations
 
+import json
+from unittest import mock
+
 import tests.test_cli_chain as chain_tests
 import tests.test_cli_chain_finalize as finalize_tests
 
 
 class GateOneChainTests(chain_tests.ForgeCLIFixture):
+    def test_docs_category_with_project_floor_runs_gate_one(self) -> None:
+        self.change("docs/floor.md", "# Floor\n")
+        chain_id = str(self.start("docs/floor.md")["chain_id"])
+        self.cli("verify", "--chain-id", chain_id, expected=0)
+        state = self.state(chain_id)
+        self.assertTrue(state["tier"]["review_final_floor"])
+        self.assertEqual(state["tier"]["categories"], ["docs"])
+        self.assertEqual(state["steps"]["gate-1"][-1]["result"], "passed")
+
     def test_gate_one_runs_once_per_candidate_and_reruns_once_after_a_failure(self) -> None:
         self.change("src/app.py", "VALUE = 2\n")
         chain_id = str(self.start("src/app.py")["chain_id"])
@@ -119,6 +131,7 @@ class GateOneEngineSwitchTests(finalize_tests.FinalizeFixture):
                 "dependency_decision": [],
                 "unknown_manifest_floor": False,
                 "control_floor": False,
+                "review_final_floor": False,
                 "trigger_matches": [],
                 "path_tier": "fast",
             }
@@ -159,3 +172,83 @@ class GateOneEngineSwitchTests(finalize_tests.FinalizeFixture):
         ran = self.store.load(finalize_tests.CHAIN_ID)
         self.assertEqual([r["result"] for r in ran["steps"]["gate-1"]], ["passed"])
         self.assertEqual(ran["steps"]["gate-1"][0]["command_argv"][:2], ["bash", "-c"])
+
+
+class ReviewFloorEngineTests(finalize_tests.FinalizeFixture):
+    def test_fresh_reviewer_evals_require_control_or_builtin_floor(self) -> None:
+        self.state["paths"] = [".claude/agents/reviewer.md"]
+        trigger = {"matches": [{"path": ".claude/agents/reviewer.md"}]}
+        with mock.patch.object(
+            finalize_tests.package_module("fresh_evals"), "derive_trigger",
+            return_value=trigger,
+        ):
+            self.assertNotIn(
+                "fresh-reviewer-evals",
+                finalize_tests.CLI._required_steps(self.context, self.state),
+            )
+            for field in ("control", "strict_floor"):
+                with self.subTest(field=field):
+                    self.state["tier"][field] = True
+                    required = finalize_tests.CLI._required_steps(self.context, self.state)
+                    self.assertEqual(required[-2:], ["strict-evals", "fresh-reviewer-evals"])
+                    self.state["tier"][field] = False
+
+    def test_floor_approval_requires_current_review_even_after_skip(self) -> None:
+        self.state["state"] = "awaiting_approval"
+        self.state["authorization"] = {}
+        self.state["tier"]["review_final_floor"] = True
+        self.state["review"]["verdict"] = None
+        self.state["steps"]["user_skips"] = {"review": {"reason": "fixture skip"}}
+        self.persist()
+        with self.patched_helpers(), self.assertRaises(finalize_tests.CLI.Refusal) as caught:
+            self.engine.approve(self.candidate)
+        self.assertIs(
+            caught.exception.reason_code, finalize_tests.CLI.ReasonCode.APPROVAL_REQUIRED,
+        )
+        self.assertEqual(
+            caught.exception.message,
+            "approval cannot replace a current-candidate PASS review",
+        )
+
+    def test_floor_finalize_refuses_skipped_review(self) -> None:
+        self.state["tier"].update(effective="hard", review_final_floor=True)
+        self.state["review"]["verdict"] = None
+        self.state["steps"]["user_skips"] = {"review": {"reason": "fixture skip"}}
+        context = finalize_tests.CLI.FinalizeContext(
+            engine=self.engine, state=self.state, policy=self.policy,
+            message="fixture commit",
+        )
+        with self.assertRaises(finalize_tests.CLI.Refusal) as caught:
+            finalize_tests.CLI._finalize_evidence(context)
+        self.assertIs(
+            caught.exception.reason_code, finalize_tests.CLI.ReasonCode.EVIDENCE_INCOMPLETE,
+        )
+        self.assertEqual(
+            caught.exception.message,
+            "required reviewer PASS is absent or bound to a stale candidate",
+        )
+        self.state["tier"]["review_final_floor"] = False
+        self.assertTrue(finalize_tests.CLI._finalize_evidence(context))
+
+    def test_engine_promotes_floor_evidence_even_when_classifier_reports_standard(self) -> None:
+        self.state["state"] = "classifying"
+        evidence = {
+            "policy_sha": self.policy.sha,
+            "derived_tier": "standard",
+            "effective_tier": "standard",
+            "paths": [{
+                "path": "tracked.txt", "categories": ["docs"],
+                "control_floor": False, "review_final_floor": True,
+                "strict_floor": False,
+            }],
+        }
+        output = json.dumps(evidence).encode("utf-8")
+        with mock.patch.object(
+            finalize_tests.RUNTIME, "run_bounded",
+            return_value=finalize_tests.process_result([], output=output),
+        ):
+            finalize_tests.CLI._run_classification(
+                self.context, self.state, persist_event=False,
+            )
+        self.assertEqual(self.state["tier"]["effective"], "hard")
+        self.assertTrue(self.state["tier"]["review_final_floor"])

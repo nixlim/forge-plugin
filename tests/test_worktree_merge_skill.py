@@ -361,9 +361,14 @@ class WorktreeMergeSkillTests(unittest.TestCase):
             self.assertIn(evidence, tiering)
         self.assertIn("can never be demoted at gate time", tiering)
         self.assertIn("non-narrowable floors", tiering)
+        self.assertIn("matched tier/trigger/category rows and floor rows", tiering)
+        self.assertIn("the built-in\nreview-final floor and project-extended control", tiering)
         self.assertIn("malformed nonempty trigger rows\nmake the range hard", tiering)
         self.assertIn("unmatched paths default standard", tiering)
         self.assertIn("unknown manifest membership are at least standard", tiering)
+
+    def test_merge_skill_has_no_unimplemented_strict_eval_run(self) -> None:
+        self.assertNotIn('STRICT=1 bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-evals.sh"', SKILL)
 
     def test_control_category_and_approval_are_fail_closed(self) -> None:
         for path in (

@@ -184,7 +184,7 @@ def assert_commit_fresh_eval_source_contract(skill: str) -> None:
         ),
         (
             "A missing or malformed authenticated `reviewer-facing-eval-triggers` "
-            "region blocks every control-class chain"
+            "region blocks every control or review-final-floor chain"
         ),
         (
             "report the matched control row names sourced from that result, not a "
@@ -1455,7 +1455,7 @@ class InstallerPayloadContractTests(unittest.TestCase):
             "malformed source fails closed": (
                 (
                     "A missing or malformed authenticated\n"
-                    "`reviewer-facing-eval-triggers` region blocks every control-class chain"
+                    "`reviewer-facing-eval-triggers` region blocks every control or review-final-floor chain"
                 ),
                 "A missing trigger region means that no fresh evaluation applies",
             ),

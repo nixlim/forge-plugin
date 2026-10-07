@@ -26,13 +26,25 @@ DEPENDENCY_END = "<!-- FORGE:DEPENDENCY-MANIFEST-PATHS END -->"
 BUILTIN_CONTROL = (
     "forge-project.md",
     ".forge-manifest",
+    "rules/**",
+    "agents/**",
+    "system/**",
+    "hooks/**",
+    "skills/**",
+    ".claude-plugin/**",
     ".codex/**",
-    ".forge/evals/tasks/**",
-    "AGENTS.md",
-    "CLAUDE.md",
     ".claude/settings*.json",
     ".github/workflows/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "docs/specs/**",
+    ".forge/evals/tasks/**",
+    ".refactor/type-baseline.json",
+    "scripts/forge/route_config.py",
 )
+BUILTIN_REVIEW_FINAL_FLOOR = tuple(dict.fromkeys((
+    "scripts/**", "hooks/**", "tests/fixtures/**", *BUILTIN_CONTROL,
+)))
 EVAL_CANDIDATES = ".forge/evals/candidates/**"
 FIXED_DEPENDENCIES = (
     "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
@@ -278,8 +290,33 @@ def regions(text: str) -> dict[str, str]:
     return found
 
 
-def table_rows(body: str, header: tuple[str, ...]) -> tuple[list[list[str]], bool]:
+def invalid_control_row(index: int) -> PolicyError:
+    # The row itself is never echoed (section 9): a failed pattern is unvalidated input.
+    return PolicyError(f"invalid path pattern in file-categories row {index + 1}")
+
+
+def table_rows(
+    body: str, header: tuple[str, ...], *, refuse_first_cell: str | None = None,
+) -> tuple[list[list[str]], bool]:
     lines = body.splitlines()
+    control_lines = {
+        index: raw for index, raw in enumerate(lines)
+        if refuse_first_cell is not None
+        and strip_code(raw.strip().lstrip("|").split("|", 1)[0].strip()).lower()
+        == refuse_first_cell
+    }
+    for control_index, raw in control_lines.items():
+        line = raw.strip()
+        cells = [cell.strip() for cell in line[1:-1].split("|")]
+        if (
+            not line.startswith("|") or not line.endswith("|")
+            or len(cells) != len(header) or any(not cell for cell in cells)
+        ):
+            raise invalid_control_row(control_index)
+        try:
+            split_patterns(cells[1])
+        except PolicyError as exc:
+            raise invalid_control_row(control_index) from exc
     header_indexes: list[int] = []
     for index, raw in enumerate(lines):
         line = raw.strip()
@@ -289,12 +326,17 @@ def table_rows(body: str, header: tuple[str, ...]) -> tuple[list[list[str]], boo
         if tuple(cell.lower() for cell in cells) == header:
             header_indexes.append(index)
     if len(header_indexes) != 1:
+        if refuse_first_cell and len(header_indexes) > 1:
+            raise invalid_control_row(header_indexes[1])
+        if control_lines:
+            raise invalid_control_row(next(iter(control_lines)))
         return [], True
 
     result: list[list[str]] = []
+    parsed_control_indexes: set[int] = set()
     malformed = False
     separator_seen = False
-    for raw in lines[header_indexes[0] + 1:]:
+    for index, raw in enumerate(lines[header_indexes[0] + 1:], header_indexes[0] + 1):
         line = raw.strip()
         if line.startswith("<!--"):
             if separator_seen:
@@ -320,6 +362,11 @@ def table_rows(body: str, header: tuple[str, ...]) -> tuple[list[list[str]], boo
             malformed = True
         else:
             result.append(cells)
+            if index in control_lines:
+                parsed_control_indexes.add(index)
+    for index in control_lines:
+        if index not in parsed_control_indexes:
+            raise invalid_control_row(index)
     return result, malformed or not separator_seen
 
 
@@ -407,7 +454,7 @@ def parse_policy(text: str, sha: str) -> Policy:
             dependency_patterns = list(FIXED_DEPENDENCIES)
 
     category_cells, category_bad = table_rows(
-        categories, ("category", "file patterns")
+        categories, ("category", "file patterns"), refuse_first_cell="control",
     )
     category_rows: list[tuple[str, tuple[str, ...]]] = []
     for cells in category_cells:
@@ -662,7 +709,7 @@ def classify(
         for pattern in patterns
         if pattern != "@formatting-only"
     }
-    all_patterns.update(BUILTIN_CONTROL)
+    all_patterns.update(BUILTIN_REVIEW_FINAL_FLOOR)
     all_patterns.add(EVAL_CANDIDATES)
     all_patterns.update(policy.trigger_patterns)
     all_patterns.update(policy.dependency_patterns)
@@ -693,18 +740,48 @@ def classify(
                     path_value = max(path_value if matches else TIERS["fast"], TIERS[tier])
                     matches.append({"tier": tier, "pattern": pattern})
 
-        control = not eval_candidate and (
-            any(path in pattern_matches[pattern] for pattern in BUILTIN_CONTROL)
-            or "control" in categories
-        )
+        builtin_control = [
+            pattern for pattern in BUILTIN_CONTROL if path in pattern_matches[pattern]
+        ]
+        project_control = [
+            pattern for category, patterns in policy.category_rows
+            if category == "control" for pattern in patterns
+            if path in pattern_matches[pattern]
+        ]
+        control = not eval_candidate and bool(builtin_control or project_control)
+        if builtin_control and "control" not in categories:
+            categories.append("control")
+            categories.sort()
         trigger_matches = [
             pattern for pattern in policy.trigger_patterns if path in pattern_matches[pattern]
         ]
+        floor_matches = [
+            {"source": "builtin", "pattern": pattern}
+            for pattern in BUILTIN_REVIEW_FINAL_FLOOR
+            if path in pattern_matches[pattern]
+        ]
+        if not eval_candidate:
+            floor_matches.extend(
+                {"source": "project-control", "pattern": pattern}
+                for pattern in project_control
+            )
+        floor_matches.extend(
+            {"source": "project-trigger", "pattern": pattern}
+            for pattern in trigger_matches
+        )
+        floor_matches.extend(
+            {"source": "project-hard", "pattern": match["pattern"]}
+            for match in matches if match["tier"] == "hard"
+        )
+        strict_floor = control or any(
+            path in pattern_matches[pattern]
+            for pattern in BUILTIN_REVIEW_FINAL_FLOOR
+        )
         dependency_matches = [
             pattern for pattern in policy.dependency_patterns if path in pattern_matches[pattern]
         ]
         unknown_manifest = bool(unknown_stack_categories)
-        if control or trigger_matches or policy.trigger_malformed:
+        if floor_matches or policy.trigger_malformed:
             path_value = TIERS["hard"]
         elif dependency_matches:
             path_value = max(path_value, TIERS["standard"])
@@ -719,6 +796,9 @@ def classify(
             "dependency_decision": dependency_matches,
             "unknown_manifest_floor": unknown_manifest,
             "control_floor": control,
+            "review_final_floor": bool(floor_matches),
+            "strict_floor": strict_floor,
+            "floor_matches": floor_matches,
             "trigger_matches": trigger_matches,
             "path_tier": next(name for name, value in TIERS.items() if value == path_value),
         })
@@ -736,6 +816,11 @@ def classify(
             {"path": item["path"], **match}
             for item in path_evidence
             for match in item["matched_rows"]  # type: ignore[union-attr]
+        ],
+        "floor_matches": [
+            {"path": item["path"], **match}
+            for item in path_evidence
+            for match in item["floor_matches"]  # type: ignore[union-attr]
         ],
         "formatting_decisions": [
             {"path": item["path"], "eligible": item["formatting_only"],

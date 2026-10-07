@@ -75,8 +75,9 @@ rank = {"fast": 0, "standard": 1, "hard": 2}
 derived = "fast"
 records = []
 for path in paths:
-    control = path.startswith(("scripts/", "rules/", "agents/", "system/"))
-    if control:
+    control = path.startswith(("rules/", "agents/", "system/")) or path == "scripts/forge/route_config.py"
+    floor = path.startswith("scripts/") or control
+    if floor:
         tier = "hard"
         categories = ["python"]
     elif path.endswith(".md"):
@@ -92,13 +93,15 @@ for path in paths:
             "path": path,
             "categories": categories,
             "control_floor": control,
+            "review_final_floor": floor,
+            "strict_floor": floor,
             "tier": tier,
         }
     )
 effective = derived
 if args.declared_tier and rank[args.declared_tier] > rank[effective]:
     effective = args.declared_tier
-if any(record["control_floor"] for record in records):
+if any(record["review_final_floor"] for record in records):
     effective = "hard"
 print(
     json.dumps(

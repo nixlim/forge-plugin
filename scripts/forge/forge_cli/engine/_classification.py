@@ -151,6 +151,8 @@ def _run_classification(
     # control floor discovered for any candidate cannot later be erased by
     # restaging a lower-risk path set inside that same chain.
     control = bool(state["tier"].get("control"))
+    review_final_floor = False
+    strict_floor = False
     for path_record in path_evidence:
         if not isinstance(path_record, dict):
             continue
@@ -158,15 +160,19 @@ def _run_classification(
             str(value) for value in path_record.get("categories", []) if value
         )
         control = control or bool(path_record.get("control_floor"))
+        review_final_floor = review_final_floor or bool(path_record.get("review_final_floor"))
+        strict_floor = strict_floor or bool(path_record.get("strict_floor"))
     old_effective = state["tier"].get("effective")
     effective = promoted_tier(old_effective, str(computed_effective))
-    if control:
+    if control or review_final_floor:
         effective = "hard"
     state["tier"].update(
         {
             "derived": derived,
             "effective": effective,
             "control": control,
+            "review_final_floor": review_final_floor,
+            "strict_floor": strict_floor,
             "categories": sorted(categories),
             "classification": evidence,
         }
