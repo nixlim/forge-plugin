@@ -54,7 +54,7 @@ REQUIREMENTS = {
     "FR-103": (
         "Every control-class or review-final-floor candidate MUST satisfy Recorded-baseline "
         "integrity over the complete committed `.forge/evals/tasks/` suite by a current "
-        "execution or a valid FR-255 applicability proof",
+        "execution;",
     ),
     "FR-034": (
         "Immediately after launch and before arming the monitor, the launcher MUST write "
@@ -69,9 +69,8 @@ REQUIREMENTS = {
         "Untrusted mutation children MUST NOT inherit `FORGE_SESSION_PID`.",
     ),
     "FR-053": (
-        "Its hard cap is eight review rounds for the same unresolved review, carried across "
-        "candidate generations and never reset by aborting or starting another chain; "
-        "FR-255 defines the inherited budget and its operator-only reset.",
+        "Its hard cap is eight review rounds per chain, counted across candidate generations "
+        "within the chain; no verb resets it.",
     ),
     "FR-055": (
         "FR-050's review loop remains outside the repo-wide commit lock.",
@@ -154,63 +153,20 @@ REQUIREMENTS = {
     ),
     "FR-255": (
         "After a review BLOCK, `commit restage --paths <path>...` MUST accept the revised file "
-        "set in the same live chain; the candidate MAY include any safe repository path, "
-        "and no task, run, scope or earlier path set restricts it.",
-        "A path is safe when it is repository-relative, lies inside the candidate worktree, "
-        "is not under `.git`, and does not resolve through a symlink to a location outside "
-        "the worktree;",
-        "`commit restage` refuses it with exit 1, the existing `path-missing` member and "
-        "exactly `forge: commit restage refused — unsafe path: <path>`, where `<path>` is "
-        "the offending path rendered under §9's precedence rule as an escaped single-line "
-        "JSON string literal when it is a syntactically valid pathspec and the literal "
-        "`(un-echoed)` otherwise, staging nothing.",
-        "On the new candidate, Gate 1, every `stack:<category>` validation and every "
-        "candidate-bound mechanical cell "
-        "(classification, snapshot currentness, secret scan, policy and safety checks) MUST "
-        "run again with any exemption freshly derived; binding review MUST run again on the "
-        "complete candidate, told the prior candidate identity and the delta and never "
-        "inheriting a verdict; a triggered fresh-reviewer eval suite MUST run again under "
-        "FR-103 with a new request and no manifest reuse.",
-        "Every other gate (evals, invariants, changelog, assertion sensing) MUST run again "
-        "when a delta path matches its committed trigger under the old or new policy, when "
-        "its command, policy, tool or input identity changed, when it has no prior PASS, or "
-        "when its trigger coverage cannot be proven; a gate that declares no trigger "
-        "matches every path.",
-        "A prior PASS carries forward only through a chain event that names its original "
-        "evidence, the trigger derivation and the delta proof; the original result stays "
-        "bound to its original candidate and is never relabeled.",
+        "set in the same live chain under exactly the path rules and refusals of `commit "
+        "start`; no task, run, scope or earlier path set restricts it.",
+        "The engine MUST record on the restage event the superseded and new candidate "
+        "identities and the exact tree delta between them (every `git diff-tree --raw` "
+        "entry, with both ends of a rename).",
+        "Every gate reruns on the new candidate with every exemption freshly derived; no "
+        "result carries forward.",
+        "Binding review reruns on the complete candidate, is told the prior candidate "
+        "identity and the delta, and never inherits a verdict.",
         "A candidate change voids approval, authorization, review dispositions and every "
-        "candidate-bound `commit skip` record, including a fresh-reviewer-evals skip, "
-        "and returning to an earlier tree does not restore them; the `review-cap` skip "
-        "is bound to the chain, not the candidate, and survives restages within it.",
-        "An unresolved review is identified by worktree: on `commit start`, when the most "
-        "recently created commit chain among those for the same canonical worktree or the same "
-        "checked-out branch has "
-        "an effective review round count of at least one (its own completed rounds plus "
-        "any `inherited_rounds`) and did not land a candidate that received a review PASS, "
-        "the new chain inherits that chain's effective round count as "
-        "`inherited_rounds`, records it and the predecessor chain id in its DM-012 "
-        "`review` object and `chain_started` evidence, and continues the count from there; "
-        "otherwise the count starts at zero; merge chains are never predecessors, and a "
-        "candidate predecessor whose state cannot be read or classified counts as eight "
-        "rounds, so the new chain starts at the cap until the operator resets it.",
-        "A predecessor that landed a fast-tier candidate without review passes its "
-        "effective count on like any other predecessor; only a landing whose candidate "
-        "received a review PASS ends the inheritance.",
-        "The budget lives in chain state as the existing per-chain iteration counter plus "
-        "that inherited base, and every iteration-cap refusal uses the existing "
-        "`iteration-cap` member and reports exactly `forge: review refused — iteration cap "
-        "reached: <rounds> rounds (<inherited> inherited from <predecessor-chain-id>)`, "
-        "with `0 inherited from none` when nothing was inherited.",
-        "Only the operator may reset an inherited budget, through `commit skip review-cap "
-        "--reason <text>`, an operator-bound verb under FR-217 that records a durable skip "
-        "on the new chain before its first review request; the skip event names the operator "
-        "and the reason, and from then on the chain's effective inherited base is zero for "
-        "every cap decision, for fresh-eval `iteration` numbering and for any later chain's "
-        "inheritance from this chain, while `inherited_rounds` and "
-        "`predecessor_chain_id` stay recorded unchanged as history.",
-        "No model-path verb, abort, or new chain resets a budget.",
-        "At the cap without PASS the workflow records residual risk and escalates without landing.",
+        "candidate-bound `commit skip` record; returning to an earlier tree restores nothing.",
+        "The eight-round cap is the chain's existing per-chain review counter (FR-053, "
+        "FR-216), counted across candidate generations within the chain; no verb resets it, "
+        "and a new chain starts at zero.",
     ),
     "FR-210": (
         "Every state-mutating subcommand MUST run the halt check first via `check-halt.sh` "
@@ -227,16 +183,22 @@ REQUIREMENTS = {
         "region-declared hard/standard floor together with the built-in FR-253 control set "
         "and FR-254 review-final floor, which are not region-sourced and are always applied.",
     ),
+    "FR-211": ("Out-of-band index changes invalidate all older evidence.",),
+    "FR-212": (
+        "always invalidates review, approval, dispositions and authorization, and "
+        "invalidates every mechanical result (FR-255).",
+        "The new file set MAY include any path `commit start` admits, without task, "
+        "run-scope or old-path-set restrictions.",
+    ),
     "FR-214": (
-        "`review-cap` is the FR-255 budget-reset skip target rather than a mechanical gate ID",
+        "records the superseded/new tree delta, invalidates every mechanical result "
+        "(FR-255), and reruns classification",
     ),
     "FR-217": (
         "No skip covers control approval or mandatory review under the control category "
         "or review-final-floor.",
-        "`commit skip review-cap --reason <text>` is the FR-255 inherited-budget reset, "
-        "admitted only before the chain's first review request",
-        "otherwise refused with `state-precondition` and exactly `forge: commit skip "
-        "refused — review-cap is admitted only before the first review request`",
+        "`commit skip --index-drift --reason <text>` retain their existing semantics; "
+        "overriding",
     ),
     "FR-256": (
         "Existing run directories, journals and activated bindings MUST remain untouched; "
@@ -275,22 +237,6 @@ REQUIREMENTS = {
     ),
 }
 
-DATA_MODELS = {
-    "DM-012": (
-        "`review` object additionally carries `inherited_rounds` (a nonnegative integer)",
-        "and `predecessor_chain_id` (a chain id or null)",
-        "set once at `commit start` and never changed afterwards",
-        "the chain's effective review round count is its own completed iterations plus "
-        "its effective inherited base, which is `inherited_rounds` unless a durable FR-255 "
-        "`review-cap` skip is recorded on the chain and zero afterwards",
-        "the `chain_started` event payload carries the same two fields",
-        "The FR-255 `review-cap` skip is a `user_skip` record under the step key "
-        "`review-cap` with the same members, written by the same verb only while the "
-        "chain has no review request, and it emits the same `user_skip` decision event "
-        "with `gate: review-cap`.",
-    ),
-}
-
 JOURNAL_READER = (
     "A writer serializes complete line appends under the single-writer append lock and "
     "returns after writing.",
@@ -314,8 +260,6 @@ JOURNAL_READER = (
 
 OTHER_PINS = (
     "scripts/forge/{check-test-quality.py,emit-decision-event.py,route_config.py}",
-    "No proof satisfies Gate 1, a candidate-bound safety cell, binding review, "
-    "approval or a fresh-reviewer manifest.",
     "A candidate's mechanical verification runs Gate 1 once, or records a freshly "
     "derived `docs-class candidate` skip under `gate-1` only when every path carries "
     "exactly the docs category and no control, review-final-floor or trigger match.",
@@ -327,12 +271,10 @@ OTHER_PINS = (
     "`forge: review request refused — review-final route equals the implementer route`; "
     "no request created | FR-032; the committed defaults (Codex implementer, Claude "
     "`review-final`) satisfy the rule; `review-cheap` requires only a distinct agent |",
-    "Beyond the ruling's text this revision adds three mechanisms, each part of this "
-    "revision: FR-255's operator-only `commit skip review-cap` reset, so that the "
-    "cross-chain cap has an operator exit; FR-032's refusal of a `review-final` route "
-    "equal to the implementer route, which makes the ruling's different-model binding "
-    "review enforceable; and `scripts/forge/route_config.py` as a built-in control path, "
-    "because its committed defaults can weaken the review.",
+    "Beyond the ruling's text this revision adds two mechanisms: FR-032's refusal of a "
+    "`review-final` route equal to the implementer route, which makes the ruling's "
+    "different-model binding review enforceable, and `scripts/forge/route_config.py` as "
+    "a built-in control path, because its committed defaults can weaken the review.",
     "The Revision-18 rule that a run-bound chain runs Gate 1 for a docs-class candidate "
     "(`run-bound-gate-one`) retires with run binding, so every chain now takes the "
     "docs-class Gate 1 skip, which still excludes control, floor and trigger matches.",
@@ -360,15 +302,26 @@ OTHER_PINS = (
     "Revision 22 reserves `execution-result-pending` and `lzma-unavailable`; they remain "
     "immutable corpus entries and MUST NOT be emitted, and the Revision-21 §9 renderer "
     "refusal named above is retired with the archive renderer.",
-    "`iteration` is an integer from 1 through 8 counted from the chain's effective "
-    "inherited base plus one under FR-255 and DM-012, so an inherited budget leaves fewer "
-    "rounds",
+    "`iteration` is an integer from 1 through 8; and `artifact_prefix`",
+    "`review` is only a skip target",
+    "- **Then** every gate reruns on the new candidate with freshly derived exemptions, "
+    "and no prior result carries forward\n",
+    "- **Then** Gate 1, candidate-bound mechanical cells, triggered fresh-reviewer evals, "
+    "every other gate and review rerun, and approval is void\n",
+    "- **And** no missing, failed, skipped or stale result is silently treated as PASS\n",
+    "- **And** an eighth BLOCK escalates with residual risk and permits no landing\n",
+    "- Fix-in-chain: candidate file additions, deletions, renames, and arbitrary "
+    "in-repository replacement paths after BLOCK under `commit start`'s path rules; the "
+    "recorded identities and raw tree delta; every gate and review rerun; prior-candidate "
+    "identity and full delta in review context; A-B-A cannot revive approval; the "
+    "per-chain cap survives restages; mandatory merge in-lock gates remain fresh; every "
+    "controlling predicate has a focused in-memory disable proof.",
+    "- **SC-038**: A review BLOCK can be fixed by restaging any revised in-repository "
+    "candidate in the same chain; every gate and review rerun and pass before landing, "
+    "every prior approval is void, and the review cap cannot reset through restage.",
     "A chain created before Revision 22 MAY additionally carry the inert legacy keys "
     "`run_binding` and `journal_outbox`; readers MUST accept them on such chains without "
     "consulting them, and new chains omit them.",
-    "`review` and `review-cap` are only skip targets",
-    "### Scenario: Operator resets an inherited review budget before the first review request",
-    "**Traces to**: FR-255, FR-217, DM-012",
     "After a successful push and immediately before cleanup, the workflow MUST fetch the "
     "remote default branch and prove the recorded pushed object is contained in it.",
     "It MUST freshly prove the named branch tip exists, the worktree remains attached "
@@ -402,17 +355,6 @@ OTHER_PINS = (
     "containing a path separator, NUL or control character) | `run-open` / journal "
     "append | exit 1, `forge: <operation> refused — invalid run id`; no directory or "
     "file created | Malformed-envelope class under FR-251; the rejected value is never echoed |",
-    "| `commit restage --paths` names a path that is not a safe repository path (outside "
-    "the worktree, under `.git`, or resolving through a symlink to a location outside "
-    "the worktree) | `commit restage` | exit 1, `path-missing`, "
-    "`forge: commit restage refused — unsafe path: <path>`; nothing staged | FR-255; "
-    "`<path>` is an escaped single-line JSON string literal for a syntactically valid "
-    "pathspec and the literal `(un-echoed)` otherwise; the candidate and every evidence "
-    "record are unchanged |",
-    "| `commit skip review-cap` issued after the chain's first review request | "
-    "`commit skip` | exit 1, `state-precondition`, `forge: commit skip refused — "
-    "review-cap is admitted only before the first review request`; no record written | "
-    "FR-255; the inherited base is unchanged |",
 )
 
 ERROR_CONTRACT_PREAMBLE = (
@@ -443,6 +385,19 @@ FROZEN_REVISION21_LINES = (
     "(Revision 21 authority; deferred to task TA of run-20261004-backfill)",
 )
 
+RETIRED_LITERALS = (
+    "inherited_rounds",
+    "inherited base",
+    "review-cap",
+    "unsafe path",
+    "applicability proof",
+    "selective reuse",
+    "applicability record",
+    "carry-forward proof",
+    "delta-trigger",
+    "safe repository path",
+)
+
 LEGACY_JOURNAL = ROOT / "tests/replay/long-run-001/journal.jsonl"
 
 
@@ -451,14 +406,6 @@ def requirement_block(document: str, requirement: str) -> str:
     matches = re.findall(pattern, document)
     if len(matches) != 1:
         raise AssertionError(f"expected one {requirement}, found {len(matches)}")
-    return matches[0]
-
-
-def data_model_block(document: str, model: str) -> str:
-    pattern = rf"(?m)^\*\*{re.escape(model)}\*\*.*$"
-    matches = re.findall(pattern, document)
-    if len(matches) != 1:
-        raise AssertionError(f"expected one {model}, found {len(matches)}")
     return matches[0]
 
 
@@ -486,10 +433,6 @@ class SpecificationRevision22Tests(unittest.TestCase):
             block = requirement_block(document, requirement)
             for literal in literals:
                 self.assertEqual(block.count(literal), 1, (requirement, literal))
-        for model, literals in DATA_MODELS.items():
-            block = data_model_block(document, model)
-            for literal in literals:
-                self.assertEqual(block.count(literal), 1, (model, literal))
         section = journal_section(document)
         for literal in JOURNAL_READER:
             self.assertEqual(section.count(literal), 1, literal)
@@ -501,12 +444,21 @@ class SpecificationRevision22Tests(unittest.TestCase):
         self.assert_pins(SPEC)
         literals = [*HEADER, *RETIREMENTS, *OTHER_PINS, *FROZEN_REVISION21_LINES]
         literals.extend(literal for group in REQUIREMENTS.values() for literal in group)
-        literals.extend(literal for group in DATA_MODELS.values() for literal in group)
         literals.extend(JOURNAL_READER)
         literals.extend(ERROR_CONTRACT_PREAMBLE)
         for literal in literals:
             with self.subTest(literal=literal), self.assertRaises(AssertionError):
                 self.assert_pins(SPEC.replace(literal, "DISABLED_CONTROL"))
+
+    def assert_retired_absent(self, document: str) -> None:
+        for literal in RETIRED_LITERALS:
+            self.assertNotIn(literal, document, literal)
+
+    def test_retired_fix_in_chain_mechanisms_are_absent(self) -> None:
+        self.assert_retired_absent(SPEC)
+        for literal in RETIRED_LITERALS:
+            with self.subTest(literal=literal), self.assertRaises(AssertionError):
+                self.assert_retired_absent(SPEC + literal)
 
     def assert_legacy_envelopes(self, lines: list[str]) -> None:
         self.assertTrue(lines)
