@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "forge" / "install.sh"
 TOOLS = ROOT / "scripts" / "codex_orch_tools.py"
 FAKE_CODEX = ROOT / "tests" / "replay" / "long-run-001" / "fake_codex.py"
-PLAIN_KEYS = {"issues", "non_passing_verifications", "ok", "warnings"}
+PLAIN_KEYS = {"issues", "ok"}
 POLICY = package_module("policy")
 
 
@@ -379,10 +379,8 @@ event-retention: 400d""",
             encoding="utf-8",
         )
 
-    def validate(self, run_dir: Path, *, gates: bool) -> dict[str, object]:
+    def validate(self, run_dir: Path) -> dict[str, object]:
         command = [sys.executable, str(TOOLS), "validate", str(run_dir)]
-        if gates:
-            command.append("--gates")
         result = subprocess.run(
             command,
             cwd=self.repo,
@@ -621,8 +619,7 @@ event-retention: 400d""",
             "The independent and binding reviews accepted the exact candidate range.\n\n"
             "## Final Results\n\n"
             "### Gate Result\n\n"
-            f"Passed with validation issues `{validation['issues']}` and warnings "
-            f"`{validation['warnings']}`.\n\n"
+            f"Structural validation issues: `{validation['issues']}`.\n\n"
             "### Risks / Follow-ups\n\n"
             "None recorded.\n\n"
             "- Run metadata: fake Codex release-smoke fixture.\n",
@@ -854,8 +851,8 @@ event-retention: 400d""",
                 "recorded_at": utc_now(),
             },
         )
-        pre_close = self.validate(run_dir, gates=True)
-        self.assertEqual(pre_close.get("profile"), "gates")
+        pre_close = self.validate(run_dir)
+        self.assertTrue(pre_close["ok"], pre_close)
         append_record(
             journal,
             {
@@ -869,14 +866,13 @@ event-retention: 400d""",
             },
         )
 
-        gated = self.validate(run_dir, gates=True)
-        self.assertTrue(gated["ok"], gated)
-        self.assertEqual(gated["profile"], "gates")
+        validated = self.validate(run_dir)
+        self.assertTrue(validated["ok"], validated)
         self.assertEqual(self.git("rev-parse", "HEAD"), target_sha)
         self.assertEqual(self.git("diff", "--cached", "--name-only"), "")
-        report = self.write_report(run_dir, gated)
+        report = self.write_report(run_dir, validated)
         self.assertTrue(report.is_file())
-        plain = self.validate(run_dir, gates=False)
+        plain = self.validate(run_dir)
         self.assertEqual(set(plain), PLAIN_KEYS)
         self.assertNotIn("profile", plain)
         self.assertTrue(plain["ok"], plain)

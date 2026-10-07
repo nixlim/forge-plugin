@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import errno
+import io
+import json
 import os
 import unittest
+from contextlib import redirect_stderr
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -13,15 +16,16 @@ from tests._cli_loader import package_module
 from tests._launch_support import (
     ENGINE,
     LAUNCH_LANE,
+    MARKER_BINDING_CHANGES,
     VERBS_LAUNCH_COLLECT,
     LaunchLaneSupport,
     digest,
 )
-from tests._revision9_coord_constants import key
+
+from codex_orchestrator import journal
 
 ATTEMPT = package_module("engine._review_attempt")
 REVIEW_LAUNCH = package_module("engine._review_launch")
-RUNTIME = package_module("runtime")
 
 NOW = "2026-09-28T12:00:00Z"
 
@@ -33,14 +37,6 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         self.configure_route("plan", "claude")
         self.open_run_and_task()
         self.engine = self.ready_engine(open_task=False)
-
-    @property
-    def builders(self) -> Any:
-        return RUNTIME._coordination_modules()[1]
-
-    @property
-    def journal(self) -> Any:
-        return RUNTIME._coordination_modules()[2]
 
     def seed(self, role: str = "implementer") -> dict[str, object]:
         self.seed_launch(role=role)
@@ -97,8 +93,8 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         return next(
             row
             for row in reversed(self.records())
-            if row.get("type") == "execution_result"
-            and row.get("execution") == record["execution"]
+            if row.get("kind") == "execution_finished"
+            and row.get("execution_id") == record["execution"]
         )
 
     def assert_refusal(
@@ -117,7 +113,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
             (self.run_dir(self.repo, self.run_id) / "journal.jsonl").read_bytes(),
         )
 
-    def test_complete_is_idempotent_and_supplies_task_completion_provenance(self) -> None:
+    def test_repeat_collect_appends_no_second_finish_and_logs_actual_route(self) -> None:
         record = self.seed()
         handoff = b"complete typed handoff\n"
         self.publish(record, handoff=handoff)
@@ -136,158 +132,169 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         )
         self.assertEqual(marker["collected_status"], "complete")
         self.assertIsInstance(marker["collected_at"], str)
+        self.assertEqual(result["started_at"], marker["requested_at"])
         journal_before = (
             self.run_dir(self.repo, self.run_id) / "journal.jsonl"
-        ).read_bytes()
+        ).read_bytes().count(b'"kind":"execution_finished"')
         marker_before = self.paths(record).leaf("launch.json").read_bytes()
         repeated = self.collect(record)
         self.assertEqual(repeated.state, "complete")
         self.assertEqual(
             journal_before,
-            (self.run_dir(self.repo, self.run_id) / "journal.jsonl").read_bytes(),
+            (self.run_dir(self.repo, self.run_id) / "journal.jsonl").read_bytes().count(
+                b'"kind":"execution_finished"'
+            ),
         )
         self.assertEqual(marker_before, self.paths(record).leaf("launch.json").read_bytes())
-        with self.api_environment():
-            finished = self.builders.task_finish(
-                self.repo,
-                self.run_id,
-                idempotency_key=key("typed-launch-task-finish"),
-                task=self.task_id,
-                status="complete",
-            )
-        self.assertEqual(finished.records[0]["status"], "complete")
+        for field in ("provider", "model", "effort", "sandbox", "route_source", "route_sha256"):
+            self.assertEqual(result[field], marker[field])
 
-    def test_terminal_result_repairs_only_an_uncollected_marker(self) -> None:
+    def test_start_append_failure_reports_but_launches(self) -> None:
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(journal, "_write_line", side_effect=journal.CoordinationRefusal(
+                journal.APPEND_IO_ERROR
+            )),
+            redirect_stderr(stderr),
+        ):
+            outcome = self.seed_launch()
+        self.assertTrue(outcome.ok)
+        self.assertEqual(stderr.getvalue(), journal.APPEND_IO_ERROR + "\n")
+        path = (self.run_dir(self.repo, self.run_id)
+                / "codex-implementer-01/execution-01/launch.json")
+        self.assertTrue(path.exists())
+        self.assertTrue((path.parent / "pid").exists())
+        self.assertFalse(self.execution_records())
+
+    def test_finish_append_failure_does_not_make_repeat_collect_append(self) -> None:
+        record = self.seed()
+        self.publish(record)
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(journal, "_write_line", side_effect=journal.CoordinationRefusal(
+                journal.APPEND_IO_ERROR
+            )),
+            redirect_stderr(stderr),
+        ):
+            outcome = self.collect(record)
+        self.assertEqual(outcome.state, "complete")
+        self.assertEqual(stderr.getvalue(), journal.APPEND_IO_ERROR + "\n")
+        self.assertEqual(self.marker(record)["collected_status"], "complete")
+        self.assertFalse(any(item.get("kind") == "execution_finished" for item in self.records()))
+        self.assertEqual(self.collect(record).state, "complete")
+        self.assertFalse(any(item.get("kind") == "execution_finished" for item in self.records()))
+
+    def test_completion_repairs_marker_without_journal_result_gate(self) -> None:
         record = self.seed()
         handoff = b"crash repair handoff\n"
         self.paths(record).leaf("handoff.md").write_bytes(handoff)
         self.paths(record).leaf("handoff.md").chmod(0o600)
-        with self.api_environment():
-            self.builders.execution_result(
-                self.repo,
-                self.run_id,
-                idempotency_key=key("crash-between-result-and-marker"),
-                execution=str(record["execution"]),
-                agent=str(record["agent"]),
-                task=self.task_id,
-                status="complete",
-                summary="pre-existing terminal result",
-                files_changed=(),
-                caveats=(),
-                handoff=self.paths(record).reference("handoff.md"),
-            )
-        journal_before = (
-            self.run_dir(self.repo, self.run_id) / "journal.jsonl"
-        ).read_bytes()
+        self.publish(record, handoff=handoff)
+        journal.append_run_record(self.repo, self.run_id, {
+            "kind": "execution_finished", "run_id": self.run_id,
+            "execution_id": record["execution"], "agent": record["agent"],
+            "status": "complete", "caveats": [],
+            "handoff": self.paths(record).reference("handoff.md"),
+        })
+        before = sum(item.get("kind") == "execution_finished" for item in self.records())
         self.assertIsNone(self.marker(record)["collected_at"])
         outcome = self.collect(record)
         self.assertEqual(outcome.state, "complete")
         self.assertEqual(
-            journal_before,
-            (self.run_dir(self.repo, self.run_id) / "journal.jsonl").read_bytes(),
+            sum(item.get("kind") == "execution_finished" for item in self.records()),
+            before + 1,
         )
         self.assertEqual(self.marker(record)["collected_status"], "complete")
 
-    def test_prose_execution_is_refused_with_migration_literal(self) -> None:
+    def test_journal_only_execution_does_not_supply_a_collect_marker(self) -> None:
         run_dir = self.run_dir(self.repo, self.run_id)
         for name in ("prompt.md", "events.jsonl", "handoff.md"):
             (run_dir / name).write_text("prose evidence\n", encoding="utf-8")
-        opening = self.records()[0]
-        route = opening["route"]["implementer"]
-        with self.api_environment():
-            outcome = self.builders.execution_start(
-                self.repo,
-                self.run_id,
-                idempotency_key=key("prose-launch"),
-                agent="codex-implementer-01",
-                task=self.task_id,
-                provider=str(route["provider"]),
-                role="implementer",
-                mode="headless",
-                model=str(route["model"]),
-                effort=str(route["effort"]),
-                worktree=str(self.repo),
-                head=self.head,
-                prompt="prompt.md",
-                handoff="handoff.md",
-                event_source="exec",
-                events="events.jsonl",
-                sandbox="workspace-write",
-                route_source=str(route["route_source"]),
-                route_sha256=str(route["route_sha256"]),
-            )
-        record = dict(outcome.records[0])
+        record = {"kind": "execution_started", "run_id": self.run_id,
+                  "execution_id": "execution-01", "execution": "execution-01",
+                  "agent": "codex-implementer-01", "task": self.task_id}
+        journal.append_run_record(self.repo, self.run_id, record)
         self.assert_refusal(
             record,
             ENGINE.V2ReasonCode.STATE_PRECONDITION,
-            "forge: launch collect refused — execution execution-01 has no "
-            "launch_marker; collect a prose launch by prose",
+            "forge: launch collect refused — execution execution-01 does not exist",
         )
 
     def test_marker_binding_covers_every_owner_record_and_digest_field(self) -> None:
         record = self.seed()
         marker_path = self.paths(record).leaf("launch.json")
         baseline = self.marker(record)
-        changes = {
-            "agent": "codex-implementer-99",
-            "task": "task-99",
-            "execution": "execution-99",
-            "role": "plan",
-            "provider": "claude",
-            "model": "other-model",
-            "effort": "opaque-other",
-            "sandbox": "read-only",
-            "route_source": "plugin-default",
-            "route_sha256": "f" * 64,
-            "worktree": str(self.repo),
-            "head": "f" * 40,
-            "argv_digest": "e" * 64,
-        }
-        for field, value in changes.items():
+        for field, value in MARKER_BINDING_CHANGES.items():
             with self.subTest(field=field):
-                changed = dict(baseline, **{field: value})
-                LAUNCH_LANE.write_marker(marker_path, changed)
+                LAUNCH_LANE.write_marker(marker_path, dict(baseline, **{field: value}))
                 self.assert_refusal(
-                    record,
-                    ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+                    record, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
                     f"launch marker does not bind execution execution-01: {field}",
                 )
                 LAUNCH_LANE.write_marker(marker_path, baseline)
         prompt = self.paths(record).leaf("prompt.md")
-        original = prompt.read_bytes()
-        prompt.write_bytes(original + b"mutated")
+        original_prompt = prompt.read_bytes()
+        prompt.write_bytes(original_prompt + b"mutated")
         self.assert_refusal(
-            record,
-            ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+            record, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
             "launch marker does not bind execution execution-01: prompt_digest",
         )
+        prompt.write_bytes(original_prompt)
+        self._check_wrapper_config_binding(record)
 
-    def test_record_launch_marker_reference_is_bound_and_control_is_load_bearing(self) -> None:
-        record = self.seed()
-        original = VERBS_LAUNCH_COLLECT._execution_record
-
-        def mismatched(state: Any, execution: str, verb: str) -> dict[str, object]:
-            return dict(original(state, execution, verb), launch_marker="wrong/launch.json")
-
-        with mock.patch.object(
-            VERBS_LAUNCH_COLLECT, "_execution_record", side_effect=mismatched
-        ):
-            self.assert_refusal(
-                record,
-                ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
-                "launch marker does not bind execution execution-01: launch_marker",
-            )
-        marker_path = self.paths(record).leaf("launch.json")
-        LAUNCH_LANE.write_marker(marker_path, dict(self.marker(record), provider="claude"))
+    def _check_wrapper_config_binding(self, record: dict[str, object]) -> None:
+        path = self.paths(record).leaf(LAUNCH_LANE.WRAPPER_CONFIG_NAME)
+        baseline = json.loads(path.read_text(encoding="utf-8"))
+        for field, value in MARKER_BINDING_CHANGES.items():
+            with self.subTest(field=field):
+                self.write_private_json(path, dict(baseline, **{field: value}))
+                self.assert_refusal(
+                    record, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+                    f"launch marker does not bind execution execution-01: {field}",
+                )
+        self.write_private_json(path, baseline)
+        path.unlink()
+        self.assert_refusal(
+            record, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "launch marker does not bind execution execution-01: wrapper_config",
+        )
+        path.symlink_to(self.paths(record).leaf("launch.json"))
+        self.assert_refusal(
+            record, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "launch marker does not bind execution execution-01: wrapper_config",
+        )
+        path.unlink()
+        self.write_private_json(path, baseline)
         with (
-            mock.patch.object(LAUNCH_LANE, "bind_marker", return_value=None),
+            mock.patch.object(LAUNCH_LANE, "bind_wrapper_config", return_value=None),
             self.assertRaises(AssertionError),
         ):
+            self.write_private_json(path, dict(baseline, task="task-99"))
             self.assert_refusal(
-                record,
-                ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
-                "launch marker does not bind execution execution-01: provider",
+                record, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "launch marker does not bind execution execution-01: task",
             )
+
+    def test_collect_ignores_missing_torn_and_duplicate_journal_starts(self) -> None:
+        record = self.seed()
+        self.publish(record)
+        path = self.run_dir(self.repo, self.run_id) / "journal.jsonl"
+        start = next(item for item in self.records() if item.get("kind") == "execution_started")
+        line = (json.dumps(start) + "\n").encode("utf-8")
+        path.write_bytes(line + line + b'{"kind":"execution_started"\n')
+        with mock.patch.object(journal, "read_journal", side_effect=AssertionError):
+            self.assertEqual(self.collect(record).state, "complete")
+        self.assertEqual(self.marker(record)["collected_status"], "complete")
+
+    def test_collect_recreates_missing_journal_from_marker(self) -> None:
+        record = self.seed()
+        self.publish(record)
+        path = self.run_dir(self.repo, self.run_id) / "journal.jsonl"
+        path.unlink()
+        self.assertEqual(self.collect(record).state, "complete")
+        self.assertEqual(self.marker(record)["collected_status"], "complete")
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["kind"],
+                         "execution_finished")
 
     def test_completion_binding_covers_request_identity_and_null_returncode(self) -> None:
         record = self.seed()
@@ -307,17 +314,21 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         for field, value in changes.items():
             with self.subTest(field=field):
                 self.write_private_json(path, dict(completion, **{field: value}))
+                origin = "launch marker" if field in {
+                    "provider", "route_source", "route_sha256", "sandbox",
+                    "argv_digest", "prompt_digest",
+                } else "completion"
                 self.assert_refusal(
                     record,
                     ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
-                    f"completion does not bind execution execution-01: {field}",
+                    f"{origin} does not bind execution execution-01: {field}",
                 )
         foreign = dict(completion, attempt="attempt-fedcba9876543210")
         self.write_private_json(path, foreign)
         self.assert_refusal(
             record,
             ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
-            "completion does not bind execution execution-01: attempt",
+            "launch marker does not bind execution execution-01: attempt",
         )
         invalid = dict(completion, returncode=None, error=None, timed_out=False)
         self.write_private_json(path, invalid)
@@ -326,7 +337,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
             ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
             "attempt record is invalid for execution-01: null returncode",
         )
-        self.write_private_json(path, dict(completion, provider="claude"))
+        self.write_private_json(path, dict(completion, wrapper_pid=5100))
         with (
             mock.patch.object(ATTEMPT, "validate_completion_binding", return_value=None),
             self.assertRaises(AssertionError),
@@ -334,7 +345,7 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
             self.assert_refusal(
                 record,
                 ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
-                "completion does not bind execution execution-01: provider",
+                "completion does not bind execution execution-01: wrapper_pid",
             )
 
     def test_files_changed_are_sorted_and_plan_changes_add_a_caveat(self) -> None:
@@ -472,21 +483,6 @@ class LaunchCollectTests(LaunchLaneSupport, unittest.TestCase):
         ):
             assertion()
 
-    def test_launch_record_replays_historically(self) -> None:
-        record = self.seed()
-        self.publish(record)
-        self.collect(record)
-        records = tuple(self.records())
-        replayed = self.journal._validate_proposed_record(
-            record,
-            run_id=self.run_id,
-            repo_root=self.repo.resolve(),
-            scope=("src/**",),
-            prior_records=records[:2],
-            _historical_replay=self.journal._HISTORICAL_REPLAY,
-        )
-        self.assertEqual(replayed["launch_marker"], record["launch_marker"])
-
     def assert_failed_mapping(
         self,
         *,
@@ -601,6 +597,37 @@ LaunchCollectTests.test_codex_not_logged_in_literal = _not_logged_in_test(
 )
 LaunchCollectTests.test_claude_not_logged_in_literal = _not_logged_in_test(
     "claude", "plan"
+)
+
+
+def _repeat_failed_collect_test(self: LaunchCollectTests) -> None:
+    record = self.seed()
+    self.publish(record, error="not-logged-in", handoff=None)
+    self.collect(record)
+    handoff = self.paths(record).reference("handoff.md")
+    expected = REVIEW_LAUNCH.CODEX_NOT_LOGGED_IN
+
+    def assertion() -> None:
+        repeated = self.collect(record)
+        self.assertEqual(repeated.message, expected)
+        self.assertEqual(repeated.state, "failed")
+        self.assertNotIn(handoff, repeated.evidence_refs)
+
+    assertion()
+    original = VERBS_LAUNCH_COLLECT.Path.is_file
+
+    def disabled_control(path: Any) -> bool:
+        return True if path.name == "handoff.md" else original(path)
+
+    with mock.patch.object(VERBS_LAUNCH_COLLECT.Path, "is_file", disabled_control):
+        with self.assertRaises(AssertionError):
+            assertion()
+
+
+setattr(
+    LaunchCollectTests,
+    f"test_{_repeat_failed_collect_test.__name__[1:]}",
+    _repeat_failed_collect_test,
 )
 
 

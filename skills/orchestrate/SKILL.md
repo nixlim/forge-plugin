@@ -6,7 +6,7 @@ description: Forge's focused cycle for one task inside an open Forge orchestrati
 # Forge Focused Orchestration
 
 Claude coordinates and verifies focused agent work. Forge launches scoped implementer and planner
-work through the run's frozen provider routes. Prefer a fresh implementer as the first mover for
+work through routes resolved for each execution. Prefer a fresh implementer as the first mover for
 bounded coding tasks.
 
 Use this skill for one focused agent cycle inside an orchestration run. The workflow skill owns
@@ -19,17 +19,17 @@ focused phase is complete.
 
 | Actor | Responsibility | Journal role | Committed default | Launch owner |
 |---|---|---|---|---|
-| Claude main session | Orchestrator/verifier; owns the journal, worktrees, gate chain, and all reintegration | n/a | host session | host session |
+| Claude main session | Orchestrator/verifier; logs the run, manages worktrees, verifies gates, and reintegrates | n/a | host session | host session |
 | Fresh routed implementer | Scoped implementation in its assigned worktree | `implementer` | Codex `gpt-5.6-sol` / `ultra` / `workspace-write` | `forge launch --role implementer` |
 | Fresh Codex first-pass reviewer | Independent, non-editing review of the supplied target | `review-cheap` | Codex `gpt-5.6-sol` / `high` / `read-only` | session, by the procedure in `references/review.md` |
 | Fresh routed planner | Bounded implementation planning for one run task; runs only, never a chain-bound planning pass | `plan` | Codex `gpt-5.6-sol` / `high` / `read-only` | `forge launch --role plan` |
 | Binding final reviewer | Candidate-bound final review | `review-final` | project-configured route | Forge review engine (`forge review request` / `forge review collect`); interactive only in `/forge:worktree-merge` |
 
-For typed implementer and plan executions, provider, model, effort, and sandbox come from the run's
-frozen resolved route and the exact FR-245 provider profile; never hand-substitute provider flags
+For typed implementer and plan executions, provider, model, effort, and sandbox come from the
+route resolved at launch and the exact FR-245 provider profile; never hand-substitute provider flags
 for those roles. The reviewer-specific procedure in `references/review.md` is the only place the
 session writes provider flags, and it uses the committed `review-cheap` values shown there. The
-`model` and `effort` in every journal `execution` entry are the values actually passed at launch.
+`model` and `effort` in every journal `execution_started` entry are the values actually passed at launch.
 Changing any committed model, effort, or sandbox default or provider-profile value is a
 control-class change; do not silently substitute a cheaper model, lower effort, or broader sandbox.
 
@@ -64,14 +64,10 @@ not part of `prompt.md`. Claude `prompt.md` and stdin start with the exact bytes
    `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`.
 1. Only the `agent-project-context` managed region extracted from the committed bytes returned by
    `git -C <worktree> show HEAD:forge-project.md`.
-1. When it exists in that same committed `HEAD`, the exact committed bytes returned by
-   `git -C <worktree> show HEAD:.forge/history/gotchas.md`. Test presence with
-   `git -C <worktree> cat-file -e HEAD:.forge/history/gotchas.md`; omit this component only when the
-   object is absent, and stop the launch on any other read failure.
 1. The concrete task assignment, with its goal, acceptance criteria, constraints, owned files,
    and required handoff.
 
-The region and gotchas MUST NOT come from working-tree state, another checkout, or a rendered agent
+The committed context MUST NOT come from working-tree state, another checkout, or a rendered agent
 definition. The typed lane renders the concrete values, saves those exact assembled bytes as
 `prompt.md`, and appends its owner record in the required order. Do not assemble or save that prompt
 by hand. Handoffs retain the upstream six-heading contract shown below.
@@ -105,26 +101,22 @@ The typed lane checks only the shared global `AGENT_HALT` sentinel before every 
 cancel. While it is engaged, all three verbs refuse with reason code `halt-engaged`; launch no new
 work, perform no reintegration, report the sentinel to the user, and wait for the operator to clear
 it. Agents must not create, delete, or bypass halt sentinels without explicit user direction. Forge
-then performs the task, registered worktree, committed HEAD, initialization, brief, frozen-route,
+then performs the task, registered worktree, committed HEAD, initialization, brief, route,
 executable, version-floor, and in-flight checks. An implementer worktree must be a dedicated linked
 worktree.
 
 The typed lane performs the owner sequence; the session does not reproduce it:
 
-1. Create the agent directory when absent and the owner-only `execution-NN` directory.
+1. Under the journal append lock, allocate execution and attempt IDs and create the agent directory
+   when absent and the owner-only `execution-NN` directory.
 1. Assemble and save `prompt.md`, then create the empty `events.jsonl`.
-1. Write and fsync `launch.json`.
-1. Append the journal `execution` owner record.
+1. Write and fsync `launch.json`, then append `execution_started` under that lock.
 1. Launch the process through the isolated wrapper.
 
-The generated owner record includes the absolute worktree, full HEAD, actual provider/model/effort,
-prompt/events/handoff paths, `mode: detached`, `launch_marker`, and the route trio `sandbox`,
-`route_source`, and `route_sha256`, copied from that role's frozen run snapshot; do not reconstruct
-or omit it. Never write `unrecorded` for a new snapshot-backed run. A reviewer-specific prose record
-written outside the typed lane may omit the trio; if it carries any of `sandbox`, `route_source`, or
-`route_sha256`, it must carry all three, equal to that role's frozen run snapshot in
-`run_started.route`, which Forge accepts only when the launched provider, model, and effort equal
-that frozen route.
+The `execution_started` record includes the absolute worktree, full HEAD, actual
+provider/model/effort, prompt/events/handoff paths, `mode: detached`, `launch_marker`, and the
+actual `sandbox`, `route_source`, and `route_sha256`. It records the route selected for this
+execution; a later execution may resolve a different route.
 
 The old implementer/plan recipe is retired. Do not use or reconstruct
 `codex exec --json --output-last-message`, `-c model="<role model>"`,
@@ -141,8 +133,9 @@ forge launch collect --repo <repo> --run-id <run-id> --execution <execution-NN>
 
 A still-launching or still-running refusal is nonterminal: append no result, do not relaunch, and
 retry collection later. Collection validates the launch marker, prompt, route, worktree, identity,
-and completion before writing at most one terminal `execution_result`; repeated collection is
-idempotent. If collect reports `wrapper-dead / child-alive`, or an owned execution must be stopped,
+and completion before writing `execution_finished`; a repeat collect after the marker is
+collected appends nothing, while an interrupted collect may append a second finish record.
+If collect reports `wrapper-dead / child-alive`, or an owned execution must be stopped,
 use:
 
 ```text
@@ -171,28 +164,19 @@ with a non-blocking poll for that file, bounded at 60 minutes, then run `forge l
 whether or not it appeared. Before each observation run
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"`; on a halt do not invoke `forge launch
 collect` or `forge launch cancel`, perform no reintegration, report the diagnostic, and wait. Once
-the operator clears the global halt, collect the already-launched execution. Collect, never a
-hand-written `execution_result`, is the lifecycle authority. Act on each result as follows:
+the operator clears the global halt, collect the already-launched execution. Collect, using the launch marker and completion artefacts, is the lifecycle authority. Act on each result as follows:
 
 | Result | Action |
 |---|---|
 | any typed-lane refusal with reason code `halt-engaged` | Stop; do not run `forge launch`, `forge launch collect`, or `forge launch cancel`; report the diagnostic and wait for the operator to clear global `AGENT_HALT`. |
-| `launch collect: complete` or `launch collect: failed` | Terminal; the one result exists. Inspect `handoff.md` and the worktree. A failed task stays active; a retry is a new `forge launch`. |
+| `launch collect: complete` or `launch collect: failed` | Terminal; the one result exists. Inspect `handoff.md` and the worktree. A retry is a new `forge launch`. |
 | `is still launching; retry after the identity deadline` | Wait at least 60 seconds, then collect again. |
 | `is still running` | Append nothing, do not relaunch, keep waiting. |
 | `wrapper-dead / child-alive …; run launch cancel …` | Run the named `forge launch cancel`. |
 | `identity-unproven … nothing was signalled` | Signal nothing yourself; report the listed PIDs to the user; collect again after they exit. |
 | `pid sidecar unavailable …; run launch collect` | Run `forge launch collect`. |
 | start refused: `still in flight in <worktree>` | One typed execution per worktree: collect or cancel that execution first. |
-| any refusal naming `journal batch-recover` | Run the named recovery before anything else. |
 | start refused: initialization, version floor, not logged in, or route | Stop and report the diagnostic verbatim; never switch provider or model. |
-
-A commit-family `execution-result-pending` refusal means an overlapping mutating execution has no
-authoritative terminal `execution_result`. For a typed launch, clear it only with `forge launch
-collect`; for another execution, journal its real terminal result through the typed builder. Never
-invent a result to clear the refusal. Lines beginning `forge: journal warning — this append makes a
-passed close impossible as recorded:` are advisory close projections: the owning command's stdout
-and exit status are unchanged, and the named issue must be resolved honestly before close.
 
 The legacy `codex_agent_stale`, `codex_agent_unknown`, and `state --dump-event-types` protocol
 applies only to reviewer-specific prose sessions outside the typed lane. There, an events file mtime,
@@ -207,6 +191,7 @@ Keep run material under:
 ```text
 .codex-orchestrator/runs/<run-id>/
   journal.jsonl
+  .execution-ids/
   <provider>-<role>-<NN>/execution-<NN>/
     prompt.md
     events.jsonl
@@ -214,20 +199,20 @@ Keep run material under:
     pid
     stderr.log              # typed launches only
     launch.json             # typed launches only
+    wrapper-config.json     # typed launches only
+    worktree                # typed launches only
     identity.json           # typed launches only
     completion.json         # typed launches only
   evidence/                 # optional
-  report.md                 # after the committed durable archive
+  report.md                 # after the run is reported
 ```
 
-The journal and execution material remain locally excluded working state. The workflow closes the
-run by writing and committing the durable archive at `.forge/history/runs/<run-id>.md` before this
-local `report.md` is written. `.forge/history/` is append-only committed repository documentation;
-never ignore, overwrite, amend, delete, or prune an archive.
+The journal and execution material remain locally excluded working state. The workflow may
+append `run_closed` as a descriptive outcome and then write the local `report.md`. No archive commit
+is required.
 
-`journal.jsonl` is Claude's append-only orchestration journal. Read
-`${CLAUDE_PLUGIN_ROOT}/docs/orchestration-contract.md` before creating or interpreting journal
-entries; it owns record fields, authority, validation, and closure semantics.
+`journal.jsonl` is an append-only log. Read
+`${CLAUDE_PLUGIN_ROOT}/docs/orchestration-contract.md` for record fields and structural reading.
 
 Capture each execution's exact prompt, raw events when available, and exact handoff. Never
 synthesize a log or rewrite a handoff. Keep small observations inline and create `evidence/` only
@@ -248,16 +233,49 @@ when material output must be retained.
   subagents, including `review-final`, share the orchestrator's worktree; they do not create or
   switch to a separate tree.
 - Record SHAs only from observed command output, never memory, and append journal corrections
-  instead of rewriting entries. Use string execution IDs shaped `execution-NN` and the array-field
-  contract in `${CLAUDE_PLUGIN_ROOT}/skills/workflow/SKILL.md`.
+  instead of rewriting entries. For `--execution` on a prose session, choose the next free
+  `execution-NN` under the run's executions root and reserve it in `.execution-ids/` the same
+  way the launcher does. For a typed session, use the execution ID printed by `forge launch`.
+
+For a prose reviewer, after choosing the next free ID and creating `prompt.md` and an empty
+`events.jsonl`, use the route actually used. The variables below are the run, task, route, and
+observed result values; `OUTPUT` names an artefact that exists even on failure.
+
+```bash
+RUN_DIR="$REPO/.codex-orchestrator/runs/$RUN_ID"
+EXECUTION=execution-02
+mkdir -p "$RUN_DIR/.execution-ids"
+mkdir "$RUN_DIR/.execution-ids/$EXECUTION"  # atomic reservation; retry with the next free ID on collision
+STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" journal execution-start \
+  --repo "$REPO" --run-id "$RUN_ID" --task "$TASK_ID" --role review-final \
+  --provider codex --model "$MODEL" --effort "$EFFORT" --worktree "$WORKTREE" \
+  --sandbox "$SANDBOX" --route-source "$ROUTE_SOURCE" --route-sha256 "$ROUTE_SHA256" \
+  --execution "$EXECUTION" --agent "$AGENT" --events "$EVENTS" --started-at "$STARTED_AT"
+```
+
+After observing the process outcome, set `STATUS`, `EXIT_STATUS`, and `OUTPUT`, then append:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" journal execution-result \
+  --repo "$REPO" --run-id "$RUN_ID" --task "$TASK_ID" --role review-final \
+  --provider codex --model "$MODEL" --effort "$EFFORT" --worktree "$WORKTREE" \
+  --sandbox "$SANDBOX" --route-source "$ROUTE_SOURCE" --route-sha256 "$ROUTE_SHA256" \
+  --execution "$EXECUTION" --started-at "$STARTED_AT" --status "$STATUS" \
+  --exit-status "$EXIT_STATUS" --output "$OUTPUT"
+```
+
+Append the result only after observing the process outcome. Supply `--session-id "$SESSION_ID"`
+on both commands for a resumed reviewer session. Record the actual
+`--sandbox <profile> --route-source <source> --route-sha256 <digest>` on both records.
 - After any defect fix, the affected end-to-end verification must pass twice consecutively before
-  task completion, with the two passes recorded as two separate `verification` entries.
+  task completion, with both observed passes retained in check evidence.
 - Apply `${CLAUDE_PLUGIN_ROOT}/rules/untrusted-input.md` and
   `${CLAUDE_PLUGIN_ROOT}/rules/risk-authority.md` for input handling and authority decisions.
 
 ## Focused Agent Cycle
 
-1. Read the complete journal, current task, and relevant references before acting.
+1. Read the task brief, recent run log, and relevant references before acting.
 2. Confirm the task's acceptance criteria and allowed/owned `files`.
 3. Compare active task files and shared resources before parallel work. Require disjoint ownership
    and serialize every overlap; use isolated worktrees for disjoint tasks without exceeding the
@@ -267,22 +285,20 @@ when material output must be retained.
    `references/review.md`. Only a reviewer confirmation round may resume that same reviewer session.
 5. Write the brief, resolve it to its absolute filesystem realpath, then pass the absolute worktree
    and canonical brief path to `forge launch`. Forge resolves the full HEAD, saves the exact prompt
-   and appends `execution` before launch; do not write
-   `prompt.md`, `events.jsonl`, `launch.json`, `pid`, or the `execution` record yourself. The typed
+   and appends `execution_started` before launch; do not write
+   `prompt.md`, `events.jsonl`, `launch.json`, `pid`, or the launch record yourself. The typed
    owner record carries no `branch` field; read it with `git -C <worktree> branch --show-current`
    when you need it.
 6. Observe with `forge launch collect` without editing files owned by the active agent, following
    the wait and outcome rules in Forge Monitor Lifecycle And Ambiguity Protocol. Use
    `forge launch cancel` only when collect names it or the execution must be stopped.
 7. When collect reports `launch collect: complete` or `launch collect: failed`, it has already
-   written the one terminal `execution_result`. Inspect the exact `handoff.md` and the worktree;
-   never append an `execution_result` for a typed execution by hand.
-8. Evaluate acceptance criteria and record material checks as `verification`.
+   written the one terminal `execution_finished`. Inspect the exact `handoff.md` and the worktree;
+   never append a finish record for a typed execution by hand.
+8. Evaluate acceptance criteria and retain the observed check evidence.
 9. Record only consequential resolutions or user dependencies as `decision`.
-10. After evaluating the criteria, append `complete` when they are satisfied, `failed` when they
-    are conclusively unmet and no in-scope recovery remains, or `blocked` when a user or external
-    dependency prevents completion or judgment. Otherwise keep the task `active` and return the
-    unresolved work to the workflow.
+10. Describe the task outcome with `journal task-finish` and return unresolved work to the
+    workflow. This record does not determine gate or task permission.
 
 Routine bounded work needs routed implementation plus main-session verification. Add a fresh
 reviewer only for material risk or a distinct unresolved question; do not repeat identical reviews.

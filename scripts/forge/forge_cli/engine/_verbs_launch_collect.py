@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import json
 import os
-import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -46,20 +46,6 @@ class BoundExecution:
     marker: dict[str, Any]
 
 
-def _execution_record(state: Any, execution: str, verb: str) -> dict[str, object]:
-    matches = [
-        dict(record)
-        for record in state.records
-        if record.get("type") == "execution" and record.get("execution") == execution
-    ]
-    if len(matches) != 1:
-        raise Refusal(
-            V2ReasonCode.STATE_PRECONDITION,
-            f"forge: launch {verb} refused — execution {execution} does not exist",
-        )
-    return matches[0]
-
-
 def _binding_refusal(verb: str, execution: str, field: str) -> Refusal:
     return Refusal(
         V2ReasonCode.EVIDENCE_INCOMPLETE,
@@ -70,43 +56,47 @@ def _binding_refusal(verb: str, execution: str, field: str) -> Refusal:
 
 def _marker_paths(
     run_dir: Path,
-    record: Mapping[str, object],
     execution: str,
     verb: str,
 ) -> _launch_lane.LaunchPaths:
-    marker_ref = record.get("launch_marker")
-    if not isinstance(marker_ref, str):
-        suffix = "; collect a prose launch by prose" if verb == "collect" else ""
+    matches = (
+        [path for path in run_dir.glob(f"*/{execution}")
+         if path.parent.name != _launch_lane.EXECUTION_IDS_NAME]
+        if _launch_lane.EXECUTION_PATTERN.fullmatch(execution) else []
+    )
+    if not matches:
         raise Refusal(
             V2ReasonCode.STATE_PRECONDITION,
-            f"forge: launch {verb} refused — execution {execution} has no "
-            f"launch_marker{suffix}",
+            f"forge: launch {verb} refused — execution {execution} does not exist",
         )
-    agent = record.get("agent")
-    if not _launch_lane.valid_component(agent):
+    if len(matches) != 1:
         raise _binding_refusal(verb, execution, "agent")
+    agent = matches[0].parent.name
     try:
         paths = _launch_lane.LaunchPaths(run_dir, str(agent), execution)
     except ValueError as exc:
         raise _binding_refusal(verb, execution, "execution") from exc
-    if marker_ref != paths.reference(_launch_lane.MARKER_NAME):
-        raise _binding_refusal(verb, execution, "launch_marker")
     return paths
 
 
 def _load_marker(
     ctx: chain_core.CommandContext,
-    record: Mapping[str, object],
     paths: _launch_lane.LaunchPaths,
-    run_id: str,
     verb: str,
     execution: str,
 ) -> dict[str, Any]:
     try:
+        if not os.path.lexists(paths.leaf(_launch_lane.MARKER_NAME)):
+            suffix = "; collect a prose launch by prose" if verb == "collect" else ""
+            raise Refusal(
+                V2ReasonCode.STATE_PRECONDITION,
+                f"forge: launch {verb} refused — execution {execution} has no "
+                f"launch_marker{suffix}",
+            )
         marker = _launch_lane.read_marker(paths.leaf(_launch_lane.MARKER_NAME))
-        if marker.get("run_id") != run_id:
-            raise _binding_refusal(verb, execution, "run_id")
-        field = _launch_lane.bind_marker(ctx, marker, record, paths)
+        field = _launch_lane.bind_wrapper_config(marker, paths)
+        if field is None:
+            field = _launch_lane.bind_marker(ctx, marker, paths)
     except Refusal:
         raise
     except (OSError, ValueError) as exc:
@@ -117,15 +107,36 @@ def _load_marker(
 
 
 def _bound_execution(self: Engine, execution: str, verb: str) -> BoundExecution:
-    """Bind a journal owner to its validated marker after shared checkpoints."""
+    """Bind a validated marker and its owner files after shared checkpoints."""
 
     _launch_lane.require_no_halt(self.ctx)
     run_id = _launch_lane.require_run_id(self.ctx)
     run = _launch_lane.run_state(self.ctx, run_id)
-    record = _execution_record(run.state, execution, verb)
-    paths = _marker_paths(run.run_dir, record, execution, verb)
-    marker = _load_marker(self.ctx, record, paths, run_id, verb, execution)
-    result = _launch_lane.result_record(run.state, execution, paths.agent)
+    paths = _marker_paths(run.run_dir, execution, verb)
+    marker = _load_marker(self.ctx, paths, verb, execution)
+    record: dict[str, object] = {
+        **marker, "task_id": marker["task"], "execution_id": paths.execution,
+        "launch_marker": paths.reference(_launch_lane.MARKER_NAME),
+    }
+    result = None
+    if marker["collected_at"] is not None:
+        caveats: list[str] = []
+        try:
+            completion = json.loads(_launch_lane.read_private_record(
+                paths.leaf(_review_attempt.COMPLETION_NAME)
+            ))
+            if isinstance(completion, dict) and completion.get("error") == "not-logged-in":
+                caveats.append(
+                    _review_launch.CODEX_NOT_LOGGED_IN
+                    if marker["provider"] == "codex" else _review_launch.CLAUDE_NOT_LOGGED_IN
+                )
+        except (OSError, ValueError):
+            pass
+        result = {
+            "status": marker["collected_status"], "caveats": caveats,
+        }
+        if paths.leaf(_launch_lane.LAUNCH_LEAVES["capture"]).is_file():
+            result["handoff"] = paths.reference(_launch_lane.LAUNCH_LEAVES["capture"])
     return BoundExecution(run, record, result, paths, marker)
 
 
@@ -307,31 +318,11 @@ def _validated_completion(
     return completion
 
 
-def _print_record_warnings(
-    repository: Path, run_id: str, record: dict[str, object]
-) -> None:
-    """Emit best-effort close-projection warnings after a typed append."""
-
-    try:
-        from codex_orchestrator import result_gate
-
-        result_gate.print_record_warnings(
-            repository, run_id, record, stream=sys.stderr
-        )
-    except Exception:
-        return
-
-
 def launch_collect(self: Engine, execution: str) -> Outcome:
     """Collect one typed execution without synthesizing terminal evidence."""
 
     bound = _bound_execution(self, execution, "collect")
     if bound.result is not None:
-        _launch_lane.mark_collected(
-            bound.paths,
-            bound.marker,
-            bound.result.get("status"),
-        )
         return _launch_lane.terminal_outcome(bound.paths, bound.result)
     try:
         attempt_fd = _launch_lane.open_attempt(bound.paths)
@@ -351,20 +342,14 @@ def launch_collect(self: Engine, execution: str) -> Outcome:
     except OSError as exc:
         raise _attempt_refusal("collect", execution, exc) from exc
     mapped = _launch_lane.map_completion(bound.record, bound.paths, completion)
-    result, repeated = _launch_lane.append_execution_result(
+    result = _launch_lane.append_execution_result(
         bound.run,
         bound.paths,
-        task=str(bound.record["task"]),
+        task=str(bound.record["task_id"]),
         result=mapped,
         completion_raw=raw,
     )
     _launch_lane.mark_collected(bound.paths, bound.marker, result.get("status"))
-    if not repeated:
-        _print_record_warnings(
-            bound.run.repository,
-            str(bound.marker["run_id"]),
-            result,
-        )
     return _launch_lane.terminal_outcome(bound.paths, result, message=mapped.message)
 
 
@@ -515,8 +500,7 @@ def launch_cancel(self: Engine, execution: str) -> Outcome:
                     f"forge: launch cancel refused — attempt publication lock was not "
                     f"acquired for {execution}",
                 )
-            state = bound.run.journal._scan_run(bound.run.run_dir)
-            if _launch_lane.result_record(state, execution, bound.paths.agent) is not None:
+            if _launch_lane.completion_present(bound.paths):
                 raise _cancel_terminal(execution)
             identity = _read_cancel_identity(bound, attempt_fd)
             if identity.get("wrapper_pid") is None:

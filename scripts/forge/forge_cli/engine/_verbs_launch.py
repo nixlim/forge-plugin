@@ -6,7 +6,6 @@ import dataclasses
 import os
 import shutil
 import stat
-import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -118,8 +117,8 @@ def _require_initialized(worktree: Path, head: str) -> None:
         raise Refusal(V2ReasonCode.STATE_PRECONDITION, INIT_INCOMPLETE)
 
 
-def _require_no_inflight(state: Any, worktree: Path) -> None:
-    execution = _launch_lane.in_flight_execution(state.records, worktree)
+def _require_no_inflight(run: _launch_lane.RunState, worktree: Path) -> None:
+    execution = _launch_lane.in_flight_execution(run, worktree)
     if execution is not None:
         raise Refusal(
             V2ReasonCode.STATE_PRECONDITION,
@@ -133,7 +132,6 @@ def _execution_fields(
 ) -> dict[str, object]:
     return {
         "agent": paths.agent,
-        "task": facts.task,
         "provider": facts.route.provider,
         "role": facts.role,
         "mode": "detached",
@@ -220,7 +218,7 @@ def _preflight(
         omitted_short=omitted,
     )
     _provider_checks(route, environment, worktree)
-    _require_no_inflight(run.state, worktree)
+    _require_no_inflight(run, worktree)
     return facts
 
 
@@ -242,27 +240,59 @@ def _make_owner_dir(path: Path) -> bool:
     return True
 
 
+def _require_owner_run_dir(path: Path) -> None:
+    try:
+        metadata = os.lstat(path)
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                or path.resolve(strict=True) != path):
+            raise OSError("run directory is unsafe")
+    except (OSError, RuntimeError) as exc:
+        raise Refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: launch refused — launch file preparation failed",
+        ) from exc
+
+
 def _create_paths(
-    facts: StartFacts, state: Any, builders: Any
+    facts: StartFacts, run: _launch_lane.RunState
 ) -> tuple[_launch_lane.LaunchPaths, bool]:
+    existing = _launch_lane.markers(run)
     agent = _launch_lane.allocate_agent(
-        state.records,
+        existing,
         facts.route.provider,
         facts.role,
         facts.task,
     )
-    execution = builders._allocate_id(state.records, "execution")
-    paths = _launch_lane.LaunchPaths(facts.run_dir, agent, execution)
     agent_dir = facts.run_dir / agent
     created_agent = _make_owner_dir(agent_dir)
+    reservations = facts.run_dir / _launch_lane.EXECUTION_IDS_NAME
     try:
-        if not _make_owner_dir(paths.directory):
-            raise FileExistsError(paths.directory)
+        _make_owner_dir(reservations)
+        for number in range(1, 100):
+            execution = f"execution-{number:02d}"
+            if any(path.parent.name != _launch_lane.EXECUTION_IDS_NAME
+                   for path in facts.run_dir.glob(f"*/{execution}")):
+                continue
+            reserved = reservations / execution
+            if not _make_owner_dir(reserved):
+                continue
+            paths = _launch_lane.LaunchPaths(facts.run_dir, agent, execution)
+            created_execution = False
+            try:
+                created_execution = _make_owner_dir(paths.directory)
+                if created_execution:
+                    return paths, created_agent
+            finally:
+                if not created_execution:
+                    reserved.rmdir()
+        raise Refusal(
+            V2ReasonCode.EVIDENCE_INCOMPLETE,
+            "forge: launch refused — launch file preparation failed",
+        )
     except BaseException:
         if created_agent:
             agent_dir.rmdir()
         raise
-    return paths, created_agent
 
 
 def _base_marker(
@@ -304,14 +334,17 @@ def _cleanup(paths: _launch_lane.LaunchPaths, created_agent: bool) -> None:
     try:
         for name in (
             _launch_lane.MARKER_NAME,
+            _launch_lane.WRAPPER_CONFIG_NAME,
             _launch_lane.LAUNCH_LEAVES["events"],
             _launch_lane.LAUNCH_LEAVES["prompt"],
+            _launch_lane.WORKTREE_NAME,
         ):
             try:
                 paths.leaf(name).unlink()
             except FileNotFoundError:
                 pass
         paths.directory.rmdir()
+        (paths.run_dir / _launch_lane.EXECUTION_IDS_NAME / paths.execution).rmdir()
         if created_agent:
             (paths.run_dir / paths.agent).rmdir()
     except OSError as exc:
@@ -320,17 +353,6 @@ def _cleanup(paths: _launch_lane.LaunchPaths, created_agent: bool) -> None:
             f"forge: launch refused — cleanup incomplete for {paths.execution}; "
             f"remove {paths.directory} before retrying",
         ) from exc
-
-
-def _builder_start(
-    builders: Any, facts: StartFacts, paths: _launch_lane.LaunchPaths, marker: Mapping[str, Any],
-) -> Any:
-    return builders.execution_start(
-        facts.repository,
-        facts.run_id,
-        idempotency_key=_launch_lane.start_idempotency(marker),
-        **_execution_fields(facts, paths),
-    )
 
 
 def _prepare_owner_files(
@@ -350,6 +372,11 @@ def _prepare_owner_files(
         _launch_lane.LAUNCH_LEAVES["events"],
         b"",
     )
+    _launch_lane.write_owner_file(
+        paths.directory,
+        _launch_lane.WORKTREE_NAME,
+        (str(facts.worktree) + "\n").encode("utf-8"),
+    )
     argv = _launch_lane.launch_argv(
         facts.route.provider,
         facts.role,
@@ -363,10 +390,15 @@ def _prepare_owner_files(
     attempt_fd = _launch_lane.open_attempt(paths)
     try:
         config = _launch_lane.wrapper_config(marker, argv)
-        _config_json, launcher_argv, digest = _review_lane_api.wrapper_launcher(
+        config_json, launcher_argv, digest = _review_lane_api.wrapper_launcher(
             ctx,
             attempt_fd,
             config,
+        )
+        _launch_lane.write_owner_file(
+            paths.directory,
+            _launch_lane.WRAPPER_CONFIG_NAME,
+            config_json.encode("utf-8") + b"\n",
         )
         marker["launcher_argv_digest"] = digest
         _launch_lane.write_marker(paths.leaf(_launch_lane.MARKER_NAME), marker)
@@ -402,46 +434,16 @@ def _close_attempt(descriptor: int) -> None:
         pass
 
 
-def _append_draft(
-    builders: Any, journal: Any, facts: StartFacts, draft: OwnerDraft
-) -> OwnerLaunch:
-    try:
-        outcome = _builder_start(builders, facts, draft.paths, draft.marker)
-    except journal.CoordinationRefusal as exc:
-        _close_attempt(draft.attempt_fd)
-        if str(exc) != journal.BATCH_DIVERGED:
-            _cleanup(draft.paths, draft.created_agent)
-        raise Refusal(V2ReasonCode.STATE_PRECONDITION, str(exc)) from exc
-    except BaseException as exc:
-        _close_attempt(draft.attempt_fd)
-        raise _ambiguous_owner_outcome() from exc
-    execution_records = [record for record in outcome.records if record.get("type") == "execution"]
-    if (
-        len(execution_records) != 1
-        or execution_records[0].get("execution") != draft.paths.execution
-    ):
-        _close_attempt(draft.attempt_fd)
-        raise _ambiguous_owner_outcome()
-    return OwnerLaunch(facts=facts, draft=draft)
-
-
-def _ambiguous_owner_outcome() -> Refusal:
-    return Refusal(
-        V2ReasonCode.EVIDENCE_INCOMPLETE,
-        "forge: launch refused — owner record outcome is ambiguous",
-        remediation="inspect the launch owner record before retrying",
-    )
-
-
 def _owner_record(ctx: chain_core.CommandContext, facts: StartFacts) -> OwnerLaunch:
     """Publish owner files before appending the one execution owner record."""
 
     run = _launch_lane.run_state(ctx, facts.run_id)
-    with run.batch.batch_lock(facts.run_dir, create=True):
-        state = run.journal._scan_run(facts.run_dir)
-        _require_no_inflight(state, facts.worktree)
+    _require_owner_run_dir(run.run_dir)
+    with _launch_lane.journal_lock(run) as descriptor:
+        _require_owner_run_dir(run.run_dir)
+        _require_no_inflight(run, facts.worktree)
         try:
-            paths, created_agent = _create_paths(facts, state, run.builders)
+            paths, created_agent = _create_paths(facts, run)
             draft = _prepare_draft(ctx, facts, paths, created_agent)
         except Refusal:
             raise
@@ -450,27 +452,20 @@ def _owner_record(ctx: chain_core.CommandContext, facts: StartFacts) -> OwnerLau
                 V2ReasonCode.EVIDENCE_INCOMPLETE,
                 "forge: launch refused — launch file preparation failed",
             ) from exc
-        return _append_draft(run.builders, run.journal, facts, draft)
-
-
-def _print_record_warnings(
-    repository: Path, run_id: str, record: dict[str, object]
-) -> None:
-    """Emit best-effort close-projection warnings after a typed append."""
-
-    try:
-        from codex_orchestrator import result_gate
-
-        result_gate.print_record_warnings(
-            repository, run_id, record, stream=sys.stderr
-        )
-    except Exception:
-        return
+        record = {
+            "kind": "execution_started", "run_id": facts.run_id,
+            "execution_id": paths.execution, "attempt_id": draft.marker["attempt"],
+            "task_id": facts.task, "started_at": draft.marker["requested_at"],
+            **_execution_fields(facts, paths),
+        }
+        if descriptor is not None:
+            _launch_lane.append_record(run, record, descriptor)
+        return OwnerLaunch(facts=facts, draft=draft)
 
 
 def _clear_spawn_failure(
     ctx: chain_core.CommandContext, owner: OwnerLaunch, cause: str
-) -> tuple[dict[str, object], bool]:
+) -> dict[str, object]:
     paths = owner.draft.paths
     raw = _launch_lane.read_private_record(
         paths.leaf(_review_attempt.COMPLETION_NAME)
@@ -496,17 +491,15 @@ def _clear_spawn_failure(
         message="launch collect: failed",
     )
     run = _launch_lane.run_state(ctx, owner.facts.run_id)
-    record, repeated = _launch_lane.append_execution_result(
+    record = _launch_lane.append_execution_result(
         run,
         paths,
         task=owner.facts.task,
         result=result,
         completion_raw=raw,
     )
-    if not repeated:
-        _print_record_warnings(owner.facts.repository, owner.facts.run_id, record)
     _launch_lane.mark_collected(paths, owner.draft.marker, record.get("status"))
-    return record, repeated
+    return record
 
 
 def _spawn_failure_outcome(
@@ -526,9 +519,7 @@ def _spawn_failure_outcome(
         # Sibling verbs cannot import each other, so Engine owns this handoff.
         return self.launch_collect(draft.paths.execution)
     recorded_cause = str(completion.get("error") or cause)
-    result, repeated = _clear_spawn_failure(self.ctx, owner, recorded_cause)
-    if repeated:
-        return _launch_lane.terminal_outcome(draft.paths, result)
+    _clear_spawn_failure(self.ctx, owner, recorded_cause)
     # The refusal reports this invocation's local spawn failure, not a raced record.
     raise Refusal(
         V2ReasonCode.EVIDENCE_INCOMPLETE,
@@ -544,11 +535,6 @@ def launch(
     facts = _preflight(self.ctx, role, task, worktree, brief)
     owner = _owner_record(self.ctx, facts)
     draft = owner.draft
-    warning_record: dict[str, object] = {
-        "type": "execution",
-        "execution": draft.paths.execution,
-        "agent": draft.paths.agent,
-    }
     try:
         try:
             process = _review_lane_api.spawn_wrapper(
@@ -558,9 +544,6 @@ def launch(
                 attempt_fd=draft.attempt_fd,
             )
         except Exception as exc:
-            _print_record_warnings(
-                facts.repository, facts.run_id, warning_record
-            )
             return _spawn_failure_outcome(self, owner, exc)
     finally:
         os.close(draft.attempt_fd)
@@ -572,7 +555,6 @@ def launch(
             f"forge: launch refused — pid sidecar unavailable for "
             f"{draft.paths.execution}; run launch collect",
         ) from exc
-    _print_record_warnings(facts.repository, facts.run_id, warning_record)
     return Outcome(
         ok=True,
         reason_code=V2ReasonCode.OK,

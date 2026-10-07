@@ -215,14 +215,13 @@ class LaunchArgvTests(LaunchLaneSupport, unittest.TestCase):
                     prefix
                     + b"--- committed agent-project-context ---\n"
                     + context
-                    + b"\n--- committed gotchas (optional; empty when absent) ---\n"
                     + b"\n--- task assignment ---\n"
                     + self.brief.read_bytes(),
                 )
                 self.assertEqual(material.role_body_path, body_path)
                 self.assertEqual(material.role_body_sha256, digest(body))
 
-    def test_prompt_reads_committed_gotchas_not_working_tree(self) -> None:
+    def test_prompt_ignores_committed_and_working_tree_gotchas(self) -> None:
         gotchas = self.repo / ".forge/history/gotchas.md"
         gotchas.parent.mkdir(parents=True, exist_ok=True)
         gotchas.write_text("committed gotcha\n", encoding="utf-8")
@@ -259,7 +258,7 @@ class LaunchArgvTests(LaunchLaneSupport, unittest.TestCase):
                     "implementer", provider, self.linked_worktree, self.head, self.brief
                 ),
             )
-            self.assertIn(b"committed gotcha\n", material.prompt)
+            self.assertNotIn(b"committed gotcha\n", material.prompt)
             self.assertNotIn(b"dirty gotcha", material.prompt)
 
     def test_brief_validation_refuses_every_unsafe_shape(self) -> None:

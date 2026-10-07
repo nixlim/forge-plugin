@@ -16,6 +16,7 @@ from tests._fresh_eval_support import (
     FreshEvalRepo,
     ScriptedLauncher,
 )
+from tests.test_revision22_legacy_fixtures import no_journal_access
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -108,10 +109,8 @@ class FreshEvalChainTests(cli_support.ForgeCLIFixture):
         chain_id = self._start_chain()
         launcher = ScriptedLauncher(self.fresh_repository.expected_verdicts)
 
-        with mock.patch.object(
-            FRESH, "NativeReviewerLauncher", return_value=launcher
-        ), mock.patch.object(RUNTIME, "_coordination_modules",
-                             side_effect=AssertionError("journal consulted")):
+        with (mock.patch.object(FRESH, "NativeReviewerLauncher", return_value=launcher),
+              no_journal_access()):
             exit_code, envelope = self._invoke_cli(
                 "--chain-id", chain_id, "verify"
             )

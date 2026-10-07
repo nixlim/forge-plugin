@@ -830,7 +830,6 @@ def migrate(root: Path, plugin_root: Path, selections: dict[str, str], now: str 
             preflight_output_destination(root, destination)
         for directory in (
             ".forge/evals/tasks",
-            ".forge/history/runs",
             ".forge/history/drift",
             ".forge/history/migrations",
             ".forge/tmp",

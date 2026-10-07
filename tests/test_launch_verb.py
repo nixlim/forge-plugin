@@ -4,27 +4,33 @@ from __future__ import annotations
 
 import concurrent.futures
 import errno
+import fcntl
+import io
 import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import threading
 import time
 import unittest
+from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest import mock
 
 from tests._cli_loader import patch_engine
 from tests._launch_support import (
+    CLI,
     ENGINE,
     LAUNCH_LANE,
+    ROOT,
     STRIPPED_PATH,
     VERBS_LAUNCH,
     LaunchLaneSupport,
 )
 
-from codex_orchestrator import builders, journal
+from codex_orchestrator import journal
 
 
 class _LaunchVerbSupport(LaunchLaneSupport):
@@ -104,47 +110,26 @@ class LaunchVerbPreflightTests(_LaunchVerbSupport, unittest.TestCase):
             with self.assertRaises(AssertionError):
                 assertion()
 
-    def _assert_inactive_task_refused(self, engine: object) -> None:
-        refusal = self._assert_clean_refusal(
-            engine,
-            lambda: VERBS_LAUNCH.launch(
-                engine, role="implementer", task="task-99",
-                worktree=str(self.linked_worktree), brief=str(self.brief),
-            ),
-            ENGINE.V2ReasonCode.STATE_PRECONDITION,
-            "forge: journal builder refused — task task-99 is not active",
+    def test_task_label_does_not_gate_launch(self) -> None:
+        engine = self.ready_engine()
+        outcome = VERBS_LAUNCH.launch(
+            engine, role="implementer", task="task-99",
+            worktree=str(self.linked_worktree), brief=str(self.brief),
         )
-        self.assertEqual(refusal.outcome().exit_code, 1)
+        self.assertTrue(outcome.ok)
+        self.assertEqual(self.execution_records()[0]["task_id"], "task-99")
 
-    def test_inactive_task_refusal_does_not_block_next_launch(self) -> None:
+    def test_initialization_refusal_leaves_no_attempt(self) -> None:
         engine = self.ready_engine()
-        for _attempt in range(2):
-            self._assert_inactive_task_refused(engine)
-        self.assertTrue(self.seed_launch(engine=engine).ok)
-        self.assertEqual(len(self.execution_records()), 1)
-        self.assertEqual(self.execution_records()[0]["execution"], "execution-01")
-
-    def test_initialization_and_active_task_checks_leave_no_attempt(self) -> None:
-        engine = self.ready_engine()
-        self._assert_inactive_task_refused(engine)
         manifest = self.linked_worktree / ".forge-manifest"
         manifest.write_text("init_completed: false\n", encoding="utf-8")
-        subprocess.run(
-            ["git", "-C", str(self.linked_worktree), "add", ".forge-manifest"],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git", "-C", str(self.linked_worktree), "-c",
-                "user.name=Forge Tests", "-c",
-                "user.email=forge-tests@example.invalid", "commit", "--quiet",
-                "-m", "incomplete manifest",
-            ],
-            check=True,
-        )
+        subprocess.run(["git", "-C", str(self.linked_worktree), "add", ".forge-manifest"],
+                       check=True)
+        subprocess.run(["git", "-C", str(self.linked_worktree), "-c",
+                        "user.name=Forge Tests", "-c", "user.email=forge-tests@example.invalid",
+                        "commit", "--quiet", "-m", "incomplete manifest"], check=True)
         self._assert_clean_refusal(
-            engine,
-            lambda: self.seed_launch(engine=engine),
+            engine, lambda: self.seed_launch(engine=engine),
             ENGINE.V2ReasonCode.STATE_PRECONDITION,
             "forge: forge initialization incomplete — run /forge:init",
         )
@@ -202,7 +187,287 @@ class LaunchVerbPreflightTests(_LaunchVerbSupport, unittest.TestCase):
                     assertion()
 
 
+class LaunchRunDirectorySafetyTests(_LaunchVerbSupport, unittest.TestCase):
+    def test_symlinked_run_directory_refuses_before_any_launch_write(self) -> None:
+        engine = self.ready_engine()
+        run_dir = self.run_dir(self.repo, self.run_id)
+        backing = run_dir.with_name("run-backing")
+        run_dir.rename(backing)
+        run_dir.symlink_to(backing, target_is_directory=True)
+        original = (backing / "journal.jsonl").read_bytes()
+
+        def assertion() -> None:
+            self._assert_clean_refusal(
+                engine,
+                lambda: self.seed_launch(engine=engine),
+                ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE,
+                "forge: launch refused — launch file preparation failed",
+            )
+            self.assertEqual((backing / "journal.jsonl").read_bytes(), original)
+            self.assertEqual(sorted(path.name for path in backing.iterdir()), ["journal.jsonl"])
+            self.assertEqual(self.spawn_calls, [])
+
+        assertion()
+        with mock.patch.object(VERBS_LAUNCH, "_require_owner_run_dir"):
+            with redirect_stderr(io.StringIO()), self.assertRaises(AssertionError):
+                assertion()
+
+
 class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
+    def test_launch_selected_from_linked_checkout_logs_under_main_root(self) -> None:
+        self.open_run_and_task()
+        repository = CLI.Repository(self.linked_worktree)
+        context = CLI.CommandContext(
+            repository,
+            CLI.ChainStore(repository.common_root()),
+            CLI.CLIOptions(repo=str(self.linked_worktree), run_id=self.run_id),
+        )
+        self.assertTrue(self.seed_launch(engine=CLI.Engine(context)).ok)
+        self.assertEqual(len(self.execution_records()), 1)
+        self.assertFalse((self.linked_worktree / ".codex-orchestrator").exists())
+
+    def test_prose_start_then_launch_get_distinct_execution_ids(self) -> None:
+        engine = self.ready_engine()
+        prose = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/codex_orch_tools.py"),
+             "journal", "execution-start", "--repo", str(self.repo),
+             "--run-id", self.run_id, "--task", self.task_id,
+             "--role", "implementer", "--provider", "codex",
+             "--model", "gpt-test", "--effort", "high",
+             "--sandbox", "workspace-write", "--route-source", "local",
+             "--route-sha256", "a" * 64, "--worktree", str(self.linked_worktree),
+             "--execution", "execution-80"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(prose.returncode, 0, prose.stderr)
+        self.assertTrue(self.seed_launch(engine=engine).ok)
+        self.assertEqual(
+            [record["execution_id"] for record in self.execution_records()],
+            ["execution-80", "execution-01"],
+        )
+
+    def test_unreadable_marker_blocks_only_its_worktree(self) -> None:
+        engine = self.ready_engine()
+        self.seed_launch(engine=engine)
+        marker = (
+            self.run_dir(self.repo, self.run_id)
+            / "codex-implementer-01/execution-01/launch.json"
+        )
+        marker.unlink()
+        marker.symlink_to(self.brief)
+        with self.assertRaises(ENGINE.Refusal) as caught:
+            self.seed_launch(engine=engine)
+        self.assertEqual(
+            caught.exception.message,
+            "forge: launch refused — execution execution-01 is still in flight in "
+            f"{self.linked_worktree}; run launch collect or launch cancel",
+        )
+        other = self.scratch / "other-worktree"
+        subprocess.run(
+            ["git", "-C", str(self.repo), "worktree", "add", "--quiet", "--detach",
+             str(other), self.head], check=True,
+        )
+        self.assertTrue(self.seed_launch(engine=engine, worktree=other).ok)
+
+    def test_execution_directories_allocate_distinct_ids_without_journal_lock(self) -> None:
+        self.configure_route("plan", "claude")
+        engine = self.ready_engine()
+        implementer = VERBS_LAUNCH._preflight(
+            engine.ctx, "implementer", self.task_id, str(self.linked_worktree), str(self.brief)
+        )
+        planner = VERBS_LAUNCH._preflight(
+            engine.ctx, "plan", self.task_id, str(self.linked_worktree), str(self.brief)
+        )
+        barrier = threading.Barrier(2)
+
+        def synchronize(_run: object, _worktree: object) -> None:
+            barrier.wait(timeout=5)
+
+        def allocate(facts: object) -> object:
+            return VERBS_LAUNCH._owner_record(engine.ctx, facts)
+
+        with (
+            mock.patch.object(VERBS_LAUNCH, "_require_no_inflight", side_effect=synchronize),
+            mock.patch.object(journal, "open_append_lock", side_effect=journal.CoordinationRefusal(
+                journal.APPEND_IO_ERROR
+            )),
+            redirect_stderr(io.StringIO()),
+            concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
+        ):
+            owners = list(pool.map(allocate, (implementer, planner)))
+        try:
+            self.assertEqual(
+                {owner.draft.paths.execution for owner in owners},
+                {"execution-01", "execution-02"},
+            )
+        finally:
+            for owner in owners:
+                os.close(owner.draft.attempt_fd)
+
+    def test_reservation_skips_next_id_even_after_execution_directory_goes_away(self) -> None:
+        engine = self.ready_engine()
+        facts = VERBS_LAUNCH._preflight(
+            engine.ctx, "implementer", self.task_id,
+            str(self.linked_worktree), str(self.brief),
+        )
+        run = LAUNCH_LANE.run_state(engine.ctx, self.run_id)
+        reservations = facts.run_dir / LAUNCH_LANE.EXECUTION_IDS_NAME
+        reservations.mkdir()
+        (reservations / "execution-01").mkdir()
+        first, _ = VERBS_LAUNCH._create_paths(facts, run)
+        self.assertEqual(first.execution, "execution-02")
+        first.directory.rmdir()
+        second, _ = VERBS_LAUNCH._create_paths(facts, run)
+        self.assertEqual(second.execution, "execution-03")
+
+        second.directory.rmdir()
+        original = VERBS_LAUNCH._make_owner_dir
+
+        def ignore_reservation(path):
+            if path == reservations / "execution-02":
+                return True
+            return original(path)
+
+        with mock.patch.object(VERBS_LAUNCH, "_make_owner_dir", side_effect=ignore_reservation):
+            colliding, _ = VERBS_LAUNCH._create_paths(facts, run)
+        self.assertNotEqual(second.execution, first.execution)
+        with self.assertRaises(AssertionError):
+            self.assertNotEqual(colliding.execution, first.execution)
+
+    def test_execution_99_starts_and_100_refuses_before_reservation_or_spawn(self) -> None:
+        engine = self.ready_engine()
+        run_dir = self.run_dir(self.repo, self.run_id)
+        reservations = run_dir / LAUNCH_LANE.EXECUTION_IDS_NAME
+        reservations.mkdir()
+        for number in range(1, 99):
+            (reservations / f"execution-{number:02d}").mkdir()
+        started = self.seed_launch(engine=engine)
+        self.assertTrue(started.ok)
+        record = self.execution_records()[0]
+        self.assertEqual(record["execution_id"], "execution-99")
+        self.assertTrue((reservations / "execution-99").is_dir())
+        marker = self.marker(record)
+        completion = self.paths(record).leaf("completion.json")
+        completion.write_text("{}", encoding="utf-8")
+        completion.chmod(0o600)
+        LAUNCH_LANE.mark_collected(self.paths(record), marker, "failed")
+
+        with mock.patch.object(
+            VERBS_LAUNCH, "_make_owner_dir", wraps=VERBS_LAUNCH._make_owner_dir
+        ) as mkdir:
+            with self.assertRaises(ENGINE.Refusal) as caught:
+                self.seed_launch(engine=engine)
+        self.assertEqual(caught.exception.reason_code, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE)
+        self.assertEqual(caught.exception.message,
+                         "forge: launch refused — launch file preparation failed")
+        self.assertFalse(self.spawn_calls)
+        self.assertFalse((reservations / "execution-100").exists())
+        self.assertFalse(any(call.args[0] == reservations / "execution-100"
+                             for call in mkdir.call_args_list))
+
+        with (
+            mock.patch.object(VERBS_LAUNCH, "range", lambda _start, _stop: range(1, 101),
+                              create=True),
+            mock.patch.object(VERBS_LAUNCH, "_make_owner_dir",
+                              wraps=VERBS_LAUNCH._make_owner_dir) as disabled_mkdir,
+        ):
+            self.seed_launch(engine=engine)
+        with self.assertRaises(AssertionError):
+            self.assertFalse(any(call.args[0] == reservations / "execution-100"
+                                 for call in disabled_mkdir.call_args_list))
+
+    def test_launch_waits_for_append_lock(self) -> None:
+        engine = self.ready_engine()
+        path = self.run_dir(self.repo, self.run_id) / "journal.jsonl"
+        holder = os.open(path, os.O_WRONLY)
+        real_flock = fcntl.flock
+        real_flock(holder, fcntl.LOCK_EX)
+        contended = threading.Event()
+        release = threading.Event()
+        outcomes: list[object] = []
+
+        def sensed_flock(descriptor: int, mode: int) -> None:
+            try:
+                real_flock(descriptor, mode | fcntl.LOCK_NB)
+            except BlockingIOError:
+                contended.set()
+                if not release.wait(5):
+                    raise AssertionError("lock holder was not released") from None
+                real_flock(descriptor, mode)
+
+        def launch_once() -> None:
+            try:
+                outcomes.append(self.seed_launch(engine=engine))
+            except BaseException as exc:
+                outcomes.append(exc)
+
+        try:
+            with mock.patch.object(LAUNCH_LANE.fcntl, "flock", side_effect=sensed_flock):
+                thread = threading.Thread(target=launch_once)
+                thread.start()
+                self.assertTrue(contended.wait(5), "launch skipped the held journal lock")
+                self.assertEqual(self.execution_records(), [])
+                os.close(holder)
+                holder = -1
+                release.set()
+                thread.join(5)
+                self.assertFalse(thread.is_alive())
+        finally:
+            release.set()
+            if holder >= 0:
+                os.close(holder)
+        self.assertEqual(len(outcomes), 1)
+        self.assertTrue(getattr(outcomes[0], "ok", False), outcomes)
+        self.assertEqual(len(self.execution_records()), 1)
+
+    def test_invalid_marker_and_uncollected_completion_block_a_second_launch(self) -> None:
+        engine = self.ready_engine()
+        self.seed_launch(engine=engine)
+        record = self.execution_records()[0]
+        marker_path = self.attempt_dir(record) / "launch.json"
+        marker_bytes = marker_path.read_bytes()
+        expected = (
+            "forge: launch refused — execution execution-01 is still in flight in "
+            f"{self.linked_worktree}; run launch collect or launch cancel"
+        )
+        marker_path.write_text("invalid json", encoding="utf-8")
+        with self.assertRaises(ENGINE.Refusal) as invalid:
+            self.seed_launch(engine=engine)
+        self.assertEqual(invalid.exception.message, expected)
+        self.assertEqual(len(self.execution_records()), 1)
+        marker_path.write_bytes(marker_bytes)
+        completion = self.attempt_dir(record) / "completion.json"
+        completion.write_text("{}", encoding="utf-8")
+        completion.chmod(0o600)
+        with self.assertRaises(ENGINE.Refusal) as uncollected:
+            self.seed_launch(engine=engine)
+        self.assertEqual(uncollected.exception.message, expected)
+        self.assertEqual(len(self.execution_records()), 1)
+        with mock.patch.object(LAUNCH_LANE, "in_flight_execution", return_value=None):
+            with self.assertRaises(AssertionError):
+                with self.assertRaises(ENGINE.Refusal):
+                    self.seed_launch(engine=engine)
+
+    def test_append_failure_keeps_invocation_files_and_existing_agent_data(self) -> None:
+        engine = self.ready_engine()
+        agent = self.run_dir(self.repo, self.run_id) / "codex-implementer-01"
+        agent.mkdir(mode=0o700)
+        sentinel = agent / "keep.txt"
+        sentinel.write_text("keep\n", encoding="utf-8")
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(journal, "_write_line", side_effect=journal.CoordinationRefusal(
+                journal.APPEND_IO_ERROR
+            )),
+            redirect_stderr(stderr),
+        ):
+            outcome = self.seed_launch(engine=engine)
+        self.assertTrue(outcome.ok)
+        self.assertEqual(stderr.getvalue(), journal.APPEND_IO_ERROR + "\n")
+        self.assertTrue((agent / "execution-01/launch.json").exists())
+        self.assertFalse(self.execution_records())
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
     def test_launch_fake_can_emit_either_duplicate_permission_precedence(self) -> None:
         for mode, expected in (
             ("permission-mode-first", "acceptEdits"),
@@ -273,11 +538,12 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
 
     def test_owner_files_precede_record_and_record_binds_marker(self) -> None:
         engine = self.ready_engine()
-        original = builders.execution_start
+        original = journal._write_line
         observed: list[bool] = []
 
-        def inspect_then_append(*args: object, **kwargs: object) -> object:
-            marker = self.run_dir(self.repo, self.run_id) / str(kwargs["launch_marker"])
+        def inspect_then_append(descriptor: int, line: bytes) -> None:
+            record = json.loads(line)
+            marker = self.run_dir(self.repo, self.run_id) / str(record["launch_marker"])
             directory = marker.parent
             observed.append(
                 marker.is_file()
@@ -285,9 +551,9 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
                 and (directory / "events.jsonl").read_bytes() == b""
                 and not (directory / "identity.json").exists()
             )
-            return original(*args, **kwargs)
+            original(descriptor, line)
 
-        with mock.patch.object(builders, "execution_start", side_effect=inspect_then_append):
+        with mock.patch.object(journal, "_write_line", side_effect=inspect_then_append):
             self.seed_launch(engine=engine)
         self.assertEqual(observed, [True])
         record = self.execution_records()[0]
@@ -419,45 +685,6 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
         refusal = next(item for item in results if isinstance(item, ENGINE.Refusal))
         self.assertIn("is still in flight", refusal.message)
 
-    def test_pre_record_failure_removes_only_invocation_files(self) -> None:
-        engine = self.ready_engine()
-        agent = self.run_dir(self.repo, self.run_id) / "codex-implementer-01"
-        agent.mkdir(mode=0o700)
-        sentinel = agent / "keep.txt"
-        sentinel.write_text("keep\n", encoding="utf-8")
-        with (
-            mock.patch.object(
-                builders,
-                "execution_start",
-                side_effect=journal.CoordinationRefusal("synthetic builder refusal"),
-            ),
-            self.assertRaises(ENGINE.Refusal) as caught,
-        ):
-            self.seed_launch(engine=engine)
-        self.assertEqual(caught.exception.message, "synthetic builder refusal")
-        self.assertIs(caught.exception.reason_code, ENGINE.V2ReasonCode.STATE_PRECONDITION)
-        self.assertEqual(caught.exception.outcome().exit_code, 1)
-        self.assertEqual(list(agent.iterdir()), [sentinel])
-        self.assertFalse(self.execution_records())
-        self.assertTrue(self.seed_launch(engine=engine).ok)
-        self.assertEqual(sentinel.read_text(), "keep\n")
-        self.assertEqual(self.execution_records()[0]["execution"], "execution-01")
-
-    def test_diverged_builder_refusal_preserves_attempt_files(self) -> None:
-        engine = self.ready_engine()
-        with (
-            mock.patch.object(builders, "execution_start",
-                              side_effect=journal.CoordinationRefusal(journal.BATCH_DIVERGED)),
-            self.assertRaises(ENGINE.Refusal) as caught,
-        ):
-            self.seed_launch(engine=engine)
-        self.assertEqual(caught.exception.message, journal.BATCH_DIVERGED)
-        agent = self.run_dir(self.repo, self.run_id) / "codex-implementer-01"
-        markers = list(agent.rglob(LAUNCH_LANE.MARKER_NAME))
-        self.assertEqual(len(markers), 1)
-        self.assertTrue(markers[0].read_bytes())
-        self.assertFalse(self.execution_records())
-
     def test_popen_failure_publishes_completion_and_clears_record(self) -> None:
         engine = self.ready_engine()
         (self.linked_worktree / "src/example.py").write_text(
@@ -476,7 +703,10 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
             "forge: launch failed for execution-01: launch-failed: errno 13",
         )
         execution = self.execution_records()[0]
-        results = [record for record in self.records() if record.get("type") == "execution_result"]
+        results = [
+            record for record in self.records()
+            if record.get("kind") == "execution_finished"
+        ]
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["status"], "failed")
         self.assertIn("error launch-failed: errno 13", results[0]["summary"])

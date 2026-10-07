@@ -1,490 +1,262 @@
-"""New-write coverage for the canonical route vocabulary."""
+"""The public journal verbs produce the Revision-22 record vocabulary."""
 
 from __future__ import annotations
 
-import hashlib
-import os
-import re
-import shutil
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest import mock
+
+from tests._git_env import init_quiet_repository
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "scripts/forge"))
-
-import route_vocab  # noqa: E402
-
-import codex_orch_tools  # noqa: E402
-from codex_orchestrator import builders, journal  # noqa: E402
-
-LEGACY_FIXTURE = ROOT / "tests/replay/gates-missing-gate-3"
-RUN_ID = "run-20260923-vocabulary-writers"
-RECORDED_AT = "2026-09-23T12:00:00Z"
+SCRIPT = ROOT / "scripts/codex_orch_tools.py"
 
 
-def key(label: str) -> str:
-    return hashlib.sha256(label.encode("utf-8")).hexdigest()
-
-
-def refusal(field: str, raw: str, replacement: str) -> str:
-    return (
-        "forge: journal append refused — invalid journal record: "
-        f"execution {field} {raw!r} is not canonical; use {replacement}"
+def invoke(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
     )
 
 
 class VocabularyWriterTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="forge-vocabulary-writers-")
-        self.addCleanup(self.temporary.cleanup)
-        self.repo = Path(self.temporary.name) / "repo"
-        subprocess.run(["git", "init", "--quiet", str(self.repo)], check=True)
-        subprocess.run(
+    def test_run_open_from_linked_worktree_uses_main_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            main = Path(temporary) / "main"
+            linked = Path(temporary) / "linked"
+            self.assertEqual(init_quiet_repository(main, "-q").returncode, 0)
+            subprocess.run(["git", "-C", str(main), "-c", "user.name=Test",
+                            "-c", "user.email=test@example.invalid", "commit", "-q",
+                            "--allow-empty", "-m", "initial"], check=True)
+            subprocess.run(["git", "-C", str(main), "worktree", "add", "-q",
+                            "-b", "linked", str(linked)], check=True)
+            result = invoke("run-open", "--repo", str(linked), "--run-id", "run",
+                            "--intent", "work", "--actor", "operator")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((main / ".codex-orchestrator/runs/run/journal.jsonl").is_file())
+            self.assertFalse((linked / ".codex-orchestrator").exists())
+
+    def test_every_kept_verb_writes_its_plain_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary)
+            identity = ("--repo", str(repo), "--run-id", "run")
+            route = (
+                "--task", "task-01", "--role", "implementer", "--provider", "codex",
+                "--model", "gpt-test", "--effort", "high", "--sandbox", "workspace-write",
+                "--route-source", "local", "--route-sha256", "a" * 64,
+                "--worktree", str(repo),
+            )
+            commands = [
+                (
+                    "run-open", *identity, "--intent", "ship", "--actor", "operator",
+                    "--reference", "missing-chain",
+                ),
+                (
+                    "journal", "task-start", *identity, "--task", "task-01",
+                    "--title", "Build", "--scope", "src/**",
+                ),
+                (
+                    "journal", "task-finish", *identity, "--task", "task-01",
+                    "--title", "Build", "--scope", "src/**", "--status", "complete",
+                ),
+                (
+                    "journal", "execution-start", *identity, *route,
+                    "--execution", "execution-01", "--agent", "impl-01",
+                    "--session-id", "session-01",
+                ),
+                (
+                    "journal", "execution-result", *identity, *route,
+                    "--agent", "impl-01", "--execution", "execution-01",
+                    "--started-at", "2026-10-07T00:00:00Z",
+                    "--status", "complete", "--exit-status", "0",
+                    "--output", "impl-01/execution-01/handoff.md",
+                    "--input-tokens", "12", "--output-tokens", "7",
+                ),
+                (
+                    "journal", "decision-add", *identity, "--text", "Use the patch",
+                    "--actor", "operator", "--reference", ".forge/chains/chain-01/verdict.json",
+                ),
+                ("run-close", *identity, "--outcome", "completed"),
+            ]
+            records = []
+            for command in commands:
+                result = invoke(*command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
+                records.append(json.loads(result.stdout))
+            on_disk = [
+                json.loads(line)
+                for line in (repo / ".codex-orchestrator/runs/run/journal.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+        self.assertEqual(on_disk, records)
+        self.assertEqual(
+            [record["kind"] for record in records],
             [
-                "git",
-                "-C",
-                str(self.repo),
-                "-c",
-                "user.name=Vocabulary Tests",
-                "-c",
-                "user.email=vocabulary@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "--allow-empty",
-                "--quiet",
-                "-m",
-                "base",
+                "run_started", "task", "task", "execution_started",
+                "execution_finished", "decision", "run_closed",
             ],
-            check=True,
         )
-        self.head = self.git("rev-parse", "HEAD").stdout.strip()
-        self.environment = mock.patch.dict(
-            os.environ, {"FORGE_SESSION_PID": str(os.getpid())}
-        )
-        self.environment.start()
-        self.addCleanup(self.environment.stop)
-        opened = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/codex_orch_tools.py"),
-             "run-open", "--repo", str(self.repo), "--run-id", RUN_ID,
-             "--idempotency-key", key("open"), "--goal", "Exercise canonical route writes",
-             "--scope", "src/**", "--plugin-ref", "forge-test-route-v2"],
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(opened.returncode, 0, opened.stderr)
-        self.assertEqual(opened.stderr, "")
-        builders.task_start(
-            self.repo,
-            RUN_ID,
-            idempotency_key=key("task"),
-            task="task-01",
-            goal="Exercise vocabulary validation",
-            acceptance=["Canonical execution records are the only new writes"],
-            files=["src/example.py"],
-        )
-        run_dir = self.repo / ".codex-orchestrator/runs" / RUN_ID
-        for relative in ("prompt.md", "events.jsonl", "handoff.md"):
-            (run_dir / relative).write_text("evidence\n", encoding="utf-8")
-        records, issues = journal.read_journal(run_dir / "journal.jsonl")
-        self.assertEqual(issues, [])
-        self.routes = records[0]["route"]
-        self.snapshot = self.routes["implementer"]
-        self.execution_number = 0
-
-    def git(self, *arguments: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", *arguments],
-            cwd=self.repo,
-            check=True,
-            capture_output=True,
-            text=True,
+        self.assertTrue(all(record["run_id"] == "run" for record in records))
+        self.assertEqual(records[0]["repository"], str(repo))
+        self.assertEqual(records[0]["intent"], "ship")
+        self.assertEqual(records[0]["references"], ["missing-chain"])
+        self.assertEqual(records[1]["scope"], "src/**")
+        self.assertEqual(records[2]["description"], "complete")
+        self.assertEqual(records[3]["execution_id"], "execution-01")
+        self.assertNotIn("attempt_id", records[3])
+        self.assertEqual(records[3]["sandbox"], "workspace-write")
+        self.assertEqual(records[3]["route_source"], "local")
+        self.assertEqual(records[3]["route_sha256"], "a" * 64)
+        self.assertEqual(records[3]["session_id"], "session-01")
+        self.assertRegex(records[3]["started_at"],
+                         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertEqual(records[4]["model"], "gpt-test")
+        self.assertEqual(records[4]["sandbox"], "workspace-write")
+        self.assertEqual(records[4]["route_source"], "local")
+        self.assertEqual(records[4]["route_sha256"], "a" * 64)
+        self.assertEqual(records[4]["exit_status"], 0)
+        self.assertEqual(records[4]["output_tokens"], 7)
+        self.assertEqual(records[5]["references"], [".forge/chains/chain-01/verdict.json"])
+        self.assertEqual(
+            records[6], {"kind": "run_closed", "run_id": "run", "outcome": "completed"}
         )
 
-    def execution_arguments(self, **updates: object) -> dict[str, object]:
-        self.execution_number += 1
-        arguments: dict[str, object] = {
-            "idempotency_key": key(f"execution-{self.execution_number}-{updates!r}"),
-            "agent": f"vocabulary-agent-{self.execution_number:02d}",
-            "task": "task-01",
-            "provider": "codex",
-            "role": "implementer",
-            "mode": "headless",
-            "model": "gpt-vocabulary",
-            "effort": "high",
-            "worktree": str(self.repo.resolve()),
-            "head": self.head,
-            "prompt": "prompt.md",
-            "handoff": "handoff.md",
-            "event_source": "exec",
-            "events": "events.jsonl",
-        }
-        arguments.update(updates)
-        return arguments
-
-    def execution_record(self, **updates: object) -> dict[str, object]:
-        record: dict[str, object] = {
-            "type": "execution",
-            "recorded_at": RECORDED_AT,
-            "run_id": RUN_ID,
-            "execution": "execution-01",
-            "agent": "vocabulary-agent-01",
-            "task": "task-01",
-            "provider": "codex",
-            "role": "implementer",
-            "mode": "headless",
-            "model": "gpt-vocabulary",
-            "effort": "high",
-            "worktree": str(self.repo.resolve()),
-            "head": self.head,
-            "prompt": "prompt.md",
-            "handoff": "handoff.md",
-            "event_source": "exec",
-            "events": "events.jsonl",
-        }
-        record.update(updates)
-        return record
-
-    def route_fields(
-        self, sandbox: object = "workspace-write", *, role: str = "implementer"
-    ) -> dict[str, object]:
-        snapshot = self.routes[role]
-        return {
-            "provider": snapshot["provider"],
-            "model": snapshot["model"],
-            "effort": snapshot["effort"],
-            "sandbox": sandbox,
-            "route_source": snapshot["route_source"],
-            "route_sha256": snapshot["route_sha256"],
-        }
-
-    def legacy_cases(self) -> tuple[tuple[str, str, str, dict[str, str]], ...]:
-        mode_ids = "one of " + ", ".join(route_vocab.MODE_IDS)
-        return (
-            ("role", "implementation", "implementer", {}),
-            ("role", "implement", "implementer", {}),
-            ("role", "review", "review-cheap", {}),
-            ("role", "reviewer", "review-cheap", {}),
-            ("role", "review", "review-final", {"provider": "claude"}),
-            ("role", "reviewer", "review-final", {"provider": "claude"}),
-            ("provider", "codex-cli", "codex", {}),
-            ("event_source", "codex", "exec", {}),
-            ("event_source", "agent-tool", "claude", {}),
-            ("event_source", "capture/events.jsonl", "exec", {}),
-            ("mode", "read-only", mode_ids, {}),
-            ("mode", "workspace-write", mode_ids, {}),
-            ("mode", "orchestrator-inline", mode_ids, {}),
-        )
-
-    def assert_builder_refuses(self, case: tuple[str, str, str, dict[str, str]]) -> None:
-        field, raw, replacement, context = case
-        arguments = self.execution_arguments(**context, **{field: raw})
-        with self.assertRaises(journal.CoordinationRefusal) as caught:
-            builders.execution_start(self.repo, RUN_ID, **arguments)
-        self.assertEqual(refusal(field, raw, replacement), str(caught.exception))
-
-    def assert_append_refuses(self, case: tuple[str, str, str, dict[str, str]]) -> None:
-        field, raw, replacement, context = case
-        record = self.execution_record(**context, **{field: raw})
-        with self.assertRaises(journal.CoordinationRefusal) as caught:
-            journal._validate_proposed_record(
-                record,
-                run_id=RUN_ID,
-                repo_root=self.repo.resolve(),
-                scope=("src/**",),
-            )
-        self.assertEqual(refusal(field, raw, replacement), str(caught.exception))
-
-    def test_every_legacy_spelling_is_refused_by_both_new_write_surfaces(self) -> None:
-        for case in self.legacy_cases():
-            field, raw, _replacement, context = case
-            with self.subTest(surface="builder", field=field, raw=raw, context=context):
-                self.assert_builder_refuses(case)
-            with self.subTest(surface="append", field=field, raw=raw, context=context):
-                self.assert_append_refuses(case)
-
-    def test_refusal_tests_fail_when_the_shared_validator_is_disabled(self) -> None:
-        case = ("role", "implementation", "implementer", {})
-        self.assert_builder_refuses(case)
-        self.assert_append_refuses(case)
-        with mock.patch.object(route_vocab, "validate_new_write", return_value=None):
-            with self.assertRaises(AssertionError):
-                self.assert_builder_refuses(case)
-            with self.assertRaises(AssertionError):
-                self.assert_append_refuses(case)
-
-    def test_route_vocabulary_refusal_precedes_sandbox_validation(self) -> None:
-        for sandbox in (7, "unconfined"):
-            with self.subTest(surface="builder", sandbox=sandbox):
-                with self.assertRaises(journal.CoordinationRefusal) as caught:
-                    builders.execution_start(
-                        self.repo,
-                        RUN_ID,
-                        **self.execution_arguments(
-                            role="implementation", sandbox=sandbox
-                        ),
-                    )
-                self.assertEqual(
-                    refusal("role", "implementation", "implementer"),
-                    str(caught.exception),
-                )
-            with self.subTest(surface="append", sandbox=sandbox):
-                with self.assertRaises(journal.CoordinationRefusal) as caught:
-                    journal._validate_proposed_record(
-                        self.execution_record(
-                            role="implementation", sandbox=sandbox
-                        ),
-                        run_id=RUN_ID,
-                        repo_root=self.repo.resolve(),
-                        scope=("src/**",),
-                    )
-                self.assertEqual(
-                    refusal("role", "implementation", "implementer"),
-                    str(caught.exception),
-                )
-
-    def test_canonical_writes_accept_all_ids(self) -> None:
-        cases = (
-            ("claude", "implementer", "headless", "exec"),
-            ("codex", "review-cheap", "detached", "claude"),
-            ("claude", "review-final", "subagent", "exec"),
-            ("codex", "plan", "teammate", "claude"),
-            ("codex", "monitoring", "headless", "exec"),
-        )
-        for provider, role, mode, event_source in cases:
-            with self.subTest(
-                provider=provider, role=role, mode=mode, event_source=event_source
+    def test_close_does_not_seal_and_duplicate_task_needs_no_prior_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            identity = ("--repo", temporary, "--run-id", "run")
+            for command in (
+                ("run-close", *identity, "--outcome", "first"),
+                ("run-close", *identity, "--outcome", "again"),
+                (
+                    "journal", "task-finish", *identity, "--task", "unknown",
+                    "--title", "Unknown", "--scope", "other/**", "--status", "complete",
+                ),
             ):
-                arguments = self.execution_arguments(
-                    provider=provider, role=role, mode=mode, event_source=event_source
-                )
-                if role in {"implementer", "plan"}:
-                    sandbox = "workspace-write" if role == "implementer" else "read-only"
-                    arguments.update(self.route_fields(sandbox, role=role))
-                    provider = str(arguments["provider"])
-                outcome = builders.execution_start(self.repo, RUN_ID, **arguments)
-                record = outcome.records[0]
-                self.assertEqual(
-                    (provider, role, mode, event_source),
-                    tuple(record[field] for field in ("provider", "role", "mode", "event_source")),
-                )
+                result = invoke(*command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            path = Path(temporary) / ".codex-orchestrator/runs/run/journal.jsonl"
+            self.assertEqual(len(path.read_text(encoding="utf-8").splitlines()), 3)
 
-    def test_sandbox_is_optional_but_route_trio_is_all_or_none(self) -> None:
-        without_sandbox = builders.execution_start(
-            self.repo, RUN_ID, **self.execution_arguments(role="review-cheap")
-        ).records[0]
-        self.assertNotIn("sandbox", without_sandbox)
-        partial = (
-            "forge: journal append refused — invalid journal record: execution route "
-            "fields must be given together (sandbox, route_source, route_sha256)"
-        )
-        for sandbox in route_vocab.SANDBOX_IDS:
-            with self.subTest(sandbox=sandbox):
-                with self.assertRaisesRegex(
-                    journal.CoordinationRefusal, re.escape(partial)
-                ):
-                    builders.execution_start(
-                        self.repo,
-                        RUN_ID,
-                        **self.execution_arguments(sandbox=sandbox),
-                    )
-                journal._validate_proposed_record(
-                    self.execution_record(
-                        sandbox=sandbox,
-                        route_source="unrecorded",
-                        route_sha256="a" * 64,
-                    ),
-                    run_id=RUN_ID,
-                    repo_root=self.repo.resolve(),
-                    scope=("src/**",),
-                )
-
-        matching = builders.execution_start(
-            self.repo,
-            RUN_ID,
-            **self.execution_arguments(**self.route_fields()),
-        ).records[0]
-        self.assertEqual("workspace-write", matching["sandbox"])
-
-        diagnostic = (
-            f"{journal.INVALID_JOURNAL_RECORD}: execution.sandbox must be one of "
-            + ", ".join(route_vocab.SANDBOX_IDS)
-        )
-        for surface in ("builder", "append"):
-            with self.subTest(surface=surface):
-                with self.assertRaises(journal.CoordinationRefusal) as caught:
-                    if surface == "builder":
-                        builders.execution_start(
-                            self.repo,
-                            RUN_ID,
-                            **self.execution_arguments(
-                                **self.route_fields(sandbox="unconfined")
-                            ),
-                        )
-                    else:
-                        journal._validate_proposed_record(
-                            self.execution_record(
-                                sandbox="unconfined",
-                                route_source="unrecorded",
-                                route_sha256="a" * 64,
-                            ),
-                            run_id=RUN_ID,
-                            repo_root=self.repo.resolve(),
-                            scope=("src/**",),
-                        )
-                self.assertEqual(diagnostic, str(caught.exception))
-
-    def test_execution_start_parser_exposes_optional_sandbox(self) -> None:
-        arguments = [
-            "journal",
-            "execution-start",
-            "--repo",
-            str(self.repo),
-            "--run-id",
-            RUN_ID,
-            "--idempotency-key",
-            key("parser"),
-            "--agent",
-            "agent-01",
-            "--task",
-            "task-01",
-            "--provider",
-            "codex",
-            "--role",
-            "implementer",
-            "--mode",
-            "headless",
-            "--model",
-            "gpt-vocabulary",
-            "--effort",
-            "high",
-            "--worktree",
-            str(self.repo),
-            "--head",
-            self.head,
-            "--prompt",
-            "prompt.md",
-            "--handoff",
-            "handoff.md",
-            "--event-source",
-            "exec",
-            "--events",
-            "events.jsonl",
-        ]
-        empty = codex_orch_tools._typed_parser().parse_args(arguments)
-        self.assertIsNone(empty.sandbox)
-        self.assertIsNone(empty.route_source)
-        self.assertIsNone(empty.route_sha256)
-        for sandbox in route_vocab.SANDBOX_IDS:
-            with self.subTest(sandbox=sandbox):
-                parsed = codex_orch_tools._typed_parser().parse_args(
-                    [*arguments, "--sandbox", sandbox]
-                )
-                self.assertEqual(sandbox, parsed.sandbox)
-        parsed = codex_orch_tools._typed_parser().parse_args(
-            [*arguments, "--route-source", "local", "--route-sha256", "a" * 64]
-        )
-        self.assertEqual((parsed.route_source, parsed.route_sha256), ("local", "a" * 64))
-
-        legacy = list(arguments)
-        legacy[legacy.index("implementer")] = "implementation"
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/codex_orch_tools.py"), *legacy],
-            cwd=self.repo,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(1, result.returncode)
-        self.assertEqual("", result.stdout)
-        self.assertEqual(
-            refusal("role", "implementation", "implementer") + "\n",
-            result.stderr,
-        )
-
-    def test_writer_surfaces_change_together_without_legacy_literals(self) -> None:
-        sources = {
-            "builder": self.source_between(
-                "scripts/codex_orchestrator/builders.py",
-                "def execution_start(",
-                "def execution_result(",
-            ),
-            "append": self.source_between(
-                "scripts/codex_orchestrator/journal.py",
-                '    if kind == "execution":',
-                '    if kind == "execution_result":',
-            ),
-            "parser": self.source_between(
-                "scripts/codex_orch_tools.py",
-                '    execution_started = journal_subparsers.add_parser("execution-start")',
-                '    execution_finished = journal_subparsers.add_parser("execution-result")',
-            ),
-            "dispatch": self.source_between(
-                "scripts/codex_orch_tools.py",
-                '        elif args.journal_command == "execution-start":',
-                '        elif args.journal_command == "execution-result":',
-            ),
-        }
-        self.assertNotIn("route_vocab.validate_new_write(", sources["builder"])
-        self.assertIn("route_evidence.validate_execution(", sources["append"])
-        self.assertIn(
-            "route_vocab.validate_new_write(",
-            (ROOT / "scripts/forge/route_evidence.py").read_text(encoding="utf-8"),
-        )
-        for surface, source in sources.items():
-            with self.subTest(surface=surface):
-                if surface != "append":
-                    self.assertIn("sandbox", source)
-                for literal in (
-                    '"implementation"',
-                    '"implement"',
-                    '"review"',
-                    '"reviewer"',
-                    '"codex-cli"',
-                    '"agent-tool"',
-                    '"read-only"',
-                    '"workspace-write"',
-                    '"orchestrator-inline"',
-                ):
-                    self.assertNotIn(literal, source)
-                self.assertIsNone(re.search(r'["\'][^"\']*/events\.jsonl["\']', source))
-
-    def source_between(self, relative: str, start: str, end: str) -> str:
-        source = (ROOT / relative).read_text(encoding="utf-8")
-        self.assertEqual(1, source.count(start), start)
-        tail = source.split(start, 1)[1]
-        self.assertIn(end, tail)
-        return start + tail.split(end, 1)[0]
-
-    def test_historical_legacy_fixture_still_validates(self) -> None:
-        historical = self.repo / ".codex-orchestrator/runs/run-historical-vocabulary"
-        shutil.copytree(LEGACY_FIXTURE, historical)
-        journal_path = historical / "journal.jsonl"
-        records, read_issues = journal.read_journal(journal_path)
-        self.assertEqual([], read_issues)
-        self.assertTrue(
-            any(
-                record.get("type") == "execution"
-                and record.get("role") == "implementation"
-                for record in records
+    def test_retired_verbs_and_flags_use_argparse_exit_two(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            identity = ("--repo", temporary, "--run-id", "run")
+            commands = (
+                ("run-readmit", *identity),
+                ("run-retire", *identity),
+                ("journal-append", *identity, "--record-json", "x"),
+                ("worktree-check", *identity),
+                ("run-open", *identity, "--intent", "x", "--actor", "y", "--scope", "src/**"),
+                ("run-open", *identity, "--intent", "x", "--actor", "y", "--successor-of", "old"),
+                ("run-open", *identity, "--intent", "x", "--actor", "y", "--record-json", "x"),
+                ("run-close", *identity, "--outcome", "x", "--judgment", "passed"),
+                ("run-open", *identity, "--intent", "x", "--actor", "y", "--idempotency-key", "x"),
+                (
+                    "journal", "task-start", *identity, "--task", "t",
+                    "--title", "T", "--scope", "src/**", "--replace",
+                ),
+                ("journal", "verification-add", *identity),
+                ("journal", "batch-recover", *identity),
+                ("journal", "close-preflight", *identity),
             )
-        )
+            for command in commands:
+                with self.subTest(command=command):
+                    result = invoke(*command)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("usage:", result.stderr)
+            self.assertFalse((Path(temporary) / ".codex-orchestrator").exists())
 
-        validation = journal.validate_run(historical, gates=False)
-        self.assertEqual(
-            {
-                "ok": True,
-                "issues": [],
-                "warnings": [],
-                "non_passing_verifications": [],
-            },
-            validation,
-        )
+    def test_concurrent_execution_starts_keep_caller_ids_and_untorn_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            identity = ("--repo", temporary, "--run-id", "run")
+            command = (
+                "journal", "execution-start", *identity, "--task", "t",
+                "--role", "implementer", "--provider", "codex",
+                "--model", "gpt-test", "--effort", "low", "--sandbox", "workspace-write",
+                "--route-source", "local", "--route-sha256", "a" * 64,
+                "--worktree", temporary,
+            )
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(pool.map(
+                    lambda index: invoke(*command, "--execution", f"execution-{index + 1:02d}"),
+                    range(16),
+                ))
+            self.assertTrue(all(result.returncode == 0 for result in results))
+            path = Path(temporary) / ".codex-orchestrator/runs/run/journal.jsonl"
+            lines = path.read_text(encoding="utf-8").splitlines()
+            records = [json.loads(line) for line in lines]
+            self.assertEqual(len(records), 16)
+            self.assertEqual(
+                {record["execution_id"] for record in records},
+                {f"execution-{number:02d}" for number in range(1, 17)},
+            )
+            self.assertTrue(all("attempt_id" not in record for record in records))
 
+    def test_prose_execution_verbs_require_route_source_and_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            identity = ("--repo", temporary, "--run-id", "run")
+            route = (
+                "--task", "task-01", "--role", "implementer", "--provider", "codex",
+                "--model", "gpt-test", "--effort", "high", "--sandbox", "workspace-write",
+                "--route-source", "local", "--route-sha256", "a" * 64,
+                "--worktree", temporary, "--execution", "execution-01",
+            )
+            verbs = (
+                ("execution-start", ()),
+                ("execution-result", ("--started-at", "2026-10-07T00:00:00Z",
+                                      "--status", "complete", "--exit-status", "0",
+                                      "--output", "handoff.md")),
+            )
+            for verb, extra in verbs:
+                for option in ("--route-source", "--route-sha256"):
+                    with self.subTest(verb=verb, missing=option):
+                        index = route.index(option)
+                        without = route[:index] + route[index + 2:]
+                        result = invoke("journal", verb, *identity, *without, *extra)
+                        self.assertEqual(result.returncode, 2)
+                        self.assertIn(option, result.stderr)
+            self.assertFalse((Path(temporary) / ".codex-orchestrator").exists())
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_execution_start_preserves_caller_id_without_consulting_legacy_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / ".codex-orchestrator/runs/run/journal.jsonl"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                '{"type":"execution","execution":"execution-04"}\n',
+                encoding="utf-8",
+            )
+            result = invoke(
+                "journal", "execution-start", "--repo", temporary, "--run-id", "run",
+                "--task", "t", "--role", "implementer", "--provider", "codex",
+                "--model", "gpt-test", "--effort", "low", "--sandbox", "workspace-write",
+                "--route-source", "local", "--route-sha256", "a" * 64,
+                "--worktree", temporary, "--execution", "execution-04",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["execution_id"], "execution-04")
+
+    def test_execution_start_accepts_arbitrary_string_ids_without_content_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = (
+                "journal", "execution-start", "--repo", temporary, "--run-id", "run",
+                "--task", "t", "--role", "implementer", "--provider", "codex",
+                "--model", "gpt-test", "--effort", "low", "--sandbox", "workspace-write",
+                "--route-source", "local", "--route-sha256", "a" * 64,
+                "--worktree", temporary,
+            )
+            missing = invoke(*base)
+            self.assertEqual(missing.returncode, 2)
+            self.assertFalse((Path(temporary) / ".codex-orchestrator").exists())
+            for execution in ("execution-100", "execution-1", "../execution-01", "custom id"):
+                with self.subTest(execution=execution):
+                    result = invoke(*base, "--execution", execution)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["execution_id"], execution)

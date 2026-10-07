@@ -693,21 +693,6 @@ config_file = "./agents/security-auditor.toml"
         )
         self.assertEqual(repository_snapshot(self.repo), before)
 
-    def test_installer_directory_path_refuses_before_any_migration_write(self) -> None:
-        occupied = self.repo / ".forge/history/runs"
-        occupied.parent.mkdir(parents=True, exist_ok=True)
-        occupied.write_bytes(b"occupied\n")
-        before = repository_snapshot(self.repo)
-
-        result = self.run_helper()
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn(
-            "migration output parent is not a directory: .forge/history/runs",
-            result.stderr,
-        )
-        self.assertEqual(repository_snapshot(self.repo), before)
-
     def test_imported_fixture_without_baseline_remains_pending(self) -> None:
         result_path = self.repo / LEGACY_ROOT / "evals/tasks/imported.result"
         subprocess.run(["git", "rm", "--quiet", str(result_path.relative_to(self.repo))], cwd=self.repo, check=True)

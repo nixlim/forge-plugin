@@ -46,7 +46,7 @@ max-nested-blocks = 4
 # header imports the bootstrapping tests._<name>_constants module first. Measured
 # repository-wide with zero new findings.
 [tool.ruff.lint.isort]
-known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "commitment_paths"]
+known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli"]
 
 # Grandfathered violations, generated per file from `ruff check` on
 # 2026-09-13 (473 file/rule pairs across 90 files). Each entry lists only the
@@ -54,15 +54,10 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 # existing file gets no new exemptions. TODO: when a file is split or cleaned,
 # delete its entry (or the codes it no longer trips) so the ratchet only tightens.
 [tool.ruff.lint.per-file-ignores]
-"scripts/codex_orch_tools.py" = ["C901", "I001", "PLR0912", "PLR0915"]
-"scripts/codex_orchestrator/batch.py" = ["B904", "C901", "E501", "I001", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
-"scripts/codex_orchestrator/builders.py" = ["B904", "C901", "E501", "F821", "F841", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP035"]
 "scripts/codex_orchestrator/events.py" = ["C901", "PLR0912", "PLR1702"]
-"scripts/codex_orchestrator/journal.py" = ["B013", "B904", "C901", "E501", "I001", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR1702", "UP012", "UP035"]
 "scripts/codex_orchestrator/monitor.py" = ["C901", "PLR0911"]
 "scripts/forge/check-test-quality.py" = ["C901", "PLR0911", "PLR0912"]
 "scripts/forge/cli.py" = ["F401", "I001", "UP035"]
-"scripts/forge/commitment_paths.py" = ["C901", "I001", "PLR0911", "PLR0912"]
 "scripts/forge/emit-decision-event.py" = ["C901", "I001", "PLR0911", "PLR0912", "PLR0915", "PLR1702"]
 "scripts/forge/forge_cli/app/__init__.py" = ["I001"]
 "scripts/forge/forge_cli/app/_admission.py" = ["C901", "I001", "PLR0912", "PLR0915"]
@@ -186,8 +181,6 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "system/fr223/bang-bypass-probe/pretool_hook.py" = ["I001"]
 "system/fr223/bang-bypass-probe/probe.py" = ["I001", "PLR0911", "UP035"]
 "tests/_fresh_eval_support.py" = ["F401", "I001", "PLR0913", "UP012", "UP022", "UP035", "UP037"]
-"tests/_revision8_support.py" = ["PLR0904", "PLR0915", "UP012"]
-"tests/_revision9_coord_support.py" = ["PLR0915"]
 "tests/test_candidate_identity.py" = ["E501", "I001", "PLR0904", "UP022"]
 "tests/test_cli_chain.py" = ["E501", "I001", "PLR0904", "PLR0915"]
 "tests/test_cli_chain_finalize.py" = ["C901", "E402", "E501", "F401", "F841", "I001"]
@@ -203,7 +196,6 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "tests/test_cli_runtime.py" = ["B023", "I001", "UP035"]
 "tests/test_commit_and_region_template.py" = ["E501", "I001", "PLR0915"]
 "tests/test_commit_guard.py" = ["E501", "PLR0904", "PLR0913", "UP012"]
-"tests/test_commitment_paths.py" = ["E402", "E501"]
 "tests/test_d13_concurrency.py" = ["B905", "E501", "I001", "PLR0913", "PLR0915", "UP022"]
 "tests/test_docs_contract.py" = ["C901", "E501", "PLR0904", "PLR0912"]
 "tests/test_drift_check.py" = ["E501", "I001", "PLR0904", "UP022"]
@@ -227,23 +219,9 @@ known-local-folder = ["codex_orchestrator", "codex_orch_tools", "forge_cli", "co
 "tests/test_repo_conformance.py" = ["C901", "PLR0904", "PLR0912"]
 "tests/test_report_skill.py" = ["E501"]
 "tests/test_revision10_review_transport.py" = ["B023", "E402", "I001", "PLR1702"]
-"tests/test_revision8_append_schema.py" = ["PLR0915"]
-"tests/test_revision8_coordination.py" = ["I001"]
-"tests/test_revision8_interruptions.py" = ["C901", "PLR0915", "UP012"]
-"tests/test_revision8_registry_races.py" = ["B023", "PLR0915", "UP012"]
-"tests/test_revision8_rollback.py" = ["B023", "UP012"]
-"tests/test_revision9_coordination.py" = ["C901", "E501", "I001", "PLR0913", "PLR0915", "UP012"]
-"tests/test_revision9_coordination_batch_builder.py" = ["E501"]
-"tests/test_revision9_coordination_chain_drain.py" = ["B023", "E731"]
-"tests/test_revision9_coordination_gap_repair.py" = ["C901", "PLR0912", "PLR0915", "PLR1702"]
-"tests/test_revision9_coordination_ledger_recovery.py" = ["B023", "PLR1702"]
-"tests/test_revision9_coordination_legacy_activation.py" = ["B023", "PLR0915", "PLR1702"]
-"tests/test_revision9_coordination_staging_crashes.py" = ["B023", "F841", "PLR1702"]
-"tests/test_revision9_coordination_terminal_builder.py" = ["E501", "E702"]
 "tests/test_revision9_reason_codes.py" = ["I001"]
 "tests/test_risk_tier.py" = ["E501", "I001", "PLR0904"]
 "tests/test_test_quality.py" = ["PLR0904"]
-"tests/test_validation.py" = ["E501", "PLR0904"]
 "tests/test_worktree_merge_skill.py" = ["E501", "PLR0904"]
 
 # Import boundaries. Run: PYTHONPATH=scripts:scripts/forge lint-imports
@@ -267,24 +245,13 @@ layers = [
     "forge_cli.fresh_evals",
     "forge_cli.candidate | forge_cli.runtime | forge_cli.policy | forge_cli.envelope",
 ]
-# Pre-existing cycle (2026-09-13): runtime.py:74 lazily imports codex_orchestrator,
-# whose builders/journal lazily import forge_cli.candidate/fresh_evals/policy/
-# chain_core, which closes an indirect cycle back into the upper layers. Ignored so
-# the contract checks direct layering. TODO: remove once that seam is untangled.
-ignore_imports = [
-    "forge_cli.runtime -> codex_orchestrator.batch",
-    "forge_cli.runtime -> codex_orchestrator.builders",
-    "forge_cli.runtime -> codex_orchestrator.journal",
-]
 
 # forge_cli.chain_core intra-package layering, top to bottom, in the wave order of
 # .refactor/plan-chain_core.md (wave 16 at the top, wave 0's _state at the bottom;
 # `|` marks modules of one wave that do not import each other). _fenced_process
 # imports _common_lock, so the two wave-16 modules are sequential layers. The split
 # introduced no function-local imports, so no intra-package ignore is needed; the
-# three ignores below mirror the "forge_cli layers" contract exactly (the
-# pre-existing runtime.py:74 -> codex_orchestrator -> forge_cli.chain_core lazy
-# cross-link closes an indirect cycle into every submodule). TODO: remove with theirs.
+# former runtime-to-journal cross-link is retired.
 [[tool.importlinter.contracts]]
 name = "forge_cli.chain_core layers"
 type = "layers"
@@ -326,17 +293,12 @@ layers = [
     "_controls",
     "_state",
 ]
-ignore_imports = [
-    "forge_cli.runtime -> codex_orchestrator.batch",
-    "forge_cli.runtime -> codex_orchestrator.builders",
-    "forge_cli.runtime -> codex_orchestrator.journal",
-]
 
 # forge_cli.engine intra-package layering, top to bottom, in the wave order of
 # .refactor/plan-engine.md (wave 5's _engine at the top, wave 0's _state at the bottom;
 # `|` marks modules of one wave that do not import each other). _command_lock and
-# _finalize name Engine only under TYPE_CHECKING (excluded by the session option above); the three ignores
-# mirror the "forge_cli layers" contract exactly. TODO: remove with theirs.
+# _finalize name Engine only under TYPE_CHECKING (excluded by the session option above).
+# No runtime-to-journal exception remains in this engine contract.
 [[tool.importlinter.contracts]]
 name = "forge_cli.engine layers"
 type = "layers"
@@ -356,15 +318,10 @@ layers = [
     "_core",
     "_state",
 ]
-ignore_imports = [
-    "forge_cli.runtime -> codex_orchestrator.batch",
-    "forge_cli.runtime -> codex_orchestrator.builders",
-    "forge_cli.runtime -> codex_orchestrator.journal",
-]
 
 [[tool.importlinter.contracts]]
-# forge_cli.app split (bead forge-plugin-hcuo): wave order of .refactor/plan-app.md; the same
-# lazy runtime -> codex_orchestrator cycle as the engine contract is ignored.
+# forge_cli.app split (bead forge-plugin-hcuo): wave order of .refactor/plan-app.md.
+# No runtime-to-journal exception remains in this app contract.
 name = "forge_cli.app layers"
 type = "layers"
 containers = ["forge_cli.app"]
@@ -377,24 +334,10 @@ layers = [
     "_engine_lock_steps | _engine_observe_remote_steps | _engine_recover_steps",
     "_admission | _candidate_observation",
 ]
-ignore_imports = [
-    "forge_cli.runtime -> codex_orchestrator.batch",
-    "forge_cli.runtime -> codex_orchestrator.builders",
-    "forge_cli.runtime -> codex_orchestrator.journal",
-]
 
-# codex_orchestrator must not depend on forge_cli at module import time. The three
-# function-level imports below are pre-existing lazy cross-links (2026-09-13); they
-# are ignored here so the contract tracks today's shape. TODO: remove each ignore
-# once the cross-link is gone (runtime.py:74 is the mirror-image lazy import from
-# forge_cli into codex_orchestrator; it is not covered by this contract).
+# codex_orchestrator must not depend on forge_cli.
 [[tool.importlinter.contracts]]
 name = "codex_orchestrator does not import forge_cli"
 type = "forbidden"
 source_modules = ["codex_orchestrator"]
 forbidden_modules = ["forge_cli"]
-ignore_imports = [
-    "codex_orchestrator.builders -> forge_cli.candidate",
-    "codex_orchestrator.builders -> forge_cli.fresh_evals",
-    "codex_orchestrator.builders -> forge_cli.policy",
-]

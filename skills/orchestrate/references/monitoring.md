@@ -32,21 +32,16 @@ follows:
 - `pid` is the legacy three-line sidecar, informational only.
 
 For Codex, `prompt.md` and stdin start with the applicable plugin role template, followed by the
-committed `agent-project-context`, optional committed gotchas, and the concrete task assignment.
+committed `agent-project-context` and the concrete task assignment.
 For Claude, the applicable committed role body is passed only through the exact FR-245 argv flag
 and is not part of `prompt.md`; Claude `prompt.md` and stdin start with the exact bytes
-`\n--- committed agent-project-context ---\n`, followed by the same committed context, gotchas, and
-task assignment. Both committed inputs come from the recorded absolute worktree at its committed
+`\n--- committed agent-project-context ---\n`, followed by the committed context and task assignment. The committed context comes from the recorded absolute worktree at its committed
 HEAD; never use working-tree prose or a rendered agent definition.
 
-The generated owner record includes the absolute worktree, full HEAD, actual provider/model/effort,
-prompt/events/handoff paths, `mode: detached`, `launch_marker`, and the route trio `sandbox`,
-`route_source`, and `route_sha256`, copied from that role's frozen run snapshot; do not reconstruct
-or omit it. Never write `unrecorded` for a new snapshot-backed run. A reviewer-specific prose record
-written outside the typed lane may omit the trio; if it carries any of `sandbox`, `route_source`, or
-`route_sha256`, it must carry all three, equal to that role's frozen run snapshot in
-`run_started.route`, which Forge accepts only when the launched provider, model, and effort equal
-that frozen route.
+The `execution_started` record contains the absolute worktree, full HEAD, actual
+provider/model/effort, prompt/events/handoff paths, `mode: detached`, `launch_marker`, and the
+actual `sandbox`, `route_source`, and `route_sha256`. Resolve the route for this execution; do not
+copy a run-open route snapshot.
 
 Every committed implementer and plan role template already requires this six-heading handoff; do
 not restate it in the brief. After collect, confirm that `handoff.md` carries these headings in
@@ -79,9 +74,26 @@ launch collect` and `forge launch cancel` remain the only lifecycle authorities.
 
 The sole sanctioned resume is a targeted confirmation round for the same reviewer. The session
 prepares it by hand, so follow FR-036 exactly: create the reviewer's next execution directory,
-write `prompt.md` (committed context and optional gotchas read from the preceding execution's
-recorded worktree at its current `HEAD`), create an empty `events.jsonl`, append the `execution`
-entry with the recorded `session_id`, then launch. Immediately before launch, require
+write `prompt.md` (committed context read from the preceding execution's
+recorded worktree at its current `HEAD`), create an empty `events.jsonl`, append the `execution_started`
+entry with the recorded `session_id`, then launch. Choose the next free `execution-NN` and reserve
+it in `.execution-ids/`; on collision, try the next ID. With the run, task, worktree, resolved
+route, and recorded session variables set, the complete start invocation is:
+
+```bash
+RUN_DIR="$REPO/.codex-orchestrator/runs/$RUN_ID"
+EXECUTION=execution-02
+mkdir -p "$RUN_DIR/.execution-ids"
+mkdir "$RUN_DIR/.execution-ids/$EXECUTION"
+STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" journal execution-start \
+  --repo "$REPO" --run-id "$RUN_ID" --task "$TASK_ID" --role review-final \
+  --provider codex --model "$MODEL" --effort "$EFFORT" --worktree "$WORKTREE" \
+  --sandbox "$SANDBOX" --route-source "$ROUTE_SOURCE" --route-sha256 "$ROUTE_SHA256" \
+  --execution "$EXECUTION" --agent "$AGENT" --events "$EVENTS" --started-at "$STARTED_AT" --session-id "$SESSION_ID"
+```
+
+Immediately before launch, require
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"` to exit 0; on a halt, launch nothing,
 report the sentinel, and wait. Never use `--ephemeral` or a harness-managed background task. The
 resume command has no `-C`; the working directory comes from the resumed session:
@@ -107,7 +119,19 @@ launch_pgid="$(ps -o pgid= -p "$launch_pid" | tr -d ' ')"
 } > /absolute/path/to/run/codex-review-01/execution-02/pid
 ```
 
-Read the absolute `worktree` from the preceding execution and record it with the same `session_id`.
+Read the absolute `worktree` from the preceding execution and record it with the same `session_id`
+using `--session-id` on `journal execution-result`, together with the actual
+`--sandbox <profile> --route-source <source> --route-sha256 <digest>`. After observing the
+outcome, set `STATUS`, `EXIT_STATUS`, and `OUTPUT` (an existing artefact even on failure) and run:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" journal execution-result \
+  --repo "$REPO" --run-id "$RUN_ID" --task "$TASK_ID" --role review-final \
+  --provider codex --model "$MODEL" --effort "$EFFORT" --worktree "$WORKTREE" \
+  --sandbox "$SANDBOX" --route-source "$ROUTE_SOURCE" --route-sha256 "$ROUTE_SHA256" \
+  --execution "$EXECUTION" --started-at "$STARTED_AT" --session-id "$SESSION_ID" \
+  --status "$STATUS" --exit-status "$EXIT_STATUS" --output "$OUTPUT"
+```
 Inspect its current HEAD and branch for the new entry. The prior `head` is a snapshot, so do not
 check out or reset to it merely because the worktree advanced.
 
@@ -128,12 +152,15 @@ Monitor an active run or explicit stream:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" monitor \
-  --repo <repo> --run-id <run-id>
+  --repo "$REPO" --run-id "$RUN_ID"
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" monitor \
-  --log <events-jsonl> --fail-on-agent-failure
+  --log "$EVENTS" --fail-on-agent-failure
 ```
 
 Always select the target with `--run-id` plus its repository or with `--log`.
+The monitor emits terminal notification types `codex_agent_complete`, `codex_agent_failed`,
+`codex_agent_unknown`, and `codex_agent_stale`; `monitor_error` reports a monitor failure.
+Its `state` command reports `idle`, `starting`, `active`, `complete`, `failed`, or `unknown`.
 
 Run-level monitoring may follow the eligible typed streams described above, but stale or unknown
 notifications never determine a typed execution's lifecycle; collect does. The ambiguity protocol
@@ -145,7 +172,7 @@ longer being watched. Between monitor cycles, run
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/forge/check-halt.sh"`. A halt forbids new work and
 reintegration; report it and wait.
 
-Treat `codex_agent_stale` as ambiguous. Before appending any `execution_result`, check the events
+Treat `codex_agent_stale` as ambiguous. Before appending any `execution_finished`, check the events
 file mtime, read PID and PGID from the execution's three-line `pid` file, verify them with `ps`, and
 inspect the handoff and worktree. For example:
 

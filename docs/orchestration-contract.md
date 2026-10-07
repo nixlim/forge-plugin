@@ -1,221 +1,89 @@
 # Orchestration Contract
 
-The run journal preserves Claude's concise causal history and links to supporting material; it
-is not a workflow engine, independent evidence, or an automated telemetry source. Claude makes the
-semantic judgments. The bundled tools only summarize event streams and check a small set of
-structural omissions.
+A run directory contains one append-only `journal.jsonl`. It records executions and decisions so
+an operator can reconstruct what happened. The journal does not authorize launches, checks,
+approvals, commits, merges, or run closure. Gate and candidate authority lives in `.forge/chains/`
+and the observed Git and review evidence used by the relevant skill.
 
-## Record Authority
+## Records and evidence
 
-- **Prompt:** the exact immutable input sent for one execution. It records assigned scope.
-- **Event stream:** raw Codex JSONL. It records what the harness emitted and supports lifecycle
-  checks, monitoring, or debugging.
-- **Handoff:** the exact final agent response. It is a compact package of agent claims.
-- **Evidence:** an inspectable observation that supports or contradicts a verification or decision.
-- **Verification:** Claude's evaluation of a task criterion using an explicit check and observation.
-- **Decision:** Claude's recorded resolution of a consequential disagreement, risk, or user need.
-- **Journal:** Claude's compact chronology, current task state, decisions, and links to these sources.
-- **Repository:** the final state relative to the recorded starting baseline determines what code
-  was actually delivered.
+The prompt is the exact execution input, the event stream is raw provider output, and the handoff
+is an agent claim. The launch marker and completion artefacts determine whether a managed launch
+is in flight or has already been collected. A gate result is established by its own observed
+command or chain evidence. A reference in a journal record is a link, not proof or permission.
 
-A handoff can establish that an agent *claimed* a test passed, and an event stream can establish
-that the harness emitted that claim. Neither establishes that the test passed against the accepted
-repository state. Claude independently checks material claims before recording verification.
+Each new journal line is a JSON object with `kind` and `run_id`. The run ID is nonempty, is not
+dot-prefixed, and contains no path separator, NUL, or control character. The writer serializes
+complete line appends under one `fcntl.flock` and returns; it does not check run ownership, file
+scope, task state, route consistency, chain state, references, or prior closure. It refuses only a
+malformed envelope or I/O failure. An invalid run ID is refused before any directory or file is
+created, without echoing the value.
 
-Evidence need not always be a file. Keep a small command result or diff observation inline. Use the
-optional `evidence/` directory for lengthy output, screenshots, metrics, failure diagnostics, or
-material that another reviewer may need to inspect later. Do not copy handoffs into `evidence/`.
+The writer reports I/O failure as `forge: journal append failed: I/O error`, a missing or
+non-object envelope as `forge: journal append refused: record must be a JSON object with kind and run_id`,
+and an invalid run ID as `forge: <operation> refused — invalid run id`. It makes no other policy
+refusal.
 
-## Journal Entries
+The public writer verbs and records are:
 
-One Claude orchestrator owns and appends to `journal.jsonl`. Every nonblank line is one JSON object
-with `recorded_at`. Do not let two orchestration loops write the same run. Each `agent` + `execution`
-pair may occur in at most one `execution` and one `execution_result`; `verification` and `decision`
-IDs must each be unique within their entry type. Task IDs intentionally repeat to record status
-changes. If a unique identity is duplicated, retain the journal, stop appending, and start a
-successor run that references the prior run instead of rewriting history. The journal contains seven
-entry types. The fields below are the prompted run protocol, not a complete runtime-enforced schema.
+| Verb | New record | Contents |
+|---|---|---|
+| `run-open` | `run_started` | repository, intent text, actor |
+| `journal task-start`, `journal task-finish` | `task` | task ID, title, free-text scope; finish may describe status |
+| `journal execution-start` | `execution_started` | execution/task IDs, actual route, worktree, start time |
+| `journal execution-result` | `execution_finished` | execution/task IDs, actual route, worktree, times, exit status, output path, reported tokens |
+| `journal decision-add` | `decision` | free text, actor, optional references |
+| `run-close` | `run_closed` | free-text outcome |
 
-### `run_started`
-
-The first entry. It records the concise original goal, absolute target worktree, starting Git
-baseline, plugin revision, and available tool versions. `repo_head` is the full starting commit;
-include `repo_branch` only when HEAD is attached. `repo_status` is an array containing the exact
-lines from `git status --short --untracked-files=all`, captured after locally excluding the run root
-and before creating it.
+For example:
 
 ```jsonl
-{"type":"run_started","run_id":"run-20260710-01","goal":"Add request validation without changing the public API.","repo":"/work/project","repo_head":"0123456789abcdef0123456789abcdef01234567","repo_branch":"feature/request-validation","repo_status":[],"plugin_ref":"git:abc1234","claude_version":"2.1.0","codex_version":"0.110.0","recorded_at":"2026-07-10T12:00:00Z"}
+{"kind":"run_started","run_id":"run-01","repository":"/work/project","intent":"Add request validation","actor":"Claude"}
+{"kind":"task","run_id":"run-01","task_id":"task-01","title":"Validate input","scope":"src/api.py and tests"}
+{"kind":"execution_started","run_id":"run-01","execution_id":"execution-01","task_id":"task-01","role":"implementer","provider":"codex","model":"gpt-5.6-sol","effort":"ultra","worktree":"/work/project-impl","started_at":"2026-10-07T12:00:00Z","sandbox":"workspace-write","route_source":"committed-default","route_sha256":"7dc8bec71a109e095bfef57db5c7c6744dd4dcd88fd472a33a23c60adc5cba00"}
+{"kind":"execution_finished","run_id":"run-01","execution_id":"execution-01","task_id":"task-01","role":"implementer","provider":"codex","model":"gpt-5.6-sol","effort":"ultra","worktree":"/work/project-impl","started_at":"2026-10-07T12:00:00Z","ended_at":"2026-10-07T12:20:00Z","status":"complete","exit_status":0,"output":"codex-impl-01/execution-01/handoff.md","sandbox":"workspace-write","route_source":"committed-default","route_sha256":"7dc8bec71a109e095bfef57db5c7c6744dd4dcd88fd472a33a23c60adc5cba00"}
+{"kind":"decision","run_id":"run-01","text":"Retain the regression test","actor":"Claude"}
+{"kind":"run_closed","run_id":"run-01","outcome":"Delivered; checks passed"}
 ```
 
-Omit an unavailable version or detached `repo_branch`; do not guess it. Treat initially dirty paths
-as pre-existing user work. If planned work overlaps them, isolate the work or get user direction;
-the status alone cannot attribute later edits within the same file.
+<!-- forge: modified from upstream — describe non-authorizing launch journaling. -->
+The launcher allocates execution and attempt IDs under the run's append lock, saves its prompt
+and marker, appends `execution_started`, launches a detached wrapper, and writes a
+three-line `pid` file (PID, PGID, UTC launch timestamp). `forge launch collect` maps the completion
+artefact to `execution_finished`; a repeat collect after the marker is collected appends nothing.
+An interrupted collect may append a second finish record when the first append succeeded before
+the marker update. Every new execution record describes the route actually used: role, provider,
+model, effort, sandbox, `route_source`, and `route_sha256`. A later execution may resolve a
+different route.
 
-### `task`
+The run's `.execution-ids/` directory holds owner-only `execution-NN` reservations. A prose
+launcher chooses the next free ID under the run's executions root and reserves it there, using
+the same allocation rule as `forge launch`; a managed launch uses the ID printed on its start
+receipt. Each managed execution also has a `worktree` sidecar containing the canonical absolute
+worktree path and a newline. The marker binds to that path during collect and cancel.
 
-<!-- forge: modified from upstream — overlapping ownership always serializes (FR-130) -->
-Entries may repeat for the same task. The latest entry is current within the journal. Status is `pending`,
-`active`, `complete`, `blocked`, or `failed`. Active tasks declare their allowed/owned file paths or
-globs in `files` before parallel execution. Parallel tasks must have disjoint ownership, including
-when they use isolated worktrees; every overlap in files, contracts, or shared resources executes
-serially. This planned boundary is distinct from `execution_result.files_changed`, which is Claude's
-compact attribution note; the repository diff determines what actually changed.
+New records may cite chain IDs and verdict paths as references. They are not checked against
+chain state. A close is descriptive; subsequent facts may be appended. The writer does not pair
+executions or enforce task completion.
 
-```jsonl
-{"type":"task","id":"task-01","status":"active","goal":"Add request validation.","acceptance":["Invalid input is rejected","Relevant tests pass"],"files":["src/api.py","tests/test_api.py"],"recorded_at":"2026-07-10T12:01:00Z"}
-```
+## Structural reading
 
-### `execution`
+`state` and `monitor` read records as data. Readers carry unknown and every legacy kind through
+without changing the stored bytes. Historical records using `type` remain readable, including
+legacy records without `run_id` after `run_started`. The committed `tests/replay/` fixtures are
+preserved inputs and validate with no issue.
 
-<!-- forge: modified from upstream — exact role routing and reviewer-only resume (FR-030/033) -->
-Append this before launch so in-flight work survives context loss. The `agent` + `execution` pair is
-its identity. Record the absolute `worktree`, full Git `head`, and attached `branch` when present so
-context recovery and integration use the same target. Implementation executions are never resumed;
-only a reviewer confirmation may resume in its next execution directory under the orchestration
-contract. Record the provider, role, and mode. Use `event_source: "exec"` for a Codex CLI stream and
-`"claude"` for a Claude agent. `events` may be omitted for a Claude agent. Record `model`, `effort`,
-and `session_id` when known; an execution result may supply the session id later.
+`validate <run_dir>` checks only that each line parses to a JSON object with a current
+`kind`/`run_id` envelope or a legacy `type` envelope. It emits sorted-key JSON with `ok` and
+`issues`, and exits 0 exactly when issues is empty. A malformed line contributes exactly
+`forge: journal validate failed: malformed JSON object at line <n>`. Unknown kinds and unfamiliar
+fields are accepted. Validation does not replay lifecycle state, evaluate gates, derive a
+judgment, or grant permission to any operation.
 
-```jsonl
-{"type":"execution","agent":"codex-impl-01","execution":"execution-01","task":"task-01","provider":"codex","role":"implementer","mode":"headless","event_source":"exec","model":"gpt-5.6-sol","effort":"ultra","worktree":"/work/project-codex-impl-01","head":"0123456789abcdef0123456789abcdef01234567","branch":"codex-impl-01","prompt":"codex-impl-01/execution-01/prompt.md","events":"codex-impl-01/execution-01/events.jsonl","handoff":"codex-impl-01/execution-01/handoff.md","recorded_at":"2026-07-10T12:02:00Z"}
-```
+## Reporting
 
-### `execution_result`
-
-Records Claude's terminal understanding of one execution as `complete`, `blocked`, or `failed`. It
-links the exact handoff and summarizes reported or observed files, results, and caveats. It is not
-mechanical process telemetry or authoritative file attribution; a complete execution result does
-not complete the task.
-
-```jsonl
-{"type":"execution_result","agent":"codex-impl-01","execution":"execution-01","task":"task-01","status":"complete","session_id":"thread-123","handoff":"codex-impl-01/execution-01/handoff.md","summary":"Implemented validation and tests.","files_changed":["src/api.py","tests/test_api.py"],"caveats":[],"recorded_at":"2026-07-10T12:20:00Z"}
-```
-
-An execution is in flight until a matching terminal execution result exists. Completed executions
-require a nonempty handoff. A missing handoff for a blocked or failed execution is reported as a
-warning and must not be fabricated.
-
-### `verification`
-
-Records Claude's evaluation of one criterion. Result is `passed`, `failed`, `inconclusive`, or
-`skipped`. The `check` is the exact command or inspection, and `observation` states what Claude
-actually observed. Evidence paths are optional.
-
-```jsonl
-{"type":"verification","id":"check-01","task":"task-01","criterion":"Relevant tests pass","method":"command","check":"python -m pytest tests/test_api.py -q","result":"passed","observation":"12 tests passed; exit code 0.","evidence":["evidence/task-01-tests.txt"],"recorded_at":"2026-07-10T12:25:00Z"}
-```
-
-The agent's `Commands Reported` section is not a verification. Claude must observe the check or
-perform an inspection appropriate to the criterion.
-
-### `decision`
-
-Records a consequential resolution. Outcome is `consensus`, `claude_decision`, or
-`user_action_required`. `basis` references checks, handoffs, evidence, or repository paths; `risk`
-states residual risk. Decisions explain history but do not delete or rewrite failed checks.
-
-```jsonl
-{"type":"decision","id":"decision-01","task":"task-01","finding":"The first implementation accepted whitespace-only names.","outcome":"consensus","resolution":"Reject stripped empty names and retain the regression test.","basis":["check-01","codex-impl-01/execution-02/handoff.md"],"risk":"low","recorded_at":"2026-07-10T12:45:00Z"}
-```
-
-### `run_closed`
-
-The final journal entry. Claude copies the pre-close validation result into `validation` and records
-the semantic `judgment` as `passed` or `blocked`, plus unresolved risks and follow-ups.
-
-```jsonl
-{"type":"run_closed","judgment":"passed","summary":"All acceptance criteria were independently verified.","validation":{"ok":true,"issues":[],"warnings":[],"non_passing_verifications":[]},"risks":[],"follow_ups":[],"recorded_at":"2026-07-10T13:00:00Z"}
-```
-
-The `validation` field preserves the descriptive check immediately preceding closure. Validation
-does not decide `judgment`: Claude reviews its output, all non-passing verification, open decisions,
-and repository state before closing the run. The workflow skill owns the complete close procedure.
-
-## Handoff Contract
-
-Every agent prompt asks for a concise final response with these headings:
-
-```markdown
-## Status
-
-## Summary
-
-## Files Changed
-
-## Claims / Findings
-
-## Commands Reported
-
-## Caveats / Blockers
-```
-
-Codex writes this exact response with `--output-last-message`. Claude agents save the exact returned
-message locally. Do not rewrite a handoff into a cleaner summary; add Claude's observations to the
-execution result or verification instead.
-
-## Failed Checks And Reruns
-
-Keep both observations. A passing rerun supports acceptance of the corrected repository state but
-does not erase the earlier failure. Record the failed verification, fix execution, and passing
-verification.
-
-[`tests/replay/long-run-001/`](../tests/replay/long-run-001/) is a checked-in input scaffold, not a
-standalone valid closed run. [`test_prompt_first_workflow.py`](../tests/test_prompt_first_workflow.py)
-copies it, generates the fake execution outputs, evidence, and example repository files, then
-validates the completed copy.
-
-## Descriptive Validation
-
-`validate` is a small omission check, not truth or acceptance validation. It checks:
-
-- JSON objects and the seven journal entry type names;
-- one initial `run_started` and at most one final `run_closed`;
-- execution/result identities, pairing, order, and matching task IDs when recorded;
-- task references plus duplicate verification and decision IDs;
-- declared prompt, event, handoff, and evidence files;
-- terminal execution results and latest task states before closure;
-- nonempty completed-execution handoffs;
-- recognized verification results and a descriptive list of every non-passing verification.
-
-Its output is ordinary JSON, not a journal entry:
-
-```json
-{
-  "ok": true,
-  "issues": [],
-  "warnings": [],
-  "non_passing_verifications": []
-}
-```
-
-Validation does not enforce every documented field, confine paths, resolve decision bases, match
-reruns, clear failures, infer consensus, verify process provenance, or decide acceptance. Claude
-copies the complete result into `run_closed.validation`, then authors `report.md` from the complete
-run context.
-
-<!-- forge: modified from upstream — document Level B gate recording and acceptance enforcement -->
-## Gate Recording
-
-Forge records Level B gates as a naming convention over the existing `verification` entry; this
-does not add a journal entry type or change the upstream schema:
-
-```jsonl
-{"type":"verification","id":"check-07","task":"task-02","criterion":"gate-1: project tests","method":"command","check":"<the forge-project.md gate1-test-command>","result":"passed","observation":"41 tests passed; exit code 0.","recorded_at":"2026-08-08T14:00:00Z"}
-{"type":"verification","id":"check-08","task":"task-02","criterion":"gate-2: lint and types","method":"command","check":"ruff check . && mypy src/","result":"passed","observation":"clean; exit code 0.","recorded_at":"2026-08-08T14:02:00Z"}
-{"type":"verification","id":"check-09","task":"task-02","criterion":"gate-3: review-final verdict","method":"inspection","check":"review-final subagent over git diff <baseline-sha>..HEAD","result":"passed","observation":"PASS; 0 CRITICAL/MAJOR findings; severities CRITICAL=0,MAJOR=0,MINOR=0; reviewer review-final; iteration 2 of 8.","recorded_at":"2026-08-08T14:20:00Z"}
-```
-
-Rules: a gate verification's `criterion` MUST begin with exactly `gate-1: `, `gate-2: `, or `gate-3: ` (lowercase, single space after colon). Gate 3's criterion MUST be exactly `gate-3: review-final verdict`. A gate `result` uses the upstream enum; a BLOCK verdict is recorded as `result: "failed"`. Record every Gate 3 observation as exactly `<PASS|BLOCK>; <critical-plus-major-count> CRITICAL/MAJOR findings; severities CRITICAL=<count>,MAJOR=<count>,MINOR=<count>; reviewer <review-cheap|review-final>; iteration <number> of 8.` so journal-derived learning retains the finding severity and actual reviewer role without adding a journal type. A gate-3 verification's `check` field MUST name the exact reviewed candidate — the reviewed commit range with full SHAs (task/merge reviews) or the staged-diff SHA-256 (commit reviews). That candidate identity is threaded unchanged through the pipeline: the same hash/SHA appears in the gate-pass marker (DM-006), in any control-class approval prompt, and in the reintegration push. This is a convention over existing fields; no schema change. A BLOCK-then-restage cycle drains a fresh complete gate set for every candidate a chain stages; only the landed candidate's fresh, non-superseded set counts toward its landing (a chain that staged A, then B, then A again lands only on an A set drained after the B records).
-
-The `--gates` profile is a deliberate forge deviation from the upstream stance that validation
-never decides acceptance. It makes missing gate passes, failed gates without passing rechecks, and
-unknown gate criteria acceptance-blocking issues. In a run activated by `forge-journal-binding/1`
-it also correlates every bound gate, approval, skip, and landing record by chain and candidate
-(FR-021): records bound to a candidate the same chain later restaged, or to a chain carrying a
-`chain-abort` decision (an explicit abort, or a retrospective `commit abort-disposition`), are
-retired from the landing correlation and the precedence rule; a terminal `execution_result`
-appended after its task's last landing for an execution recorded before that landing does not move
-the mutating boundary; records bound to a chain that neither landed, carries an abort decision, nor
-was superseded on its own chain keep the inconsistent-candidate refusal. Plain `validate` retains
-the upstream descriptive validation contract.
+Keep exact prompts, raw events, handoffs, and useful observations under the local run directory.
+Compare the final repository with its observed starting state, inspect check results and review
+verdicts at their source, and report chain outcomes from `.forge/chains/`. Treat a handoff as a
+claim until it has been checked. Correct a mistake by appending a later fact; never rewrite an
+existing journal line or historical fixture.

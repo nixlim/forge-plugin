@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import ast
-import io
-import json
 import os
 import re
 import subprocess
@@ -20,17 +18,6 @@ from tests._git_env import (
     quiet_repository,
     with_quiet_git,
 )
-from tests._revision9_coord_constants import key as batch_key
-from tests._revision9_coord_support import Revision9BuilderBatchSupport
-from tests.test_worktree_guard import (
-    MERGE_SKILL,
-    WORKFLOW_SKILL,
-    _WorktreeGuardFixture,
-    mutated_function,
-)
-
-import codex_orch_tools
-from codex_orchestrator import builders, journal, worktree_guard
 
 ROOT = Path(__file__).resolve().parents[1]
 THIS_MODULE = "tests/test_git_env.py"
@@ -55,12 +42,9 @@ PENDING_ADOPTION = frozenset(
         "tests/test_launch_init_step.py",
         "tests/test_migration.py",
         "tests/test_mutation_runner.py",
-        "tests/test_revision9_coordination.py",
         "tests/test_risk_tier.py",
         "tests/test_route_config_ownership.py",
         "tests/test_tree_index_drift_flags.py",
-        "tests/test_vocab_readers.py",
-        "tests/test_vocab_writers.py",
     }
 )
 SHELL_CREATION = re.compile(r"(?<![\w-])git\s+(?:init|clone)\b")
@@ -529,7 +513,7 @@ class GitEnvironmentTests(_GitMaintenanceFixture):
                 quiet_repository(disabled_linked)
 
     def test_repository_creation_adoption_is_an_exact_ratchet(self) -> None:
-        self.assertEqual(len(PENDING_ADOPTION), 24)
+        self.assertEqual(len(PENDING_ADOPTION), 21)
         self.assertEqual(_adoption_issues(_test_sources()), [])
 
     def test_repo_conformance_imports_in_commitment_audit_script_mode(self) -> None:
@@ -580,354 +564,46 @@ class GitEnvironmentTests(_GitMaintenanceFixture):
         self.assertFalse(_creates_git_repository(source))
 
 
-class WorktreeGuardWriterCompatibilityTests(
-    Revision9BuilderBatchSupport, unittest.TestCase
-):
-    def _guard_status(self, target: Path) -> int:
-        with mock.patch.object(sys, "stderr", io.StringIO()):
-            return worktree_guard.main(self.repo, target)
-
-    def _target(self) -> Path:
-        target = Path(self.temporary.name) / "cleanup-target"
-        target.mkdir()
-        return target
-
-    def test_raw_writer_empty_citations_match_guard_shape_validation(self) -> None:
-        run_id = "run-writer-empty-citations"
-        execution = {
-            "type": "execution", "recorded_at": "2026-10-04T00:00:01Z",
-            "run_id": run_id, "execution": "execution-01", "agent": "claude-review-01",
-            "task": "task-01", "provider": "claude", "role": "review-final",
-            "mode": "subagent", "model": "fable", "effort": "high",
-            "worktree": str(self.repo), "head": self.head, "prompt": "prompt.md",
-            "handoff": "handoff.md", "event_source": "claude", "events": "",
-        }
-        result = {
-            "type": "execution_result", "recorded_at": "2026-10-04T00:00:02Z",
-            "run_id": run_id, "execution": "execution-01", "agent": "claude-review-01",
-            "task": "task-01", "status": "blocked", "summary": "blocked",
-            "files_changed": [], "caveats": [], "handoff": "",
-        }
-        with self.api_environment():
-            self._open_legacy_run(self.repo, run_id)
-            for invalid in (dict(execution, events=None), dict(result, handoff=None)):
-                with self.assertRaises(journal.CoordinationRefusal):
-                    journal.append_run_record(self.repo, run_id, invalid)
-                with self.assertRaises(worktree_guard.WorktreeGuardError):
-                    worktree_guard._normalize_record_shapes([invalid])
-            journal.append_run_record(self.repo, run_id, execution)
-            journal.append_run_record(self.repo, run_id, result)
-        target = self._target()
-        self.assertEqual(self._guard_status(target), 0)
-        validator = worktree_guard._citation_field_is_valid
-
-        def reject_empty(extraction: str, value: object, *, allow_empty: bool = False) -> bool:
-            return validator(extraction, value)
-
-        with mock.patch.object(worktree_guard, "_citation_field_is_valid", reject_empty):
-            self.assertEqual(self._guard_status(target), 2)
-
-    def test_typed_builder_null_optionals_are_omitted_and_guard_valid(self) -> None:
-        run_id = "run-builder-optional-citations"
-        with self.api_environment():
-            opening = self.open_run(self.repo, run_id).records[0]
-            self.start_task(self.repo, run_id)
-            run_dir = self.run_dir(self.repo, run_id)
-            for name in ("prompt.md", "handoff.md"):
-                (run_dir / name).write_text("evidence\n", encoding="utf-8")
-            route = opening["route"]["review-final"]
-            execution = builders.execution_start(
-                self.repo, run_id, idempotency_key=batch_key("optional-execution"),
-                agent="claude-review-final-01", task="task-01", provider=route["provider"],
-                role="review-final", mode="subagent", model=route["model"],
-                effort=route["effort"], worktree=str(self.repo.resolve()), head=self.head,
-                prompt="prompt.md", handoff="handoff.md", event_source="claude", events=None,
-                sandbox=journal.route_evidence.route_config.profile_sandbox(
-                    route["provider"], "review-final"), route_source=route["route_source"],
-                route_sha256=route["route_sha256"],
-            )
-            builders.execution_result(
-                self.repo, run_id, idempotency_key=batch_key("optional-result"),
-                execution=execution.records[0]["execution"], agent="claude-review-final-01",
-                task="task-01", status="blocked", summary="blocked", files_changed=[],
-                caveats=[], handoff=None,
-            )
-        records, issues = journal.read_journal(run_dir / "journal.jsonl")
-        self.assertEqual(issues, [])
-        persisted = [record for record in records if record["type"].startswith("execution")]
-        self.assertNotIn("events", persisted[0])
-        self.assertNotIn("handoff", persisted[1])
-        self.assertEqual(self._guard_status(self._target()), 0)
-
-
-class WorktreeGuardAdditionalControlTests(_WorktreeGuardFixture, unittest.TestCase):
-    def test_runs_root_ancestor_symlink_check_is_load_bearing(self) -> None:
-        orchestration_root = self.repo / ".codex-orchestrator"
-        symlink_target = self.base / "orchestration-state"
-        (symlink_target / "runs").mkdir(parents=True)
-        orchestration_root.symlink_to(symlink_target, target_is_directory=True)
-        anchor = "        or runs_root.resolve(strict=True) != runs_root\n"
-        mutant = mutated_function(worktree_guard._runs_root_entries, anchor, "")
-
-        self.assertEqual(self._in_process(), self._expected_result(2))
-        with mock.patch.object(worktree_guard, "_runs_root_entries", mutant):
-            self.assertEqual(self._in_process(), self._expected_result(0))
-
-    def test_worktree_argument_must_be_a_directory(self) -> None:
-        target = self.base / "not-a-directory"
-        target.write_text("not a worktree\n", encoding="utf-8")
-        anchor = "        if not repository.is_dir() or not target.is_dir():\n"
-        replacement = "        if not repository.is_dir():\n"
-        mutant = mutated_function(worktree_guard.find_dependency, anchor, replacement)
-
-        self.assertEqual(self._in_process(target), self._expected_result(2))
-        with mock.patch.object(worktree_guard, "find_dependency", mutant):
-            self.assertEqual(self._in_process(target), self._expected_result(0))
-
-    def test_worktree_guard_import_failure_is_a_refusal(self) -> None:
-        stdout, stderr = io.StringIO(), io.StringIO()
-        with mock.patch.object(
-            codex_orch_tools.importlib, "import_module", side_effect=ImportError("broken guard")
-        ), mock.patch.object(sys, "stdout", stdout), mock.patch.object(sys, "stderr", stderr):
-            status = codex_orch_tools._coordination_main([
-                "worktree-check", "--repo", str(self.repo), "--worktree", str(self.worktree)])
-        self.assertEqual((status, stdout.getvalue()), (2, ""))
-        self.assertEqual(stderr.getvalue(), worktree_guard.INPUT_DIAGNOSTIC + "\n")
-
-    def test_worktree_check_help_is_refused_and_control_is_load_bearing(self) -> None:
-        tools = ROOT / "scripts/codex_orch_tools.py"
-        for option in ("-h", "--help"):
-            result = subprocess.run(
-                [sys.executable, str(tools), "worktree-check", option],
-                check=False, capture_output=True, text=True,
-            )
-            with self.subTest(option=option):
-                self.assertEqual((result.returncode, result.stdout), (2, ""))
-                self.assertEqual(
-                    result.stderr.splitlines()[0], worktree_guard.INPUT_DIAGNOSTIC
-                )
-                self.assertIn("usage:", result.stderr)
-
-        mutant = mutated_function(
-            codex_orch_tools._worktree_check_parser, "        add_help=False,\n", ""
-        )
-        with mock.patch.object(codex_orch_tools, "_worktree_check_parser", mutant), \
-                mock.patch.object(sys, "stdout", io.StringIO()), \
-                mock.patch.object(sys, "stderr", io.StringIO()), \
-                self.assertRaises(SystemExit) as caught:
-            codex_orch_tools._worktree_check_main(["--help"])
-        self.assertEqual(caught.exception.code, 0)
-
-    def test_eager_entry_import_failure_is_exit_two_and_control_is_load_bearing(
-        self,
-    ) -> None:
-        source = (ROOT / "scripts/codex_orch_tools.py").read_text(encoding="utf-8")
-        anchor = (
-            '    if __name__ == "__main__" and sys.argv[1:2] == '
-            '["worktree-check"]:\n'
-        )
-        self.assertEqual(source.count(anchor), 1)
-
-        def execute(candidate: str) -> tuple[BaseException, str]:
-            original_import = __import__
-
-            def failing_import(
-                name: str, globals_: object = None, locals_: object = None,
-                fromlist: object = (), level: int = 0,
-            ) -> object:
-                if name == "codex_orchestrator.cli":
-                    raise ImportError("disabled eager import")
-                return original_import(name, globals_, locals_, fromlist, level)
-
-            stderr = io.StringIO()
-            namespace = {
-                "__name__": "__main__",
-                "__file__": str(ROOT / "scripts/codex_orch_tools.py"),
-            }
-            with mock.patch("builtins.__import__", side_effect=failing_import), \
-                    mock.patch.object(sys, "argv", ["codex_orch_tools.py", "worktree-check"]), \
-                    mock.patch.object(sys, "stderr", stderr):
-                try:
-                    exec(compile(candidate, "codex_orch_tools.py", "exec"), namespace)
-                except (ImportError, SystemExit) as exc:
-                    return exc, stderr.getvalue()
-            raise AssertionError("entry script unexpectedly returned")
-
-        intact, diagnostic = execute(source)
-        self.assertIsInstance(intact, SystemExit)
-        self.assertEqual(getattr(intact, "code", None), 2)
-        self.assertEqual(diagnostic, worktree_guard.INPUT_DIAGNOSTIC + "\n")
-        disabled, disabled_diagnostic = execute(source.replace(anchor, "    if False:\n", 1))
-        self.assertIsInstance(disabled, ImportError)
-        self.assertEqual(disabled_diagnostic, "")
-
-    def test_operator_release_and_post_removal_controls_are_load_bearing(self) -> None:
-        protocol = (
-            "a passed run that remains unarchivable after the deferred workflow retry, a retired "
-            "run, or a blocked run that is not gate-clean",
-            "remains `cleanup deferred` with its worktree and branch intact",
-            "only as an operator-reserved cleanup under explicit terminal direction recorded as "
-            "an operator `decision` in an open run's journal",
-            "The operator—not this skill or any agent—runs `git -C <main-worktree> worktree "
-            "remove <absolute-worktree-path>` without a force option",
-            "only after independently re-proving the branch tip and remote containment",
-            "`git -C <main-worktree> update-ref -d <branch-ref> <verified-old-oid>`",
-            "Agents never run either command themselves, never release that worktree, and never "
-            "treat the operator decision as guard exit 0",
-        )
-        mechanics = (
-            ("merge", 'cd "$MAIN_WORKTREE" || {'),
-            ("merge", "branch tip changed during cleanup — cleanup incomplete"),
-            ("merge", "branch tip is not contained in origin/${DEFAULT_BRANCH} "
-             "— cleanup incomplete"),
-            ("workflow", "branch tip changed during cleanup — cleanup incomplete"),
-            ("workflow", "branch tip is not contained in "
-             "origin/${DEFERRED_DEFAULT_BRANCH} — cleanup incomplete"),
-        )
-
-        def assert_contract(merge: str, workflow: str) -> None:
-            sources = {"merge": merge, "workflow": workflow}
-            for text in sources.values():
-                normalized = " ".join(text.split())
-                for fragment in protocol:
-                    self.assertEqual(normalized.count(fragment), 1)
-                self.assertEqual(
-                    [normalized.index(fragment) for fragment in protocol],
-                    sorted(normalized.index(fragment) for fragment in protocol),
-                )
-            for scope, fragment in mechanics:
-                self.assertEqual(sources[scope].count(fragment), 1)
-            cleanup = merge.split("## Cleanup after successful push", 1)[1].split(
-                "## Record authority and report", 1
-            )[0]
-            self.assertLess(
-                cleanup.index('cd "$MAIN_WORKTREE" || {'),
-                cleanup.index('git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_DIR"'),
-            )
-            self.assertNotIn(
-                "branch tip changed during cleanup — branch preserved",
-                merge + workflow,
-            )
-            self.assertNotIn(
-                "branch tip is not contained in origin/${DEFAULT_BRANCH} "
-                "— branch preserved",
-                merge,
-            )
-            self.assertNotIn(
-                "branch tip is not contained in origin/${DEFERRED_DEFAULT_BRANCH} "
-                "— branch preserved",
-                workflow,
-            )
-
-        assert_contract(MERGE_SKILL, WORKFLOW_SKILL)
-        for scope, fragment in mechanics:
-            sources = {"merge": MERGE_SKILL, "workflow": WORKFLOW_SKILL}
-            sources[scope] = sources[scope].replace(fragment, "DISABLED_CONTROL", 1)
-            with self.subTest(disabled=fragment), self.assertRaises(AssertionError):
-                assert_contract(sources["merge"], sources["workflow"])
-        for scope, source in (("merge", MERGE_SKILL), ("workflow", WORKFLOW_SKILL)):
-            for fragment in protocol:
-                mutated = " ".join(source.split()).replace(
-                    fragment, "DISABLED_CONTROL", 1
-                )
-                with self.subTest(scope=scope, disabled=fragment[:24]), \
-                        self.assertRaises(AssertionError):
-                    assert_contract(
-                        mutated if scope == "merge" else MERGE_SKILL,
-                        mutated if scope == "workflow" else WORKFLOW_SKILL,
-                    )
-
-    def test_permanently_unarchivable_runs_remain_deferred_after_decision(self) -> None:
-        from tests import test_worktree_merge_skill as cleanup_test
-
-        real_apply = cleanup_test.apply_cleanup_scenario
-
-        def apply_permanent(fixture: object, scenario: str) -> str:
-            if not scenario.startswith("permanent-"):
-                return real_apply(fixture, scenario)
-            main, worktree = fixture.main, fixture.worktree
-            run_id = "run-a-" + scenario.removeprefix("permanent-")
-            if scenario == "permanent-retired":
-                opening = {"type": "run_started", "id": run_id,
-                           "repo": str(worktree), "scope": ["src/**"]}
-                tail = [{"type": "decision", "id": "forge-run-retired",
-                         "resolution": journal.RETIREMENT_RESOLUTION}]
-            else:
-                opening = {"type": "run_started", "run_id": run_id,
-                           "repo": str(worktree)}
-                judgment = "passed" if scenario == "permanent-passed" else "blocked"
-                tail = ([{"type": "verification", "id": "check-01", "result": "failed",
-                          "evidence": []}] if judgment == "blocked" else [])
-                tail.append({"type": "run_closed", "judgment": judgment})
-            records_by_run = {
-                run_id: [opening, *tail],
-                "run-z-operator-direction": [
-                    {"type": "run_started", "run_id": "run-z-operator-direction",
-                     "repo": str(main)},
-                    {"type": "decision", "id": "operator-release-direction",
-                     "resolution": "terminal cleanup directed by operator"},
-                ],
-            }
-            for selected_run, records in records_by_run.items():
-                run_dir = main / ".codex-orchestrator" / "runs" / selected_run
-                run_dir.mkdir(parents=True)
-                (run_dir / "journal.jsonl").write_text(
-                    "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
-                )
-                (run_dir / "owner").write_text(
-                    "pid: 1\nhost: forge-tests\nstarted_at: 2026-10-04T00:00:00Z\n",
-                    encoding="utf-8",
-                )
-            return cleanup_test.run_git(
-                main, "rev-parse", "refs/heads/topic"
-            ).stdout.strip()
-
-        with mock.patch.object(
-            cleanup_test, "apply_cleanup_scenario", side_effect=apply_permanent
-        ):
-            for scenario in ("permanent-passed", "permanent-retired", "permanent-blocked"):
-                for kind in ("merge", "workflow"):
-                    outcome = cleanup_test.run_cleanup_case(kind, scenario)
-                    with self.subTest(run_class=scenario, block=kind):
-                        self.assertEqual(outcome.process.returncode, 0 if kind == "merge" else 1)
-                        self.assertIn(f"cleanup deferred — run run-a-{scenario[10:]}",
-                                      outcome.process.stderr)
-                        self.assertTrue(outcome.worktree_exists)
-                        self.assertEqual(outcome.branch_tip, outcome.expected_tip)
-
+class MergeCleanupStatusTests(unittest.TestCase):
     def test_successful_merge_cleanup_returns_to_main_worktree(self) -> None:
         from tests.test_worktree_merge_skill import SKILL, run_cleanup_case
 
-        marker = "esac\n```\n\nRun the worktree-removal command exactly as shown"
+        marker = (
+            'CLEANUP_OUTCOME="cleanup succeeded"\n```\n\n'
+            "Run the worktree-removal command exactly as shown"
+        )
         self.assertEqual(SKILL.count(marker), 1)
         probed = SKILL.replace(
             marker,
-            "esac\npwd\n```\n\nRun the worktree-removal command exactly as shown",
+            'CLEANUP_OUTCOME="cleanup succeeded"\npwd\n```\n\n'
+            "Run the worktree-removal command exactly as shown",
             1,
         )
-        outcome = run_cleanup_case("merge", "clean", skill=probed)
+        outcome = run_cleanup_case("clean", skill=probed)
         self.assertEqual(outcome.process.returncode, 0, outcome.process.stderr)
         self.assertTrue(outcome.process.stdout.rstrip().endswith("/main"))
 
+        disabled = probed.replace('cd "$MAIN_WORKTREE" || {', 'true || {', 1)
+        wrong = run_cleanup_case("clean", skill=disabled)
+        with self.assertRaises(AssertionError):
+            self.assertTrue(wrong.process.stdout.rstrip().endswith("/main"))
 
-class WorkflowRetryStatusTests(unittest.TestCase):
-    def test_repository_probe_and_fetch_failures_are_distinct_refusals(self) -> None:
-        from tests.test_worktree_merge_skill import WORKFLOW, run_cleanup_case
+    def test_fetch_failure_preserves_worktree_and_branch(self) -> None:
+        from tests.test_worktree_merge_skill import SKILL, run_cleanup_case
 
-        cases = (
-            (WORKFLOW.replace('REPO="$(git rev-parse --show-toplevel 2>/dev/null)"',
-                              'REPO="$(false 2>/dev/null)"', 1),
-             "forge: repository root is unavailable — cleanup refused"),
-            (WORKFLOW.replace("fetch origin", "fetch missing-origin", 1),
-             "forge: default-branch fetch failed — cleanup refused"),
+        prefix, cleanup = SKILL.split("## Cleanup after successful push", 1)
+        mutant = prefix + "## Cleanup after successful push" + cleanup.replace(
+            'git fetch origin "$DEFAULT_BRANCH" --quiet',
+            'git fetch missing-origin "$DEFAULT_BRANCH" --quiet',
+            1,
         )
-        for workflow, diagnostic in cases:
-            outcome = run_cleanup_case("workflow", "clean", workflow=workflow)
-            with self.subTest(diagnostic=diagnostic):
-                self.assertEqual(outcome.process.returncode, 2, outcome.process.stderr)
-                self.assertIn(diagnostic, outcome.process.stderr)
-                self.assertTrue(outcome.worktree_exists)
-                self.assertEqual(outcome.branch_tip, outcome.expected_tip)
+        outcome = run_cleanup_case("clean", skill=mutant)
+        self.assertEqual(outcome.process.returncode, 1, outcome.process.stderr)
+        self.assertIn(
+            "forge: default-branch fetch failed — cleanup refused", outcome.process.stderr
+        )
+        self.assertTrue(outcome.worktree_exists)
+        self.assertEqual(outcome.branch_tip, outcome.expected_tip)
 
 
 if __name__ == "__main__":

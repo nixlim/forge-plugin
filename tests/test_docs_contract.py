@@ -13,14 +13,11 @@ def _flat(text: str) -> str:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE3_PRODUCERS = (
-    ROOT / "docs/orchestration-contract.md",
-    ROOT / "skills/commit/SKILL.md",
-    ROOT / "skills/worktree-merge/SKILL.md",
-)
 JOURNAL_ENTRY_TYPES = {
     "run_started",
     "task",
+    "execution_started",
+    "execution_finished",
     "execution",
     "execution_result",
     "verification",
@@ -64,45 +61,19 @@ def jsonl_records(text: str) -> list[dict[str, object]]:
     ]
 
 
-def assert_repo_routing_close_control(workflow: str) -> None:
-    close = workflow.split(
-        "12. Create and commit the durable archive", maxsplit=1
-    )[1].split("13. Only after the archive commit", maxsplit=1)[0]
-    source_marker = (
-        "git ls-files --error-unmatch \\\n"
-        "  tests/test_repo_conformance.py .claude-plugin/plugin.json \\\n"
-        "  docs/specs/forge-plugin-spec.md"
+def assert_run_log_report_contract(workflow: str) -> None:
+    required = (
+        'codex_orch_tools.py" run-close',
+        '--outcome <free-text-outcome>',
+        'codex_orch_tools.py" validate',
+        'Use [report](../report/SKILL.md)',
+        '`.forge/chains/`',
     )
-    route_audit = 'python3 tests/test_repo_conformance.py --run-dir "$RUN_DIR" || exit 1'
-    commitment_audit = 'audit-commitments.py" --run-dir "$RUN_DIR"'
-    archive = 'archive-run.py"'
-
-    for fragment in (source_marker, route_audit, commitment_audit, archive):
-        if close.count(fragment) != 1:
-            raise AssertionError(fragment)
-    positions = [
-        close.index(fragment)
-        for fragment in (route_audit, commitment_audit, archive)
-    ]
-    if positions != sorted(positions):
-        raise AssertionError("routing conformance must precede audit and archive")
-    normalized = " ".join(close.split())
-    if "repository dogfood control, not an installed-project requirement" not in normalized:
-        raise AssertionError("routing conformance must remain repository-specific")
-    required_contract = (
-        "Current agent-definition and `system/codex/agents/*.toml` routing must conform",
-        "remains fail closed on the command's nonzero exit",
-        "fully resolved historical model/effort mismatch is immutable journal evidence, not a refusal",
-        "names every mismatch under `## Historical Routing Findings`",
-        "journal line, agent, recorded value, expected value, and recorded-HEAD authority",
-        "commitment audit reruns that same routing-conformance command as defense in depth",
-        "sole source for the archive's routing findings",
-        "renderer independently reruns the commitment audit and embeds that exact output",
-        "making every historical routing finding part of the committed archive",
-    )
-    for fragment in required_contract:
-        if fragment not in normalized:
-            raise AssertionError(fragment)
+    for marker in required:
+        if marker not in workflow:
+            raise AssertionError(marker)
+    if any(x in workflow for x in ('validate --gates', 'archive-run.py', 'worktree-check')):
+        raise AssertionError('retired journal authority')
 
 
 PROMPT_CONTRACT_MARKERS = {
@@ -110,24 +81,21 @@ PROMPT_CONTRACT_MARKERS = {
         "same absolute execution worktree",
         "`${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/implementer.md` or",
         "git -C <worktree> show HEAD:forge-project.md",
-        "git -C <worktree> show HEAD:.forge/history/gotchas.md",
-        "git -C <worktree> cat-file -e HEAD:.forge/history/gotchas.md",
         "1. The concrete task assignment",
         "MUST NOT come from working-tree state, another checkout, or a rendered agent",
     ),
     "monitoring": (
         "For Codex, `prompt.md` and stdin start with the applicable plugin role template",
-        "committed `agent-project-context`, optional committed gotchas, and the concrete task assignment",
+        "committed `agent-project-context` and the concrete task assignment",
         "For Claude, the applicable committed role body is passed only through the exact FR-245 argv flag",
-        "Both committed inputs come from the recorded absolute worktree at its committed\nHEAD",
+        "The committed context comes from the recorded absolute worktree at its committed\nHEAD",
         "never use working-tree prose or a rendered agent definition",
     ),
     "review": (
         "[prompt-construction contract](../SKILL.md#forge-isolation-and-prompt-construction)",
         "git -C <worktree> show HEAD:forge-project.md",
-        "git -C <worktree> show HEAD:.forge/history/gotchas.md",
-        "same review worktree",
-        "never source either committed input from working-tree state",
+        "review worktree recorded for the execution",
+        "never source committed context from working-tree state",
     ),
     "commit": (
         "[`orchestrate`](../orchestrate/SKILL.md#forge-isolation-and-prompt-construction)",
@@ -158,7 +126,7 @@ def assert_prompt_feed_forward_contract(documents: dict[str, str]) -> None:
     )[1].split("## Forge Execution Preparation And Launch", maxsplit=1)[0]
     monitoring = documents["monitoring"].split(
         "### Typed Implementer And Plan Launches", maxsplit=1
-    )[1].split("The generated owner record includes", maxsplit=1)[0]
+    )[1].split("The `execution_started` record contains", maxsplit=1)[0]
     review = documents["review"].split("For the first independent review:", maxsplit=1)[1].split(
         "Immediately before launch", maxsplit=1
     )[0]
@@ -170,19 +138,16 @@ def assert_prompt_feed_forward_contract(documents: dict[str, str]) -> None:
         "orchestrate": (
             "`${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/implementer.md` or",
             "git -C <worktree> show HEAD:forge-project.md",
-            "git -C <worktree> show HEAD:.forge/history/gotchas.md",
             "1. The concrete task assignment",
         ),
         "monitoring": (
             "applicable plugin role template",
             "committed `agent-project-context`",
-            "optional committed gotchas",
             "concrete task assignment",
         ),
         "review": (
             "`${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`",
             "git -C <worktree> show HEAD:forge-project.md",
-            "git -C <worktree> show HEAD:.forge/history/gotchas.md",
             "isolated review assignment",
         ),
         "commit": (
@@ -308,6 +273,8 @@ def assert_revision8_commit_skill_contract(documents: dict[str, str]) -> None:
             pattern = rf"export\s+FORGE_SESSION_PID\s*=\s*{re.escape(transient)}"
             if re.search(pattern, document):
                 raise AssertionError(f"{name}: transient session identity export")
+        if name == "workflow":
+            continue
         for marker in (
             "stable live `FORGE_SESSION_PID`",
             "long-lived harness",
@@ -490,6 +457,110 @@ def assert_fresh_reviewer_operator_skip_contract(spec: str, commit: str) -> None
             raise AssertionError(marker)
 
 class DocumentationContractTests(unittest.TestCase):
+    def test_upstream_keeps_historical_learn_line(self) -> None:
+        upstream = (ROOT / "UPSTREAM").read_text(encoding="utf-8")
+        marker = "- FR-200..FR-205: added Forge-only deterministic journal-pattern extraction"
+        self.assertIn(marker, upstream)
+        with self.assertRaises(AssertionError):
+            self.assertIn(marker, upstream.replace(marker, "DISABLED_CONTROL"))
+
+    def test_prose_execution_examples_include_required_flags_and_reservation(self) -> None:
+        documents = (
+            ROOT / "skills/orchestrate/SKILL.md",
+            ROOT / "skills/orchestrate/references/monitoring.md",
+            ROOT / "skills/workflow/SKILL.md",
+        )
+        route_flags = {
+            "--repo", "--run-id", "--task", "--role", "--provider", "--model",
+            "--effort", "--worktree", "--sandbox", "--route-source",
+            "--route-sha256", "--execution", "--started-at",
+        }
+        result_flags = route_flags | {"--status", "--exit-status", "--output"}
+
+        def assert_examples(document: str) -> None:
+            for verb, required in (
+                ("execution-start", route_flags),
+                ("execution-result", result_flags),
+            ):
+                match = re.search(
+                    rf"journal {verb} \\\n(?:[^\n]*\\\n)*[^\n]*", document
+                )
+                self.assertIsNotNone(match, verb)
+                self.assertLessEqual(required, set(re.findall(r"--[a-z0-9-]+", match.group())))
+            self.assertIn('mkdir "$RUN_DIR/.execution-ids/$EXECUTION"', document)
+
+        for path in documents:
+            document = path.read_text(encoding="utf-8")
+            with self.subTest(path=path):
+                assert_examples(document)
+                with self.assertRaises(AssertionError):
+                    assert_examples(document.replace("--route-sha256", "DISABLED_CONTROL"))
+                with self.assertRaises(AssertionError):
+                    assert_examples(document.replace(
+                        'mkdir "$RUN_DIR/.execution-ids/$EXECUTION"', "DISABLED_CONTROL"
+                    ))
+
+    def test_monitor_example_and_terminal_values_are_documented(self) -> None:
+        monitoring = (
+            ROOT / "skills/orchestrate/references/monitoring.md"
+        ).read_text(encoding="utf-8")
+        markers = (
+            'monitor \\\n  --repo "$REPO" --run-id "$RUN_ID"',
+            'monitor \\\n  --log "$EVENTS" --fail-on-agent-failure',
+            "codex_agent_complete", "codex_agent_failed", "codex_agent_unknown",
+            "codex_agent_stale", "monitor_error",
+            "`idle`, `starting`, `active`, `complete`, `failed`, or `unknown`",
+        )
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, monitoring)
+                with self.assertRaises(AssertionError):
+                    self.assertIn(marker, monitoring.replace(marker, "DISABLED_CONTROL"))
+
+    def test_prose_execution_id_reservation_is_documented_at_both_entry_points(self) -> None:
+        paths = (
+            ROOT / "skills/orchestrate/SKILL.md",
+            ROOT / "skills/workflow/SKILL.md",
+            ROOT / "docs/orchestration-contract.md",
+        )
+        for path in paths:
+            document = path.read_text(encoding="utf-8")
+            with self.subTest(path=path):
+                for marker in (".execution-ids/", "next free", "ID printed"):
+                    self.assertIn(marker, document)
+                    with self.assertRaises(AssertionError):
+                        self.assertIn(marker, document.replace(marker, "DISABLED_CONTROL"))
+        contract = paths[-1].read_text(encoding="utf-8")
+        self.assertIn("`worktree` sidecar", contract)
+        with self.assertRaises(AssertionError):
+            self.assertIn("`worktree` sidecar", contract.replace(
+                "`worktree` sidecar", "DISABLED_CONTROL"
+            ))
+
+    def test_managed_launch_upgrade_note_and_upstream_history_are_pinned(self) -> None:
+        operations = (ROOT / "OPERATIONS.md").read_text(encoding="utf-8")
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        upstream = (ROOT / "UPSTREAM").read_text(encoding="utf-8")
+        for document in (operations, changelog):
+            normalized = _flat(document).lower()
+            assert_markers = (
+                "collect or cancel every in-flight managed launch before upgrading",
+                "wrapper-config.json",
+                "worktree sidecar",
+                "stranded marker",
+            )
+            for marker in assert_markers:
+                self.assertIn(marker, normalized)
+                with self.assertRaises(AssertionError):
+                    self.assertIn(marker, normalized.replace(marker, "DISABLED_CONTROL", 1))
+        for marker in (
+            "Forge-only persisted commit and merge chain CLI",
+            "Revision 22 retired that journal correlation",
+        ):
+            self.assertIn(marker, upstream)
+            with self.assertRaises(AssertionError):
+                self.assertIn(marker, upstream.replace(marker, "DISABLED_CONTROL", 1))
+
     def test_stack_validation_fence_refusal_and_init_grammar_are_pinned(self) -> None:
         diagnostic = (
             "forge: stack-validations region present but contains no fenced shell cell — "
@@ -544,35 +615,29 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertEqual(list((ROOT / "commands").glob("*.md")), [])
 
     # forge: modified from upstream — require ownership of the gated close sequence
-    def test_workflow_skill_owns_the_exact_close_sequence(self) -> None:
-        phrase = " → ".join(
-            ("validate --gates", "run_closed", "validate --gates", "archive", "report.md")
-        )
-        owners = [
-            path.relative_to(ROOT).as_posix()
-            for path in documentation_paths()
-            if phrase in path.read_text(encoding="utf-8")
-        ]
+    def test_workflow_owns_descriptive_close_and_report(self) -> None:
+        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        assert_run_log_report_contract(workflow)
+        positions = [workflow.index(x) for x in (
+            'codex_orch_tools.py" run-close', 'codex_orch_tools.py" validate',
+            'Use [report](../report/SKILL.md)')]
+        self.assertEqual(positions, sorted(positions))
 
-        self.assertEqual(owners, ["skills/workflow/SKILL.md"])
 
     # forge: modified from upstream — migrate the README diagram contract to workflow prose
     def test_workflow_skill_documents_the_full_workflow(self) -> None:
         workflow = _flat((ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8"))
-        close_sequence = " → ".join(
-            ("validate --gates", "run_closed", "validate --gates", "archive", "report.md")
-        )
-
         for step in (
-            "This skill owns the lifecycle from planning through the final",
-            "Claude turns the goal into a concrete plan",
-            "Ask Codex to review Claude's plan",
-            "use the orchestrate skill to launch a fresh routed implementer through `forge launch`", "collect its result with `forge launch collect`",
-            "independently verify the result",
-            "inspect the final repository state",
-            close_sequence,
+            "Write a plan with deliverables, acceptance criteria",
+            "Break the plan into bounded tasks",
+            "launch each fresh implementer or planner",
+            "collect with `forge launch collect`",
+            "Run `/forge:commit` for verified checkpoints",
+            "Inspect final repository state and unresolved work",
+            "write `report.md` from the journal",
         ):
             self.assertIn(step, workflow)
+
 
     def test_revision8_commit_step5_and_identity_contract_survives_mutation(self) -> None:
         documents = {
@@ -703,32 +768,6 @@ class DocumentationContractTests(unittest.TestCase):
                     assert_candidate_v2_spec_contract(mutated)
 
 
-    def test_run_open_refusal_source_literal_inventory(self) -> None:
-        source = (
-            ROOT / "scripts/codex_orchestrator/journal.py"
-        ).read_text(encoding="utf-8")
-        literals = [
-            node.value
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        ]
-        run_open_refusal = (
-            "forge: run open refused — writer_contract is builder-injected; use typed "
-            "run-open: codex_orch_tools.py run-open --repo <repo> --run-id <id> "
-            "--idempotency-key <64-hex> --goal <goal> --plugin-ref <plugin-ref> "
-            "--scope <pathspec>"
-        )
-        shared_refusal = (
-            "forge: journal append refused — activated writer requires typed builder"
-        )
-        legacy_open_notice = (
-            "forge: notice — run opened in legacy mode (no writer_contract); its first "
-            "typed mutation will activate it in place; prefer typed run-open"
-        )
-        self.assertEqual(literals.count(run_open_refusal), 1)
-        self.assertEqual(literals.count(shared_refusal), 9)
-        self.assertEqual(literals.count(legacy_open_notice), 1)
-
     def test_fresh_reviewer_operator_skip_contract_survives_mutation(self) -> None:
         spec = (ROOT / "docs/specs/forge-plugin-spec.md").read_text(encoding="utf-8")
         commit = (ROOT / "skills/commit/SKILL.md").read_text(encoding="utf-8")
@@ -760,42 +799,26 @@ class DocumentationContractTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             assert_fresh_reviewer_operator_skip_contract(spec, weakened)
 
-    def test_workflow_refuses_drift_block_before_registry_admission(self) -> None:
+    def test_workflow_refuses_drift_block_before_run_open(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
-        refusal = (
-            "forge: new run refused — CRITICAL drift block present at "
-            ".forge/tmp/drift-block; operator clearance required"
-        )
+        refusal = ("forge: new run refused — CRITICAL drift block present at "
+                   ".forge/tmp/drift-block; operator clearance required")
         self.assertEqual(workflow.count(refusal), 1)
-        self.assertLess(
-            workflow.index(".forge/tmp/drift-block"),
-            workflow.index("Open the run only through"),
-        )
-        self.assertIn("applies to every new run, including a user-designated successor", workflow)
-        self.assertIn("only an operator may manually delete it", workflow)
-        self.assertIn("Forge agents and cleanup never delete, bypass, or replace it", workflow)
+        self.assertLess(workflow.index(".forge/tmp/drift-block"),
+                        workflow.index("Open the run through the plain writer"))
+        self.assertIn("Only an operator may manually delete the block", workflow)
+        self.assertIn("Forge agents and cleanup never delete or bypass it", workflow)
         self.assertIn("run-open refusal, not an `AGENT_HALT` sentinel", workflow)
-        self.assertIn("agents never create or clear `AGENT_HALT` for drift", workflow)
+        with self.assertRaises(AssertionError):
+            self.assertIn(refusal, workflow.replace(refusal, "DISABLED_CONTROL", 1))
 
-    def test_gate3_producers_share_the_lossless_observation_grammar(self) -> None:
-        grammar = (
-            "`<PASS|BLOCK>; <critical-plus-major-count> CRITICAL/MAJOR findings; "
-            "severities CRITICAL=<count>,MAJOR=<count>,MINOR=<count>; reviewer "
-            "<review-cheap|review-final>; iteration <number> of 8.`"
-        )
 
-        def assert_contract(text: str) -> None:
-            self.assertIn(grammar, " ".join(text.split()))
-
-        for path in GATE3_PRODUCERS:
-            with self.subTest(path=path):
-                source = path.read_text(encoding="utf-8")
-                normalized = " ".join(source.split())
-                assert_contract(normalized)
-                with self.assertRaises(AssertionError):
-                    assert_contract(
-                        normalized.replace(grammar, "DISABLED GATE3 GRAMMAR", 1)
-                    )
+    def test_merge_skill_keeps_review_diff_without_retired_journal_grammar(self) -> None:
+        source = (ROOT / "skills/worktree-merge/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn('git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"', source)
+        self.assertIn('git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"', source)
+        self.assertNotIn("gate-3: review-final verdict", source)
+        self.assertNotIn("<critical-plus-major-count>", source)
 
     def test_retired_learning_tail_and_pointer_are_absent(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
@@ -881,77 +904,45 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("fresh named `codex-review-NN` agent", review)
         self.assertIn("Verify review findings against the repository", review)
 
-    def test_run_journal_is_claude_authored_not_global_evidence(self) -> None:
-        contract = "\n".join(
-            (ROOT / path).read_text(encoding="utf-8").casefold()
-            for path in (
-                "README.md",
-                "skills/orchestrate/SKILL.md",
-                "skills/report/SKILL.md",
-            )
-        )
+    def test_run_journal_is_plain_log_not_gate_evidence(self) -> None:
+        docs = _flat("\n".join((ROOT / path).read_text(encoding="utf-8") for path in (
+            "README.md", "docs/orchestration-contract.md", "skills/report/SKILL.md")))
+        self.assertIn("append-only run journal", docs)
+        self.assertIn("A reference in a journal record is a link, not proof or permission", docs)
+        self.assertIn("A journal reference alone cannot establish a gate result", docs)
 
-        self.assertIn("append-only orchestration journal", contract)
-        self.assertIn("not independent evidence", contract)
-        self.assertNotIn("primary run record", contract)
-        self.assertNotIn("source of truth", contract)
 
-    def test_workflow_initializes_an_ignored_run_with_a_git_baseline(self) -> None:
-        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
-        contract = (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8")
-
-        for text in (
-            "git rev-parse --show-toplevel",
-            "git rev-parse --git-path info/exclude",
-            "'/.codex-orchestrator/'",
-            "git check-ignore -q .codex-orchestrator/.ignore-check",
-            "git rev-parse HEAD",
-            "git branch --show-current",
-            "git status --short --untracked-files=all",
+    def test_workflow_initializes_an_ignored_plain_run(self) -> None:
+        workflow = _flat((ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8"))
+        for control in (
+            "git rev-parse --show-toplevel", "git rev-parse --git-path info/exclude",
+            "git check-ignore -q .codex-orchestrator/.ignore-check", "git rev-parse HEAD",
+            "git status --short --untracked-files=all", 'codex_orch_tools.py" run-open',
+            "--intent <concise-original-goal> --actor <actor>",
+            "an invalid ID is refused before a directory or file is created",
         ):
-            self.assertIn(text, workflow)
-        self.assertEqual(workflow.count("grep -qxF '/.codex-orchestrator/'"), 2)
-        self.assertIn("do not edit the tracked `.gitignore`", workflow)
-        self.assertIn("Do not create the run unless both exclude checks succeed", workflow)
-        self.assertLess(
-            workflow.index("git check-ignore -q"),
-            workflow.index(
-                'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" run-open'
-            ),
-        )
-        typed_open = workflow.split(
-            "Open the run only through the typed builder", maxsplit=1
-        )[1].split("Add `--successor-of", maxsplit=1)[0]
-        for argument in (
-            '--repo "$REPO"',
-            "--run-id <run-id>",
-            "--idempotency-key <64-lowercase-hex>",
-            "--goal <concise-original-goal>",
-            "--plugin-ref <plugin-ref>",
-            "--scope <pathspec>",
-        ):
-            self.assertIn(argument, typed_open)
-        self.assertNotIn("--record-json", typed_open)
-        records = jsonl_records(contract)
-        run_started = next(record for record in records if record["type"] == "run_started")
-        self.assertTrue(Path(run_started["repo"]).is_absolute())
-        for field in ("goal", "repo_head", "repo_branch", "repo_status"):
-            self.assertIn(field, run_started)
+            self.assertIn(control, workflow)
+        self.assertLess(workflow.index("git check-ignore -q"),
+                        workflow.index('codex_orch_tools.py" run-open'))
+        self.assertNotIn("--idempotency-key", workflow)
 
-    def test_execution_records_its_worktree_and_ref_before_launch(self) -> None:
+
+    def test_execution_records_actual_route_before_launch(self) -> None:
         orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"))
-        monitoring = _flat((ROOT / "skills/orchestrate/references/monitoring.md").read_text(encoding="utf-8"))
         contract = (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8")
-        typed_launch = orchestrate.split("### Typed Implementer And Plan Launches", maxsplit=1)[1]
+        typed = orchestrate.split("### Typed Implementer And Plan Launches", 1)[1]
+        self.assertLess(typed.index("append `execution_started`"),
+                        typed.index("Launch the process through the isolated wrapper"))
+        self.assertIn("route selected for this execution", typed)
+        executions = [x for x in jsonl_records(contract)
+                      if x.get("kind") in {"execution_started", "execution_finished"}]
+        self.assertEqual(len(executions), 2)
+        for execution in executions:
+            self.assertTrue(Path(str(execution["worktree"])).is_absolute())
+            for field in ("role", "provider", "model", "effort", "worktree",
+                          "started_at", "sandbox", "route_source", "route_sha256"):
+                self.assertIn(field, execution)
 
-        self.assertLess(typed_launch.index("Append the journal `execution` owner record."), typed_launch.index("Launch the process through the isolated wrapper."))
-        for document in (typed_launch, monitoring):
-            self.assertIn("generated owner record includes the absolute worktree, full HEAD", document)
-        records = jsonl_records(contract)
-        execution = next(record for record in records if record["type"] == "execution")
-        self.assertTrue(Path(execution["worktree"]).is_absolute())
-        for field in ("worktree", "head"):
-            self.assertIn(field, execution)
 
     # forge: modified from upstream — only reviewer confirmation rounds may resume
     def test_reviewer_resume_uses_the_next_execution_directory_without_cwd_override(self) -> None:
@@ -962,7 +953,10 @@ class DocumentationContractTests(unittest.TestCase):
             "The sole sanctioned resume is a targeted confirmation round for the same reviewer.",
             maxsplit=1,
         )[1]
-        command = resume.split("```bash", maxsplit=1)[1].split("```", maxsplit=1)[0]
+        command = next(
+            block for block in re.findall(r"```bash\n(.*?)\n```", resume, flags=re.DOTALL)
+            if "nohup codex exec" in block
+        )
 
         self.assertIn("codex-review-01/execution-02/handoff.md", command)
         self.assertIn("codex-review-01/execution-02/prompt.md", command)
@@ -975,70 +969,30 @@ class DocumentationContractTests(unittest.TestCase):
     def test_forge_launch_and_monitor_contract_is_complete(self) -> None:
         orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"))
         monitoring = _flat((ROOT / "skills/orchestrate/references/monitoring.md").read_text(encoding="utf-8"))
-        implementer = (ROOT / "system/codex/prompts/implementer.md").read_text(encoding="utf-8")
-        reviewer = (ROOT / "system/codex/prompts/review-cheap.md").read_text(encoding="utf-8")
-        planner = (ROOT / "system/codex/prompts/plan.md").read_text(encoding="utf-8")
+        for role in ("implementer", "plan"):
+            self.assertIn(f"forge launch --repo <repo> --run-id <run-id> --role {role}", orchestrate)
+        for control in (
+            "route resolved at launch", "never hand-substitute provider flags",
+            "completion.json` when the provider exits or hits its fixed timeout",
+            "non-blocking poll for that file, bounded at 60 minutes",
+            "Collect, using the launch marker and completion artefacts",
+            "a repeat collect after the marker is collected appends nothing",
+        ):
+            self.assertIn(control, orchestrate)
+        self.assertIn("monitor notifications are observational", monitoring)
+        self.assertIn("only lifecycle authorities", monitoring)
+        self.assertNotIn("frozen run snapshot", orchestrate + monitoring)
 
-        for value in (
-            "`gpt-5.6-sol`",
-            "`ultra`",
-            "`workspace-write`",
-            "`gpt-5.6-sol`",
-            "`high`",
-            "`read-only`",
-            "control-class change",
-        ):
-            self.assertIn(value, orchestrate)
-        self.assertIn("${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/implementer.md", orchestrate)
-        self.assertIn("${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md", orchestrate)
-        for command in (
-            "forge launch --repo <repo> --run-id <run-id> --role implementer --task <task-id> --worktree <absolute-worktree> --brief <absolute-brief>", "forge launch --repo <repo> --run-id <run-id> --role plan --task <task-id> --worktree <absolute-worktree> --brief <absolute-brief>",
-            "forge launch collect --repo <repo> --run-id <run-id> --execution <execution-NN>", "forge launch cancel --repo <repo> --run-id <run-id> --execution <execution-NN>",
-        ):
-            self.assertIn(command, orchestrate)
-        for value in (
-            "provider, model, effort, and sandbox come from the run's frozen resolved route", "never hand-substitute provider flags for those roles",
-            "completion.json` when the provider exits or hits its fixed timeout", "non-blocking poll for that file, bounded at 60 minutes",
-            "Collect, never a hand-written `execution_result`, is the lifecycle authority",
-        ):
-            self.assertIn(value, orchestrate)
-        for value in (
-            "typed Codex and typed Claude launches only when their owner record names a stream-JSON `events` file", "Subagent-mode Claude records have no events file and are not monitor targets",
-            "monitor notifications are observational", "`forge launch collect` and `forge launch cancel` remain the only lifecycle authorities",
-            "ambiguity protocol below applies only to reviewer prose sessions",
-        ):
-            self.assertIn(value, monitoring)
-        sentence = (
-            "You may commit inside this worktree. You must NEVER push, never touch any branch "
-            "other than your\nown, and never run destructive git commands."
-        )
-        self.assertIn(sentence, implementer)
-        self.assertIn("# Review assignment", reviewer)
-        self.assertIn("read-only sandbox", reviewer)
-        for value in ("full commit SHA", "tree_oid", "authorization_id", "git cat-file -t <tree_oid>",
-                      "absence of a commit SHA for kind (b) is not a finding"):
-            self.assertIn(value, reviewer)
-        for value in ("read-only sandbox", "run context", "required grammars", "## Status",
-                      "## Caveats / Blockers"):
-            self.assertIn(value, planner)
-        self.assertIn("exact target SHA", orchestrate)
 
-    def test_committed_prompt_feed_forward_contract_survives_static_mutation(self) -> None:
-        documents = {
-            "orchestrate": (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"),
-            "monitoring": (
-                ROOT / "skills/orchestrate/references/monitoring.md"
-            ).read_text(encoding="utf-8"),
-            "review": (ROOT / "skills/orchestrate/references/review.md").read_text(
-                encoding="utf-8"
-            ),
-            "commit": (ROOT / "skills/commit/SKILL.md").read_text(encoding="utf-8"),
-            "reviewer-template": (
-                ROOT / "system/codex/prompts/review-cheap.md"
-            ).read_text(encoding="utf-8"),
-        }
+    def test_committed_prompt_context_survives_static_mutation(self) -> None:
+        documents = {name: (ROOT / path).read_text(encoding="utf-8") for name, path in (
+            ("orchestrate", "skills/orchestrate/SKILL.md"),
+            ("monitoring", "skills/orchestrate/references/monitoring.md"),
+            ("review", "skills/orchestrate/references/review.md"),
+            ("commit", "skills/commit/SKILL.md"),
+            ("reviewer-template", "system/codex/prompts/review-cheap.md"),
+        )}
         assert_prompt_feed_forward_contract(documents)
-
         for name, markers in PROMPT_CONTRACT_MARKERS.items():
             for marker in markers:
                 with self.subTest(document=name, disabled=marker):
@@ -1046,143 +1000,59 @@ class DocumentationContractTests(unittest.TestCase):
                     mutated[name] = mutated[name].replace(marker, "DISABLED_CONTROL", 1)
                     with self.assertRaises(AssertionError):
                         assert_prompt_feed_forward_contract(mutated)
+        for name in ("orchestrate", "monitoring", "review"):
+            self.assertNotIn(".forge/history/gotchas.md", documents[name])
 
-        context = "git -C <worktree> show HEAD:forge-project.md"
-        gotchas = "git -C <worktree> show HEAD:.forge/history/gotchas.md"
-        mutated = dict(documents)
-        mutated["orchestrate"] = mutated["orchestrate"].replace(
-            context, "SWAPPED_GOTCHAS", 1
-        ).replace(gotchas, context, 1).replace("SWAPPED_GOTCHAS", gotchas, 1)
-        with self.assertRaises(AssertionError):
-            assert_prompt_feed_forward_contract(mutated)
 
     # forge: modified from upstream — enforce D13 disjoint registry and retirement contract
-    def test_journal_uniqueness_and_successor_run_guidance_match_runtime(self) -> None:
-        contract = " ".join(
-            (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8").split()
-        )
-        workflow = " ".join(
-            (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8").split()
-        )
-
-        self.assertIn("Task IDs intentionally repeat", contract)
-        self.assertIn(
-            "`verification` and `decision` IDs must each be unique within their entry type",
-            contract,
-        )
-        self.assertIn("retain the journal", contract)
-        self.assertIn("Never rewrite journal history", workflow)
-        self.assertIn("retain the run and start a successor", workflow)
-        self.assertIn("Disjoint open runs may proceed concurrently", workflow)
-        self.assertIn("run registry unavailable", workflow)
-        self.assertIn("scope overlap between <new-run-id> and open run <open-run-id>", workflow)
-        self.assertIn("use `run-retire", workflow)
-        self.assertIn("--successor-of <predecessor>", workflow)
-        self.assertIn("journal task-start", workflow)
-        self.assertIn("journal task-finish", workflow)
-        self.assertNotIn("append them through `journal-append`", workflow)
-        disabled = workflow.replace("Disjoint open runs may proceed concurrently", "", 1)
-        self.assertNotIn("Disjoint open runs may proceed concurrently", disabled)
-
-    # forge: modified from upstream — cover Level B gate recording and gated report refusal
-    def test_gate_recording_and_gated_close_are_documented(self) -> None:
+    def test_journal_append_does_not_claim_run_authority(self) -> None:
         contract = (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8")
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        controls = ("does not check run ownership", "prior closure",
+                    "A close is descriptive; subsequent facts may be appended")
+        for control in controls:
+            self.assertIn(control, contract)
+        self.assertIn("does not reserve the run, files, routes, or a session", workflow.casefold().replace("\n", " "))
+        for retired in ("run-readmit", "run-retire", "--successor-of", "scope overlap"):
+            self.assertNotIn(retired, workflow)
+
+
+    # forge: modified from upstream — cover Level B gate recording and gated report refusal
+    def test_structural_validation_and_chain_authority_are_documented(self) -> None:
+        contract = (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8")
         report = (ROOT / "skills/report/SKILL.md").read_text(encoding="utf-8")
+        for control in ("checks only that each line parses to a JSON object",
+                        "Unknown kinds and unfamiliar", "Validation does not replay lifecycle state"):
+            self.assertIn(control, contract)
+        self.assertIn("`.forge/chains/`", report)
+        self.assertNotIn("validate --gates", contract + report)
 
-        gate_section = contract.split("## Gate Recording", maxsplit=1)[1]
-        gate_records = jsonl_records(gate_section)
-        self.assertEqual(
-            [record["criterion"] for record in gate_records],
-            [
-                "gate-1: project tests",
-                "gate-2: lint and types",
-                "gate-3: review-final verdict",
-            ],
-        )
-        self.assertIn(
-            "deliberate forge deviation from the upstream stance that validation never decides "
-            "acceptance",
-            " ".join(contract.split()),
-        )
-        self.assertEqual(workflow.count('codex_orch_tools.py" validate --gates'), 2)
-        self.assertIn("pre-close payload verbatim", workflow)
-        self.assertIn("The post-close pass must exit 0", workflow)
-        refusal = (
-            "The report skill refuses to write `report.md` while the post-close "
-            "`validate --gates` reports issues."
-        )
-        self.assertIn(refusal, workflow)
-        self.assertIn(refusal, report)
 
-    def test_archive_controls_precede_report_and_survive_static_mutation(self) -> None:
+    def test_run_close_and_report_chain_sources_survive_static_mutation(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
-        archive_close = workflow.split(
-            "12. Create and commit the durable archive", maxsplit=1
-        )[1]
-        required = (
-            'git status --short --untracked-files=all',
-            'audit-commitments.py" --run-dir "$RUN_DIR"',
-            'archive-run.py"',
-            '/forge:commit',
-            'skills/report/SKILL.md',
-        )
-        positions = [archive_close.index(fragment) for fragment in required]
-        self.assertEqual(positions, sorted(positions))
-        self.assertIn(
-            "forge: archive refused — close tree contains unrelated changes",
-            workflow,
-        )
-        self.assertIn('CLOSING_HEAD="$(git rev-parse HEAD)"', workflow)
+        assert_run_log_report_contract(workflow)
+        for control in ('codex_orch_tools.py" run-close',
+                        '--outcome <free-text-outcome>', '`.forge/chains/`'):
+            with self.subTest(disabled=control), self.assertRaises(AssertionError):
+                assert_run_log_report_contract(workflow.replace(control, "DISABLED_CONTROL"))
 
-        # Disabling each ordering control in a temporary string must trip this sensor.
-        for fragment in required[:-1]:
-            with self.subTest(disabled=fragment):
-                mutated = archive_close.replace(fragment, "DISABLED_CONTROL", 1)
-                self.assertEqual(mutated.count(fragment), archive_close.count(fragment) - 1)
-                with self.assertRaises(AssertionError):
-                    self.assertEqual(mutated.count(fragment), archive_close.count(fragment))
 
-    def test_repo_routing_conformance_runs_before_audit_and_archive(self) -> None:
+    def test_retired_archive_commands_are_absent_from_workflow(self) -> None:
         workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        assert_run_log_report_contract(workflow)
+        for retired in ("archive-run.py", "audit-commitments.py", "worktree-check"):
+            self.assertNotIn(retired, workflow)
 
-        assert_repo_routing_close_control(workflow)
-
-        # Disable the run-scoped control in memory: the contract sensor must fail.
-        disabled = workflow.replace(
-            'python3 tests/test_repo_conformance.py --run-dir "$RUN_DIR" || exit 1',
-            'true # routing conformance disabled',
-            1,
-        )
-        with self.assertRaises(AssertionError):
-            assert_repo_routing_close_control(disabled)
-
-        # Removing the audit/archive finding-carriage contract in memory must
-        # fail this sensor even though the executable routing check remains.
-        findings_disabled = workflow.replace(
-            "making every historical routing finding part of the committed archive",
-            "historical routing findings may be omitted from the committed archive",
-            1,
-        )
-        with self.assertRaises(AssertionError):
-            assert_repo_routing_close_control(findings_disabled)
-
-        # Inverting the two audits in memory must trip the ordering sensor.
-        route_audit = 'python3 tests/test_repo_conformance.py --run-dir "$RUN_DIR" || exit 1'
-        commitment_audit = 'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/audit-commitments.py" --run-dir "$RUN_DIR"'
-        reordered = workflow.replace(route_audit, "ROUTE_AUDIT", 1).replace(
-            commitment_audit, route_audit, 1
-        ).replace("ROUTE_AUDIT", commitment_audit, 1)
-        with self.assertRaises(AssertionError):
-            assert_repo_routing_close_control(reordered)
 
     # forge: modified from upstream — removed the non-vendored historical benchmark assertion
 
-    def test_validation_is_documented_as_an_omission_check_not_a_schema(self) -> None:
-        contract = (ROOT / "docs" / "orchestration-contract.md").read_text(encoding="utf-8")
+    def test_validation_is_documented_as_structural_only(self) -> None:
+        contract = (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8")
+        self.assertIn("checks only that each line parses to a JSON object", contract)
+        self.assertIn("`ok` and", contract)
+        self.assertIn("Unknown kinds and unfamiliar", contract)
+        self.assertIn("does not replay lifecycle state", contract)
 
-        self.assertIn("small omission check", contract)
-        self.assertIn("does not enforce every documented field", contract)
 
     def test_verification_and_independent_review_use_different_context(self) -> None:
         review = " ".join(
@@ -1258,21 +1128,11 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("nvidia-smi --query-gpu=memory.used,memory.total", compute)
         self.assertIn("nvidia-smi --query-compute-apps=pid,used_memory", compute)
 
-    def test_focused_cycle_defines_task_outcomes(self) -> None:
-        orchestrate = " ".join(
-            (ROOT / "skills/orchestrate/SKILL.md")
-            .read_text(encoding="utf-8")
-            .casefold()
-            .split()
-        )
+    def test_focused_cycle_logs_task_outcomes_without_gate_authority(self) -> None:
+        orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"))
+        self.assertIn("Describe the task outcome with `journal task-finish`", orchestrate)
+        self.assertIn("This record does not determine gate or task permission", orchestrate)
 
-        self.assertIn("append `complete` when they are satisfied", orchestrate)
-        self.assertIn(
-            "`failed` when they are conclusively unmet and no in-scope recovery remains",
-            orchestrate,
-        )
-        self.assertIn("`blocked` when a user or external dependency prevents", orchestrate)
-        self.assertIn("otherwise keep the task `active`", orchestrate)
 
     def test_accepted_worktree_changes_are_reverified_in_the_target(self) -> None:
         compute = " ".join(
@@ -1286,53 +1146,31 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("rerun the affected acceptance checks there", compute)
         self.assertIn("only after those target checks pass", compute)
 
-    def test_replay_directory_is_documented_as_a_generated_test_scaffold(self) -> None:
-        contract = " ".join(
-            (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8").split()
-        )
+    def test_replay_directory_is_documented_as_legacy_input(self) -> None:
+        contract = (ROOT / "docs/orchestration-contract.md").read_text(encoding="utf-8")
+        self.assertIn("committed `tests/replay/` fixtures", contract)
+        self.assertIn("validate with no issue", contract)
 
-        self.assertIn("checked-in input scaffold, not a standalone valid closed run", contract)
-        self.assertIn("test_prompt_first_workflow.py", contract)
-        self.assertIn("validates the completed copy", contract)
 
     def test_review_effort_is_risk_scaled(self) -> None:
-        review = " ".join(
-            (ROOT / "skills/orchestrate/references/review.md")
-            .read_text(encoding="utf-8")
-            .casefold()
-            .split()
-        )
-        workflow = " ".join(
-            (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8").casefold().split()
-        )
-
+        review = _flat((ROOT / "skills/orchestrate/references/review.md").read_text(encoding="utf-8").casefold())
+        workflow = _flat((ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8").casefold())
+        orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8").casefold())
         self.assertIn("distinct unresolved question", review)
-        orchestrate = " ".join(
-            (ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8").casefold().split()
-        )
-        self.assertIn("fresh agent and native session", orchestrate)
-        self.assertIn("hard-to-reverse design choice", workflow)
-        self.assertIn("only the goal, constraints, and acceptance criteria", workflow)
-        self.assertIn("using evidence rather than agent count", workflow)
-        self.assertIn("distinct unresolved question", orchestrate)
+        self.assertIn("consequential or hard-to-reverse design choice", workflow)
+        self.assertIn("before reading any codex proposal", workflow)
         self.assertIn("do not repeat identical reviews", orchestrate)
-        self.assertNotIn("unanchored alternative", workflow)
 
-    def test_workflow_owns_the_complete_run_and_delegates_focused_cycles(self) -> None:
+
+    def test_workflow_owns_complete_run_and_delegates_focused_cycles(self) -> None:
         orchestrate = _flat((ROOT / "skills/orchestrate/SKILL.md").read_text(encoding="utf-8"))
         workflow = _flat((ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8"))
-
-        self.assertIn("This skill owns the lifecycle from planning", workflow)
-        self.assertIn("Claude turns the goal into a concrete plan", workflow)
-        self.assertIn("review as a task and focused agent cycle", workflow)
-        self.assertIn("each focused routed-agent execution, review, or verification cycle", workflow)
-        self.assertIn("use the orchestrate skill to launch a fresh routed implementer", workflow)
+        self.assertIn("Use this skill for one complete run", workflow)
+        self.assertIn("focused agent cycle", workflow)
         self.assertIn("Use this skill for one focused agent cycle", orchestrate)
-        self.assertIn("workflow skill owns planning, run initialization, task decomposition, closure, and reporting", orchestrate)
-        self.assertIn("saves the exact prompt and appends `execution` before launch", orchestrate)
-        self.assertNotIn("This skill owns the run protocol", orchestrate)
-        self.assertNotIn("`run_started`", orchestrate)
-        self.assertNotIn("`run_closed`", orchestrate)
+        self.assertIn("workflow skill owns planning, run initialization, task decomposition", orchestrate)
+        self.assertIn("appends `execution_started` before launch", orchestrate)
+
 
     def test_docs_exclude_removed_ide_and_observe_workflows(self) -> None:
         operational_docs = "\n".join(
@@ -1381,11 +1219,7 @@ not valid JSON and intentionally ignored
         examples = 0
         for path in documentation_paths():
             relative_path = path.relative_to(ROOT)
-            try:
-                blocks = jsonl_blocks(path.read_text(encoding="utf-8"))
-            except AssertionError as error:
-                self.fail(f"{relative_path}: {error}")
-            for block in blocks:
+            for block in jsonl_blocks(path.read_text(encoding="utf-8")):
                 for line_number, line in block:
                     if not line.strip():
                         continue
@@ -1394,17 +1228,11 @@ not valid JSON and intentionally ignored
                         event = json.loads(line)
                     except json.JSONDecodeError as error:
                         self.fail(f"{relative_path}:{line_number}: {error}")
-                    self.assertIsInstance(
-                        event,
-                        dict,
-                        f"{relative_path}:{line_number}: journal entry must be an object",
-                    )
-                    self.assertIn(
-                        event.get("type"),
-                        JOURNAL_ENTRY_TYPES,
-                        f"{relative_path}:{line_number}: undocumented journal entry type",
-                    )
-        self.assertGreater(examples, 0, "documentation must contain a marked journal example")
+                    self.assertIsInstance(event, dict)
+                    self.assertIn(event.get("kind", event.get("type")), JOURNAL_ENTRY_TYPES,
+                                  f"{relative_path}:{line_number}: undocumented journal kind")
+        self.assertGreater(examples, 0)
+
 
 
 if __name__ == "__main__":

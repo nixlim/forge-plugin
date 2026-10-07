@@ -30,9 +30,9 @@ For every non-mutation executable policy cell, use the FR-149 runner discipline 
 parameters, an isolated process group, a 65,536-byte combined-output cap, and a fixed 1200-second
 fail-closed timeout. This applies to stack validations and gate commands as well as invariants.
 
-Only consult an orchestration journal when an open run has been explicitly identified by a run ID
-passed by the orchestrator or confirmed by the user. Never infer the latest run. With no explicitly
-identified open run, execute the complete chain without journal entries.
+A commit chain uses its own candidate and gate evidence. If an orchestration run ID is explicitly
+provided, it may be cited in a descriptive journal decision; do not infer a latest run or read
+the journal for commit permission.
 
 Before Step 1, compute no candidate and write no authorization. Authorization is a content-addressed
 identity of the complete index tree, while its deterministic tree-to-tree patch has a separate
@@ -176,15 +176,9 @@ decision solely from the snapshot's exact immutable path set and the authenticat
 `reviewer-facing-eval-triggers` region; this skill must not restate, reconstruct, or maintain a
 second trigger path list.
 
-When an explicitly identified run is open, append one journal `verification` for every validation
-execution. Follow `${CLAUDE_PLUGIN_ROOT}/docs/orchestration-contract.md` and DM-001. Use a criterion
-beginning exactly `gate-1: ` for project-test executions. Use one beginning exactly `gate-2: ` for
-lint, format, static-analysis, type, build, Recorded-baseline integrity, and Candidate-bound fresh
-reviewer evaluation executions. A fresh-evaluation verification criterion is exactly
-`gate-2: fresh reviewer evaluation`. If one configured command covers both concerns, append both
-gate verifications against that same command, with evidence specific to each concern. Record the
-exact command in `check`, the real result and exit evidence, and append a later passing recheck after
-any failed execution. Do not fabricate or collapse distinct gate executions.
+Keep every Step 2 validation result with the chain's observed command, exit status, and
+candidate identity. A failed execution requires a later observed passing recheck; do not collapse
+distinct runs. A journal reference may cite that evidence but does not determine Gate 1 or Gate 2.
 
 ## Step 3 — Apply the Changelog Policy
 
@@ -461,10 +455,7 @@ exact candidate. Below, `forge` is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge
 
 1. `forge review request --chain-id <id>` resolves the role's route at the candidate's base
    commit, starts the detached headless reviewer, and records the attempt. It refuses before
-   recording anything when the route cannot be resolved or, on a run-bound chain, diverges from
-   the run's frozen route
-   (`forge: review request refused — route diverges from run snapshot for <role>: <field>`), and
-   it refuses while an earlier attempt is still outstanding.
+   recording anything when the route cannot be resolved or an earlier attempt is still outstanding.
 1. `forge review collect --chain-id <id>` is the only way a new request's verdict binds. While it
    reports `launching` or a running reviewer, wait and collect again; never issue another request.
    A timeout, stream cap, malformed stream line, provider error, or missing or invalid verdict
@@ -574,16 +565,11 @@ or not-logged-in) consumes none. Stop after at most 8 review iterations. If iter
 PASS, record the outstanding findings and why they remain as residual risk, escalate to the user,
 and never commit.
 
-When an explicitly identified run is open, append a journal gate verification for every Step 4
-review. Its criterion must be exactly `gate-3: review-final verdict`; its `check` must name
-both the exact 64-hex `authorization_id` and the separately named `review_diff_sha256`, not either
-variable name; a BLOCK uses `result: "failed"`. Normalize and count every finding by `CRITICAL`,
-`MAJOR`, and `MINOR`, and
-record whether this invocation used `review-cheap` or `review-final`. Record the observation as
-exactly `<PASS|BLOCK>; <critical-plus-major-count> CRITICAL/MAJOR findings; severities
-CRITICAL=<count>,MAJOR=<count>,MINOR=<count>; reviewer <review-cheap|review-final>; iteration
-<number> of 8.` Thread the authorization ID unchanged into the marker and any control-class
-approval prompt. The review digest remains evidence of the exact artifact and never authorizes.
+Keep each Step 4 review verdict with the chain's exact 64-hex `authorization_id`, the
+separately named `review_diff_sha256`, reviewer role, iteration, and finding severities. A BLOCK
+remains a BLOCK until the candidate is fixed and reviewed again. Thread the authorization ID
+unchanged into the marker and any control-class approval prompt. The review digest identifies
+the exact artifact; the chain verdict, not a journal entry, supplies Gate 3 evidence.
 
 After PASS and a matching post-review tree observation, capture `reviewed_at` immediately as the
 actual verdict time:
@@ -1131,9 +1117,9 @@ forms are cleanup-only and never authorize. The PreToolUse commit guard independ
 freshness and shape and recomputes fast eligibility at `git commit`; never bypass or reinterpret its
 decision.
 
-When an explicitly identified run is open, record the verified produced parent/tree/message tuple as
-a passing `gate-2: produced commit identity` verification before reporting landing success. The two
-post-success calls occur only after the commit succeeds, the produced identity passes, and mandatory
+Gate results remain in `.forge/chains/`. An open orchestration run may append a free-text
+`decision` naming the commit chain. The two post-success calls occur only after the commit
+succeeds, the produced identity passes, and mandatory
 marker cleanup has run; a release diagnostic may already have been reported without retracting that
 commit. A successful commit followed by cleanup failure must be reported as commit success together
 with the cleanup failure and must never be retried. `gate_commit` supplies the eligible-commit
@@ -1171,9 +1157,9 @@ exactly one advisory `user_skip` event attempt through `emit-decision-event.py` 
 `authorization_id` when a snapshot already exists (otherwise `""`), the full `policy_sha`, surface
 `/forge:commit`, and a stable
 non-secret reason identifying the mapped skip. Event failure never retracts the accepted skip or
-changes any subsequent gate status. When an explicitly identified run is open, append a journal
-`decision` naming the user's directive, skipped steps, authorization ID when already available, and
-user authority. With no such run, append the audit line shown below immediately.
+changes any subsequent gate status. If a run ID was explicitly supplied, a descriptive journal
+`decision` may cite the user directive and authorization ID. Always append the audit line shown
+below immediately.
 
 For a Step 4 skip, first reset every candidate variable exactly as at the start of Step 4 without
 deleting another candidate's marker. Still stage only the explicit target paths. Run the exact
@@ -1250,7 +1236,6 @@ re-observation, produced-commit verification, and mandatory release still apply.
 
 ## Orchestrated Checkpoints
 
-When the workflow identifies an open run explicitly, use its run ID for all Step 2 and Step 4
-records and for any skip decision. A checkpoint commit is mandatory after every verified task; the
-orchestrator invokes this skill with that task's explicit files and run ID. Agent claims are not
-gate evidence: record only executions and results observed under the journal contract.
+A checkpoint commit is mandatory after every verified task; the orchestrator invokes this skill
+with that task's explicit files. Agent claims and journal entries are not gate evidence: use
+the chain's observed executions, verdicts, and candidate identity.

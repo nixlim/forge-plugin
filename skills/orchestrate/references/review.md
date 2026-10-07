@@ -10,11 +10,11 @@ Use [the orchestration contract](../../../docs/orchestration-contract.md) for jo
 1. Inspect the actual diff and changed files. Compare them with the task's declared `files`.
 1. Evaluate every acceptance criterion with an observed check. Do not promote `Commands Reported`
    to a passing verification.
-1. Record each criterion as a `verification`.
+1. Retain the observed check result as evidence for the relevant gate or report.
 1. On implementation failure, preserve the record and launch a fresh named implementer and native
    session with the exact finding and observation. Only reviewer confirmation may resume that same
    reviewer session. Record the recheck separately.
-1. Mark the task terminal only after all criteria are evaluated.
+1. Describe the task outcome after all criteria are evaluated.
 
 Base verification on repository state or observed output. Use handoffs and model findings to choose
 what to inspect. Keep concise observations inline; use `evidence/` only for lengthy material worth
@@ -34,13 +34,12 @@ For the first independent review:
 - Build the prompt through the canonical
   [prompt-construction contract](../SKILL.md#forge-isolation-and-prompt-construction), in exact
   order: `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`; the `agent-project-context`
-  region from `git -C <worktree> show HEAD:forge-project.md`; the exact bytes from
-  `git -C <worktree> show HEAD:.forge/history/gotchas.md` when present in that `HEAD`; and the
-  isolated review assignment. `<worktree>` is the same review worktree recorded for the execution
-  and passed to `-C`; never source either committed input from working-tree state or a rendered
+  region from `git -C <worktree> show HEAD:forge-project.md`; the exact bytes of the
+  isolated review assignment. `<worktree>` is the review worktree recorded for the execution
+  and passed to `-C`; never source committed context from working-tree state or a rendered
   agent definition.
 - In order, create the execution directory, save the exact prompt, create an empty `events.jsonl`,
-  append the execution, and only then launch. Capture the event stream and exact handoff.
+  append `execution_started`, and only then launch. Capture the event stream and exact handoff.
 
 `forge launch` admits only fresh implementer and planner roles. This non-chain first-pass review
 therefore remains on the manual reviewer-only path; use the committed Codex `review-cheap` values

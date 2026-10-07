@@ -497,7 +497,7 @@ class CommitSkillTests(unittest.TestCase):
             COMMIT_SKILL,
         )
         self.assertIn("review_diff_sha256", COMMIT_SKILL)
-        self.assertIn("review digest remains evidence", COMMIT_SKILL)
+        self.assertIn("review digest identifies", COMMIT_SKILL)
         self.assertIn("owner-controlled mode-0600 artifact", COMMIT_SKILL)
         self.assertIn("re-run the affected Step 2 validations", COMMIT_SKILL)
         self.assertIn("restart Step 4", COMMIT_SKILL)
@@ -724,7 +724,7 @@ class CommitSkillTests(unittest.TestCase):
         skip_write = "candidate.render_marker(observation, sys.argv[5], skip=True)"
         self.assertLess(COMMIT_SKILL.index(skip_approval), COMMIT_SKILL.index(skip_write))
 
-    def test_step5_script_sequence_and_journal_rules_are_explicit(self) -> None:
+    def test_step5_script_sequence_and_chain_evidence_rules_are_explicit(self) -> None:
         step5 = COMMIT_SKILL.split("## Step 5 — Prepare, Commit, Cleanup", 1)[1].split(
             "## User-Directed Skips", 1
         )[0]
@@ -800,11 +800,9 @@ class CommitSkillTests(unittest.TestCase):
             cleanup,
         )
         self.assertIn("Never hold the lock across Step 4", COMMIT_SKILL)
-        self.assertIn("Never infer the latest run", COMMIT_SKILL)
-        self.assertIn("beginning exactly `gate-1: ` for project-test", COMMIT_SKILL)
-        self.assertIn("beginning exactly `gate-2: ` for", COMMIT_SKILL)
-        self.assertIn("criterion must be exactly `gate-3: review-final verdict`", COMMIT_SKILL)
-        self.assertIn('`result: "failed"`', COMMIT_SKILL)
+        self.assertIn("do not infer a latest run or read", COMMIT_SKILL)
+        self.assertIn("A journal reference may cite that evidence but does not determine Gate 1 or Gate 2", COMMIT_SKILL)
+        self.assertIn("the chain verdict, not a journal entry, supplies Gate 3 evidence", COMMIT_SKILL)
         self.assertIn("exact four-line standard/hard PASS marker", COMMIT_SKILL)
         self.assertIn("exact five-line user-skip marker", COMMIT_SKILL)
         self.assertIn("exact six-line fast marker younger than 30 minutes", COMMIT_SKILL)

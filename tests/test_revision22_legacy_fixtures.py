@@ -1,7 +1,12 @@
 """Load native pre-Revision-22 writer histories without migration or regeneration."""
 
+import builtins
+import contextlib
+import io
 import json
+import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +18,56 @@ CLI = load_cli("forge_revision22_head_fixtures")
 FIXTURES = Path(__file__).parent / "fixtures/revision22-head"
 
 
+@contextlib.contextmanager
+def no_journal_access():
+    """Sense both late journal imports and any attempted journal file open."""
+    prefixes = ("codex_orchestrator", "scripts.codex_orchestrator")
+    removed = {name: sys.modules.pop(name) for name in tuple(sys.modules)
+               if name.startswith(prefixes)}
+    opened: list[str] = []
+    original_builtin = builtins.open
+    original_io = io.open
+    original_os = os.open
+
+    def guarded_open(file, *args, **kwargs):
+        if str(file).endswith("journal.jsonl"):
+            opened.append(str(file))
+        return original_builtin(file, *args, **kwargs)
+
+    def guarded_io(file, *args, **kwargs):
+        if str(file).endswith("journal.jsonl"):
+            opened.append(str(file))
+        return original_io(file, *args, **kwargs)
+
+    def guarded_os(file, *args, **kwargs):
+        if str(file).endswith("journal.jsonl"):
+            opened.append(str(file))
+        return original_os(file, *args, **kwargs)
+
+    try:
+        with (mock.patch("builtins.open", side_effect=guarded_open),
+              mock.patch("io.open", side_effect=guarded_io),
+              mock.patch("os.open", side_effect=guarded_os)):
+            try:
+                yield
+            finally:
+                imported = {name for name in sys.modules if name.startswith(prefixes)}
+                assert not imported, f"journal package imported: {imported}"
+                assert not opened, f"journal path opened: {opened}"
+    finally:
+        for name in tuple(sys.modules):
+            if name.startswith(prefixes):
+                sys.modules.pop(name)
+        sys.modules.update(removed)
+
+
 class HeadWriterCompatibilityTests(unittest.TestCase):
+    def test_journal_access_sensor_is_load_bearing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(AssertionError, "journal path opened"):
+                with no_journal_access():
+                    (Path(directory) / "journal.jsonl").write_text("", encoding="utf-8")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -29,9 +83,7 @@ class HeadWriterCompatibilityTests(unittest.TestCase):
         store = store_type(root)
         paths = (store.state_path(chain_id), store.events_path(chain_id))
         before = [path.read_bytes() for path in paths]
-        with mock.patch.object(
-            CLI.runtime, "_coordination_modules", side_effect=AssertionError("journal consulted")
-        ):
+        with no_journal_access():
             loaded = store.load(chain_id)
         self.assertEqual(loaded, json.loads(before[0]))
         self.assertEqual(isinstance(loaded["run_binding"], dict), bound)
@@ -71,9 +123,7 @@ class HeadWriterCompatibilityTests(unittest.TestCase):
         store = (CLI.ChainStore if family == "commit" else CLI.MergeChainStore)(root)
         paths = (store.state_path(chain_id), store.events_path(chain_id))
         before = [path.read_bytes() for path in paths]
-        with mock.patch.object(
-            CLI.runtime, "_coordination_modules", side_effect=AssertionError("journal consulted")
-        ):
+        with no_journal_access():
             self.assertEqual(store.load(chain_id), json.loads(before[0]))
         self.assertEqual([path.read_bytes() for path in paths], before)
         return [json.loads(line) for line in before[1].splitlines()]
@@ -114,9 +164,7 @@ class HeadWriterCompatibilityTests(unittest.TestCase):
         chain_id = path.name.removesuffix('.events.jsonl')
         paths = (store.state_path(chain_id), path)
         before = [p.read_bytes() for p in paths]
-        with mock.patch.object(
-            CLI.runtime, '_coordination_modules', side_effect=AssertionError('journal consulted')
-        ):
+        with no_journal_access():
             self.assertEqual(store.load(chain_id), json.loads(before[0]))
         self.assertEqual([p.read_bytes() for p in paths], before)
         return store, chain_id, [json.loads(line) for line in before[1].splitlines()]

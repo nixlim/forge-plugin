@@ -11,9 +11,6 @@ from types import SimpleNamespace
 
 from tests._cli_loader import patch_engine
 from tests._launch_support import LAUNCH_LANE, ROOT, LaunchLaneSupport
-from tests._revision9_coord_constants import key
-
-from codex_orchestrator import builders
 
 REVIEW_LAUNCH = importlib.import_module("forge_cli.engine._review_launch")
 SPEC = ROOT / "docs/specs/forge-plugin-spec.md"
@@ -22,7 +19,7 @@ SPEC = ROOT / "docs/specs/forge-plugin-spec.md"
 class LaunchProfileTests(LaunchLaneSupport, unittest.TestCase):
     def test_agent_allocation_requires_exact_task_profile_and_two_digit_name(self) -> None:
         base = {
-            "type": "execution", "task": self.task_id, "provider": "codex",
+            "task": self.task_id, "provider": "codex",
             "role": "implementer", "execution": "execution-01",
         }
         records = [
@@ -46,20 +43,13 @@ class LaunchProfileTests(LaunchLaneSupport, unittest.TestCase):
         engine = self.ready_engine()
         self.seed_launch(engine=engine)
         first = self.execution_records()[0]
-        with self.api_environment():
-            builders.execution_result(
-                self.repo,
-                self.run_id,
-                idempotency_key=key("launch-agent-reuse-terminal"),
-                execution=str(first["execution"]),
-                agent=str(first["agent"]),
-                task=self.task_id,
-                status="failed",
-                summary="fixture terminal result",
-                files_changed=[],
-                caveats=[],
-                handoff=None,
-            )
+        marker = self.marker(first)
+        marker["collected_at"] = "2026-09-28T12:00:00Z"
+        marker["collected_status"] = "failed"
+        LAUNCH_LANE.write_marker(self.paths(first).leaf("launch.json"), marker)
+        completion = self.paths(first).leaf("completion.json")
+        completion.write_text("{}", encoding="utf-8")
+        completion.chmod(0o600)
         self.seed_launch(engine=engine)
         first, second = self.execution_records()
         self.assertEqual(first["agent"], second["agent"])
@@ -67,10 +57,11 @@ class LaunchProfileTests(LaunchLaneSupport, unittest.TestCase):
             (first["execution"], second["execution"]),
             ("execution-01", "execution-02"),
         )
+        first_marker = self.marker(first)
         hostile = [
-            dict(first, task="task-other", agent="codex-implementer-99"),
-            dict(first, agent="bad"),
-            first,
+            dict(first_marker, task="task-other", agent="codex-implementer-99"),
+            dict(first_marker, agent="bad"),
+            first_marker,
         ]
         allocated = LAUNCH_LANE.allocate_agent(
             hostile,

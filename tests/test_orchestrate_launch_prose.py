@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 import sys
 import unittest
@@ -44,10 +45,7 @@ PLACEHOLDERS = {
     "<absolute-brief>": "/abs/b.md",
     "<execution-NN>": "execution-01",
 }
-OUTSIDE_ROUTE = (
-    "if it carries any of `sandbox`, `route_source`, or `route_sha256`, it must "
-    "carry all three, equal to that role's frozen run snapshot"
-)
+ACTUAL_ROUTE = "actual `sandbox`, `route_source`, and `route_sha256`"
 SKILL_CONTROLS = (
     "# Forge Focused Orchestration",
     "Use this skill, not the upstream codex-orchestrator orchestrate skill",
@@ -67,9 +65,9 @@ SKILL_CONTROLS = (
     "collect reports every untracked worktree path in `files_changed`",
     '`forge` is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/cli.py"',
     "successful start receipt reads `launch started for execution-NN`",
-    "Create the agent directory when absent and the owner-only `execution-NN` "
-    "directory",
-    OUTSIDE_ROUTE,
+    "Under the journal append lock, allocate execution and attempt IDs and create the agent "
+    "directory when absent and the owner-only `execution-NN` directory",
+    ACTUAL_ROUTE,
     "completion.json` when the provider exits or hits its fixed timeout",
     "implementer 14400 seconds, plan 1200 seconds",
     "non-blocking poll for that file, bounded at 60 minutes",
@@ -81,10 +79,10 @@ SKILL_CONTROLS = (
     "fresh implementer or planner only through `forge launch`",
     "Write the brief, resolve it to its absolute filesystem realpath, then pass the "
     "absolute worktree and canonical brief path to `forge launch`",
-    "saves the exact prompt and appends `execution` before launch",
+    "saves the exact prompt and appends `execution_started` before launch",
     "owner record carries no `branch` field",
     "git -C <worktree> branch --show-current",
-    "never append an `execution_result` for a typed execution by hand",
+    "never append a finish record for a typed execution by hand",
     "before reading typed-launch artifacts on disk",
     "before verifying a handoff or starting a first-pass reviewer",
     "when Claude and an agent disagree or a decision outcome is recorded",
@@ -98,8 +96,8 @@ MONITOR_CONTROLS = (
     "`completion.json` appearing is the wake signal",
     "For Codex, `prompt.md` and stdin start with the applicable plugin role template",
     "Claude `prompt.md` and stdin start with the exact bytes",
-    "Both committed inputs come from the recorded absolute worktree at its committed HEAD",
-    OUTSIDE_ROUTE,
+    "The committed context comes from the recorded absolute worktree at its committed HEAD",
+    ACTUAL_ROUTE,
     "typed Codex and typed Claude launches only when their owner record names a "
     "stream-JSON `events` file",
     "Subagent-mode Claude records have no events file and are not monitor targets",
@@ -120,10 +118,10 @@ MONITOR_CONTROLS = (
     "a `still running` collect refusal is the liveness answer",
 )
 WORKFLOW_CONTROLS = (
-    "Forge's end-to-end owner workflow for a governed repository run",
-    "launch a fresh routed implementer through `forge launch`",
-    "collect its result with `forge launch collect`",
-    "independently verify the result",
+    "Forge's end-to-end owner workflow for planning",
+    "launch each fresh implementer or planner with",
+    "collect with `forge launch collect`",
+    "Treat agent claims as claims",
 )
 OUTCOME_RULES = (
     (
@@ -140,19 +138,19 @@ OUTCOME_RULES = (
     ("identity-unproven", "Signal nothing yourself"),
     ("pid sidecar unavailable", "Run `forge launch collect`"),
     ("still in flight in <worktree>", "One typed execution per worktree"),
-    ("journal batch-recover", "Run the named recovery before anything else"),
     ("initialization, version floor, not logged in, or route", "Stop and report"),
 )
 REVIEWER_PREPARATION_ORDER = (
     "create the reviewer's next execution directory",
     "write `prompt.md`",
     "create an empty `events.jsonl`",
-    "append the `execution` entry with the recorded `session_id`",
+    "append the `execution_started` entry with the recorded `session_id`",
     "then launch",
 )
 DURABLE_TREE_LINES = (
     ".codex-orchestrator/runs/<run-id>/",
     "  journal.jsonl",
+    "  .execution-ids/",
     "  <provider>-<role>-<NN>/execution-<NN>/",
     "    prompt.md",
     "    events.jsonl",
@@ -160,11 +158,14 @@ DURABLE_TREE_LINES = (
     "    pid",
     "    stderr.log              # typed launches only",
     "    launch.json             # typed launches only",
+    "    wrapper-config.json     # typed launches only",
+    "    worktree                # typed launches only",
     "    identity.json           # typed launches only",
     "    completion.json         # typed launches only",
     "  evidence/                 # optional",
-    "  report.md                 # after the committed durable archive",
+    "  report.md                 # after the run is reported",
 )
+PROSE_ROUTE_FLAGS = "--sandbox <profile> --route-source <source> --route-sha256 <digest>"
 HANDOFF_HEADINGS = (
     "## Status",
     "## Summary",
@@ -284,6 +285,30 @@ def _assert_handoff_headings(document: str) -> None:
         raise AssertionError("handoff headings changed")
 
 
+
+def _documented_execution_start_blocks() -> list[str]:
+    blocks = []
+    names = (
+        "skills/orchestrate/SKILL.md",
+        "skills/orchestrate/references/monitoring.md",
+        "skills/workflow/SKILL.md",
+    )
+    for name in names:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        for match in re.finditer(r"journal execution-start \\\n(?:[^\n]*\\\n)*[^\n]*", text):
+            blocks.append(match.group(0))
+    return blocks
+
+
+class DocumentedExecutionStartTests(unittest.TestCase):
+    def test_documented_execution_start_names_agent_and_events(self) -> None:
+        blocks = _documented_execution_start_blocks()
+        self.assertEqual(len(blocks), 3)
+        for block in blocks:
+            self.assertIn("--agent", block)
+            self.assertIn("--events", block)
+
+
 class OrchestrateLaunchProseTests(unittest.TestCase):
     def test_documented_launch_commands_parse_and_are_canonical(self) -> None:
         _assert_canonical_commands(DOCUMENTS)
@@ -368,6 +393,18 @@ class OrchestrateLaunchProseTests(unittest.TestCase):
             ):
                 _assert_durable_tree(SKILL.replace(line, DISABLED_CONTROL))
 
+    def test_prose_route_flags_are_documented_at_both_entry_points(self) -> None:
+        workflow = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
+        for document in (SKILL, workflow, MONITORING):
+            normalized = " ".join(document.split())
+            with self.subTest(document=document[:30]):
+                self.assertIn(PROSE_ROUTE_FLAGS, normalized)
+                with self.assertRaises(AssertionError):
+                    self.assertIn(
+                        PROSE_ROUTE_FLAGS,
+                        normalized.replace(PROSE_ROUTE_FLAGS, DISABLED_CONTROL),
+                    )
+
     def test_collected_handoff_shape_is_load_bearing(self) -> None:
         _assert_handoff_headings(MONITORING)
         for heading in HANDOFF_HEADINGS:
@@ -383,7 +420,6 @@ class OrchestrateLaunchProseTests(unittest.TestCase):
         self.assertNotEqual(focused_description, workflow_description)
         self.assertIn("forge launch collect", focused_description)
         self.assertIn("end-to-end owner workflow", workflow_description)
-
 
 if __name__ == "__main__":
     unittest.main()

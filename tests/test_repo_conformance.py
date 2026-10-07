@@ -19,7 +19,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts/forge") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts/forge"))
-import route_evidence  # noqa: E402
 import route_provenance  # noqa: E402
 import route_vocab  # noqa: E402
 
@@ -383,7 +382,7 @@ def recorded_authority(repo: Path, head: str, record: dict[str, object], line_nu
     prefix = f"journal line {line_number}: "
     if provider is None:
         return None, None, prefix + f"execution has unsupported provider {raw_provider!r}", None
-    if role is not None and route_evidence.projected_route_source(record) == "local":
+    if role is not None and record.get("route_source") == "local":
         return None, None, None, None
     if provider == "codex" and role in {"implementer", "review-cheap", "plan"}:
         authority_path = ROLE_PATHS[role]
@@ -453,7 +452,7 @@ def check_run(repo: Path, run_dir: Path) -> tuple[list[str], list[str]]:
             errors.append(route_error)
             continue
         prefix = f"journal line {line_number}: agent {record.get('agent')!r}"
-        local = route_evidence.projected_route_source(record) == "local"
+        local = record.get("route_source") == "local"
         local_note = (
             "developer-local selection "
             f"(route_sha256 {record.get('route_sha256')})"

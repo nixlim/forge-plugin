@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import errno
 import fcntl
@@ -11,7 +12,7 @@ import re
 import secrets
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,6 @@ from forge_cli.engine._state import CLAUDE_EXECUTABLE as CLAUDE_EXECUTABLE
 from forge_cli.engine._state import CODEX_EXECUTABLE as CODEX_EXECUTABLE
 from forge_cli.envelope import (
     REVISION9_OUTPUT_SCHEMA,
-    FrozenError,
     Outcome,
     ReasonCode,
     Refusal,
@@ -39,13 +39,14 @@ PROMPT_LIMIT_BYTES = 4 * BRIEF_LIMIT_BYTES
 RECORD_LIMIT_BYTES = 65_536
 GIT_LIMIT_BYTES = 1024 * 1024
 GIT_TIMEOUT_SECONDS = 30
-GIT_PROBE_CAP_BYTES = 4096
 MAX_AGENT_NUMBER = 99
 LAUNCH_MARKER_SCHEMA = "forge-launch-marker/1"
-IDEMPOTENCY_SCHEMA = "forge-launch-idempotency/1"
 GLOBAL_HALT_SCOPE = ""
 MARKER_NAME = "launch.json"
+WRAPPER_CONFIG_NAME = "wrapper-config.json"
 PID_NAME = "pid"
+WORKTREE_NAME = "worktree"
+EXECUTION_IDS_NAME = ".execution-ids"
 ATTEMPT_PATTERN = re.compile(r"attempt-[0-9a-f]{16}\Z")
 EXECUTION_PATTERN = re.compile(r"execution-[0-9]{2}\Z")
 OBJECT_ID_PATTERN = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -55,7 +56,6 @@ EVENT_SOURCES = {"codex": "exec", "claude": "claude"}
 CLAUDE_IMPLEMENTER_TOOLS = "Read,Write,Edit,Bash,Grep,Glob"
 CLAUDE_PLAN_TOOLS = "Read,Grep,Glob"
 CONTEXT_SEPARATOR = b"--- committed agent-project-context ---\n"
-GOTCHAS_SEPARATOR = b"\n--- committed gotchas (optional; empty when absent) ---\n"
 ASSIGNMENT_SEPARATOR = b"\n--- task assignment ---\n"
 LAUNCH_LEAVES = {
     "prompt": "prompt.md",
@@ -100,23 +100,18 @@ MARKER_NONSTRING_KEYS = frozenset(
     }
 )
 MARKER_KEYS = MARKER_STRING_KEYS | MARKER_NONSTRING_KEYS
-RECORD_BOUND_FIELDS = (
-    "agent",
+WRAPPER_BINDING_FIELDS = (
+    "run_id",
     "task",
+    "agent",
     "execution",
+    "attempt",
     "role",
     "provider",
     "model",
     "effort",
-    "sandbox",
-    "route_source",
-    "route_sha256",
     "worktree",
     "head",
-)
-WRAPPER_BINDING_FIELDS = (
-    "attempt",
-    "provider",
     "route_source",
     "route_sha256",
     "sandbox",
@@ -163,14 +158,11 @@ class PromptMaterial:
 
 @dataclasses.dataclass(frozen=True)
 class RunState:
-    """Hold the lazily loaded coordination modules and one scanned run."""
+    """Locate one run and its plain journal writer."""
 
-    batch: Any
-    builders: Any
     journal: Any
     repository: Path
     run_dir: Path
-    state: Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -251,19 +243,65 @@ def require_run_id(ctx: chain_core.CommandContext) -> str:
 
 
 def run_state(ctx: chain_core.CommandContext, run_id: str) -> RunState:
-    """Resolve and scan one run while retaining its lazy coordination modules."""
+    """Load the writer on demand from the sibling scripts package."""
 
-    batch, builders, journal = runtime._coordination_modules()
-    repository, state_root = journal._resolve_repository(ctx.repo.root, "launch")
-    run_dir = state_root / ".codex-orchestrator" / "runs" / run_id
-    return RunState(
-        batch=batch,
-        builders=builders,
-        journal=journal,
-        repository=repository,
-        run_dir=run_dir,
-        state=journal._scan_run(run_dir),
-    )
+    scripts = str(runtime.SCRIPT_DIR.parent)
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from codex_orchestrator import journal  # noqa: PLC0415
+
+    repository = ctx.repo.git_common_dir().parent
+    return RunState(journal, repository, journal.run_directory(repository, run_id))
+
+
+@contextlib.contextmanager
+def journal_lock(run: RunState) -> Iterator[int | None]:
+    """Serialize launch ids and the start append on the journal descriptor."""
+
+    descriptor = None
+    try:
+        descriptor = run.journal.open_append_lock(run.repository, run.run_dir.name)
+    except (OSError, run.journal.CoordinationRefusal):
+        print(run.journal.APPEND_IO_ERROR, file=sys.stderr)
+    try:
+        yield descriptor
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def append_record(run: RunState, record: dict[str, object], descriptor: int | None = None) -> None:
+    """Best-effort append of a launch fact without granting it authority."""
+
+    try:
+        if descriptor is None:
+            run.journal.append_run_record(run.repository, run.run_dir.name, record)
+        else:
+            run.journal.append_locked_record(descriptor, run.run_dir / "journal.jsonl", record)
+    except (OSError, run.journal.CoordinationRefusal):
+        print(run.journal.APPEND_IO_ERROR, file=sys.stderr)
+
+
+def markers(run: RunState) -> list[dict[str, Any]]:
+    """Read launch markers without treating journal contents as launch authority."""
+
+    found: list[dict[str, Any]] = []
+    for path in run.run_dir.glob("*/execution-*/launch.json"):
+        try:
+            found.append(read_marker(path))
+        except (OSError, ValueError):
+            try:
+                worktree = (
+                    read_private_record(path.parent / WORKTREE_NAME)
+                    .decode("utf-8")
+                    .rstrip("\n")
+                )
+            except (OSError, UnicodeError):
+                worktree = None
+            found.append({"agent": path.parent.parent.name,
+                          "execution": path.parent.name, "collected_at": None,
+                          "worktree": worktree, "invalid": True})
+    return found
 
 
 def role_body_path(plugin_root: Path, provider: str, role: str) -> Path:
@@ -509,35 +547,17 @@ def git_bytes(
     return result.output
 
 
-def _git_object_exists(worktree: Path, spec: str) -> bool:
-    result = runtime.run_bounded(
-        ["git", "-C", str(worktree), "cat-file", "-e", spec],
-        cwd=worktree,
-        timeout=GIT_TIMEOUT_SECONDS,
-        cap=GIT_PROBE_CAP_BYTES,
-    )
-    if result.timed_out or result.output_limit:
-        raise OSError("bounded Git existence check failed")
-    return result.returncode == 0
-
-
 def committed_file(worktree: Path, head: str, relative: str) -> bytes:
     """Read one file from the selected committed worktree snapshot."""
 
     return git_bytes(worktree, ["show", f"{head}:{relative}"])
 
 
-def _committed_prompt_parts(request: PromptRequest) -> tuple[bytes, bytes]:
+def _committed_prompt_parts(request: PromptRequest) -> bytes:
     project = committed_file(request.worktree, request.head, "forge-project.md")
     regions = policy._parse_regions(project)
     context = regions["agent-project-context"].encode("utf-8")
-    relative = ".forge/history/gotchas.md"
-    gotchas = (
-        committed_file(request.worktree, request.head, relative)
-        if _git_object_exists(request.worktree, f"{request.head}:{relative}")
-        else b""
-    )
-    return context, gotchas
+    return context
 
 
 def prepare_prompt(ctx: chain_core.CommandContext, request: PromptRequest) -> PromptMaterial:
@@ -556,7 +576,7 @@ def prepare_prompt(ctx: chain_core.CommandContext, request: PromptRequest) -> Pr
             owned=False,
         )
         brief = read_brief(request.brief)
-        context, gotchas = _committed_prompt_parts(request)
+        context = _committed_prompt_parts(request)
     except Refusal:
         raise
     except (KeyError, OSError, UnicodeError, ValueError, policy.PolicyError) as exc:
@@ -569,8 +589,6 @@ def prepare_prompt(ctx: chain_core.CommandContext, request: PromptRequest) -> Pr
         prefix
         + CONTEXT_SEPARATOR
         + context
-        + GOTCHAS_SEPARATOR
-        + gotchas
         + ASSIGNMENT_SEPARATOR
         + brief
     )
@@ -619,8 +637,7 @@ def _reusable_agent(
     for record in records:
         agent = record.get("agent")
         if (
-            record.get("type") == "execution"
-            and record.get("task") == task
+            record.get("task") == task
             and (record.get("provider"), record.get("role")) == (provider, role)
             and isinstance(agent, str)
             and pattern.fullmatch(agent) is not None
@@ -658,26 +675,20 @@ def allocate_agent(
     )
 
 
-def in_flight_execution(
-    records: Sequence[Mapping[str, object]], worktree: Path
-) -> str | None:
-    """Return the first unterminated typed execution in one worktree."""
+def in_flight_execution(run: RunState, worktree: Path) -> str | None:
+    """Use marker and completion artefacts to identify a pending launch."""
 
-    terminal = {
-        str(record.get("execution"))
-        for record in records
-        if record.get("type") == "execution_result"
-    }
-    for record in records:
-        execution = record.get("execution")
-        if (
-            record.get("type") == "execution"
-            and record.get("launch_marker")
-            and record.get("worktree") == str(worktree)
-            and isinstance(execution, str)
-            and execution not in terminal
-        ):
-            return execution
+    for marker in markers(run):
+        if marker.get("worktree") != str(worktree):
+            continue
+        if marker.get("invalid") or marker.get("collected_at") is None:
+            return str(marker["execution"])
+        try:
+            paths = LaunchPaths(run.run_dir, str(marker["agent"]), str(marker["execution"]))
+            if not completion_present(paths):
+                return str(marker["execution"])
+        except (OSError, ValueError):
+            return str(marker["execution"])
     return None
 
 
@@ -831,6 +842,28 @@ def marker_binding(marker: Mapping[str, Any]) -> dict[str, Any]:
     return {field: marker[field] for field in WRAPPER_BINDING_FIELDS}
 
 
+def bind_wrapper_config(marker: Mapping[str, Any], paths: LaunchPaths) -> str | None:
+    """Bind the marker to the separate config saved before wrapper launch."""
+
+    try:
+        config = json.loads(
+            read_private_record(paths.leaf(WRAPPER_CONFIG_NAME)),
+            object_pairs_hook=_unique_object,
+        )
+    except (OSError, UnicodeError, ValueError):
+        return "wrapper_config"
+    if not isinstance(config, dict):
+        return "wrapper_config"
+    # ponytail: a launcher that writes both artefacts dishonestly is not detected;
+    # upgrade with independently authenticated launch evidence if that threat matters.
+    for field in WRAPPER_BINDING_FIELDS:
+        if marker.get(field) != config.get(field):
+            return field
+    if list(marker_argv(marker, paths)) != config.get("argv"):
+        return "argv_digest"
+    return None
+
+
 def marker_argv(marker: Mapping[str, Any], paths: LaunchPaths) -> tuple[str, ...]:
     """Reconstruct the provider argv bound by a launch marker."""
 
@@ -848,17 +881,25 @@ def marker_argv(marker: Mapping[str, Any], paths: LaunchPaths) -> tuple[str, ...
 def bind_marker(
     ctx: chain_core.CommandContext,
     marker: Mapping[str, Any],
-    record: Mapping[str, object],
     paths: LaunchPaths,
 ) -> str | None:
-    """Return the first field for which marker, journal, or owner bytes diverge."""
+    """Compare marker fields with independent owner paths, bytes, and completion."""
 
-    for field in RECORD_BOUND_FIELDS:
-        if marker.get(field) != record.get(field):
+    sidecar = read_private_record(paths.leaf(WORKTREE_NAME)).decode("utf-8")
+    worktree = sidecar[:-1] if sidecar.endswith("\n") else None
+    if worktree is not None and os.path.realpath(worktree) != worktree:
+        worktree = None
+    owner = re.fullmatch(r"(codex|claude)-(implementer|plan)-[0-9]{2}", paths.agent)
+    for field, expected in (
+        ("run_id", paths.run_dir.name),
+        ("agent", paths.agent),
+        ("execution", paths.execution),
+        ("worktree", worktree),
+        ("provider", owner.group(1) if owner else None),
+        ("role", owner.group(2) if owner else None),
+    ):
+        if marker.get(field) != expected:
             return field
-    expected_ref = paths.reference(MARKER_NAME)
-    if record.get("launch_marker") != expected_ref:
-        return "launch_marker"
     prompt = read_bounded_regular(
         paths.leaf(LAUNCH_LEAVES["prompt"]),
         limit=PROMPT_LIMIT_BYTES,
@@ -870,7 +911,18 @@ def bind_marker(
     argv = marker_argv(marker, paths)
     if ctx.command_digest(argv) != marker.get("argv_digest"):
         return "argv_digest"
-    return None
+    try:
+        completion = json.loads(read_private_record(paths.leaf(_review_attempt.COMPLETION_NAME)))
+    except FileNotFoundError:
+        return None
+    if not isinstance(completion, dict):
+        return "completion"
+    return next((field for field, recorded in (
+        ("attempt", "attempt"), ("provider", "provider"),
+        ("sandbox", "sandbox"), ("route_source", "route_source"),
+        ("route_sha256", "route_sha256"),
+        ("argv_digest", "argv_digest"), ("prompt_digest", "prompt_digest"),
+    ) if marker.get(field) != completion.get(recorded)), None)
 
 
 def wrapper_config(marker: Mapping[str, Any], argv: Sequence[str]) -> dict[str, object]:
@@ -885,21 +937,6 @@ def wrapper_config(marker: Mapping[str, Any], argv: Sequence[str]) -> dict[str, 
         "leaves": dict(LAUNCH_LEAVES),
         "events_existing": True,
     }
-
-
-def result_record(
-    state: Any, execution: str, agent: object
-) -> dict[str, object] | None:
-    """Return the newest terminal result for one exact execution owner."""
-
-    matches = [
-        dict(record)
-        for record in state.records
-        if record.get("type") == "execution_result"
-        and record.get("execution") == execution
-        and record.get("agent") == agent
-    ]
-    return matches[-1] if matches else None
 
 
 def completion_summary(
@@ -1039,47 +1076,39 @@ def append_execution_result(
     task: str,
     result: CompletionResult,
     completion_raw: bytes,
-) -> tuple[dict[str, object], bool]:
-    """Append one idempotent result, returning its record and repeat status."""
+) -> dict[str, object]:
+    """Log completion; the marker remains the recovery and idempotence source."""
 
-    key = completion_idempotency(
-        paths.run_dir.name, paths.execution, sha256_bytes(completion_raw))
-    with run.batch.batch_lock(run.run_dir, create=True):
-        state = run.journal._scan_run(run.run_dir)
-        existing = result_record(state, paths.execution, paths.agent)
-        if existing is not None:
-            return existing, True
-        try:
-            outcome = run.builders.execution_result(
-                run.repository,
-                paths.run_dir.name,
-                idempotency_key=key,
-                execution=paths.execution, agent=paths.agent, task=task,
-                status=result.status, summary=result.summary,
-                files_changed=result.files_changed, caveats=result.caveats,
-                handoff=result.handoff,
-            )
-        except run.journal.CoordinationRefusal as exc:
-            fresh = run.journal._scan_run(run.run_dir)
-            existing = result_record(fresh, paths.execution, paths.agent)
-            if existing is not None:
-                return existing, True
-            raise Refusal(V2ReasonCode.STATE_PRECONDITION, str(exc),
-                remediation="inspect the launch result record before retrying") from exc
-    records = [
-        record for record in outcome.records if record.get("type") == "execution_result"
-    ]
-    if len(records) != 1:
-        raise FrozenError("launch execution result is malformed",
-            observed=f"expected one execution_result record; got {len(records)}",
-            schema=REVISION9_OUTPUT_SCHEMA)
-    return dict(records[0]), bool(outcome.repeated)
+    marker = read_marker(paths.leaf(MARKER_NAME))
+    try:
+        completion = json.loads(completion_raw)
+    except (ValueError, UnicodeError):
+        completion = {}
+    returncode = completion.get("returncode") if isinstance(completion, dict) else None
+    record: dict[str, object] = {
+        "kind": "execution_finished", "run_id": run.run_dir.name,
+        "execution_id": paths.execution, "attempt_id": marker["attempt"],
+        "agent": paths.agent, "task_id": task, "role": marker["role"],
+        "provider": marker["provider"], "model": marker["model"],
+        "effort": marker["effort"], "sandbox": marker["sandbox"],
+        "route_source": marker["route_source"], "route_sha256": marker["route_sha256"],
+        "worktree": marker["worktree"], "ended_at": chain_core.iso_z(),
+        "started_at": marker["requested_at"],
+        "status": result.status, "exit_status": returncode if type(returncode) is int else None,
+        "summary": result.summary,
+        "files_changed": list(result.files_changed), "caveats": list(result.caveats),
+        "output": result.handoff or paths.reference(LAUNCH_LEAVES["stderr"]),
+        "handoff": result.handoff,
+        "completion": paths.reference(_review_attempt.COMPLETION_NAME),
+    }
+    append_record(run, record)
+    return record
 
 
 def mark_collected(
     paths: LaunchPaths, marker: dict[str, Any], status: object
 ) -> None:
-    """Repair an uncollected marker after its one terminal result exists."""
+    """Mark a completion as collected using the marker's status."""
 
     if marker["collected_at"] is not None:
         return
@@ -1135,36 +1164,6 @@ def terminal_outcome(
         next_required_step="none — launch execution is terminal",
         evidence_refs=tuple(refs),
         schema=REVISION9_OUTPUT_SCHEMA,
-    )
-
-
-def completion_idempotency(run_id: str, execution: str, digest: str) -> str:
-    return sha256_bytes(
-        chain_core.canonical_bytes(
-            {
-                "schema": IDEMPOTENCY_SCHEMA,
-                "step": "execution-result",
-                "run_id": run_id,
-                "execution": execution,
-                "completion_sha256": digest,
-            }
-        )
-    )
-
-
-def start_idempotency(marker: Mapping[str, Any]) -> str:
-    return sha256_bytes(
-        chain_core.canonical_bytes(
-            {
-                "schema": IDEMPOTENCY_SCHEMA,
-                "step": "execution-start",
-                "run_id": marker["run_id"],
-                "agent": marker["agent"],
-                "execution": marker["execution"],
-                "prompt_digest": marker["prompt_digest"],
-                "requested_at": marker["requested_at"],
-            }
-        )
     )
 
 

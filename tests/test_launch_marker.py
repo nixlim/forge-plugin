@@ -24,6 +24,69 @@ class LaunchMarkerSchemaTests(LaunchLaneSupport, unittest.TestCase):
         self.marker_path = self.attempt_dir(self.record) / "launch.json"
         self.baseline = self.marker(self.record)
 
+    def test_prose_execution_directory_has_exact_collect_refusal(self) -> None:
+        directory = self.run_dir(self.repo, self.run_id) / "prose-agent/execution-02"
+        directory.mkdir(parents=True)
+        with self.assertRaises(ENGINE.Refusal) as caught:
+            VERBS_LAUNCH_COLLECT.launch_collect(self.ready_engine(), "execution-02")
+        self.assertEqual(
+            caught.exception.message,
+            "forge: launch collect refused — execution execution-02 has no "
+            "launch_marker; collect a prose launch by prose",
+        )
+
+    def test_marker_binding_uses_independent_path_sidecar_and_completion_fields(self) -> None:
+        engine = self.ready_engine()
+        paths = self.paths(self.record)
+        self.write_private_json(
+            paths.leaf("completion.json"),
+            {field: self.baseline[field] for field in (
+                "attempt", "provider", "sandbox", "route_source", "route_sha256",
+                "argv_digest", "prompt_digest",
+            )},
+        )
+        changes = {
+            "run_id": "another-run", "agent": "codex-implementer-99",
+            "execution": "execution-99", "attempt": "attempt-0123456789abcdef",
+            "worktree": str(self.repo), "provider": "claude", "role": "plan",
+            "sandbox": "read-only", "route_source": "different",
+            "route_sha256": "a" * 64,
+        }
+
+        def assert_field(field: str, value: str) -> None:
+            changed = dict(self.baseline, **{field: value})
+            if field == "provider":
+                changed["argv_digest"] = engine.ctx.command_digest(
+                    LAUNCH_LANE.marker_argv(changed, paths)
+                )
+            LAUNCH_LANE.write_marker(self.marker_path, changed)
+            with self.assertRaises(ENGINE.Refusal) as caught:
+                VERBS_LAUNCH_COLLECT._bound_execution(engine, "execution-01", "collect")
+            self.assertEqual(
+                caught.exception.message,
+                "forge: launch collect refused — launch marker does not bind "
+                f"execution execution-01: {field}",
+            )
+            LAUNCH_LANE.write_marker(self.marker_path, self.baseline)
+
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                assert_field(field, value)
+        LAUNCH_LANE.replace_owner_file(
+            paths.directory,
+            LAUNCH_LANE.WORKTREE_NAME,
+            (str(self.repo) + "\n").encode("utf-8"),
+        )
+        with self.assertRaises(ENGINE.Refusal) as caught:
+            VERBS_LAUNCH_COLLECT._bound_execution(engine, "execution-01", "collect")
+        self.assertIn("execution execution-01: worktree", caught.exception.message)
+        with (
+            mock.patch.object(LAUNCH_LANE, "bind_marker", return_value=None),
+            self.assertRaises(AssertionError),
+        ):
+            with self.assertRaises(ENGINE.Refusal):
+                VERBS_LAUNCH_COLLECT._bound_execution(engine, "execution-01", "collect")
+
     def assert_invalid_marker(self, marker: dict[str, object]) -> None:
         journal = self.run_dir(self.repo, self.run_id) / "journal.jsonl"
         before = journal.read_bytes()

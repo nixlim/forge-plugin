@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import hashlib
 import json
 import os
 import re
@@ -18,21 +17,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 OUTPUT_LIMIT = 65_536
-JOURNAL_OBSERVATION_LIMIT = 2_000
-JOURNAL_TRUNCATION_MARKER = (
-    "... [truncated for journal; full observation retained in mutation evidence]"
-)
 DEFAULT_TIMEOUT_SECONDS = 600
 MALFORMED_DIAGNOSTIC = "forge: executable policy row malformed"
 POLICY_ABSENT_DIAGNOSTIC = "forge: mutation policy absent at HEAD"
-MUTATION_JOURNAL_SCHEMA = "forge-scoped-mutation-journal/1"
-MUTATION_JOURNAL_SIDEBAND_PREFIX = "\x00FMJ1\x00"
-MUTATION_PERSISTENCE_ADVISORY = (
-    "forge: scoped mutation journal persistence unavailable — advisory evidence emitted only"
-)
-MUTATION_JOURNAL_CONTROLS = frozenset(
-    {"typed-builder", "deterministic-key", "owner-scrub"}
-)
+MUTATION_RUN_CONTROLS = frozenset({"owner-scrub"})
 ABSENCE_RE = re.compile(
     r"No mutation tool available for ([^\s]+) — assertion-quality fallback only\."
 )
@@ -67,10 +55,6 @@ TEST_PATTERN_EXCLUSIONS_BY_CATEGORY: dict[str, tuple[str, ...]] = {
 
 class PolicyError(RuntimeError):
     """The committed executable policy cannot be parsed safely."""
-
-
-class _MutationJournalControlUnavailable(RuntimeError):
-    """An in-memory safety control was disabled during verification."""
 
 
 @dataclass(frozen=True)
@@ -437,7 +421,7 @@ def kill_process_group(
 
 
 def run_command(command: str, paths: list[str], timeout: int, repo: Path) -> RunOutcome:
-    if "owner-scrub" not in MUTATION_JOURNAL_CONTROLS:
+    if "owner-scrub" not in MUTATION_RUN_CONTROLS:
         return RunOutcome("inconclusive", "launch-failed", None, "")
     started = time.monotonic()
     child_environment = os.environ.copy()
@@ -571,212 +555,19 @@ def observation_for(
     )
 
 
-def verification_record(
+def evidence_record(
     *,
-    task: str,
     scope: str,
     result: str,
     check: str,
     observation: str,
-    method: str = "command",
 ) -> dict[str, object]:
     return {
-        "type": "verification",
-        "task": task,
         "criterion": f"mutation: {scope}",
-        "method": method,
         "check": check,
         "result": result,
         "observation": observation,
-        "evidence": [],
     }
-
-
-def truncated_observation(record: dict[str, object]) -> str:
-    observation = record.get("observation")
-    if not isinstance(observation, str):
-        raise ValueError("mutation verification observation must be a string")
-    if len(observation) <= JOURNAL_OBSERVATION_LIMIT:
-        return observation
-    prefix_length = JOURNAL_OBSERVATION_LIMIT - len(JOURNAL_TRUNCATION_MARKER)
-    return observation[:prefix_length] + JOURNAL_TRUNCATION_MARKER
-
-
-def mutation_journal_preimage(
-    *,
-    repository: Path,
-    run_id: str,
-    task: str,
-    base: str,
-    head: str,
-    criterion: str,
-    result: str,
-    check: str,
-    observation: str,
-    evidence: list[str],
-) -> dict[str, object]:
-    """Build the exact deterministic FR-142 mutation-journal key preimage."""
-
-    return {
-        "schema": MUTATION_JOURNAL_SCHEMA,
-        "repository": str(repository.resolve()),
-        "run_id": run_id,
-        "task": task,
-        "base": base,
-        "head": head,
-        "criterion": criterion,
-        "result": result,
-        "check": check,
-        "truncated_observation": observation,
-        "evidence": list(evidence),
-    }
-
-
-def mutation_idempotency_key(preimage: dict[str, object]) -> str:
-    if "deterministic-key" not in MUTATION_JOURNAL_CONTROLS:
-        raise _MutationJournalControlUnavailable()
-    payload = json.dumps(
-        preimage,
-        allow_nan=False,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def mutation_journal_request(
-    *,
-    repository: Path,
-    run_id: str,
-    base: str,
-    head: str,
-    record: dict[str, object],
-) -> dict[str, object]:
-    if "typed-builder" not in MUTATION_JOURNAL_CONTROLS:
-        raise _MutationJournalControlUnavailable()
-    observation = truncated_observation(record)
-    evidence = record.get("evidence")
-    if not isinstance(evidence, list) or not all(isinstance(item, str) for item in evidence):
-        raise ValueError("mutation verification evidence must be an array of strings")
-    values: dict[str, str] = {}
-    for field in ("task", "criterion", "method", "check", "result"):
-        value = record.get(field)
-        if not isinstance(value, str):
-            raise ValueError(f"mutation verification {field} must be a string")
-        values[field] = value
-    preimage = mutation_journal_preimage(
-        repository=repository,
-        run_id=run_id,
-        task=values["task"],
-        base=base,
-        head=head,
-        criterion=values["criterion"],
-        result=values["result"],
-        check=values["check"],
-        observation=observation,
-        evidence=evidence,
-    )
-    return {
-        **preimage,
-        "method": values["method"],
-        "idempotency_key": mutation_idempotency_key(preimage),
-    }
-
-
-def _report_persistence_failure(error: Exception) -> None:
-    detail = str(error)
-    if detail.startswith("forge: "):
-        print(detail, file=sys.stderr)
-    print(MUTATION_PERSISTENCE_ADVISORY, file=sys.stderr)
-
-
-def persist_verification(
-    *,
-    repository: Path,
-    run_id: str,
-    base: str,
-    head: str,
-    record: dict[str, object],
-) -> bool:
-    """Persist one ordinary verification only through the typed builder."""
-
-    try:
-        if "typed-builder" not in MUTATION_JOURNAL_CONTROLS:
-            raise _MutationJournalControlUnavailable()
-        request = mutation_journal_request(
-            repository=repository,
-            run_id=run_id,
-            base=base,
-            head=head,
-            record=record,
-        )
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from codex_orchestrator import builders  # noqa: PLC0415
-
-        builders.verification_add(
-            repository,
-            run_id,
-            idempotency_key=str(request["idempotency_key"]),
-            task=str(request["task"]),
-            criterion=str(request["criterion"]),
-            method=str(request["method"]),
-            check=str(request["check"]),
-            result=str(request["result"]),
-            observation=str(request["truncated_observation"]),
-            evidence=list(request["evidence"]),
-            binding_chain=None,
-            binding_id=None,
-        )
-        return True
-    except Exception as error:  # Persistence is advisory; never raw-fallback.
-        _report_persistence_failure(error)
-        return False
-
-
-def emit_journal_request(
-    *,
-    repository: Path,
-    run_id: str,
-    base: str,
-    head: str,
-    record: dict[str, object],
-) -> None:
-    try:
-        request = mutation_journal_request(
-            repository=repository,
-            run_id=run_id,
-            base=base,
-            head=head,
-            record=record,
-        )
-        print(
-            MUTATION_JOURNAL_SIDEBAND_PREFIX
-            + json_text(request, allow_nan=False, sort_keys=True, separators=(",", ":"))
-        )
-    except Exception as error:
-        _report_persistence_failure(error)
-
-
-def handle_journal_record(args: argparse.Namespace, record: dict[str, object]) -> None:
-    if args.repository is None:
-        return
-    if args.defer_journal:
-        emit_journal_request(
-            repository=args.repository,
-            run_id=args.run_id,
-            base=args.base,
-            head=args.head,
-            record=record,
-        )
-        return
-    persist_verification(
-        repository=args.repository,
-        run_id=args.run_id,
-        base=args.base,
-        head=args.head,
-        record=record,
-    )
 
 
 def emit_evidence(record: dict[str, object], *, diagnostic: str | None = None) -> None:
@@ -786,21 +577,6 @@ def emit_evidence(record: dict[str, object], *, diagnostic: str | None = None) -
     if diagnostic is not None:
         evidence["diagnostic"] = diagnostic
     print(json_text({"type": "mutation_evidence", **evidence}))
-
-
-def emit_record(
-    args: argparse.Namespace,
-    record: dict[str, object],
-    *,
-    diagnostic: str | None = None,
-) -> None:
-    """Emit trusted deferred sideband before cap-consuming public evidence."""
-
-    if args.defer_journal:
-        handle_journal_record(args, record)
-    emit_evidence(record, diagnostic=diagnostic)
-    if not args.defer_journal:
-        handle_journal_record(args, record)
 
 
 def emit_unavailable(diagnostic: str) -> None:
@@ -828,33 +604,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, help="Fixed full-SHA candidate base.")
     parser.add_argument("--head", required=True, help="Fixed full-SHA candidate head.")
-    parser.add_argument(
-        "--repository",
-        type=Path,
-        help="Repository bound to the explicitly selected coordinated run.",
-    )
-    parser.add_argument("--run-id", help="Explicitly selected coordinated run ID.")
-    parser.add_argument("--task", help="Task id in the explicitly selected open run.")
-    parser.add_argument(
-        "--defer-journal",
-        action="store_true",
-        help="Emit trusted persistence requests for the lock-owning parent process.",
-    )
-    args = parser.parse_args(argv)
-    coordinated = (args.repository, args.run_id, args.task)
-    if any(value is not None for value in coordinated) and not all(
-        value is not None for value in coordinated
-    ):
-        parser.error("--repository, --run-id, and --task must be supplied together")
-    for name in ("run_id", "task"):
-        value = getattr(args, name)
-        if value is not None and (not value or "\n" in value or "\r" in value):
-            parser.error(f"--{name.replace('_', '-')} must be a nonempty single-line value")
-    if args.defer_journal and args.repository is None:
-        parser.error("--defer-journal requires coordinated run arguments")
-    if args.repository is not None:
-        args.repository = args.repository.resolve()
-    return args
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -901,15 +651,13 @@ def main(argv: list[str] | None = None) -> int:
                 "scoped_files=[]; timeout=not-applicable; "
                 f"diagnostic={MALFORMED_DIAGNOSTIC}"
             )
-            record = verification_record(
-                task=args.task or "",
+            record = evidence_record(
                 scope="policy",
                 result="skipped",
                 check="git show HEAD:forge-project.md (mutation-testing)",
                 observation=observation,
-                method="inspection",
             )
-            emit_record(args, record, diagnostic=MALFORMED_DIAGNOSTIC)
+            emit_evidence(record, diagnostic=MALFORMED_DIAGNOSTIC)
         else:
             emit_unavailable(diagnostic)
         return 0
@@ -929,14 +677,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"tool={row.command}; scope={row.category}; outcome=no-live-scope; "
                 f"scoped_files=[]; timeout={row.timeout}s"
             )
-        record = verification_record(
-            task=args.task or "",
+        record = evidence_record(
             scope=row.category,
             result=result,
             check=row.changed_files_form,
             observation=observation,
         )
-        emit_record(args, record)
+        emit_evidence(record)
         evidence_emitted = True
 
     for stack in sorted(absences):
@@ -944,8 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         absence_text = f"No mutation tool available for {stack} — assertion-quality fallback only."
         patterns = categories.get(category)
         if patterns is None:
-            record = verification_record(
-                task=args.task or "",
+            record = evidence_record(
                 scope=category,
                 result="skipped",
                 check=absence_text,
@@ -953,16 +699,14 @@ def main(argv: list[str] | None = None) -> int:
                     f"tool=none; scope={category}; outcome=declared-absence; "
                     "scoped_files=[]; timeout=not-applicable"
                 ),
-                method="inspection",
             )
-            emit_record(args, record)
+            emit_evidence(record)
             evidence_emitted = True
             continue
         synthetic = MutationRow(category, f"No mutation tool available for {stack}", ":", 600)
         triggered, paths = scoped_paths(synthetic, patterns, changes, seeds)
         if triggered:
-            record = verification_record(
-                task=args.task or "",
+            record = evidence_record(
                 scope=category,
                 result="skipped",
                 check=absence_text,
@@ -971,9 +715,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"scoped_files={json_text(paths, separators=(',', ':'))}; "
                     "timeout=not-applicable"
                 ),
-                method="inspection",
             )
-            emit_record(args, record)
+            emit_evidence(record)
             evidence_emitted = True
 
     if not evidence_emitted:
@@ -982,8 +725,7 @@ def main(argv: list[str] | None = None) -> int:
             category = stack_categories.get(stack, stack)
             if category not in evaluated_categories:
                 evaluated_categories.append(category)
-        record = verification_record(
-            task=args.task or "",
+        record = evidence_record(
             scope="policy",
             result="skipped",
             check="derive fixed candidate mutation scope",
@@ -992,9 +734,8 @@ def main(argv: list[str] | None = None) -> int:
                 "categories_evaluated="
                 + json_text(evaluated_categories, separators=(",", ":"))
             ),
-            method="inspection",
         )
-        emit_record(args, record)
+        emit_evidence(record)
     return 0
 
 

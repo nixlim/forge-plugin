@@ -43,62 +43,26 @@ def assert_markers_are_load_bearing(
             assert_markers(text.replace(marker, "DISABLED_CONTROL"))
 
 
-def assert_typed_workflow_journal_contract(
+def assert_plain_workflow_journal_contract(
     test_case: unittest.TestCase, text: str
 ) -> None:
+    controls = (
+        'codex_orch_tools.py" run-open',
+        '--repo "$REPO" --run-id <run-id> --intent <concise-original-goal> --actor <actor>',
+        '`journal task-start',
+        '`journal task-finish`',
+        '`journal decision-add',
+        'codex_orch_tools.py" run-close',
+        '--outcome <free-text-outcome>',
+        'codex_orch_tools.py" validate',
+        'Their gate results, review verdicts, approval, and Git outcomes live in `.forge/chains/`',
+    )
     normalized = compact(text)
-    typed_open = text.split(
-        "Open the run only through the typed builder", maxsplit=1
-    )[1].split("Add `--successor-of", maxsplit=1)[0]
-    for marker in (
-        "codex_orch_tools.py\" run-open",
-        '--repo "$REPO"',
-        "--run-id <run-id>",
-        "--idempotency-key <64-lowercase-hex>",
-        "--goal <concise-original-goal>",
-        "--plugin-ref <plugin-ref>",
-        "--scope <pathspec>",
-    ):
-        test_case.assertIn(marker, typed_open)
-    test_case.assertNotIn("--record-json", typed_open)
-
-    for marker in (
-        "`run-readmit --repo",
-        "`journal task-start`",
-        "`journal task-finish`",
-        "`journal execution-start`",
-        "`journal execution-result`",
-        "`journal verification-add`",
-        "`journal decision-add`",
-        "`journal ingest-chain`",
-        "close with typed `run-close`",
-        "typed `run-close --repo",
-        "--judgment passed|blocked",
-        "--summary <summary>",
-    ):
-        test_case.assertIn(marker, normalized)
-
-    for forbidden in (
-        "Append every later record only with `journal-append",
-        "append them through `journal-append`",
-        "`journal-append` for every record",
-        "--run-id <run-id> --record-json <file>",
-    ):
-        test_case.assertNotIn(forbidden, text)
-
-    compatibility_paragraphs = [
-        compact(paragraph).casefold()
-        for paragraph in text.split("\n\n")
-        if "--record-json" in paragraph or "journal-append" in paragraph
-    ]
-    test_case.assertTrue(compatibility_paragraphs)
-    for paragraph in compatibility_paragraphs:
-        test_case.assertIn("legacy/migration", paragraph)
-        test_case.assertIn("activated", paragraph)
-        test_case.assertTrue(
-            "never" in paragraph or "cannot" in paragraph,
-            "raw compatibility text must prohibit activated/canonical use",
-        )
+    for control in controls:
+        test_case.assertIn(control, normalized)
+    for retired in ('--idempotency-key', '--judgment', 'run-readmit', 'journal ingest-chain',
+                    'validate --gates', 'journal verification-add'):
+        test_case.assertNotIn(retired, text)
 
 
 def frontmatter(text: str) -> tuple[dict[str, str], list[str]]:
@@ -452,30 +416,25 @@ class GovernanceRuleContentTests(unittest.TestCase):
 
 
 class GovernanceDoctrineContentTests(unittest.TestCase):
-    def test_workflow_uses_typed_run_open_and_typed_journal_verbs(self) -> None:
-        assert_typed_workflow_journal_contract(self, WORKFLOW)
+    def test_workflow_uses_plain_run_and_journal_verbs(self) -> None:
+        assert_plain_workflow_journal_contract(self, WORKFLOW)
 
-    def test_typed_workflow_journal_controls_survive_in_memory_mutation(self) -> None:
-        for marker in (
-            "codex_orch_tools.py\" run-open",
-            "--idempotency-key <64-lowercase-hex>",
-            "`run-readmit --repo",
-            "`journal task-start`",
-            "`journal task-finish`",
-            "`journal execution-start`",
-            "`journal execution-result`",
-            "`journal verification-add`",
-            "`journal decision-add`",
-            "`journal ingest-chain`",
-            "close with typed\n`run-close`",
-            "legacy/migration surfaces only",
-            "cannot turn the raw form into an activated opening",
-        ):
-            with self.subTest(disabled_control=marker):
-                self.assertIn(marker, WORKFLOW)
-                mutant = WORKFLOW.replace(marker, "DISABLED_CONTROL")
-                with self.assertRaises(AssertionError):
-                    assert_typed_workflow_journal_contract(self, mutant)
+    def test_plain_workflow_journal_controls_survive_in_memory_mutation(self) -> None:
+        controls = (
+            'codex_orch_tools.py" run-open',
+            '`journal task-start',
+            '`journal task-finish`',
+            '`journal decision-add',
+            'codex_orch_tools.py" run-close',
+            '--outcome <free-text-outcome>',
+            'codex_orch_tools.py" validate',
+            'Their gate results, review verdicts, approval, and Git outcomes live in `.forge/chains/`',
+        )
+        for control in controls:
+            with self.subTest(disabled=control), self.assertRaises(AssertionError):
+                assert_plain_workflow_journal_contract(
+                    self, WORKFLOW.replace(control, "DISABLED_CONTROL", 1)
+                )
 
     def test_twice_consecutive_verification_is_in_both_skills(self) -> None:
         for name, text in (("workflow", WORKFLOW), ("orchestrate", ORCHESTRATE)):
@@ -486,37 +445,30 @@ class GovernanceDoctrineContentTests(unittest.TestCase):
                     "completion",
                     normalized,
                 )
-                self.assertIn("two separate `verification` entries", normalized)
+                self.assertIn("both observed", normalized)
 
     def test_concurrency_cap_is_in_both_skills(self) -> None:
         for name, text in (("workflow", WORKFLOW), ("orchestrate", ORCHESTRATE)):
             with self.subTest(skill=name):
-                self.assertRegex(compact(text), r"(?:Never exceed|At most) 10 concurrent Codex")
+                self.assertRegex(compact(text), r"(?:Limit a run to ten|At most 10) concurrent Codex")
 
-    def test_journal_planning_and_worktree_doctrine_is_present(self) -> None:
+    def test_planning_and_worktree_doctrine_is_present(self) -> None:
         workflow = compact(WORKFLOW)
         orchestrate = compact(ORCHESTRATE)
-
-        self.assertIn("before reading any Codex proposal", workflow)
-        self.assertIn("`decision.basis` array", workflow)
-        self.assertIn("real canonical answer plus a positive control", workflow)
-        for field in (
-            "acceptance",
-            "files",
-            "repo_status",
-            "basis",
-            "evidence",
-            "caveats",
-            "files_changed",
-            "risks",
-            "follow_ups",
+        for control in (
+            "before reading any Codex proposal",
+            "real canonical answer plus a positive control",
+            "cite both documents as optional references",
+            "serialize overlapping work",
         ):
-            with self.subTest(field=field):
-                self.assertIn(f"`{field}`", workflow)
-        self.assertIn("`git worktree add <dir> -b <branch>`", orchestrate)
-        self.assertIn("from the integration baseline", orchestrate)
-        self.assertIn("One session owns one worktree", orchestrate)
-        self.assertIn("including `review-final`, share the orchestrator's worktree", orchestrate)
+            self.assertIn(control, workflow)
+        for control in (
+            "`git worktree add <dir> -b <branch>`",
+            "from the integration baseline",
+            "One session owns one worktree",
+            "including `review-final`, share the orchestrator's worktree",
+        ):
+            self.assertIn(control, orchestrate)
 
     def test_manual_reviewer_lane_boundary_is_load_bearing(self) -> None:
         assert_markers_are_load_bearing(self, compact(REVIEW_REFERENCE), (

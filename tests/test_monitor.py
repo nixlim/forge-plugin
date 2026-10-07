@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -8,6 +9,10 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from scripts.codex_orchestrator import monitor
+from tests._git_env import init_quiet_repository
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "codex_orch_tools.py"
@@ -38,6 +43,51 @@ def journal_entry(kind: str, **values: object) -> dict[str, object]:
 
 
 class MonitorTests(unittest.TestCase):
+    def test_regular_forge_package_cannot_shadow_local_route_vocab(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            shadow = Path(temporary) / "forge"
+            shadow.mkdir()
+            (shadow / "__init__.py").write_text(
+                "raise AssertionError('shadow forge imported')\n", encoding="utf-8"
+            )
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "validate", str(Path(temporary))],
+                capture_output=True, text=True, check=False, cwd=ROOT,
+                env={**os.environ, "PYTHONPATH": temporary},
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("shadow forge imported", result.stderr)
+            self.assertEqual(json.loads(result.stdout)["issues"],
+                             ["journal.jsonl: I/O error"])
+
+    def test_run_monitor_from_linked_worktree_reads_main_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            main = Path(temporary) / "main"
+            linked = Path(temporary) / "linked"
+            self.assertEqual(init_quiet_repository(main, "-q").returncode, 0)
+            subprocess.run(["git", "-C", str(main), "-c", "user.name=Test",
+                            "-c", "user.email=test@example.invalid", "commit", "-q",
+                            "--allow-empty", "-m", "initial"], check=True)
+            subprocess.run(["git", "-C", str(main), "worktree", "add", "-q",
+                            "-b", "linked", str(linked)], check=True)
+            run_dir = self.make_run(main)
+            write_jsonl(
+                run_dir / "journal.jsonl", [{"kind": "run_started", "run_id": "run-active"}]
+            )
+            result = run_id_monitor(linked, "run-active", "--once")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_run_monitor_resolves_repository_with_bounded_common_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_run(root)
+            args = argparse.Namespace(log=None, run_id="run-active", repo=str(root))
+            with mock.patch.object(
+                monitor.route_config, "common_root", return_value=root
+            ) as resolve:
+                monitor.resolve_monitor_targets(args)
+            resolve.assert_called_once_with(root)
+
     def make_run(self, root: Path, name: str = "run-active") -> Path:
         run_dir = root / ".codex-orchestrator" / "runs" / name
         run_dir.mkdir(parents=True)
@@ -110,6 +160,51 @@ class MonitorTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["type"], "monitor_error")
         self.assertIn("run directory", payload["message"])
+
+    def test_new_execution_records_select_only_unfinished_streams(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = self.make_run(root, "new-run")
+            first, _ = self.add_execution(
+                run_dir,
+                events=[
+                    {"type": "thread.started", "thread_id": "new-first"},
+                    {"type": "turn.completed"},
+                ],
+            )
+            second, _ = self.add_execution(
+                run_dir,
+                agent="codex-review-01",
+                events=[
+                    {"type": "thread.started", "thread_id": "new-second"},
+                    {"type": "turn.completed"},
+                ],
+            )
+            records = []
+            for execution in (first, second):
+                records.append(
+                    {
+                        "kind": "execution_started",
+                        "run_id": "new-run",
+                        "agent": execution["agent"],
+                        "execution_id": execution["execution"],
+                        "events": execution["events"],
+                        "event_source": "exec",
+                    }
+                )
+            records.append(
+                {
+                    "kind": "execution_finished",
+                    "run_id": "new-run",
+                    "agent": second["agent"],
+                    "execution_id": second["execution"],
+                    "status": "complete",
+                }
+            )
+            write_jsonl(run_dir / "journal.jsonl", records)
+            result = run_id_monitor(root, "new-run", "--once")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["thread_id"], "new-first")
 
     def test_watches_all_inflight_executions_but_not_completed_ones(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -465,7 +560,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(strict_validation.returncode, 1, strict_validation.stderr)
         self.assertTrue(
             any(
-                "invalid JSON" in issue
+                "malformed JSON object" in issue
                 for issue in json.loads(strict_validation.stdout)["issues"]
             )
         )

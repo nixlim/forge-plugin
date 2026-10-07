@@ -18,27 +18,6 @@ from tests._launch_support import (
 
 CLI = load_cli("forge_launch_cli_tests")
 
-MUTATING_LAUNCH_WARNINGS = (
-    "forge: journal warning — this append makes a passed close impossible as "
-    "recorded: execution codex-implementer-01/execution-01 has no terminal "
-    "execution_result\n"
-    "forge: journal warning — this append makes a passed close impossible as "
-    "recorded: run closed as passed without a passing 'gate-1' verification "
-    "after the last mutating execution\n"
-    "forge: journal warning — this append makes a passed close impossible as "
-    "recorded: run closed as passed without a passing 'gate-2' verification "
-    "after the last mutating execution\n"
-    "forge: journal warning — this append makes a passed close impossible as "
-    "recorded: run closed as passed without a passing 'gate-3: review-final "
-    "verdict' verification after the last mutating execution\n"
-)
-PLAN_LAUNCH_WARNING = (
-    "forge: journal warning — this append makes a passed close impossible as "
-    "recorded: execution claude-plan-01/execution-02 has no terminal "
-    "execution_result\n"
-)
-
-
 class LaunchCLIParsingTests(LaunchLaneSupport, unittest.TestCase):
     def _dispatch(self, argv: list[str]) -> tuple[object, mock.Mock]:
         _options, remaining = CLI._extract_global_options(argv)
@@ -280,12 +259,12 @@ class LaunchCLIIntegrationTests(LaunchLaneSupport, unittest.TestCase):
         ):
             self._launch_and_collect(
                 "implementer",
-                expected_launch_stderr=MUTATING_LAUNCH_WARNINGS,
+                expected_launch_stderr="",
             )
             self._launch_and_collect(
-                "plan", expected_launch_stderr=PLAN_LAUNCH_WARNING
+                "plan", expected_launch_stderr=""
             )
-        results = [row for row in self.records() if row.get("type") == "execution_result"]
+        results = [row for row in self.records() if row.get("kind") == "execution_finished"]
         self.assertEqual([row["status"] for row in results], ["complete", "complete"])
         self.assertTrue((self.logs / "codex.argv.json").is_file())
         self.assertTrue((self.logs / "claude.argv.json").is_file())

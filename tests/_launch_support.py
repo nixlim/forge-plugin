@@ -9,21 +9,42 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 from tests._cli_loader import load_cli, package_module, patch_engine
+from tests._git_env import init_quiet_repository
 from tests._review_lane_support import install_fake_provider
-from tests._revision9_coord_constants import key
-from tests._revision9_coord_support import Revision9BuilderBatchSupport
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+from codex_orchestrator import journal  # noqa: E402
+
 STRIPPED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+MARKER_BINDING_CHANGES = {
+    "run_id": "different-run",
+    "agent": "codex-implementer-99",
+    "task": "task-99",
+    "execution": "execution-99",
+    "role": "plan",
+    "provider": "claude",
+    "model": "other-model",
+    "effort": "opaque-other",
+    "sandbox": "read-only",
+    "route_source": "plugin-default",
+    "route_sha256": "f" * 64,
+    "worktree": "/different/worktree",
+    "head": "f" * 40,
+    "argv_digest": "e" * 64,
+}
 CLI = load_cli("forge_launch_support_cli")
 ENGINE = package_module("engine")
 LAUNCH_LANE = importlib.import_module("forge_cli.engine._launch_lane")
@@ -200,14 +221,16 @@ def install_launch_provider(
     return path
 
 
-class LaunchLaneSupport(Revision9BuilderBatchSupport):
-    """Fixture repository, explicit providers, and direct typed-verb helpers."""
+class LaunchRepositorySupport:
+    """Fixture repository, explicit providers, and direct launch helpers."""
 
     run_id = "run-20260928-launch-test"
     task_id = "task-01"
 
     def setUp(self) -> None:
-        super().setUp()
+        self.temporary = tempfile.TemporaryDirectory(prefix="forge-launch-")
+        self.addCleanup(self.temporary.cleanup)
+        self.repo, self.head = self._new_repo("repo")
         self.scratch = Path(self.temporary.name).resolve(strict=True)
         self.bin_dir = self.scratch / "bin"
         self.logs = self.scratch / "logs"
@@ -236,6 +259,41 @@ class LaunchLaneSupport(Revision9BuilderBatchSupport):
         plugin_patch = mock.patch.object(RUNTIME, "PLUGIN_ROOT", ROOT)
         plugin_patch.start()
         self.addCleanup(plugin_patch.stop)
+
+    def _new_repo(self, name: str) -> tuple[Path, str]:
+        repo = Path(self.temporary.name) / name
+        init_quiet_repository(repo, "--quiet").check_returncode()
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=Forge Tests",
+             "-c", "user.email=forge-tests@example.invalid",
+             "-c", "commit.gpgsign=false", "commit", "--allow-empty",
+             "--quiet", "-m", "base"], check=True,
+        )
+        head = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        return repo, head
+
+    @contextmanager
+    def api_environment(self):
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            yield
+
+    def run_dir(self, repo: Path, run_id: str) -> Path:
+        return journal.run_directory(repo, run_id)
+
+    def open_run(self, repo: Path, run_id: str, label: str = "open") -> Any:
+        record = {"kind": "run_started", "run_id": run_id, "repository": str(repo),
+                  "intent": label, "actor": "forge-test"}
+        journal.append_run_record(repo, run_id, record)
+        return SimpleNamespace(records=[record])
+
+    def start_task(self, repo: Path, run_id: str, label: str = "task") -> Any:
+        record = {"kind": "task", "run_id": run_id, "task_id": self.task_id,
+                  "title": label, "scope": "launch tests", "status": "started"}
+        journal.append_run_record(repo, run_id, record)
+        return SimpleNamespace(records=[record])
 
     def _install_committed_launch_inputs(self) -> None:
         inputs = {
@@ -357,21 +415,12 @@ class LaunchLaneSupport(Revision9BuilderBatchSupport):
 
     def open_run_and_task(self, run_id: str | None = None) -> tuple[Any, Any]:
         selected = run_id or self.run_id
-        _batch, builders, _journal = RUNTIME._coordination_modules()
         with self.api_environment():
-            opened = builders.run_open(
-                self.repo, selected, idempotency_key=key(f"{selected}-open"),
-                goal="Exercise typed launch", scope=[f"scopes/{selected}/**"],
-                plugin_ref="forge-test-typed-launch",
-            )
-            task = builders.task_start(
-                self.repo, selected, idempotency_key=key(f"{selected}-task"),
-                task=self.task_id, goal="Exercise typed launch",
-                acceptance=["The focused behavior passes"],
-                files=[f"scopes/{selected}/example.py"],
-            )
+            opened = self.open_run(self.repo, selected)
+            task = self.start_task(self.repo, selected)
         return opened, task
 
+class LaunchLaneSupport(LaunchRepositorySupport):
     def ready_engine(
         self, run_id: str | None = None, *, open_task: bool = True
     ) -> Any:
@@ -388,13 +437,14 @@ class LaunchLaneSupport(Revision9BuilderBatchSupport):
 
     def records(self, run_id: str | None = None) -> list[dict[str, object]]:
         selected = run_id or self.run_id
-        _batch, _builders, journal = RUNTIME._coordination_modules()
-        return list(journal._scan_run(self.run_dir(self.repo, selected)).records)
+        return journal.read_journal(self.run_dir(self.repo, selected) / "journal.jsonl")[0]
 
     def execution_records(
         self, run_id: str | None = None
     ) -> list[dict[str, object]]:
-        return [record for record in self.records(run_id) if record.get("type") == "execution"]
+        return [dict(record, execution=record["execution_id"])
+                for record in self.records(run_id)
+                if record.get("kind") == "execution_started"]
 
     def attempt_dir(self, record: Mapping[str, object] | None = None) -> Path:
         selected = record or self.execution_records()[-1]

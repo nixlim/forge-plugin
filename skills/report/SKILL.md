@@ -1,71 +1,37 @@
 ---
 name: forge-report
-description: Author the final report from a completed orchestration run after its descriptive close check.
+description: Author a final run report from local execution logs, observed repository state, and chain evidence.
 ---
 
 # Report
 
-Use this skill only after orchestration work has finished. Do not start agents, continue tasks, or
-write an interim report here. Return to `${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/SKILL.md` or
-`${CLAUDE_PLUGIN_ROOT}/skills/workflow/SKILL.md` when more work is needed.
+Use this skill after the orchestration work is finished. Return to
+`${CLAUDE_PLUGIN_ROOT}/skills/workflow/SKILL.md` if checks or implementation remain.
 
-## Preconditions
+## Sources
 
-<!-- forge: modified from upstream — refuse reports until validation and committed archive are clean -->
-Confirm that:
-
-- `run_closed.validation` contains the complete descriptive validation result — the verbatim
-  pre-close `--gates` payload — including `profile: "gates"`;
-- every execution has a terminal execution result and every task is terminal;
-- `run_closed` is the final journal entry and contains `judgment: passed|blocked`;
-- a fresh rerun of the post-close `validate --gates` exits 0 and reports no issues;
-- `.forge/history/runs/<run-id>.md` exists in `HEAD` and has no unstaged or staged changes;
-- no further run work is planned.
-
-The report skill refuses to write `report.md` while the post-close `validate --gates` reports issues.
-Rerun that check rather than trusting an earlier result:
+Read the complete `journal.jsonl`, the exact prompts and handoffs, observed repository changes,
+and the relevant `.forge/chains/` state, events, gate outputs, review verdicts, approvals, and
+landing evidence. A `run_closed` record describes the reported outcome; it is not a judgment or
+permission check. `validate` checks record structure only:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" validate --gates \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" validate \
   .codex-orchestrator/runs/<run-id>
 ```
 
-Then set `ARCHIVE_PATH=.forge/history/runs/<run-id>.md` and require all three commands to succeed:
+Report validation issues honestly. Do not edit the journal to make the report look complete.
+Ground each claim in the right source: Git for delivered changes, observed checks and chain
+records for gates and approvals, prompt for assignment, handoff for agent claims, and the journal
+for chronology and decisions. Use raw events to resolve ambiguity. Surface missing or conflicting
+facts rather than infer a passing check.
 
-```bash
-git cat-file -e "HEAD:$ARCHIVE_PATH"
-git diff --quiet -- "$ARCHIVE_PATH"
-git diff --cached --quiet -- "$ARCHIVE_PATH"
-```
-
-If any archive command fails, refuse with exactly:
-
-```text
-forge: report refused — archive missing or uncommitted: .forge/history/runs/<run-id>.md
-```
-
-Do not treat the run as delivered and do not create or replace `report.md` unless all preconditions
-pass. If a condition is false, stop and return to orchestration. Never edit the journal merely to
-make the report look complete.
-
-Read the complete `journal.jsonl`, then ground each claim in its appropriate source:
-
-- actual delivery: final repository state relative to the `run_started` Git baseline;
-- Claude's checks: verification observations and referenced evidence;
-- assigned scope: exact prompts;
-- agent claims: exact handoffs;
-- lifecycle and chronology: journal entries;
-- ambiguous process activity: raw events or direct observation;
-- decisions and final judgment: decision and `run_closed` entries.
-
-The journal is working memory, not independent evidence. Use raw events only for ambiguity or
-debugging. Surface conflicts and missing facts; do not silently repair them.
+Treat a handoff as a claim until it has been checked against the repository and observed results.
 
 ## Required Report Structure
 
-Create the final `report.md` once, after closure, as a complete Claude-authored report using exactly
-these five top-level sections in this order. Only replace an existing final report when explicitly
-asked to correct or regenerate it.
+Write the local `report.md` with exactly these five top-level sections in order. Replace an
+existing final report only when asked to correct or regenerate it.
 
 ```markdown
 # Report
@@ -81,49 +47,31 @@ asked to correct or regenerate it.
 ## Final Results
 ```
 
-Do not add other `##` sections.
-
 ### Summary
 
-State the original `run_started.goal`, overall result, `run_closed.judgment`, and the main reason for
-that outcome. Mention unresolved work plainly and keep this section concise.
+State the original intent, delivered result, and main reason for that result. Name unresolved work.
 
 ### Changes
 
-Compare the final repository state with `run_started.repo_head` and `run_started.repo_status`, then
-connect material delivered changes to their tasks or agents. Do not attribute initially dirty paths
-without supporting evidence. Cite important repository files and evidence when useful. Distinguish
-complete, blocked, failed, and intentionally unchanged work. Do not reproduce the journal line by
-line or treat `execution_result.files_changed` as mechanical attribution.
+Compare final repository state with the observed starting Git baseline. Connect material changes
+to tasks and agents where the evidence supports it. Do not attribute initially dirty paths
+without evidence or treat an agent's files-changed claim as mechanical attribution.
 
 ### Orchestration Graph
 
-Create a readable Mermaid `flowchart TD` from journal chronology, grounded in handoffs, verification
-evidence, repository changes, and raw events only when needed. Use this top-to-bottom shape:
-
-- `A_CLAUDE{{"Claude Code<br/>planner · orchestrator"}}`;
-- separate non-empty Claude-agent and Codex-agent subgraphs;
-- material reviews, checks, decisions, and produced deliverables;
-- final judgment and state, including meaningful fix/recheck loops.
-
-Use one node per named agent, ordered by first execution. Include its task, recorded model/effort,
-main result, and terminal status; combine that agent's resumed executions in its node. Keep a linear
-run minimal and do not create empty subgraphs.
-Label edges concisely (`assign`, `review`, `verified`, `resolution`, `consensus`,
-`claude_decision`, `produced`, `fix required`, `recheck`, `accepted`). Show only evidence that affected
-a decision or final judgment. Combine routine passing checks and group related decisions, but keep
-Claude decisions, user actions, and unresolved outcomes distinct. Mark reconstructed facts as
-`inferred`; never infer verification results, decision outcomes, judgments, or terminal status.
+Create a readable Mermaid `flowchart TD` from execution and decision chronology. Include Claude
+and Codex agents, material checks, review and fix loops, and delivered outcomes. Name each agent's
+task, recorded model and effort, main result, and observed completion status. Mark reconstructed
+facts `inferred`; never infer a passing check, verdict, or terminal execution status.
 
 ### Consensus
 
-Summarize consequential `decision` entries with outcome, basis, resolution, and risk; state when no
-decision was required. Keep consensus, Claude decisions, user actions, accepted risks, and unresolved
-outcomes distinct. Put missing basis or residual-risk treatment under Risks / Follow-ups.
+Summarize consequential `decision` entries, user actions, accepted risks, and unresolved outcomes.
+Say when no decision was required.
 
 ### Final Results
 
-Use these subsections in this order:
+Use these subsections in order:
 
 ```markdown
 ### Gate Result
@@ -131,21 +79,17 @@ Use these subsections in this order:
 ### Risks / Follow-ups
 ```
 
-Under `Gate Result`, report `run_closed.judgment`, its summary, and the recorded validation issues
-and warnings. Validation is an omission check, not evidence of correctness or the source of the
-judgment. This is a human-facing heading, not a separate journal entry. Do not recompute or soften
-Claude's recorded judgment.
+Under `Gate Result`, report each required gate and its actual outcome from chain evidence or the
+merge skill's observed commands. Include candidate identity, any in-lock reruns, review verdict,
+approval, pushed SHA, and cleanup outcome where applicable. A journal reference alone cannot
+establish a gate result.
 
-Under `Risks / Follow-ups`, list unresolved checks, blocked or failed work, user actions, accepted
-risks, and concrete next steps. Write `None recorded.` when nothing remains.
-
-At the end of Final Results, include available Claude Code and Codex CLI versions from `run_started`
-in one compact `Run metadata` bullet. Omit unavailable values. Do not add protocol/schema versions
-or a Reproducibility section.
+Under `Risks / Follow-ups`, list failed or missing checks, blocked work, user actions, accepted
+risks, and concrete next steps. Write `None recorded.` if nothing remains. Include available tool
+versions as one compact `Run metadata` bullet when observed; omit unavailable values.
 
 ## Final Check
 
-Reread the finished report. Confirm that the five required `##` sections appear once and in order,
-the Mermaid block is readable, every material claim is grounded, and Final Results faithfully
-reflects `run_closed.judgment`, validation output, risks, and follow-ups. Reconcile every numeric
-total against the journal entries or handoffs it summarizes.
+Confirm that the five required sections appear once and in order, the graph is readable, and
+material claims match Git, observed checks, and chain evidence. Reconcile numeric totals with the
+underlying records or handoffs.

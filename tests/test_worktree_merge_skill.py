@@ -15,18 +15,12 @@ from tests._git_env import init_quiet_repository, quiet_repository
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = (ROOT / "skills/worktree-merge/SKILL.md").read_text(encoding="utf-8")
-WORKFLOW = (ROOT / "skills/workflow/SKILL.md").read_text(encoding="utf-8")
 RENAME_FLAGS = (" --no-renames ", " --no-ext-diff ", " --no-textconv ")
 FULL_PATCH_COMMANDS = (
     'git diff "origin/${DEFAULT_BRANCH}...HEAD"',
     'git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"',
     'git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"',
 )
-WORKFLOW_SETUP_GUARDS = (
-    'REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || {\n  echo "forge: repository root is unavailable — cleanup refused" >&2\n  exit 2\n}',
-    'git -C "$REPO" fetch origin "$DEFERRED_DEFAULT_BRANCH" --quiet || {\n  echo "forge: default-branch fetch failed — cleanup refused" >&2\n  exit 2\n}',
-)
-WORKFLOW_FIRST_ANCESTRY_GUARD = 'git -C "$REPO" merge-base --is-ancestor \\\n  "$DEFERRED_PUSHED_HEAD" "origin/${DEFERRED_DEFAULT_BRANCH}" || {\n  echo "forge: pushed candidate is not contained in origin/${DEFERRED_DEFAULT_BRANCH} — cleanup refused" >&2\n  exit 2\n}'
 GIT_TEST_ENV = {
     key: value for key, value in os.environ.items() if not key.startswith("GIT_")
 }
@@ -79,16 +73,13 @@ def rename_listing_mutants(text: str) -> tuple[tuple[str, str], ...]:
     return removed_flags + added_flags
 
 
-def assert_deferred_cleanup_contract(
-    case: unittest.TestCase, skill: str, workflow: str
-) -> None:
-    cleanup = skill.split("## Cleanup after successful push", maxsplit=1)[1].split(
-        "## Record authority and report", maxsplit=1
+def assert_cleanup_contract(case: unittest.TestCase, skill: str) -> None:
+    cleanup = skill.split("## Cleanup after successful push", 1)[1].split(
+        "## Record authority and report", 1
     )[0]
-    skill_ordered = (
+    ordered = (
         'git fetch origin "$DEFAULT_BRANCH" --quiet || {',
         'git merge-base --is-ancestor "$PUSHED_HEAD"',
-        'codex_orch_tools.py" worktree-check',
         'CURRENT_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q',
         'WORKTREE_BRANCH="$(git -C "$WORKTREE_DIR" symbolic-ref --quiet HEAD)"',
         '[ "$WORKTREE_BRANCH" = "refs/heads/${BRANCH}" ]',
@@ -98,6 +89,7 @@ def assert_deferred_cleanup_contract(
         '[ -z "$WORKTREE_STATUS" ]',
         '[ "$CURRENT_BRANCH_TIP" != "$PUSHED_HEAD" ]',
         '"$CURRENT_BRANCH_TIP" "origin/${DEFAULT_BRANCH}"',
+        'cd "$MAIN_WORKTREE" || {',
         'git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_DIR" || {',
         'DELETE_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q',
         '[ "$DELETE_BRANCH_TIP" = "$CURRENT_BRANCH_TIP" ]',
@@ -105,107 +97,13 @@ def assert_deferred_cleanup_contract(
         'git -C "$MAIN_WORKTREE" update-ref -d',
         '"refs/heads/$BRANCH" "$DELETE_BRANCH_TIP"',
     )
-    for fragment in skill_ordered:
-        case.assertEqual(cleanup.count(fragment), 1)
-    case.assertEqual(
-        [cleanup.index(fragment) for fragment in skill_ordered],
-        sorted(cleanup.index(fragment) for fragment in skill_ordered),
-    )
-    case.assertIn('--repo "$MAIN_WORKTREE" --worktree "$WORKTREE_DIR"', cleanup)
-    case.assertNotIn('git branch -D "', cleanup)
-
-    for marker in ('  0)\n', '  1)\n', '  2)\n', '  *)\n'):
-        case.assertIn(marker, cleanup)
-    success = cleanup.split('  0)\n', maxsplit=1)[1].split(
-        '  1)\n', maxsplit=1
-    )[0]
-    deferred = cleanup.split('  1)\n', maxsplit=1)[1].split(
-        '  2)\n', maxsplit=1
-    )[0]
-    unreadable = cleanup.split('  2)\n', maxsplit=1)[1].split(
-        '  *)\n', maxsplit=1
-    )[0]
-    case.assertIn(
-        'git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_DIR"', success
-    )
-    case.assertIn('git -C "$MAIN_WORKTREE" update-ref -d', success)
-    case.assertIn('--porcelain=v1 --untracked-files=all', success)
-    case.assertIn('CLEANUP_OUTCOME="cleanup deferred"', deferred)
-    case.assertNotIn("worktree remove", deferred)
-    case.assertNotIn("update-ref -d", deferred)
-    case.assertIn("exit 2", unreadable)
-    case.assertNotIn("git worktree remove", unreadable)
-    case.assertNotIn("update-ref -d", unreadable)
-    case.assertIn("does not change the successful merge outcome", cleanup)
-    case.assertIn("Never use `branch -D`", cleanup)
-
-    ordered = ("Before closing or removing a deferred worktree",
-               "Require the commit to succeed before proceeding.",
-               "13. Only after the archive commit",
-               "14. After the report succeeds, re-run deferred cleanup")
     for fragment in ordered:
-        case.assertIn(fragment, workflow)
-    positions = [workflow.index(fragment) for fragment in ordered]
-    case.assertEqual(positions, sorted(positions))
-    retry_contract = workflow[positions[-1] : workflow.index(
-        "## Machine Moves Are Run Boundaries"
-    )]
-    workflow_ordered = (
-        *WORKFLOW_SETUP_GUARDS,
-        WORKFLOW_FIRST_ANCESTRY_GUARD,
-        'codex_orch_tools.py" worktree-check',
-        'DEFERRED_CURRENT_BRANCH_TIP="$(git -C "$REPO" rev-parse --verify -q',
-        'DEFERRED_WORKTREE_BRANCH="$(git -C "$DEFERRED_WORKTREE"',
-        '[ "$DEFERRED_WORKTREE_BRANCH" = "refs/heads/${DEFERRED_BRANCH}" ]',
-        'DEFERRED_WORKTREE_HEAD="$(git -C "$DEFERRED_WORKTREE"',
-        '[ "$DEFERRED_WORKTREE_HEAD" = "$DEFERRED_CURRENT_BRANCH_TIP" ]',
-        'DEFERRED_WORKTREE_STATUS="$(git -C "$DEFERRED_WORKTREE" status',
-        '[ -z "$DEFERRED_WORKTREE_STATUS" ]',
-        '[ "$DEFERRED_CURRENT_BRANCH_TIP" != "$DEFERRED_PUSHED_HEAD" ]',
-        '"$DEFERRED_CURRENT_BRANCH_TIP" "origin/${DEFERRED_DEFAULT_BRANCH}"',
-        'git -C "$REPO" worktree remove "$DEFERRED_WORKTREE"',
-        'DEFERRED_DELETE_BRANCH_TIP="$(git -C "$REPO" rev-parse --verify -q',
-        '[ "$DEFERRED_DELETE_BRANCH_TIP" = "$DEFERRED_CURRENT_BRANCH_TIP" ]',
-        '"$DEFERRED_DELETE_BRANCH_TIP" "origin/${DEFERRED_DEFAULT_BRANCH}"',
-        'git -C "$REPO" update-ref -d',
-        '"refs/heads/$DEFERRED_BRANCH" "$DEFERRED_DELETE_BRANCH_TIP"',
-    )
-    for fragment in (
-        'DEFERRED_WORKTREE="<absolute-worktree-path>"',
-        'DEFERRED_BRANCH="<branch>"',
-        'DEFERRED_PUSHED_HEAD="<pushed-full-sha>"',
-        'DEFERRED_DEFAULT_BRANCH="<default-branch>"',
-        '--repo "$REPO" --worktree "$DEFERRED_WORKTREE"',
-        'DEFERRED_CLEANUP_OUTCOME="cleanup deferred"',
-        'DEFERRED_RETRY_STATUS=0\n(',
-        ') || DEFERRED_RETRY_STATUS=$?',
-        *workflow_ordered,
-    ):
-        case.assertIn(fragment, retry_contract)
-    case.assertEqual(
-        [retry_contract.index(fragment) for fragment in workflow_ordered],
-        sorted(retry_contract.index(fragment) for fragment in workflow_ordered),
-    )
-    case.assertNotIn('git -C "$REPO" branch -D "', retry_contract)
-    case.assertNotIn("exit 1", retry_contract)
-    case.assertIn("do not reuse the main worktree's new archive-commit `HEAD`", retry_contract)
-    normalized_retry = " ".join(retry_contract.split())
-    for statement in (
-        "Retry every deferred worktree independently",
-        "record and report every `DEFERRED_RETRY_STATUS`",
-        "continue after any refusal or failure",
-        "retain that worktree and branch",
-        "status 1 means the guard deferred cleanup",
-        "continue to post-report best-effort learning",
-    ):
-        case.assertIn(statement, normalized_retry)
-    normalized = " ".join(workflow.split())
-    for statement in (
-        "copy every FR-017-cited artifact that lives in a worktree into `<run>/evidence/`",
-        "cleanup guard reads original journal citations, not citation-correction decisions",
-        "protecting later validation only—it does not change the guard's decision",
-    ):
-        case.assertIn(statement, normalized)
+        case.assertEqual(cleanup.count(fragment), 1)
+    case.assertEqual([cleanup.index(x) for x in ordered], sorted(cleanup.index(x) for x in ordered))
+    case.assertNotIn('worktree-check', cleanup)
+    case.assertNotIn('git branch -D "', cleanup)
+    case.assertIn('Never use `branch -D`', cleanup)
+    case.assertIn('No failed merge path removes a worktree', cleanup)
 
 
 def run_git(
@@ -306,60 +204,23 @@ def apply_cleanup_scenario(fixture: CleanupFixture, scenario: str) -> str:
         (fixture.worktree / "topic.txt").write_text("modified\n", encoding="utf-8")
     elif scenario == "detached":
         run_git(fixture.worktree, "checkout", "--detach", "--quiet")
-    elif scenario in {"dependent", "guard-refusal"}:
-        run_id = "run-cleanup-block"
-        run_dir = fixture.main / ".codex-orchestrator" / "runs" / run_id
-        run_dir.mkdir(parents=True)
-        opening = {"type": "run_started", "run_id": run_id,
-                   "repo": str(fixture.worktree)}
-        payload = "{malformed\n" if scenario == "guard-refusal" else json.dumps(opening) + "\n"
-        (run_dir / "journal.jsonl").write_text(payload, encoding="utf-8")
-        (run_dir / "owner").write_text(
-            "pid: 1\nhost: forge-tests\nstarted_at: 2026-10-04T00:00:00Z\n"
-        )
     elif scenario != "clean":
         raise AssertionError(f"unknown cleanup scenario: {scenario}")
     return run_git(fixture.main, "rev-parse", "refs/heads/topic").stdout.strip()
 
 
-def extracted_cleanup_block(kind: str, skill: str, workflow: str) -> str:
-    if kind == "merge":
-        section = skill.split("## Cleanup after successful push", 1)[1].split(
-            "## Record authority and report", 1
-        )[0]
-    elif kind == "workflow":
-        section = workflow.split(
-            "14. After the report succeeds, re-run deferred cleanup", 1
-        )[1].split("## Machine Moves Are Run Boundaries", 1)[0]
-    else:
-        raise AssertionError(f"unknown cleanup block: {kind}")
+def extracted_cleanup_block(skill: str) -> str:
+    section = skill.split("## Cleanup after successful push", 1)[1].split(
+        "## Record authority and report", 1
+    )[0]
     blocks = re.findall(r"```bash\n(.*?)```", section, flags=re.DOTALL)
     if len(blocks) != 1:
-        raise AssertionError(f"expected one {kind} cleanup block")
+        raise AssertionError("expected one merge cleanup block")
     return blocks[0]
 
 
-def rendered_cleanup_block(kind: str, skill: str, workflow: str) -> str:
-    block = extracted_cleanup_block(kind, skill, workflow)
-    if kind == "workflow":
-        replacements = {
-            'DEFERRED_WORKTREE="<absolute-worktree-path>"': (
-                'DEFERRED_WORKTREE="$TEST_WORKTREE"'),
-            'DEFERRED_BRANCH="<branch>"': 'DEFERRED_BRANCH="topic"',
-            'DEFERRED_PUSHED_HEAD="<pushed-full-sha>"': (
-                'DEFERRED_PUSHED_HEAD="$TEST_PUSHED_HEAD"'),
-            'DEFERRED_DEFAULT_BRANCH="<default-branch>"': 'DEFERRED_DEFAULT_BRANCH="main"',
-        }
-        for placeholder, value in replacements.items():
-            if block.count(placeholder) != 1:
-                raise AssertionError(f"cleanup placeholder drifted: {placeholder}")
-            block = block.replace(placeholder, value, 1)
-        block += '\nexit "$DEFERRED_RETRY_STATUS"\n'
-    return block
-
-
 def run_cleanup_case(
-    kind: str, scenario: str, *, skill: str = SKILL, workflow: str = WORKFLOW
+    scenario: str, *, skill: str = SKILL
 ) -> CleanupOutcome:
     with tempfile.TemporaryDirectory(prefix="forge-cleanup-exec-") as scratch:
         root = Path(scratch)
@@ -375,10 +236,10 @@ def run_cleanup_case(
             TEST_WORKTREE=str(fixture.worktree),
             TEST_PUSHED_HEAD=fixture.pushed_head,
         )
-        script = rendered_cleanup_block(kind, skill, workflow)
+        script = extracted_cleanup_block(skill)
         process = subprocess.run(
             ["bash", "-c", script],
-            cwd=fixture.worktree if kind == "merge" else fixture.main,
+            cwd=fixture.worktree,
             env=environment,
             check=False,
             capture_output=True,
@@ -411,20 +272,15 @@ def weaken_refusal_exit(text: str, diagnostic: str) -> str:
 def assert_cleanup_refused(
     case: unittest.TestCase,
     outcome: CleanupOutcome,
-    kind: str,
     scenario: str,
 ) -> None:
     if scenario == "unpushed":
-        diagnostic = (
-            "forge: pushed candidate is not contained in origin/main — cleanup refused"
-            if kind == "merge"
-            else "forge: current branch tip moved outside origin/main — cleanup refused"
-        )
+        diagnostic = "forge: pushed candidate is not contained in origin/main — cleanup refused"
     elif scenario in {"untracked", "modified"}:
         diagnostic = "forge: worktree is not clean — cleanup refused"
     else:
         diagnostic = "forge: worktree branch is unavailable — cleanup refused"
-    case.assertEqual(outcome.process.returncode, 1 if kind == "merge" else 2,
+    case.assertEqual(outcome.process.returncode, 1,
                      outcome.process.stderr)
     case.assertEqual(outcome.process.stderr, diagnostic + "\n")
     case.assertTrue(outcome.worktree_exists)
@@ -530,20 +386,11 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("Never approve a control-class merge autonomously", SKILL)
         self.assertIn("Use `CANDIDATE_HEAD` as the Gate 4\ncandidate identity", SKILL)
 
-    def test_dm001_gate_records_and_fixed_review_diff(self) -> None:
+    def test_dm001_chain_evidence_and_fixed_review_diff(self) -> None:
         self.assertIn('git diff "${REVIEWED_BASE}...${CANDIDATE_HEAD}"', SKILL)
         self.assertIn("exact, unmodified diff", SKILL)
-        self.assertIn("explicitly identified orchestration run", SKILL)
-        self.assertIn("including every in-lock re-run", SKILL)
-        self.assertIn("exactly `gate-1: `", SKILL)
-        self.assertIn("exactly `gate-2: `", SKILL)
-        self.assertIn("exactly\n`gate-3: review-final verdict`", SKILL)
+        self.assertNotIn("gate-3: review-final verdict", SKILL)
         flattened = " ".join(SKILL.split())
-        self.assertIn(
-            "resolved full-SHA `${REVIEWED_BASE}...${CANDIDATE_HEAD}` range",
-            flattened,
-        )
-        self.assertIn("`${INTEGRATED_BASE}...${INTEGRATED_HEAD}` range", SKILL)
         self.assertIn('git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"', SKILL)
         self.assertIn("wait for explicit user approval naming that exact SHA", flattened)
         self.assertIn('require `git rev-parse HEAD` to equal `AUTHORIZED_HEAD`', SKILL)
@@ -920,119 +767,49 @@ class WorktreeMergeSkillTests(unittest.TestCase):
         self.assertIn("agent handoff and claimed gate result as a claim", SKILL)
         self.assertIn("integration target, not in the agent's worktree", SKILL)
 
-    def test_unarchived_run_defers_cleanup_and_static_mutations_fail(self) -> None:
-        assert_deferred_cleanup_contract(self, SKILL, WORKFLOW)
-        skill_controls = (
+    def test_cleanup_proofs_survive_static_mutation(self) -> None:
+        assert_cleanup_contract(self, SKILL)
+        controls = (
             'git fetch origin "$DEFAULT_BRANCH" --quiet || {',
             'git merge-base --is-ancestor "$PUSHED_HEAD"',
-            'codex_orch_tools.py" worktree-check',
-            'CURRENT_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q',
             '[ "$WORKTREE_BRANCH" = "refs/heads/${BRANCH}" ]',
             '[ "$WORKTREE_HEAD" = "$CURRENT_BRANCH_TIP" ]',
-            'WORKTREE_STATUS="$(git -C "$WORKTREE_DIR" status',
             '[ -z "$WORKTREE_STATUS" ]',
-            '[ "$CURRENT_BRANCH_TIP" != "$PUSHED_HEAD" ]',
-            '"$CURRENT_BRANCH_TIP" "origin/${DEFAULT_BRANCH}"',
-            'CLEANUP_OUTCOME="cleanup deferred"',
-            '  2)\n    exit 2',
             'git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_DIR" || {',
             '[ "$DELETE_BRANCH_TIP" = "$CURRENT_BRANCH_TIP" ]',
-            '"$DELETE_BRANCH_TIP" "origin/${DEFAULT_BRANCH}"',
             'git -C "$MAIN_WORKTREE" update-ref -d',
             '"refs/heads/$BRANCH" "$DELETE_BRANCH_TIP"',
-            "Never use `branch -D`",
-            "does not change the successful merge outcome",
+            'cd "$MAIN_WORKTREE" || {',
         )
-        for fragment in skill_controls:
-            with self.subTest(disabled=fragment):
-                mutated = SKILL.replace(fragment, "DISABLED_CONTROL", 1)
-                self.assertEqual(mutated.count(fragment), SKILL.count(fragment) - 1)
-                with self.assertRaises(AssertionError):
-                    assert_deferred_cleanup_contract(self, mutated, WORKFLOW)
+        for fragment in controls:
+            with self.subTest(disabled=fragment), self.assertRaises(AssertionError):
+                assert_cleanup_contract(self, SKILL.replace(fragment, "DISABLED_CONTROL", 1))
 
-        workflow_controls = (
-            "Require the commit to succeed before proceeding.",
-            "13. Only after the archive commit",
-            "14. After the report succeeds, re-run deferred cleanup",
-            'DEFERRED_PUSHED_HEAD="<pushed-full-sha>"',
-            'DEFERRED_RETRY_STATUS=0\n(',
-            *WORKFLOW_SETUP_GUARDS,
-            WORKFLOW_FIRST_ANCESTRY_GUARD,
-            'codex_orch_tools.py" worktree-check',
-            'DEFERRED_CURRENT_BRANCH_TIP="$(git -C "$REPO" rev-parse --verify -q',
-            '[ "$DEFERRED_WORKTREE_BRANCH" = "refs/heads/${DEFERRED_BRANCH}" ]',
-            '[ "$DEFERRED_WORKTREE_HEAD" = "$DEFERRED_CURRENT_BRANCH_TIP" ]',
-            'DEFERRED_WORKTREE_STATUS="$(git -C "$DEFERRED_WORKTREE" status',
-            '[ -z "$DEFERRED_WORKTREE_STATUS" ]',
-            '[ "$DEFERRED_CURRENT_BRANCH_TIP" != "$DEFERRED_PUSHED_HEAD" ]',
-            '"$DEFERRED_CURRENT_BRANCH_TIP" "origin/${DEFERRED_DEFAULT_BRANCH}"',
-            'git -C "$REPO" worktree remove "$DEFERRED_WORKTREE"',
-            '[ "$DEFERRED_DELETE_BRANCH_TIP" = "$DEFERRED_CURRENT_BRANCH_TIP" ]',
-            '"$DEFERRED_DELETE_BRANCH_TIP" "origin/${DEFERRED_DEFAULT_BRANCH}"',
-            'git -C "$REPO" update-ref -d',
-            '"refs/heads/$DEFERRED_BRANCH" "$DEFERRED_DELETE_BRANCH_TIP"',
-            ') || DEFERRED_RETRY_STATUS=$?',
-            "Retry every deferred worktree independently",
-            "continue after any refusal or failure",
-            "continue to\n    post-report best-effort learning",
-            "copy every FR-017-cited artifact that lives in a",
-            "cleanup guard reads original journal citations",
-            "does not change the guard's decision",
-            "status 1 means the guard deferred cleanup",
-        )
-        for fragment in workflow_controls:
-            with self.subTest(disabled=fragment):
-                mutated = WORKFLOW.replace(fragment, "DISABLED_CONTROL", 1)
-                self.assertEqual(mutated.count(fragment), WORKFLOW.count(fragment) - 1)
-                with self.assertRaises(AssertionError):
-                    assert_deferred_cleanup_contract(self, SKILL, mutated)
-        for guard in (*WORKFLOW_SETUP_GUARDS, WORKFLOW_FIRST_ANCESTRY_GUARD):
-            weakened = WORKFLOW.replace(
-                guard, guard.replace("exit 2", "true", 1), 1
-            )
-            with self.subTest(weakened=guard), self.assertRaises(AssertionError):
-                assert_deferred_cleanup_contract(self, SKILL, weakened)
-
-    def test_cleanup_blocks_execute_in_scratch_repositories(self) -> None:
-        for kind in ("merge", "workflow"):
-            with self.subTest(block=kind, scenario="clean"):
-                clean = run_cleanup_case(kind, "clean")
-                self.assertEqual(clean.process.returncode, 0, clean.process.stderr)
-                self.assertFalse(clean.worktree_exists)
-                self.assertIsNone(clean.branch_tip)
-            for scenario in ("unpushed", "untracked", "modified", "detached"):
-                with self.subTest(block=kind, scenario=scenario):
-                    assert_cleanup_refused(
-                        self, run_cleanup_case(kind, scenario), kind, scenario
-                    )
+    def test_cleanup_block_executes_in_scratch_repositories(self) -> None:
+        clean = run_cleanup_case("clean")
+        self.assertEqual(clean.process.returncode, 0, clean.process.stderr)
+        self.assertFalse(clean.worktree_exists)
+        self.assertIsNone(clean.branch_tip)
+        for scenario in ("unpushed", "untracked", "modified", "detached"):
+            with self.subTest(scenario=scenario):
+                assert_cleanup_refused(self, run_cleanup_case(scenario), scenario)
 
     def test_cleanup_refusal_exit_mutations_destroy_preservation(self) -> None:
         cases = (
-            ("merge", "unpushed", "pushed candidate is not contained in"),
-            ("merge", "modified", "worktree is not clean"),
-            ("merge", "detached", "worktree branch is unavailable"),
-            ("workflow", "unpushed", "current branch tip moved outside"),
-            ("workflow", "modified", "worktree is not clean"),
-            ("workflow", "detached", "worktree branch is unavailable"),
+            ("unpushed", "pushed candidate is not contained in"),
+            ("modified", "worktree is not clean"),
+            ("detached", "worktree branch is unavailable"),
         )
-        for kind, scenario, phrase in cases:
-            source = SKILL if kind == "merge" else WORKFLOW
+        for scenario, phrase in cases:
             diagnostic = next(
                 line.split('echo "', 1)[1].split('" >&2', 1)[0]
-                for line in source.splitlines()
+                for line in SKILL.splitlines()
                 if phrase in line and 'echo "' in line
             )
-            mutant = weaken_refusal_exit(source, diagnostic)
-            outcome = run_cleanup_case(
-                kind,
-                scenario,
-                skill=mutant if kind == "merge" else SKILL,
-                workflow=mutant if kind == "workflow" else WORKFLOW,
-            )
-            with self.subTest(block=kind, scenario=scenario), self.assertRaises(
-                AssertionError
-            ):
-                assert_cleanup_refused(self, outcome, kind, scenario)
+            mutant = weaken_refusal_exit(SKILL, diagnostic)
+            outcome = run_cleanup_case(scenario, skill=mutant)
+            with self.subTest(scenario=scenario), self.assertRaises(AssertionError):
+                assert_cleanup_refused(self, outcome, scenario)
 
     def test_name_only_listings_disable_rename_detection(self) -> None:
         assert_rename_listing_contract(self, SKILL)

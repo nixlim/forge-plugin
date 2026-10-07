@@ -1,7 +1,4 @@
 {
- "scripts/codex_orchestrator/batch.py": 4522,
- "scripts/codex_orchestrator/builders.py": 9431,
- "scripts/codex_orchestrator/journal.py": 8261,
  "scripts/forge/forge_cli/candidate.py": 1195,
  "scripts/forge/forge_cli/chain_core/_commit_chain.py": 1847,
  "scripts/forge/forge_cli/chain_core/_merge_chain.py": 1902,
@@ -28,7 +25,5 @@
  "tests/test_fresh_reviewer_evals.py": 2016,
  "tests/test_governance_scripts.py": 1307,
  "tests/test_installer.py": 1446,
- "tests/test_mutation_runner.py": 1537,
- "tests/test_revision9_coordination.py": 4931,
- "tests/test_validation.py": 1599
+ "tests/test_mutation_runner.py": 1048
 }

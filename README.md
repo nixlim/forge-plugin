@@ -10,9 +10,9 @@ the system exists to test claims rather than to produce more of them.
 
 It merges two systems — **forge** (gate chains, an adversarial review
 constitution, worktree discipline, a kill-switch, eval regressions) and
-**codex-orchestrator** (durable journal-based orchestration of headless agents) —
+**codex-orchestrator** (append-only execution logging and headless-agent tools) —
 into one arrangement for the **Claude + Codex pair**. The Claude main session
-orchestrates and verifies; fresh agents implement and review on frozen routes. The
+orchestrates and verifies; fresh agents implement and review on routes resolved for each execution. The
 shipped defaults use Codex for implementation and first-pass review and Claude for
 the binding verdict. Support for other harnesses is deliberately out of scope.
 
@@ -87,7 +87,7 @@ seven skills:
 | `/forge:init` | Install or refresh the per-repo layer (region file, AGENTS.md splice, `.codex/`, evals) |
 | `/forge:workflow` | Run a full orchestration lifecycle (plan → tasks → close → report) |
 | `/forge:orchestrate` | One focused Codex-agent execution, review, or verification cycle |
-| `/forge:report` | Author the final report after a gated close |
+| `/forge:report` | Author the final report from the run log and chain evidence |
 | `/forge:commit` | The five-step fail-closed commit gate chain |
 | `/forge:worktree-merge` | The four-gate merge chain with locked-rebase reintegration |
 | `/forge:drift` | Mechanical drift sensing, then an operator-invoked periodic semantic review |
@@ -246,8 +246,7 @@ inside one cell: each module is its own unittest process, pulled longest-first b
 300 seconds; both guards are no-ops where those paths do not exist. Measured on the
 shared twelve-core host at load 3 to 5: 102 modules, 2,031 tests, 335 to 350 seconds
 wall; it is not a promised speedup. A candidate whose every classified path is
-docs-class records a `gate-1` skip instead of running the cell only outside a run
-(Revision 18: a run-bound chain runs Gate 1); the docs-contract stack validation
+docs-class records a `gate-1` skip instead of running the cell; the docs-contract stack validation
 still runs the prose-contract modules for it.
 
 The Python entry point `scripts/forge/cli.py` is a compatibility shim over the

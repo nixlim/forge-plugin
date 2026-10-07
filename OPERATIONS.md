@@ -49,16 +49,15 @@ units may be reintegrated incrementally; the diagram groups delivery for readabi
 | Actor | Responsibility | Boundary |
 |---|---|---|
 | User/operator | Supplies goals, resolves consequential choices, approves control changes, and controls halts | Approval must identify the actual reviewed candidate |
-| Claude main session | Plans, owns the run journal and worktrees, verifies evidence, coordinates gates, and reintegrates | An agent's handoff does not substitute for observed verification |
-| Fresh routed implementer (shipped default Codex) | Implements an assigned task in its dedicated worktree | Starts only through `forge launch` on the run's frozen route; may commit through Forge in its own worktree, but must not push or operate on another branch |
-| Fresh routed planner (shipped default Codex) | Produces a bounded plan for one run task | Starts only through `forge launch` on the run's frozen route and remains read-only |
+| Claude main session | Plans, records the run and manages worktrees, verifies evidence, coordinates gates, and reintegrates | An agent's handoff does not substitute for observed verification |
+| Fresh routed implementer (shipped default Codex) | Implements an assigned task in its dedicated worktree | Starts only through `forge launch` on its resolved route; may commit through Forge in its own worktree, but must not push or operate on another branch |
+| Fresh routed planner (shipped default Codex) | Produces a bounded plan for one run task | Starts only through `forge launch` on its resolved route and remains read-only |
 | Fresh first-pass reviewer (shipped default Codex) | Independently inspects the assigned candidate | Uses a separate session from the author; Codex is OS-sandboxed read-only, while Claude is instruction-bounded and execution-capable |
 | `review-final` (resolved route; shipped default Claude) | Gives the binding final PASS/BLOCK where required | Must not edit; a Claude reviewer can execute checks and its no-write boundary is instruction-based, while a Codex reviewer runs read-only |
 | Forge scripts and CLI | Enforce mechanical preconditions, execute bounded checks, record evidence, and reject invalid transitions | They do not replace human approval or semantic review |
 
 The shipped defaults route implementation to Codex `gpt-5.6-sol` with `ultra` effort
-and first-pass review and planning to Codex `gpt-5.6-sol` with `high` effort. A run
-freezes the resolved provider, model, and effort for each role; typed launches and
+and first-pass review and planning to Codex `gpt-5.6-sol` with `high` effort. Each execution resolves its provider, model, and effort when launched; typed launches and
 engine reviews record the route actually used. These are controlled routing values,
 not runtime cost suggestions. Consult the current
 [orchestration skill](skills/orchestrate/SKILL.md) before launching an execution.
@@ -86,7 +85,6 @@ flowchart LR
     CommitSkill --> Helpers["Candidate, gate, and locking helpers"]
     Helpers --> Checks
     Runner --> Checks["Project tests, invariants, sensors, Git"]
-    CLI -.->|"Typed bound records"| Orch
     Run --> Report["Local final report"]
     Chain --> Report
     Hooks["Hooks and execpolicy"] -.->|"Guard supported operations"| CLI
@@ -107,14 +105,14 @@ sequence, using the common-lock helper without owning a CLI merge chain.
 |---|---|---|
 | Lifecycle instructions | [`skills/`](skills/) | Initialization, planning, execution cycles, commits, reintegration, closure, and drift |
 | Public orchestration entry point | [`scripts/codex_orch_tools.py`](scripts/codex_orch_tools.py) | Run and journal commands, execution inspection, and validation |
-| Orchestration engine | [`scripts/codex_orchestrator/`](scripts/codex_orchestrator/) | Typed records, run ownership, scope admission, journal batches, and recovery |
+| Orchestration engine | [`scripts/codex_orchestrator/`](scripts/codex_orchestrator/) | Append-only journal writer, structural reader, and execution monitoring |
 | Public gate entry point | [`scripts/forge/cli.py`](scripts/forge/cli.py) | Import-safe compatibility entry point forwarding into the CLI package |
 | Application layer | [`forge_cli/app/`](scripts/forge/forge_cli/app/) | Dispatch, shared-verb routing, and the dormant merge engine |
 | Gate behavior | [`forge_cli/engine/`](scripts/forge/forge_cli/engine/) | Commit lifecycle, classification, checks, review transport, approval, and finalization |
 | Chain infrastructure | [`forge_cli/chain_core/`](scripts/forge/forge_cli/chain_core/) | Repository context, persistence, transitions, replay, coordination, and locks |
 | Candidate identity | [`forge_cli/candidate.py`](scripts/forge/forge_cli/candidate.py) | Immutable Git-tree snapshot, authorization identity, and deterministic review artifact |
 | Policy parsing | [`forge_cli/policy.py`](scripts/forge/forge_cli/policy.py) | Parsing committed regions into executable policy |
-| Execution primitives | [`forge_cli/runtime.py`](scripts/forge/forge_cli/runtime.py) | Shared runtime controls, bounded subprocess execution, and coordination loading |
+| Execution primitives | [`forge_cli/runtime.py`](scripts/forge/forge_cli/runtime.py) | Shared runtime controls and bounded subprocess execution |
 | Fresh reviewer evaluations | [`forge_cli/fresh_evals.py`](scripts/forge/forge_cli/fresh_evals.py) | Candidate-bound evaluation requests and evidence validation |
 | Machine responses | [`forge_cli/envelope.py`](scripts/forge/forge_cli/envelope.py) | Structured outcomes and refusal reason codes |
 | Enforcement surfaces | [`hooks/`](hooks/), [`system/codex/`](system/codex/) | Claude tool hooks and installed Codex routing/policy surfaces |
@@ -252,17 +250,12 @@ The orchestrator identifies the repository root, current full Git SHA, branch,
 and initial working-tree state. Existing changes remain attributed to their
 original owner. Run material is locally excluded from Git before creation.
 
-The typed `run-open` builder creates the run's ownership information and opening
-journal entry atomically. It records the original goal, baseline, plugin
-reference, and a nonempty set of repository-relative path scopes. A shared
-registry refuses overlapping open-run scopes and ambiguous registry state. A
-stable session identity must come from the long-lived harness, not a temporary
-tool shell's PID.
+`run-open` appends a `run_started` record with repository, intent, and actor. It does not
+reserve the run, scope, route, or session. The single journal lock serializes line appends and
+launcher execution-ID allocation. An invalid run ID is refused before creating a directory.
 
-An existing `.forge/tmp/drift-block` prevents new runs until the operator clears
-it. A live foreign owner or unresolved scope conflict also prevents admission.
-Creating a directory or manually appending JSON is not an alternative admission
-path.
+An existing `.forge/tmp/drift-block` prevents new runs until the operator clears it. This is
+independent of the journal and is not an `AGENT_HALT` sentinel.
 
 ### Step 3 — Plan and decompose the work
 
@@ -270,7 +263,7 @@ path.
 
 The orchestrator translates the request into deliverables, acceptance criteria,
 constraints, risks, and executable verification paths. Each task receives an
-explicit file scope contained within the run's admitted scope.
+clear assignment and owned files recorded in the task brief.
 
 For a consequential or hard-to-reverse choice, Claude writes its own plan before
 reading a fresh Codex proposal. The two approaches are compared using evidence,
@@ -286,10 +279,10 @@ executions; available host capacity may impose a smaller limit.
 
 **Purpose:** give one agent enough context to complete one bounded assignment.
 
-The orchestrator creates a dedicated worktree and assembles the prompt from the
-role template, the worktree's committed project context, and the concrete assignment.
-It saves the exact prompt, creates the events file, and appends the execution record
-**before** launching the process.
+The orchestrator creates a dedicated worktree and supplies the concrete assignment.
+`forge launch` assembles the prompt from the role template and the worktree's
+committed project context, saves the exact prompt, creates the events file, and
+appends `execution_started` **before** launching the process.
 
 The execution record includes the actual worktree, full HEAD, branch, model,
 effort, and evidence paths. The process launches detached in its own process
@@ -315,6 +308,11 @@ The orchestrator preserves the agent's exact handoff and inspects the resulting
 diff. It records a terminal execution result only when the outcome is known. A
 halt prevents new launches and reintegration; read-only observation of already
 running work can continue.
+
+Collect or cancel every in-flight managed launch before upgrading to Revision 22.
+Earlier uncollected launches have neither `wrapper-config.json` nor the worktree sidecar,
+so the new collect and cancel commands refuse them. If one leaves a stranded marker,
+the operator clears that marker by hand after inspecting the process and worktree.
 
 ### Step 6 — Verify the task against its acceptance criteria
 
@@ -356,10 +354,9 @@ The CLI path proceeds as follows:
    causes classification to run again.
 3. **Execute mechanical verification.** Run Gate 1 once for the candidate. When
    the classifier's own per-path evidence shows every staged path with exactly
-   the `docs` category, no control floor, and no trigger-path match, a chain with
-   no run binding records a `gate-1` skip with reason `docs-class candidate` and
-   launches no test process. A run-bound chain instead runs Gate 1 once, including
-   for a docs-class candidate; the docs-contract stack validation still runs.
+   the `docs` category, no control floor, and no trigger-path match, the chain
+   records a `gate-1` skip with reason `docs-class candidate` and
+   launches no test process; the docs-contract stack validation still runs.
    Then run the relevant stack validations, the assertion sensor, commit
    invariants, and a secret
    scan of the exact review artifact. Control candidates additionally require
@@ -414,9 +411,8 @@ recovery rules.
 
 The CLI persists completed steps, so `verify` resumes from the first incomplete
 step. It does not automatically request review, approve a change, or finalize a
-commit. `status --chain-id <id>` reports the next required action. A chain runs
-without journal writes when no open run was explicitly supplied; it must never
-infer the “latest” run.
+commit. `status --chain-id <id>` reports the next required action. A chain uses its own evidence for permission. It may cite an explicitly supplied run, but
+it never infers a “latest” run or reads the journal to decide a gate.
 
 ### Step 8 — Review the combined branch and reintegrate
 
@@ -475,26 +471,10 @@ residual files. Report push, lock release, and cleanup outcomes separately.
 **Purpose:** make sure the recorded story matches delivered work before declaring
 the run complete.
 
-Once tasks are terminal, the orchestrator rereads the complete journal and checks
-the final repository against the opening baseline. Typed builders append missing
-records and supported corrections; journal history is not rewritten.
-
-Run gated validation before closure. This pre-close check is advisory because
-some requirements can be evaluated only after the closing record exists. The
-typed close builder records `passed` or `blocked`, the summary, risks, follow-ups,
-and the exact pre-close validation payload. Run gated validation again after
-closure and save its exact JSON output. The post-close check must exit zero.
-
-For a passed run with mutating work, current required gate evidence must follow
-the relevant completed executions. Failed gates need a later passing recheck of
-the same criterion. Activated journals also correlate task, chain, candidate,
-approval, and landing identities. A PASS for a different tree or unrelated task
-does not fill a missing gate.
-
-Supported superseded-candidate and abort-disposition rules preserve unsuccessful
-history without treating it as delivered evidence. An unrepairable closed journal
-cannot be made valid by editing old lines; use the prescribed successor or
-operator recovery procedure.
+Inspect the final repository against the observed starting state and the relevant chain
+evidence. Append `run_closed` with a free-text outcome. It records a fact and does not prevent
+later appends. `validate` checks JSON object structure only; it returns `ok` and `issues` and
+does not decide whether work may close or be reported.
 
 ### Step 10 — Write the final report
 
@@ -506,9 +486,8 @@ evidence. The report has five sections: Summary, Changes, Orchestration Graph,
 Consensus, and Final Results. Its Mermaid graph reflects observed execution and
 decision history, including meaningful revision loops.
 
-The final result states the actual judgment, failed or unresolved checks,
-accepted risks, and follow-ups. Validation checks bookkeeping completeness; it
-does not independently prove that the software is correct.
+The final result states observed gate outcomes, failed or unresolved checks, accepted risks,
+and follow-ups. Structural validation does not prove that the software is correct.
 
 ### Step 12 — Check for drift
 
@@ -543,18 +522,13 @@ from an `AGENT_HALT` sentinel.
 | `.codex-orchestrator/runs/<run-id>/journal.jsonl` | Locally excluded append-only run history |
 | Execution `prompt.md`, `events.jsonl`, `handoff.md`, and `pid` | Local exact assignment, raw events, final agent message, and process identity |
 | `.forge/chains/` | Local persisted chain state, events, and evidence, rooted in the common repository context |
-| `.forge/tmp/` | Transient authorization markers, registry, drift output, audit logs, and telemetry |
+| `.forge/tmp/` | Transient authorization markers, drift output, audit logs, and telemetry |
 | Run-local `report.md` | Final human-facing report |
 | `.forge/history/drift/` | Committed periodic drift reports |
 
-The journal records lifecycle and judgment; command evidence supports verification;
-chain events support candidate-bound authorization and landing. Chain events are
-written before the materialized state file; authenticated replay can reconstruct
-a missing or stale state projection. Typed journal
-builders use idempotency keys and ownership checks. Bound chains can carry a
-pending journal outbox, and supported recovery replays authenticated records
-rather than inventing a successful outcome. The journal is not a replacement for
-the chain's mechanical evidence.
+The journal logs executions and decisions. Chain state and events supply candidate-bound
+authorization and landing evidence; authenticated replay can reconstruct a missing or stale
+chain-state projection. Journal references to chains carry no permission.
 
 ### Common interruptions
 
@@ -569,8 +543,8 @@ the chain's mechanical evidence.
 | Interrupted CLI verification | Inspect `status` and resume `verify` from the first incomplete step |
 | Produced commit differs from intent | Preserve the commit and frozen chain for operator disposition; do not automatically reset or amend it |
 | Reintegration failure | Preserve the branch and worktree; report the observed failure and lock outcome |
-| Foreign/live owner or stale reintegration lock | Follow the specific ownership/lock recovery procedure; do not delete state to force progress |
-| Post-close validation failure | Do not generate a final report claiming delivery |
+| Stale reintegration lock | Follow the lock recovery procedure; do not delete state to force progress |
+| Journal structural issue | Report the malformed line and preserve the bytes; inspect delivery from Git and chain evidence |
 | Machine move | Preserve the run journal and chain evidence needed for a final report |
 
 Ordinary non-mutation policy commands run from the repository root as one complete

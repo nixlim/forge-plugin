@@ -9,6 +9,8 @@ from unittest import mock
 
 from tests._cli_loader import package_module, patch_engine
 from tests._launch_support import (
+    LAUNCH_LANE,
+    MARKER_BINDING_CHANGES,
     VERBS_LAUNCH_COLLECT,
     LaunchLaneSupport,
     kill_group,
@@ -29,6 +31,70 @@ class LaunchCancelTests(LaunchLaneSupport, unittest.TestCase):
             caught.exception.message,
             "forge: launch cancel refused — execution execution-99 does not exist",
         )
+
+    def test_prose_execution_directory_has_exact_cancel_refusal(self) -> None:
+        self.open_run_and_task()
+        directory = self.run_dir(self.repo, self.run_id) / "prose-agent/execution-01"
+        directory.mkdir(parents=True)
+        with self.assertRaises(ENGINE.Refusal) as caught:
+            VERBS_LAUNCH_COLLECT.launch_cancel(self.ready_engine(), "execution-01")
+        self.assertEqual(
+            caught.exception.message,
+            "forge: launch cancel refused — execution execution-01 has no launch_marker",
+        )
+
+    def test_cancel_marker_binding_covers_every_owner_record_and_digest_field(self) -> None:
+        self.seed_launch(provider="codex")
+        record = self.execution_records()[-1]
+        path = self.paths(record).leaf("launch.json")
+        baseline = self.marker(record)
+        for field, value in MARKER_BINDING_CHANGES.items():
+            with self.subTest(field=field):
+                LAUNCH_LANE.write_marker(path, dict(baseline, **{field: value}))
+                with self.assertRaises(ENGINE.Refusal) as caught:
+                    VERBS_LAUNCH_COLLECT.launch_cancel(
+                        self.ready_engine(), str(record["execution"])
+                    )
+                self.assertEqual(
+                    caught.exception.message,
+                    "forge: launch cancel refused — launch marker does not bind "
+                    f"execution execution-01: {field}",
+                )
+        LAUNCH_LANE.write_marker(path, baseline)
+
+    def test_cancel_wrapper_config_binding_and_missing_config_refuse(self) -> None:
+        self.seed_launch(provider="codex")
+        record = self.execution_records()[-1]
+        path = self.paths(record).leaf(LAUNCH_LANE.WRAPPER_CONFIG_NAME)
+        baseline = json.loads(path.read_text(encoding="utf-8"))
+
+        def assert_binding(field: str) -> None:
+            with self.assertRaises(ENGINE.Refusal) as caught:
+                VERBS_LAUNCH_COLLECT.launch_cancel(
+                    self.ready_engine(), str(record["execution"])
+                )
+            self.assertEqual(
+                caught.exception.message,
+                "forge: launch cancel refused — launch marker does not bind "
+                f"execution execution-01: {field}",
+            )
+
+        for field, value in MARKER_BINDING_CHANGES.items():
+            with self.subTest(field=field):
+                self.write_private_json(path, dict(baseline, **{field: value}))
+                assert_binding(field)
+        self.write_private_json(path, baseline)
+        path.unlink()
+        assert_binding("wrapper_config")
+        path.symlink_to(self.paths(record).leaf("launch.json"))
+        assert_binding("wrapper_config")
+        path.unlink()
+        self.write_private_json(path, dict(baseline, task="task-99"))
+        with (
+            mock.patch.object(LAUNCH_LANE, "bind_wrapper_config", return_value=None),
+            self.assertRaises(AssertionError),
+        ):
+            assert_binding("task")
 
     def test_wrapper_dead_child_alive_names_cancel_and_lost_proofs_map(self) -> None:
         self.seed_launch(provider="codex")
@@ -128,6 +194,7 @@ class LaunchCancelTests(LaunchLaneSupport, unittest.TestCase):
             self.assertTrue(held)
             return original_publish(*args)
 
+        (self.run_dir(self.repo, self.run_id) / "journal.jsonl").unlink()
         with (
             patch_engine("attempt_publication_lock", side_effect=locked),
             patch_engine("read_identity", side_effect=read_identity),
@@ -141,6 +208,7 @@ class LaunchCancelTests(LaunchLaneSupport, unittest.TestCase):
         killed.assert_called_once_with(refreshed, 5)
         completion = self.attempt_dir(record) / "completion.json"
         self.assertEqual(json.loads(completion.read_text())["error"], "cancelled")
+        self.assertTrue(self.seed_launch(engine=engine).ok)
 
     def test_cancel_refuses_each_changed_immutable_identity_field(self) -> None:
         self.seed_launch(provider="codex")
@@ -268,7 +336,7 @@ class LaunchCancelTests(LaunchLaneSupport, unittest.TestCase):
         completion = json.loads((directory / "completion.json").read_text())
         self.assertEqual(completion["error"], "provider exit 9")
         results = [
-            item for item in self.records() if item.get("type") == "execution_result"
+            item for item in self.records() if item.get("kind") == "execution_finished"
         ]
         self.assertEqual(len(results), 1)
 

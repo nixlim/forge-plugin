@@ -4,8 +4,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORT_SKILL = ROOT / "skills" / "report" / "SKILL.md"
-
+REPORT_SKILL = ROOT / "skills/report/SKILL.md"
 REPORT_TEMPLATE = """# Report
 
 ## Summary
@@ -20,74 +19,46 @@ REPORT_TEMPLATE = """# Report
 
 
 class ReportSkillTests(unittest.TestCase):
-    def test_skill_authors_complete_report_with_exact_section_order(self) -> None:
+    def test_report_structure_and_evidence_sources(self) -> None:
         skill = REPORT_SKILL.read_text(encoding="utf-8")
-
         self.assertIn(REPORT_TEMPLATE, skill)
-        self.assertIn("### Gate Result", skill)
-        self.assertIn("### Risks / Follow-ups", skill)
-        self.assertIn("Mermaid `flowchart TD`", skill)
-        self.assertIn('A_CLAUDE{{"Claude Code<br/>planner · orchestrator"}}', skill)
-        self.assertIn("Show only evidence that affected", skill)
-        self.assertIn("one node per named agent", skill)
-
-    def test_skill_requires_a_closed_and_validated_run(self) -> None:
-        skill = REPORT_SKILL.read_text(encoding="utf-8")
-        normalized = " ".join(skill.lower().split())
-
-        self.assertIn(
-            "`run_closed.validation` contains the complete descriptive validation", normalized
-        )
-        self.assertIn("`run_closed` is the final journal entry", normalized)
-        self.assertIn("no further run work is planned", normalized)
-        self.assertNotIn("validate → run_closed → report.md", normalized)
-
-    def test_skill_refuses_until_archive_is_committed_and_clean(self) -> None:
-        skill = REPORT_SKILL.read_text(encoding="utf-8")
-        archive = ".forge/history/runs/<run-id>.md"
-        refusal = (
-            "forge: report refused — archive missing or uncommitted: " + archive
-        )
-
-        self.assertEqual(skill.count(refusal), 1)
-        self.assertIn('git cat-file -e "HEAD:$ARCHIVE_PATH"', skill)
-        self.assertIn('git diff --quiet -- "$ARCHIVE_PATH"', skill)
-        self.assertIn('git diff --cached --quiet -- "$ARCHIVE_PATH"', skill)
-        self.assertIn('codex_orch_tools.py" validate --gates', skill)
-        self.assertLess(skill.index("git cat-file -e"), skill.index("Create the final `report.md` once"))
-
+        normalized = " ".join(skill.split())
         controls = (
-            'git cat-file -e "HEAD:$ARCHIVE_PATH"',
-            'git diff --quiet -- "$ARCHIVE_PATH"',
-            'git diff --cached --quiet -- "$ARCHIVE_PATH"',
-            refusal,
+            "### Gate Result",
+            "### Risks / Follow-ups",
+            "Mermaid `flowchart TD`",
+            "`.forge/chains/`",
+            "Git for delivered changes",
+            "observed checks and chain records for gates and approvals",
+            "A journal reference alone cannot establish a gate result.",
+            "Reconcile numeric totals",
         )
         for control in controls:
-            with self.subTest(disabled=control):
-                mutated = skill.replace(control, "disabled-control", 1)
-                self.assertNotIn(control, mutated)
+            with self.subTest(control=control):
+                self.assertIn(control, normalized)
                 with self.assertRaises(AssertionError):
-                    self.assertIn(control, mutated)
+                    self.assertIn(control, normalized.replace(control, "DISABLED_CONTROL", 1))
 
-    def test_skill_uses_claim_specific_sources_and_creates_one_final_report(self) -> None:
-        skill = " ".join(REPORT_SKILL.read_text(encoding="utf-8").lower().split())
+    def test_report_uses_structural_validation_without_archive_precondition(self) -> None:
+        skill = REPORT_SKILL.read_text(encoding="utf-8")
+        self.assertIn('codex_orch_tools.py" validate', skill)
+        self.assertIn("A `run_closed` record describes the reported outcome", skill)
+        self.assertNotIn("validate --gates", skill)
+        self.assertNotIn(".forge/history/runs/", skill)
+        self.assertNotIn("run_closed.judgment", skill)
+        self.assertIn("Report validation issues honestly.", skill)
 
-        self.assertIn("actual delivery: final repository state relative to", skill)
-        self.assertIn(
-            "compare the final repository state with `run_started.repo_head` and "
-            "`run_started.repo_status`",
-            skill,
-        )
-        self.assertIn("do not attribute initially dirty paths without supporting evidence", skill)
-        self.assertIn("agent claims: exact handoffs", skill)
-        self.assertIn("not independent evidence", skill)
-        self.assertIn("create the final `report.md` once", skill)
+    def test_report_does_not_promote_claims_to_results(self) -> None:
+        skill = " ".join(REPORT_SKILL.read_text(encoding="utf-8").split())
+        for control in (
+            "Treat a handoff as a claim",
+            "Surface missing or conflicting facts",
+            "never infer a passing check, verdict, or terminal execution status",
+            "Do not attribute initially dirty paths",
+        ):
+            with self.subTest(control=control):
+                self.assertIn(control, skill)
 
-    def test_skill_reconciles_numeric_totals_and_keeps_linear_graphs_small(self) -> None:
-        skill = " ".join(REPORT_SKILL.read_text(encoding="utf-8").lower().split())
-
-        self.assertIn("keep a linear run minimal", skill)
-        self.assertIn("reconcile every numeric total", skill)
 
 if __name__ == "__main__":
     unittest.main()

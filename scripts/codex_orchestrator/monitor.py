@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "forge"))
+import route_config  # noqa: E402
+import route_vocab  # noqa: E402
 
 from .events import StreamSummary, compatibility, event_text, json_dumps, summarize_stream
 from .journal import (
@@ -11,7 +16,6 @@ from .journal import (
     execution_key,
     read_journal,
     resolve_run_path,
-    route_vocab,
 )
 
 # forge: modified from upstream — monitor engine-launched Claude event streams
@@ -57,7 +61,8 @@ def inflight_targets(
     completed = {
         key
         for record in records
-        if record.get("type") == "execution_result"
+        if record.get("kind") == "execution_finished"
+        or record.get("type") == "execution_result"
         for key in [execution_key(record)]
         if key is not None
         and isinstance(record.get("status"), str)
@@ -66,7 +71,7 @@ def inflight_targets(
     targets: list[MonitorTarget] = []
     errors: list[dict[str, object]] = []
     for record in records:
-        if record.get("type") != "execution":
+        if record.get("kind") != "execution_started" and record.get("type") != "execution":
             continue
         key = execution_key(record)
         if key is None:
@@ -134,8 +139,13 @@ def resolve_monitor_targets(
     if bool(args.run_id) != bool(args.repo):
         return [], [error_payload("--repo and --run-id must be provided together")]
     if args.run_id:
+        repository = Path(args.repo).expanduser()
+        try:
+            repository = route_config.common_root(repository)
+        except route_config.RouteRefusal:
+            pass
         run_dir = (
-            Path(args.repo).expanduser()
+            repository
             / ".codex-orchestrator"
             / "runs"
             / args.run_id

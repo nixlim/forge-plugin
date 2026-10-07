@@ -216,8 +216,7 @@ class PromptFirstWorkflowTests(unittest.TestCase):
             {"codex-impl-01", "codex-review-01"},
         )
 
-    # forge: modified from upstream — exercise plain and gated replay validation
-    def test_validation_accepts_the_closed_fixture_in_both_profiles(self) -> None:
+    def test_validation_accepts_the_closed_legacy_fixture_structurally(self) -> None:
         plain_result = run_cli("validate", str(self.run_dir))
         gates_result = run_cli("validate", str(self.run_dir), "--gates")
 
@@ -225,23 +224,14 @@ class PromptFirstWorkflowTests(unittest.TestCase):
         plain_payload = json.loads(plain_result.stdout)
         self.assertEqual(
             list(plain_payload),
-            ["issues", "non_passing_verifications", "ok", "warnings"],
+            ["issues", "ok"],
         )
         self.assertTrue(plain_payload["ok"], plain_payload)
         self.assertEqual(plain_payload["issues"], [])
-        self.assertEqual(plain_payload["non_passing_verifications"], [])
         self.assertNotIn("profile", plain_payload)
 
-        self.assertEqual(gates_result.returncode, 0, gates_result.stderr)
-        gates_payload = json.loads(gates_result.stdout)
-        self.assertEqual(
-            list(gates_payload),
-            ["issues", "non_passing_verifications", "ok", "profile", "warnings"],
-        )
-        self.assertTrue(gates_payload["ok"], gates_payload)
-        self.assertEqual(gates_payload["issues"], [])
-        self.assertEqual(gates_payload["non_passing_verifications"], [])
-        self.assertEqual(gates_payload["profile"], "gates")
+        self.assertEqual(gates_result.returncode, 2)
+        self.assertIn("unrecognized arguments: --gates", gates_result.stderr)
 
 
 if __name__ == "__main__":

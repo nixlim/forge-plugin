@@ -6,7 +6,6 @@ import re
 import unittest
 from unittest import mock
 
-from tests import test_route_snapshot as snapshot
 from tests.test_route_config_support import (
     ROOT,
     RouteConfigSupport,
@@ -15,8 +14,6 @@ from tests.test_route_config_support import (
     route_text,
 )
 
-journal = snapshot.journal
-route_evidence = snapshot.route_evidence
 SPEC_EFFORTS_RE = re.compile(
     r"Codex effort is exactly `([^`]+)`; Claude effort is exactly `([^`]+)`"
 )
@@ -94,55 +91,6 @@ class XhighGrammarTests(RouteConfigSupport, unittest.TestCase):
         argv = route_config_probe._claude_argv(spec, ROOT)
         index = argv.index("--effort")
         self.assertEqual(argv[index : index + 2], ("--effort", "xhigh"))
-
-
-class XhighSnapshotTests(snapshot.Revision9BuilderBatchSupport, unittest.TestCase):
-    _write_local = snapshot.RouteSnapshotTests._write_local
-    _open = snapshot.RouteSnapshotTests._open
-    _open_task = snapshot.RouteSnapshotTests._open_task
-    _execution = snapshot.RouteSnapshotTests._execution
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.env.pop("CLAUDE_CODE_SESSION_ID", None)
-        self.execution_number = 0
-
-    def test_run_open_freezes_xhigh_and_a_matching_execution_is_accepted(self) -> None:
-        self._write_local(XHIGH_REVIEW_FINAL.replace("[review-final]", "[implementer]"))
-        run_id = "run-20260927-route-xhigh"
-        route = self._open_task(run_id)["route"]["implementer"]
-        self.assertEqual((route["provider"], route["effort"]), ("claude", "xhigh"))
-        self.assertEqual(route["route_sha256"], route_evidence.route_digest("implementer", route))
-        execution = self._execution(run_id, route).records[0]
-        self.assertEqual(
-            (execution["effort"], execution["sandbox"]), ("xhigh", "instruction-bounded")
-        )
-        with self.assertRaises(journal.CoordinationRefusal) as caught:
-            self._execution(run_id, route, effort="max")
-        self.assertEqual(
-            "forge: execution refused — route diverges from run snapshot for implementer: effort",
-            str(caught.exception),
-        )
-
-    def test_opening_snapshot_refuses_codex_xhigh(self) -> None:
-        entry = {"provider": "codex", "model": "gpt-5.6-sol", "effort": "xhigh",
-                 "route_source": "local"}
-        entry["route_sha256"] = route_evidence.route_digest("implementer", entry)
-        claude = {**entry, "provider": "claude"}
-        claude["route_sha256"] = route_evidence.route_digest("implementer", claude)
-        self.assertIsNone(route_evidence._valid_route_entry("implementer", claude))
-
-        def assertion() -> None:
-            self.assertEqual(
-                "run_started.route.implementer.effort is invalid for provider codex",
-                route_evidence._valid_route_entry("implementer", entry),
-            )
-
-        assertion()
-        admitted = {**route_config.EFFORTS, "codex": route_config.EFFORTS["codex"] | {"xhigh"}}
-        with mock.patch.object(route_config, "EFFORTS", admitted):
-            with self.assertRaises(AssertionError):
-                assertion()
 
 
 if __name__ == "__main__":

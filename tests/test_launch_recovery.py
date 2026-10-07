@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -19,7 +21,7 @@ from tests._launch_support import (
     wait_path,
 )
 
-from codex_orchestrator import builders, journal
+from codex_orchestrator import journal
 
 ENGINE = package_module("engine")
 ATTEMPT = package_module("engine._review_attempt")
@@ -50,80 +52,38 @@ class LaunchReservedReasonTests(unittest.TestCase):
 
 
 class LaunchRecoveryTests(LaunchLaneSupport, unittest.TestCase):
-    def test_malformed_owner_outcome_preserves_evidence(self) -> None:
-        with (
-            mock.patch.object(
-                VERBS_LAUNCH, "_builder_start", return_value=mock.Mock(records=[])
-            ),
-            self.assertRaises(ENGINE.Refusal) as caught,
-        ):
-            self.launch_direct(engine=self.ready_engine())
-        self.assertIs(caught.exception.reason_code, ENGINE.V2ReasonCode.EVIDENCE_INCOMPLETE)
-        self.assertEqual(
-            caught.exception.message,
-            "forge: launch refused — owner record outcome is ambiguous",
-        )
-        self.assertEqual(
-            caught.exception.remediation,
-            "inspect the launch owner record before retrying",
-        )
-
-    def test_spawn_result_refusal_rereads_state_and_uses_structured_recovery(self) -> None:
-        self.configure_route("implementer", "codex", effort="ultra")
+    def test_start_append_failure_reports_and_keeps_launch_files(self) -> None:
         engine = self.ready_engine()
-        original_scan = journal._scan_run
-        refusing = False
-        post_refusal_scans: list[bool] = []
-
-        def refuse_result(*_args: object, **_kwargs: object) -> object:
-            nonlocal refusing
-            refusing = True
-            raise journal.CoordinationRefusal(journal.BATCH_PENDING)
-
-        def observe_scan(*args: object, **kwargs: object) -> object:
-            state = original_scan(*args, **kwargs)
-            if refusing:
-                post_refusal_scans.append(True)
-            return state
-
+        stderr = io.StringIO()
         with (
-            patch_engine("spawn_wrapper", side_effect=OSError("fixture spawn failure")),
-            mock.patch.object(builders, "execution_result", side_effect=refuse_result),
-            mock.patch.object(journal, "_scan_run", side_effect=observe_scan),
-            self.assertRaises(ENGINE.Refusal) as caught,
+            mock.patch.object(journal, "_write_line", side_effect=journal.CoordinationRefusal(
+                journal.APPEND_IO_ERROR
+            )),
+            redirect_stderr(stderr),
         ):
-            self.launch_direct(engine=engine)
-        self.assertEqual(caught.exception.message, journal.BATCH_PENDING)
-        self.assertIs(caught.exception.reason_code, ENGINE.V2ReasonCode.STATE_PRECONDITION)
-        self.assertEqual(
-            caught.exception.remediation, "inspect the launch result record before retrying"
-        )
-        self.assertEqual(post_refusal_scans, [True])
-        self.assertEqual(caught.exception.outcome().exit_code, 1)
+            outcome = self.seed_launch(engine=engine)
+        self.assertTrue(outcome.ok)
+        self.assertEqual(stderr.getvalue(), journal.APPEND_IO_ERROR + "\n")
+        marker_path = (self.run_dir(self.repo, self.run_id)
+                       / "codex-implementer-01/execution-01/launch.json")
+        self.assertTrue(marker_path.exists())
+        self.assertTrue((marker_path.parent / "pid").exists())
+        self.assertEqual(self.execution_records(), [])
 
-    def test_spawn_result_refusal_recovers_an_already_written_result(self) -> None:
+    def test_append_lock_failure_reports_and_launches(self) -> None:
         engine = self.ready_engine()
-        append_result = builders.execution_result
-
-        def append_then_refuse(*args: object, **kwargs: object) -> object:
-            append_result(*args, **kwargs)
-            raise journal.CoordinationRefusal("synthetic post-append refusal")
-
+        stderr = io.StringIO()
         with (
-            patch_engine("spawn_wrapper", side_effect=OSError("fixture spawn failure")),
-            mock.patch.object(builders, "execution_result", side_effect=append_then_refuse),
+            mock.patch.object(LAUNCH_LANE.fcntl, "flock", side_effect=OSError("lock failed")),
+            redirect_stderr(stderr),
         ):
-            recovered = self.launch_direct(engine=engine)
-        self.assertEqual(recovered.message, "launch collect: failed")
-        self.assertEqual(recovered.state, "failed")
-        self.assertTrue(recovered.ok)
-        self.assertEqual(self.marker()["collected_status"], "failed")
-        results = [record for record in self.records() if record.get("type") == "execution_result"]
-        self.assertEqual(len(results), 1)
-        repeated = VERBS_LAUNCH_COLLECT.launch_collect(engine, "execution-01")
-        self.assertEqual(repeated.state, "failed")
-        self.assertEqual([record for record in self.records()
-                          if record.get("type") == "execution_result"], results)
+            outcome = self.seed_launch(engine=engine)
+        self.assertTrue(outcome.ok)
+        self.assertEqual(stderr.getvalue(), journal.APPEND_IO_ERROR + "\n")
+        marker_path = (self.run_dir(self.repo, self.run_id)
+                       / "codex-implementer-01/execution-01/launch.json")
+        self.assertTrue(marker_path.exists())
+        self.assertTrue((marker_path.parent / "pid").exists())
 
     def _assert_cleanup_failure_is_explicit(self) -> None:
         engine = self.ready_engine()

@@ -3,7 +3,7 @@
 Every module of the split reads these names by attribute through this one module, so a
 single in-memory patch (``mock.patch.object(runtime, ...)``) disables a control everywhere:
 the clock, the bounded process runner, the merge lifecycle flag, the Revision-9 state
-controls, the path roots, the lazily imported coordination modules, and the fast-tier
+controls, the path roots, and the fast-tier
 mechanical-skip predicate. Definitions were moved verbatim from scripts/forge/cli.py.
 """
 
@@ -33,12 +33,6 @@ OUTPUT_CAP_BYTES = 65536
 MERGE_LIFECYCLE_ACTIVE = False
 
 
-_COORDINATION_MODULE_CACHE: tuple[Any, Any, Any] | None = None
-
-
-_COORDINATION_MODULE_LOCK = threading.Lock()
-
-
 # The shim's directory (scripts/forge), computed from this package file so the value
 # is identical to the one the shim used to compute from its own __file__.
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -49,24 +43,6 @@ PLUGIN_ROOT = SCRIPT_DIR.parents[1]
 
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
-
-
-def _coordination_modules() -> tuple[Any, Any, Any]:
-    """Load the task-03 package from the plugin's scripts parent on demand."""
-
-    global _COORDINATION_MODULE_CACHE
-    if _COORDINATION_MODULE_CACHE is not None:
-        return _COORDINATION_MODULE_CACHE
-    with _COORDINATION_MODULE_LOCK:
-        if _COORDINATION_MODULE_CACHE is not None:
-            return _COORDINATION_MODULE_CACHE
-        scripts_parent = str(PLUGIN_ROOT / "scripts")
-        if scripts_parent not in sys.path:
-            sys.path.insert(0, scripts_parent)
-        from codex_orchestrator import batch, builders, journal
-
-        _COORDINATION_MODULE_CACHE = (batch, builders, journal)
-        return _COORDINATION_MODULE_CACHE
 
 
 @dataclasses.dataclass
@@ -436,9 +412,6 @@ __all__ = [
     'PLUGIN_ROOT',
     'ProcessResult',
     'SCRIPT_DIR',
-    '_COORDINATION_MODULE_CACHE',
-    '_COORDINATION_MODULE_LOCK',
-    '_coordination_modules',
     '_fast_mechanical_skips',
     '_kill_process_group',
     '_process_group_exists',

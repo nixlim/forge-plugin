@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib
 import json
 import os
 import subprocess
@@ -526,8 +527,13 @@ class LegacyCommitReplayTests(ChainProcessFixture):
     def test_legacy_binding_and_receipts_load_without_journal_or_rewrite(self):
         store, chain_id, _events = self.legacy_chain()
         before = (store.events_path(chain_id).read_bytes(), store.state_path(chain_id).read_bytes())
-        with mock.patch.object(
-            CLI.runtime, "_coordination_modules", side_effect=AssertionError("journal consulted")
+        with mock.patch.object(sys, "path", [str(CLI_PATH.parents[1]), *sys.path]):
+            journal = importlib.import_module("codex_orchestrator.journal")
+        with (
+            mock.patch.object(journal, "read_journal", side_effect=AssertionError("journal read")),
+            mock.patch.object(
+                journal, "_open_journal", side_effect=AssertionError("journal write")
+            ),
         ):
             loaded = store.load(chain_id)
             code, result = self.invoke_cli("--chain-id", chain_id, "status")
@@ -542,8 +548,13 @@ class LegacyCommitReplayTests(ChainProcessFixture):
         store, chain_id, _events = self.legacy_chain()
         path = "new\npath.txt"
         (self.repo / path).write_text("new candidate\n", encoding="utf-8")
-        with mock.patch.object(
-            CLI.runtime, "_coordination_modules", side_effect=AssertionError("journal consulted")
+        with mock.patch.object(sys, "path", [str(CLI_PATH.parents[1]), *sys.path]):
+            journal = importlib.import_module("codex_orchestrator.journal")
+        with (
+            mock.patch.object(journal, "read_journal", side_effect=AssertionError("journal read")),
+            mock.patch.object(
+                journal, "_open_journal", side_effect=AssertionError("journal write")
+            ),
         ):
             code, result = self.invoke_cli(
                 "--chain-id", chain_id, "commit", "restage", "--paths", path

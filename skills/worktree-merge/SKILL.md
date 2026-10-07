@@ -196,11 +196,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/forge/run-scoped-mutation.py" \
 cat "$MUTATION_EVIDENCE_FILE"
 ```
 
-When, and only when, an explicitly identified orchestration run is open, add both
-`--journal <that-run-dir>/journal.jsonl` and `--task <that-run-task-id>` to this single invocation.
-Pass both values as separate argv elements and never infer a "latest" run. The runner appends one
-ordinary `verification` per applicable execution. Without those explicit values it prints the same
-evidence without creating or selecting a journal.
+The runner prints advisory mutation evidence without creating or selecting a journal.
+Record its result with the candidate's other observed checks and present it to Gate 3.
 
 The runner validates the complete committed `mutation-testing` region before running any row. A
 valid table is `| category | command | changed-files form | timeout |`; the executable cells are
@@ -332,18 +329,8 @@ any finding above MINOR requires explicit user approval. At the 8-iteration cap 
 record the residual risk—every outstanding finding and why it remains—escalate to the user, and
 never merge.
 
-When, and only when, an explicitly identified orchestration run is open, journal every Gate 1 and
-Gate 2 execution under that run, including every in-lock re-run. Begin each Gate 1 criterion
-exactly `gate-1: ` and each Gate 2 criterion exactly `gate-2: `. Use exactly
-`gate-3: review-final verdict` for every Gate 3 execution. For the initial Gate 3, its `check` names
-the resolved full-SHA `${REVIEWED_BASE}...${CANDIDATE_HEAD}` range that generated the exact review
-diff. A post-rebase Gate 3 instead names the actual full-SHA
-`${INTEGRATED_BASE}...${INTEGRATED_HEAD}` range it reviewed. Resolve the applicable variables before
-writing each record; do not record variable names, short SHAs, symbolic refs, or an inferred
-"latest" run. Normalize and count every finding by `CRITICAL`, `MAJOR`, and `MINOR`; the reviewer
-is `review-final`. Record the observation as exactly `<PASS|BLOCK>; <critical-plus-major-count>
-CRITICAL/MAJOR findings; severities CRITICAL=<count>,MAJOR=<count>,MINOR=<count>; reviewer
-<review-cheap|review-final>; iteration <number> of 8.`
+Gate results remain in `.forge/chains/`. An open orchestration run may append a free-text
+`decision` naming the merge chain.
 
 ## Gate 4 — Summary and authority
 
@@ -532,16 +519,15 @@ Perform all required re-runs inside the lock and before push:
   Preserve this replacement evidence as the only tier authority for the integrated candidate.
   Between the two gates, also run the applicable advisory scoped
   mutation checks by repeating the plugin runner invocation with `--base "$INTEGRATED_BASE"` and
-  `--head "$INTEGRATED_HEAD"`, replacing the earlier mutation evidence file (and passing the same
-  explicitly selected journal/task pair when a run is open). Re-derive changed paths and
+  `--head "$INTEGRATED_HEAD"`, replacing the earlier mutation evidence file. Re-derive changed paths and
   assertion-sensor inputs from `INTEGRATED_RANGE` with the same `--no-renames` name listing; require
   clean Gate 1 and Gate 2 passes while preserving mutation findings as Gate 3 evidence.
   This covers both remote movement after the initial gates and a candidate that was already behind
   the default branch when the chain began. Never push an untested integrated tree.
 - If conflicts were resolved, Gate 3 is mandatory on the post-rebase candidate because the content
   changed. If `CANDIDATE_REWRITTEN=1` without conflicts, also re-run Gate 3 so the binding review,
-  approval, and pushed SHA identify the same candidate as DM-001 requires. Give `review-final`
-  exactly `git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"` and journal that actual resolved
+  approval, and pushed SHA identify the same candidate. Give `review-final`
+  exactly `git diff "${INTEGRATED_BASE}...${INTEGRATED_HEAD}"` and report that actual resolved
   full-SHA range. Require PASS before push. This strengthened identity rebind includes every
   conflict-resolution case.
 - If the rebase is a pure fast-forward with no new default-branch commits and no conflict
@@ -622,88 +608,71 @@ git merge-base --is-ancestor "$PUSHED_HEAD" "origin/${DEFAULT_BRANCH}" || {
   echo "forge: pushed candidate is not contained in origin/${DEFAULT_BRANCH} — cleanup refused" >&2
   exit 1
 }
-WORKTREE_CHECK_STATUS=0
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/codex_orch_tools.py" worktree-check \
-  --repo "$MAIN_WORKTREE" --worktree "$WORKTREE_DIR" || WORKTREE_CHECK_STATUS=$?
-case "$WORKTREE_CHECK_STATUS" in
-  0)
-    CURRENT_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q \
-      "refs/heads/${BRANCH}^{commit}")" || {
-      echo "forge: current branch tip is unavailable — cleanup refused" >&2
-      exit 1
-    }
-    WORKTREE_BRANCH="$(git -C "$WORKTREE_DIR" symbolic-ref --quiet HEAD)" || {
-      echo "forge: worktree branch is unavailable — cleanup refused" >&2
-      exit 1
-    }
-    [ "$WORKTREE_BRANCH" = "refs/heads/${BRANCH}" ] || {
-      echo "forge: worktree branch changed after push — cleanup refused" >&2
-      exit 1
-    }
-    WORKTREE_HEAD="$(git -C "$WORKTREE_DIR" rev-parse --verify HEAD^{commit})" || {
-      echo "forge: worktree HEAD is unavailable — cleanup refused" >&2
-      exit 1
-    }
-    [ "$WORKTREE_HEAD" = "$CURRENT_BRANCH_TIP" ] || {
-      echo "forge: worktree HEAD differs from current branch tip — cleanup refused" >&2
-      exit 1
-    }
-    WORKTREE_STATUS="$(git -C "$WORKTREE_DIR" status \
-      --porcelain=v1 --untracked-files=all)" || {
-      echo "forge: worktree status is unreadable — cleanup refused" >&2
-      exit 1
-    }
-    [ -z "$WORKTREE_STATUS" ] || {
-      echo "forge: worktree is not clean — cleanup refused" >&2
-      exit 1
-    }
-    if [ "$CURRENT_BRANCH_TIP" != "$PUSHED_HEAD" ]; then
-      git -C "$MAIN_WORKTREE" merge-base --is-ancestor \
-        "$CURRENT_BRANCH_TIP" "origin/${DEFAULT_BRANCH}" || {
-        echo "forge: current branch tip moved outside origin/${DEFAULT_BRANCH} — cleanup refused" >&2
-        exit 1
-      }
-    fi
-    cd "$MAIN_WORKTREE" || {
-      echo "forge: main worktree is unavailable — cleanup refused" >&2
-      exit 1
-    }
-    git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_DIR" || {
-      echo "forge: worktree removal failed — branch preserved" >&2
-      exit 1
-    }
-    DELETE_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q \
-      "refs/heads/${BRANCH}^{commit}")" || {
-      echo "forge: branch tip is unavailable after worktree removal — cleanup incomplete" >&2
-      exit 1
-    }
-    [ "$DELETE_BRANCH_TIP" = "$CURRENT_BRANCH_TIP" ] || {
-      echo "forge: branch tip changed during cleanup — cleanup incomplete" >&2
-      exit 1
-    }
-    git -C "$MAIN_WORKTREE" merge-base --is-ancestor \
-      "$DELETE_BRANCH_TIP" "origin/${DEFAULT_BRANCH}" || {
-      echo "forge: branch tip is not contained in origin/${DEFAULT_BRANCH} — cleanup incomplete" >&2
-      exit 1
-    }
-    git -C "$MAIN_WORKTREE" update-ref -d \
-      "refs/heads/$BRANCH" "$DELETE_BRANCH_TIP" || {
-      echo "forge: branch deletion failed — cleanup incomplete" >&2
-      exit 1
-    }
-    CLEANUP_OUTCOME="cleanup succeeded"
-    ;;
-  1)
-    CLEANUP_OUTCOME="cleanup deferred"
-    ;;
-  2)
-    exit 2
-    ;;
-  *)
-    echo "forge: worktree check refused — unexpected exit $WORKTREE_CHECK_STATUS" >&2
-    exit 2
-    ;;
-esac
+CURRENT_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q \
+  "refs/heads/${BRANCH}^{commit}")" || {
+  echo "forge: current branch tip is unavailable — cleanup refused" >&2
+  exit 1
+}
+WORKTREE_BRANCH="$(git -C "$WORKTREE_DIR" symbolic-ref --quiet HEAD)" || {
+  echo "forge: worktree branch is unavailable — cleanup refused" >&2
+  exit 1
+}
+[ "$WORKTREE_BRANCH" = "refs/heads/${BRANCH}" ] || {
+  echo "forge: worktree branch changed after push — cleanup refused" >&2
+  exit 1
+}
+WORKTREE_HEAD="$(git -C "$WORKTREE_DIR" rev-parse --verify HEAD^{commit})" || {
+  echo "forge: worktree HEAD is unavailable — cleanup refused" >&2
+  exit 1
+}
+[ "$WORKTREE_HEAD" = "$CURRENT_BRANCH_TIP" ] || {
+  echo "forge: worktree HEAD differs from current branch tip — cleanup refused" >&2
+  exit 1
+}
+WORKTREE_STATUS="$(git -C "$WORKTREE_DIR" status \
+  --porcelain=v1 --untracked-files=all)" || {
+  echo "forge: worktree status is unreadable — cleanup refused" >&2
+  exit 1
+}
+[ -z "$WORKTREE_STATUS" ] || {
+  echo "forge: worktree is not clean — cleanup refused" >&2
+  exit 1
+}
+if [ "$CURRENT_BRANCH_TIP" != "$PUSHED_HEAD" ]; then
+  git -C "$MAIN_WORKTREE" merge-base --is-ancestor \
+    "$CURRENT_BRANCH_TIP" "origin/${DEFAULT_BRANCH}" || {
+    echo "forge: current branch tip moved outside origin/${DEFAULT_BRANCH} — cleanup refused" >&2
+    exit 1
+  }
+fi
+cd "$MAIN_WORKTREE" || {
+  echo "forge: main worktree is unavailable — cleanup refused" >&2
+  exit 1
+}
+git -C "$MAIN_WORKTREE" worktree remove "$WORKTREE_DIR" || {
+  echo "forge: worktree removal failed — branch preserved" >&2
+  exit 1
+}
+DELETE_BRANCH_TIP="$(git -C "$MAIN_WORKTREE" rev-parse --verify -q \
+  "refs/heads/${BRANCH}^{commit}")" || {
+  echo "forge: branch tip is unavailable after worktree removal — cleanup incomplete" >&2
+  exit 1
+}
+[ "$DELETE_BRANCH_TIP" = "$CURRENT_BRANCH_TIP" ] || {
+  echo "forge: branch tip changed during cleanup — cleanup incomplete" >&2
+  exit 1
+}
+git -C "$MAIN_WORKTREE" merge-base --is-ancestor \
+  "$DELETE_BRANCH_TIP" "origin/${DEFAULT_BRANCH}" || {
+  echo "forge: branch tip is not contained in origin/${DEFAULT_BRANCH} — cleanup incomplete" >&2
+  exit 1
+}
+git -C "$MAIN_WORKTREE" update-ref -d \
+  "refs/heads/$BRANCH" "$DELETE_BRANCH_TIP" || {
+  echo "forge: branch deletion failed — cleanup incomplete" >&2
+  exit 1
+}
+CLEANUP_OUTCOME="cleanup succeeded"
 ```
 
 Run the worktree-removal command exactly as shown; do not add options that discard residual files.
@@ -713,36 +682,9 @@ either to equal the recorded pushed SHA or to be contained in the fetched remote
 After removal, re-read the branch tip, recheck its containment, and delete exactly the already
 verified object with `update-ref`'s expected-old-object guard. Never use `branch -D`; any missing,
 moved, detached, dirty, unreadable, or uncontained state stops cleanup with the branch preserved.
-A worktree-check exit 1 keeps both the worktree and branch, reports `cleanup deferred`, and
-does not change the successful merge outcome; the push has already landed. Exit 2 stops cleanup
-with its diagnostic and likewise preserves both. No failed merge path may remove either the
-worktree or the branch.
-
-The check treats cited evidence as exactly the FR-017 journal-record surfaces, in order:
-`execution.prompt`, `execution.events`, `execution.handoff`, `execution_result.handoff`,
-`verification.evidence`, `decision.basis`, and `verification.observation`. It uses the shared
-per-surface tokenizer and resolves relative citations against the run directory first and the
-layout-derived repository root second.
-
-It classifies runs-root children in bytewise name order. A non-dot regular file is skipped. A
-non-dot real non-symlink directory is skipped only when it is completely empty, ownerless, and has
-no `journal.jsonl`; this read-only check does not need the registry to recognize that inert
-placeholder. A directory containing `journal.jsonl` is scanned. Dot-prefixed entries or unsafe
-directory names, symlinks or broken links, other non-regular children, unreadable directories, owner-bearing
-or nonempty journal-less directories, empty, unreadable, symlinked, broken, or non-file journals,
-malformed scanned journals, and inspection errors all produce exit 2 with the unreadable-input
-diagnostic; none is silently skipped.
-
-A worktree on which a permanently unarchivable run depends—a passed run that remains
-unarchivable after the deferred workflow retry, a retired run, or a blocked run that is not
-gate-clean—remains `cleanup deferred` with its worktree and branch intact. It may be released only
-as an operator-reserved cleanup under explicit terminal direction recorded as an operator
-`decision` in an open run's journal. The operator—not this skill or any agent—runs
-`git -C <main-worktree> worktree remove <absolute-worktree-path>` without a force option and, only after
-independently re-proving the branch tip and remote containment, runs
-`git -C <main-worktree> update-ref -d <branch-ref> <verified-old-oid>`. Agents never run either
-command themselves, never release that worktree, and never treat the operator decision as guard
-exit 0.
+A failed cleanup proof keeps the worktree and branch and reports the refusal. The push has
+already landed; cleanup does not change that outcome. No failed merge path removes a worktree
+or branch.
 
 ## Record authority and report
 
@@ -763,7 +705,6 @@ its own integration target, not in the agent's worktree. Record only the orchest
 commands, outputs, and exit statuses as gate evidence.
 
 Report the four gate results, any in-lock re-runs, the pushed full SHA, the default branch, lock
-outcome, and `CLEANUP_OUTCOME`. When cleanup is deferred, also report the absolute worktree path and
-branch so workflow close can retry that exact cleanup after the archive commit. Include `cleanup
-deferred` when the guard retained the worktree. Never report reintegration or cleanup as successful
-unless the corresponding command succeeded.
+outcome, and `CLEANUP_OUTCOME`. When cleanup fails, report the absolute worktree path and
+branch with the failed proof so the operator can resolve it. Never report reintegration or cleanup
+as successful unless the corresponding command succeeded.
