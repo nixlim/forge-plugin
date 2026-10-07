@@ -396,6 +396,8 @@ RETIRED_LITERALS = (
     "carry-forward proof",
     "delta-trigger",
     "safe repository path",
+    "carries forward only",
+    "never reset by aborting or starting another chain",
 )
 
 LEGACY_JOURNAL = ROOT / "tests/replay/long-run-001/journal.jsonl"
