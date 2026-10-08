@@ -2028,7 +2028,6 @@ def _candidate_blob(
     *,
     required: bool = True,
     cap: int = PROMPT_CAP_BYTES,
-    allow_empty: bool = False,
 ) -> bytes | None:
     try:
         entry = candidate_module.tree_entry(context, tree_oid, path)
@@ -2048,7 +2047,7 @@ def _candidate_blob(
         raise FreshEvalError(f"candidate reviewer control is unreadable: {path}")
     if len(raw) > cap:
         raise FreshEvalError(f"candidate reviewer control exceeds {cap} bytes: {path}")
-    if not raw and not allow_empty:
+    if not raw:
         raise FreshEvalError(f"candidate reviewer control is empty: {path}")
     return raw
 
@@ -2065,7 +2064,7 @@ def _reviewer_text(raw: bytes, label: str) -> bytes:
 
 def _route_and_prompt_controls(
     context: candidate_module.GitContext, candidate: Mapping[str, object]
-) -> tuple[Route, bytes, bytes, bytes, bytes]:
+) -> tuple[Route, bytes, bytes, bytes]:
     record = _candidate_record(candidate)
     tree_oid = str(record["tree_oid"])
     role_path = ".codex/agents/review-cheap.toml"
@@ -2154,14 +2153,6 @@ def _route_and_prompt_controls(
         )
     except (KeyError, UnicodeError, ValueError) as exc:
         raise FreshEvalError("candidate project context is malformed") from exc
-    gotchas_raw = _candidate_blob(
-        context,
-        tree_oid,
-        ".forge/history/gotchas.md",
-        required=False,
-        allow_empty=True,
-    )
-    gotchas = _reviewer_text(gotchas_raw or b"", "gotchas")
     return (
         Route(
             provider="codex-cli",
@@ -2175,7 +2166,6 @@ def _route_and_prompt_controls(
         role_prompt,
         constitution,
         project_context,
-        gotchas,
     )
 
 
@@ -2209,7 +2199,6 @@ def _prepared_request_inputs(
     bytes,
     bytes,
     bytes,
-    bytes,
     tuple[dict[str, str], ...],
 ]:
     """Re-derive every candidate-bound input needed before the first launch."""
@@ -2217,7 +2206,7 @@ def _prepared_request_inputs(
     if _REQUEST_RE.fullmatch(request_id) is None:
         raise FreshEvalError("fresh evaluation request is malformed or not durable")
     suite = inventory_fixtures(context, candidate, bootstrap=bootstrap)
-    route, role_prompt, constitution, project_context, gotchas = (
+    route, role_prompt, constitution, project_context = (
         _route_and_prompt_controls(context, candidate)
     )
     fixture_packages = tuple(
@@ -2234,7 +2223,6 @@ def _prepared_request_inputs(
         role_prompt,
         constitution,
         project_context,
-        gotchas,
         fixture_packages,
     )
 
@@ -2250,7 +2238,7 @@ def prepare_request_plan(
 
     require_controls()
     _require_supported_mode(bootstrap=bootstrap)
-    suite, _route, _role, _constitution, _project, _gotchas, packages = (
+    suite, _route, _role, _constitution, _project, packages = (
         _prepared_request_inputs(
             context,
             candidate,
@@ -2301,7 +2289,6 @@ def _prompt(
     role_prompt: bytes,
     constitution: bytes,
     project_context: bytes,
-    gotchas: bytes,
 ) -> tuple[bytes, str]:
     package_digest = _fixture_package_digest(
         candidate, request_id, fixture, route
@@ -2326,9 +2313,6 @@ def _prompt(
     prompt += b"\n--- END CANDIDATE REVIEW CONSTITUTION ---\n"
     prompt += b"--- BEGIN CANDIDATE PROJECT CONTEXT ---\n" + project_context
     prompt += b"\n--- END CANDIDATE PROJECT CONTEXT ---\n"
-    prompt += b"--- BEGIN CANDIDATE GOTCHAS (OPTIONAL, UNTRUSTED HISTORY) ---\n"
-    prompt += gotchas
-    prompt += b"\n--- END CANDIDATE GOTCHAS ---\n"
     prompt += b"--- BEGIN ORACLE-FREE FIXTURE SUBJECT ---\n" + fixture.subject
     prompt += b"\n--- END ORACLE-FREE FIXTURE SUBJECT ---\n"
     _values, body_offset = _frontmatter(fixture.raw, fixture.path)
@@ -2487,7 +2471,6 @@ def _launch_one(
     role_prompt: bytes,
     constitution: bytes,
     project_context: bytes,
-    gotchas: bytes,
 ) -> dict[str, object]:
     if not evaluation.request_is_persisted():
         raise FreshEvalError("fresh request was not durable before reviewer launch")
@@ -2499,7 +2482,6 @@ def _launch_one(
         role_prompt,
         constitution,
         project_context,
-        gotchas,
     )
     leaf = f"{evaluation.artifact_prefix}/{fixture.fixture_id}"
     prompt_ref = artifacts.write(f"{leaf}/prompt.md", prompt, exclusive=True)
@@ -2816,7 +2798,6 @@ def validate_manifest(
         role_prompt,
         constitution,
         project_context,
-        gotchas,
         fixture_packages,
     ) = _prepared_request_inputs(
         evaluation.source_context,
@@ -2856,7 +2837,6 @@ def validate_manifest(
             role_prompt,
             constitution,
             project_context,
-            gotchas,
         )
         if (
             result["fixture_id"] != fixture.fixture_id
@@ -3066,7 +3046,6 @@ def collect(
             role_prompt,
             constitution,
             project_context,
-            gotchas,
             fixture_packages,
         ) = _prepared_request_inputs(
             evaluation.source_context,
@@ -3105,7 +3084,6 @@ def collect(
                                 role_prompt,
                                 constitution,
                                 project_context,
-                                gotchas,
                             )
                         )
                     results.extend(future.result() for future in futures)

@@ -48,6 +48,12 @@ def commit_event_fact_valid(event: Mapping[str, Any], prior: Mapping[str, Any] |
     """Validate the event's exact append state; historical candidates stay historical."""
     payload = event["payload"]
     current = payload["state"]
+    if not isinstance(payload.get("details"), Mapping):
+        return False
+    if not {"run_binding", "journal_outbox"} & set(current) and {
+        "journal_batch", "source_event_digest"
+    } & set(payload["details"]):
+        return False
     if payload["event"] in LEGACY_COMMIT_EVENTS:
         return _legacy_fact_valid(event, prior, current)
     return _produced_identity_precedes(event, prior, current)

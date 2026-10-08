@@ -1041,8 +1041,7 @@ verify_history_ignore_invariant() {
         ".forge/history/" \
         ".forge/history/runs/.forge-ignore-check.md" \
         ".forge/history/drift/.forge-ignore-check.md" \
-        ".forge/history/migrations/.forge-ignore-check.md" \
-        ".forge/history/gotchas.md"; do
+        ".forge/history/migrations/.forge-ignore-check.md"; do
         if git check-ignore -q --no-index -- "${history_path}"; then
             echo "forge install: .forge/history/ must not be ignored" >&2
             exit 2

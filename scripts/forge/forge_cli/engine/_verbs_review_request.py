@@ -10,6 +10,7 @@ from forge_cli import fresh_evals as fresh_eval_module
 from forge_cli.engine import _review_attempt, _review_lane_api, _review_launch
 from forge_cli.engine._approval import _success as _success
 from forge_cli.engine._candidate_ops import _candidate_review_diff as _candidate_review_diff
+from forge_cli.engine._candidate_ops import _tree_delta
 from forge_cli.engine._core import _fresh_eval_invalid_refusal as _fresh_eval_invalid_refusal
 from forge_cli.engine._core import _write_artifact as _write_artifact
 from forge_cli.engine._fresh_eval_evidence import (
@@ -127,10 +128,6 @@ def _review_package(
             remediation=chain_core._forge_command(state, "review request"),
             chain=state,
         ) from exc
-    gotchas_result = self.ctx.repo.git(
-        ["show", f"{policy.sha}:.forge/history/gotchas.md"], check=False
-    )
-    gotchas = gotchas_result.stdout if gotchas_result.returncode == 0 else b""
     instruction = REVIEW_INSTRUCTION.format(constitution_path=constitution_path).encode()
     candidate = state["candidate"]
     header_lines = [
@@ -156,6 +153,18 @@ def _review_package(
         f"role-template: {role_relative.as_posix()}",
         f"role-template-digest: {sha256_bytes(role_template)}",
     ]
+    events = self.ctx.store._events(str(state["chain_id"]))
+    reviewed = next((
+        event["payload"]["state"]["candidate"]
+        for event in reversed(events)
+        if event["payload"]["event"] in {"review_blocked", "review_passed"}
+    ), None)
+    if isinstance(reviewed, Mapping):
+        old_tree = reviewed.get("tree_oid")
+        header_lines.append("prior-candidate: " + chain_core.canonical_bytes(reviewed).decode())
+        if isinstance(old_tree, str):
+            delta = _tree_delta(self.ctx, old_tree, str(candidate["tree_oid"]))
+            header_lines.append(f"candidate-delta: {chain_core.canonical_bytes(delta).decode()}")
     if reviewer == "review-final":
         header_lines.append(f"role-body-digest: {paths.role_body_digest}")
     header = ("\n".join(header_lines) + "\n").encode()
@@ -166,8 +175,7 @@ def _review_package(
     control += (
         "\n--- committed agent-project-context ---\n"
         f"{policy.regions['agent-project-context']}"
-        "\n--- committed gotchas (optional; empty when absent) ---\n"
-    ).encode() + gotchas
+    ).encode()
     control += (
         "\n--- committed review-prompt-project-focus ---\n"
         f"{policy.regions['review-prompt-project-focus']}"
@@ -408,6 +416,7 @@ def review_request(self) -> Outcome:
     role = _reviewer_role(state)
     head = str(state["candidate"]["base_commit_oid"])
     route = _review_launch.resolve_review_route(self.ctx, role, head, state=state)
+    _review_launch.require_distinct_final_route(self.ctx, route, head, state)
     iteration = int(state["review"].get("iteration", 0)) + 1
     attempt = _review_lane_api.new_attempt_id()
     attempt_relative = f"review/iteration-{iteration:02d}/{attempt}"

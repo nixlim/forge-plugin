@@ -190,11 +190,15 @@ class LegacyMergeReplayTests(adapters.MergeAdapterFixture):
                 changed[index]["payload"]["scope_request"] = value
                 self.assert_event_refused(store, chain_id, changed, index)
 
-    def test_new_merge_reader_refuses_lone_source_event_digest(self):
+    def _assert_new_merge_reader_refuses_carrier(self, carrier):
+        transition = package_module("chain_core._merge_transition")
         store, chain_id, events = self.bootstrap_result()
         self.assertEqual(events[-1]["event"], "generation_refreshed")
-        self.assertNotIn("run_binding", store.load(chain_id))
-        events[-1]["payload"]["source_event_digest"] = "a" * 64
+        current = store.load(chain_id)
+        self.assertNotIn("run_binding", current)
+        payload = {carrier: "a" * 64}
+        self.assertFalse(transition._new_merge_carriers_absent(current, payload))
+        events[-1]["payload"].update(payload)
         rewrite_events(store, chain_id, events)
         paths = (store.state_path(chain_id), store.events_path(chain_id))
         before = [path.read_bytes() for path in paths]
@@ -203,6 +207,12 @@ class LegacyMergeReplayTests(adapters.MergeAdapterFixture):
         ):
             store.load(chain_id)
         self.assertEqual([path.read_bytes() for path in paths], before)
+
+    def test_new_merge_reader_refuses_source_event_digest(self):
+        self._assert_new_merge_reader_refuses_carrier("source_event_digest")
+
+    def test_new_merge_reader_refuses_journal_batch(self):
+        self._assert_new_merge_reader_refuses_carrier("journal_batch")
 
     def test_merge_state_requires_both_legacy_keys_or_neither(self):
         store, chain_id, _events = self.bootstrap_result()

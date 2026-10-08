@@ -332,11 +332,13 @@ every required in-lock review of the integrated range. An invocation with no fin
 finding event. These attempts occur after the verdict and findings are preserved; emitter failure
 never changes the verdict, review iteration, or exit status.
 
-For a revision, commit the fix through `/forge:commit`, re-establish a clean worktree, and re-run
-the affected Gates 1 and 2 before re-review. Use a maximum of 8 review iterations. Dispositioning
-any finding above MINOR requires explicit user approval. At the 8-iteration cap without PASS,
-record the residual risk—every outstanding finding and why it remains—escalate to the user, and
-never merge.
+For a revision, commit the fix through `/forge:commit`, using `commit restage --paths <path>...`
+inside a live blocked commit chain so its candidate delta is recorded. Re-establish a clean
+worktree and re-run the affected Gates 1 and 2 before merge re-review. The merge chain keeps its
+own review and in-lock re-verification generations. Use a maximum of 8 review iterations.
+Dispositioning any finding above MINOR requires explicit user approval. At the 8-iteration cap
+without PASS, record the residual risk—every outstanding finding and why it remains—escalate to
+the user, and never merge.
 
 Gate results remain in `.forge/chains/`. An open orchestration run may append a free-text
 `decision` naming the merge chain.

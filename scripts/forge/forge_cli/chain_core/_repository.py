@@ -1,5 +1,6 @@
 """Extracted from scripts/forge/forge_cli/chain_core/__init__.py."""
 from __future__ import annotations
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -14,6 +15,17 @@ from forge_cli.policy import sha256_bytes
 
 _DRIFT_NO_FSMONITOR: tuple[str, ...] = ("-c", "core.fsmonitor=false")
 _DRIFT_LITERAL_PATHSPECS: tuple[str, ...] = ("--literal-pathspecs",)
+
+
+def echo_pathspec(value: str) -> str:
+    """Render a path value on one diagnostic line."""
+    try:
+        value.encode("utf-8", "strict")
+    except UnicodeEncodeError:
+        return "(un-echoed)"
+    if any(ord(character) < 32 for character in value):
+        return "(un-echoed)"
+    return json.dumps(value, ensure_ascii=True)
 
 
 def _flagged_index_labels(raw: bytes) -> list[str]:
@@ -91,7 +103,7 @@ class Repository:
             ["git", *args],
             cwd=str(self.root),
             input=input_bytes,
-            stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+            stdin=None if input_bytes is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=pinned_environment,
@@ -208,6 +220,13 @@ class Repository:
     def normalize_paths(self, values: Sequence[str]) -> list[str]:
         normalized: list[str] = []
         for value in values:
+            if not value or "\0" in value:
+                raise Refusal(
+                    ReasonCode.PATH_MISSING,
+                    "named path is outside the repository: (un-echoed)",
+                    observed="(un-echoed)",
+                    remediation="forge commit start --paths <repository-relative-path>...",
+                )
             candidate = Path(value)
             absolute = candidate if candidate.is_absolute() else self.root / candidate
             resolved_parent = Path(os.path.realpath(absolute.parent))
@@ -217,8 +236,8 @@ class Repository:
             except ValueError:
                 raise Refusal(
                     ReasonCode.PATH_MISSING,
-                    f"named path is outside the repository: {value}",
-                    observed=value,
+                    f"named path is outside the repository: {echo_pathspec(value)}",
+                    observed=echo_pathspec(value),
                     remediation="forge commit start --paths <repository-relative-path>...",
                 )
             label = relative.as_posix()
@@ -226,10 +245,22 @@ class Repository:
             if not resolved.exists() and tracked.returncode != 0:
                 raise Refusal(
                     ReasonCode.PATH_MISSING,
-                    f"named path does not exist: {label}",
-                    observed=label,
-                    remediation=f"create {label} or remove it from --paths",
+                    f"named path does not exist: {echo_pathspec(label)}",
+                    observed=echo_pathspec(label),
+                    remediation=f"create {echo_pathspec(label)} or remove it from --paths",
                 )
+            self._require_not_ignored(label)
             if label not in normalized:
                 normalized.append(label)
         return normalized
+
+    def _require_not_ignored(self, label: str) -> None:
+        result = self.git(["check-ignore", "-q", "-z", "--stdin"],
+                          input_bytes=os.fsencode(label) + b"\0", check=False)
+        if result.returncode != 1:
+            raise Refusal(
+                ReasonCode.PATH_MISSING,
+                f"named path does not exist: {echo_pathspec(label)}",
+                observed=echo_pathspec(label),
+                remediation="name a non-ignored repository path",
+            )

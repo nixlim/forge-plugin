@@ -551,5 +551,38 @@ class MergeReviewUnitTests(unittest.TestCase):
             self.assertIn("review collect", APP_REVIEW._collect_pending(*pending_args).remediation)
 
 
+class MergeRouteTests(adapters.MergeAdapterFixture):
+    """Shared final-route refusal on merge chains."""
+
+    def test_merge_review_final_refuses_equal_implementer_route(self) -> None:
+        _admission, _generation, store, engine, _outcome, _calls = self.verify_chain()
+        launch = package_module("engine._review_launch")
+        original = launch.route_config.resolve
+
+        def same_model(root, role, head):
+            return original(root, "review-final" if role == "implementer" else role, head)
+
+        before = store.events_path(self.chain_id).read_bytes()
+        with mock.patch.object(launch.route_config, "resolve", side_effect=same_model):
+            with self.assertRaises(APP_REVIEW.Refusal) as caught:
+                engine.review_request()
+            self.assertEqual(
+                str(caught.exception),
+                "forge: review request refused — review-final route equals the implementer route",
+            )
+            self.assertEqual(caught.exception.reason_code.value, "state-precondition")
+            self.assertEqual(caught.exception.schema, "forge-cli/2")
+            self.assertEqual(store.events_path(self.chain_id).read_bytes(), before)
+            self.assertIsNone(store.load(self.chain_id)["review"].get("request"))
+            with patch_engine("require_distinct_final_route", return_value=None):
+                executable = review_support.install_fake_provider(
+                    self.temp_root / "route-review-bin", "claude", mode="pass",
+                    log_dir=self.temp_root / "route-review-log",
+                )
+                with patch_engine("CLAUDE_EXECUTABLE", str(executable)):
+                    engine.review_request()
+        self.assertIsNotNone(store.load(self.chain_id)["review"]["request"])
+
+
 if __name__ == "__main__":
     unittest.main()

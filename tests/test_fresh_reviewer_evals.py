@@ -650,7 +650,7 @@ class FreshReviewerFailureTests(unittest.TestCase):
                 repository.write(relative, raw)
                 repository.git("add", "--", relative)
             snapshot = repository.snapshot()
-            route, role_prompt, _constitution, _project, _gotchas = (
+            route, role_prompt, _constitution, _project = (
                 FRESH._route_and_prompt_controls(
                     repository.context, snapshot.state_record()
                 )
@@ -677,7 +677,7 @@ class FreshReviewerFailureTests(unittest.TestCase):
         with FreshEvalRepo() as repository:
             repository.remove("system/codex/prompts/review-cheap.md")
             snapshot = repository.snapshot()
-            _route, role_prompt, _constitution, _project, _gotchas = (
+            _route, role_prompt, _constitution, _project = (
                 FRESH._route_and_prompt_controls(
                     repository.context, snapshot.state_record()
                 )
@@ -745,7 +745,6 @@ class FreshReviewerFailureTests(unittest.TestCase):
                 role_prompt,
                 constitution,
                 project_context,
-                gotchas,
                 _packages,
             ) = FRESH._prepared_request_inputs(
                 repository.context,
@@ -772,7 +771,6 @@ class FreshReviewerFailureTests(unittest.TestCase):
                         role_prompt,
                         constitution,
                         project_context,
-                        gotchas,
                     )
             self.assertEqual(launcher.started, [])
 
@@ -1146,7 +1144,7 @@ The fresh-evaluation gate refuses the unsupported fixture route.
             suite = FRESH.inventory_fixtures(
                 repository.context, snapshot.state_record()
             )
-            route, role, constitution, project, gotchas = (
+            route, role, constitution, project = (
                 FRESH._route_and_prompt_controls(
                     repository.context, snapshot.state_record()
                 )
@@ -1164,7 +1162,6 @@ The fresh-evaluation gate refuses the unsupported fixture route.
                         role,
                         constitution,
                         project,
-                        gotchas,
                     )
             self.assertEqual(
                 caught.exception.reason,

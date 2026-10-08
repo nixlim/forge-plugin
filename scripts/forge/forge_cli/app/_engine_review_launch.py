@@ -254,6 +254,9 @@ def review_request(self: MergeEngine) -> Outcome:
     route = engine.resolve_review_route(
         self.ctx, "review-final", str(state["candidate"]["remote_tip"]), state=state
     )
+    engine.require_distinct_final_route(
+        self.ctx, route, str(state["candidate"]["remote_tip"]), state
+    )
     attempt = engine.new_attempt_id()
     relative = f"review/iteration-{iteration:02d}/{attempt}"
     worktree = self.ctx.repo.root.parent / str(state["worktree"]["path"])

@@ -10,6 +10,7 @@ from forge_cli.engine._candidate_ops import (
     _invalidate_candidate_evidence as _invalidate_candidate_evidence,
 )
 from forge_cli.engine._candidate_ops import _stage_paths as _stage_paths
+from forge_cli.engine._candidate_ops import _tree_delta as _tree_delta
 from forge_cli.engine._classification import _run_classification as _run_classification
 from forge_cli.engine._command_lock import _new_state as _new_state
 from forge_cli.engine._core import _run_halt as _run_halt
@@ -211,7 +212,10 @@ def restage(self, paths: Sequence[str]) -> Outcome:
             state["policy_source"]["sha"] = current_head
             state["steps"].pop("head_moved", None)
     normalized = self.ctx.repo.normalize_paths(paths)
+    old_record = copy.deepcopy(state["candidate"])
+    old_tree = str(old_record.get("tree_oid") or self.ctx.repo.candidate_snapshot().tree_oid)
     old, candidate = _stage_paths(self.ctx, state, normalized, clear_old=True)
+    delta = _tree_delta(self.ctx, old_tree, str(state["candidate"]["tree_oid"]))
     _invalidate_candidate_evidence(state, preserve_operator_cosign=True)
     _transition_state(state, "classifying")
     self.ctx.store.persist(
@@ -220,6 +224,11 @@ def restage(self, paths: Sequence[str]) -> Outcome:
         {
             "old_candidate": old,
             "new_candidate": candidate,
+            "old_candidate_identity": old_record,
+            "new_candidate_identity": copy.deepcopy(state["candidate"]),
+            "old_tree": old_tree,
+            "new_tree": state["candidate"]["tree_oid"],
+            "delta": delta,
             "paths": list(state["paths"]),
         },
     )

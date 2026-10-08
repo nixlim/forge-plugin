@@ -2,15 +2,15 @@
 from __future__ import annotations
 import datetime as dt
 import os
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 from forge_cli import chain_core, runtime
 if TYPE_CHECKING:
     from forge_cli.engine._engine import Engine
-from forge_cli.engine._core import _run_halt as _run_halt
 from forge_cli.engine._state import TERMINAL_STATES as TERMINAL_STATES
 from forge_cli.policy import Policy
 from forge_cli.envelope import Outcome
 import functools
+
 
 def _new_state(
     chain_id: str,
@@ -70,21 +70,6 @@ def _new_state(
         "commit_result": {},
     }
     return chain_core.validate_state(state, chain_id)
-
-
-def _requested_restage_paths(
-    engine: "Engine",
-    method_name: str,
-    args: Sequence[object],
-    kwargs: Mapping[str, object],
-) -> tuple[str, ...]:
-    if method_name != "restage":
-        return ()
-    values = args[0] if args else kwargs.get("paths")
-    if not isinstance(values, (list, tuple)):
-        return ()
-    requested = [value for value in values if isinstance(value, str)]
-    return tuple(engine.ctx.repo.normalize_paths(requested))
 
 
 def _serialize_worktree_command(method: Callable[..., Outcome]) -> Callable[..., Outcome]:

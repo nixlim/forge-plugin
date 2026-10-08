@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Mapping, MutableMapping
 from forge_cli import chain_core, candidate as candidate_module, runtime
-from forge_cli.engine._core import promoted_tier as promoted_tier, _transition_state as _transition_state, _env_fingerprint as _env_fingerprint, _record_process_step as _record_process_step
+from forge_cli.engine._core import _transition_state as _transition_state, _env_fingerprint as _env_fingerprint, _record_process_step as _record_process_step
 import os
 import json
 from forge_cli.envelope import ReasonCode, Refusal
@@ -147,10 +147,7 @@ def _run_classification(
             chain=state,
         )
     categories: set[str] = set()
-    # Classification is promote-only across the lifetime of a chain.  A
-    # control floor discovered for any candidate cannot later be erased by
-    # restaging a lower-risk path set inside that same chain.
-    control = bool(state["tier"].get("control"))
+    control = False
     review_final_floor = False
     strict_floor = False
     for path_record in path_evidence:
@@ -162,8 +159,7 @@ def _run_classification(
         control = control or bool(path_record.get("control_floor"))
         review_final_floor = review_final_floor or bool(path_record.get("review_final_floor"))
         strict_floor = strict_floor or bool(path_record.get("strict_floor"))
-    old_effective = state["tier"].get("effective")
-    effective = promoted_tier(old_effective, str(computed_effective))
+    effective = str(computed_effective)
     if control or review_final_floor:
         effective = "hard"
     state["tier"].update(

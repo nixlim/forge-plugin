@@ -537,8 +537,7 @@ Complete the Review Completeness Check.
 Provide PASS or BLOCK verdict with severity-ranked findings.
 ```
 
-Beyond the mandatory FR-037 plugin role template, committed `agent-project-context`, and optional
-committed `.forge/history/gotchas.md` prefix, provide no task-assignment review payload beyond that
+Beyond the mandatory FR-037 plugin role template and committed `agent-project-context`, provide no task-assignment review payload beyond that
 instruction, its three spliced region bodies, the snapshot metadata (including both
 `authorization_id` and `review_diff_sha256`), and the exact bytes read from `review_artifact`. Do
 not substitute a summary, a regenerated or moving-index patch, a commit range, handoff, or the
@@ -572,12 +571,17 @@ an old verdict merely because a later snapshot has the same authorization ID.
 
 For each BLOCK, address every MAJOR or CRITICAL finding or consciously disposition it before the
 next review. Dispositioning any finding above MINOR requires explicit user approval; never
-self-approve it. After any fix, re-run the affected Step 2 validations before staging the fix and
-launching a fresh re-review. One bound verdict, including the engine's synthetic BLOCK, is one
-iteration; an attempt cleared without a verdict (cancelled, abandoned, wrapper-lost, launch-failed,
-or not-logged-in) consumes none. Stop after at most 8 review iterations. If iteration 8 does not
-PASS, record the outstanding findings and why they remain as residual risk, escalate to the user,
-and never commit.
+self-approve it. After any fix, re-run the affected Step 2 validations, then run
+`commit restage --paths <path>...` in the live chain, naming every revised repository path under
+`commit start`'s path rules; the CLI records the old and new candidate identities and their exact
+tree delta. Every gate and the review run again after a restage; nothing carries forward. The
+named paths form the whole restaged candidate; any omitted staged path is restored to HEAD.
+Restaging clears approval, authorization, dispositions and every candidate-bound skip; returning
+to older tree bytes restores no superseded authority. One bound verdict, including the engine's
+synthetic BLOCK, is one iteration; an attempt cleared without a verdict (cancelled, abandoned,
+wrapper-lost, launch-failed, or not-logged-in) consumes none. Stop after at most 8 review
+iterations. If iteration 8 does not PASS, record the outstanding findings and why they remain as
+residual risk, escalate to the user, and never commit.
 
 Keep each Step 4 review verdict with the chain's exact 64-hex `authorization_id`, the
 separately named `review_diff_sha256`, reviewer role, iteration, and finding severities. A BLOCK

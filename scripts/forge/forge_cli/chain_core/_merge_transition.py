@@ -1960,6 +1960,10 @@ def _merge_transition_valid(
     return True
 
 
+def _new_merge_carriers_absent(current: Mapping[str, Any], payload: Mapping[str, Any]) -> bool:
+    return "run_binding" in current or not {"source_event_digest", "journal_batch"} & set(payload)
+
+
 def _merge_history_transition_valid(
     event: dict[str, Any],
     prior: dict[str, Any] | None,
@@ -1970,7 +1974,7 @@ def _merge_history_transition_valid(
 ) -> bool:
     """Keep captured Revision-9 epochs on their immutable grammar."""
 
-    if "run_binding" not in current and "source_event_digest" in event["payload"]:
+    if not _new_merge_carriers_absent(current, event["payload"]):
         return False
     if not _merge_history_uses_additive_grammar((*history, event)):
         return bool(
@@ -1978,10 +1982,4 @@ def _merge_history_transition_valid(
                 event, prior, current, context=context
             )
         )
-    return _merge_transition_valid(
-        event,
-        prior,
-        current,
-        context=context,
-        history=history,
-    )
+    return _merge_transition_valid(event, prior, current, context=context, history=history)

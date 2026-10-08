@@ -51,7 +51,6 @@ class FreshEvalChainTests(cli_support.ForgeCLIFixture):
         relatives = (
             ".codex/agents/review-cheap.toml",
             ".codex/config.toml",
-            ".forge/history/gotchas.md",
             "rules/review-constitution.md",
             "system/codex/agents/review-cheap.toml",
             "system/codex/config.toml",

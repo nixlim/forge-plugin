@@ -144,6 +144,39 @@ def _candidate_review_diff(
     return data
 
 
+def _tree_delta(
+    ctx: chain_core.CommandContext, old_tree: str, new_tree: str
+) -> list[dict[str, str | None]]:
+    raw = candidate_module.git_output(
+        ctx.repo.candidate_context(),
+        ["diff-tree", "-z", "-r", "-M", "--raw", old_tree, new_tree],
+        stdout_limit=candidate_module.ENUMERATION_MAX_BYTES,
+    )
+    fields = raw.split(b"\0")
+    if fields.pop() != b"":
+        raise FrozenError("candidate tree delta is not NUL framed")
+    result: list[dict[str, str | None]] = []
+    index = 0
+    while index < len(fields):
+        header = fields[index].split(b" ")
+        if len(header) != 5 or not header[0].startswith(b":"):
+            raise FrozenError("candidate tree delta has malformed raw header")
+        status = header[4].decode("ascii", "strict")
+        rename = status.startswith(("R", "C"))
+        if index + (2 if rename else 1) >= len(fields):
+            raise FrozenError("candidate tree delta has missing path")
+        old_path = fields[index + 1].decode("utf-8", "strict")
+        path = fields[index + 2 if rename else index + 1].decode("utf-8", "strict")
+        result.append({
+            "status": status, "path": path,
+            "old_path": old_path if rename else None,
+            "old_mode": header[0][1:].decode("ascii", "strict"),
+            "new_mode": header[1].decode("ascii", "strict"),
+        })
+        index += 3 if rename else 2
+    return result
+
+
 def _adopt_out_of_band_candidate(
     ctx: chain_core.CommandContext,
     state: MutableMapping[str, Any],

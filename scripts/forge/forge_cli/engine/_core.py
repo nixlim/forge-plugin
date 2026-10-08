@@ -26,11 +26,6 @@ def chain_id_now() -> str:
     return f"c-{stamp}-{secrets.token_hex(2)}"
 
 
-def promoted_tier(*tiers: str | None) -> str:
-    present = [tier for tier in tiers if tier in chain_core.TIER_RANK]
-    return max(present, key=chain_core.TIER_RANK.__getitem__) if present else "standard"
-
-
 def _transition_state(state: MutableMapping[str, Any], target: str) -> None:
     """Apply one transition through the closed FR-211 state table."""
     current = str(state.get("state"))

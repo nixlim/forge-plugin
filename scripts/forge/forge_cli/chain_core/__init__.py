@@ -74,6 +74,7 @@ from ._merge_rebase import (
 )
 from ._merge_state_shape import _merge_gate_plan_valid as _merge_gate_plan_valid, _merge_epoch_valid as _merge_epoch_valid, _merge_bootstrap_classification_pending as _merge_bootstrap_classification_pending, _merge_revision9_compatibility_view as _merge_revision9_compatibility_view, _merge_state_shape_valid as _merge_state_shape_valid, _merge_history_uses_additive_grammar as _merge_history_uses_additive_grammar
 from ._repository import Repository as Repository
+from ._repository import echo_pathspec as echo_pathspec
 from ._lock_record_io import (
     _read_owned_record_at as _read_owned_record_at,
     _same_published_record as _same_published_record,
@@ -438,6 +439,7 @@ __all__ = [
     'acquire_chain_lease',
     'acquire_common_lock',
     'canonical_bytes',
+    'echo_pathspec',
     'hold_common_lock',
     'iso_z',
     'merge_gate_intent_digest',

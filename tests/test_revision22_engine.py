@@ -585,6 +585,43 @@ class LegacyCommitReplayTests(ChainProcessFixture):
             self.assertNotIn(payload["event"], {"journal_receipted", "abort_disposition_recorded"})
             self.assertFalse({"journal_batch", "source_event_digest"} & set(payload["details"]))
 
+    def test_new_commit_reader_refuses_each_retired_carrier(self):
+        chain_id = self.start_candidate()
+        store = CLI.ChainStore(CLI.Repository(self.repo).common_root())
+        original = self.events(chain_id)
+        for carrier in ("journal_batch", "source_event_digest"):
+            with self.subTest(carrier=carrier):
+                events = copy.deepcopy(original)
+                events[-1]["payload"]["details"][carrier] = "retired"
+                write_commit_history(store, chain_id, events)
+                with self.assertRaisesRegex(CLI.FrozenError, "^commit chain event replay failed$"):
+                    store.load(chain_id)
+
+    def test_legacy_candidate_restage_records_the_index_tree_and_delta(self):
+        chain_id = self.start_candidate()
+        repository = CLI.Repository(self.repo)
+        store = CLI.ChainStore(repository.common_root())
+        events = self.events(chain_id)
+        for event in events:
+            record = event["payload"]["state"]["candidate"]
+            event["payload"]["state"]["candidate"] = {
+                "sha256": record.get("sha256"), "computed_at": record.get("computed_at")
+            }
+        write_commit_history(store, chain_id, events)
+        index_tree = repository.candidate_snapshot().tree_oid
+        self.change("README.md", "restaged\n")
+        code, result = self.invoke_cli(
+            "--chain-id", chain_id, "commit", "restage", "--paths", "README.md"
+        )
+        self.assertEqual(code, 0, result)
+        detail = [event["payload"]["details"] for event in self.events(chain_id)
+                  if event["payload"]["event"] == "candidate_restaged"][-1]
+        self.assertEqual(detail["old_candidate_identity"],
+                         events[-1]["payload"]["state"]["candidate"])
+        self.assertEqual(detail["old_tree"], index_tree)
+        self.assertEqual([(entry["status"], entry["path"]) for entry in detail["delta"]],
+                         [("A", "README.md"), ("M", "src/app.py")])
+
     def test_new_chain_writer_refuses_legacy_members(self):
         source_id = self.start_candidate()
         store = CLI.ChainStore(CLI.Repository(self.repo).common_root())

@@ -451,7 +451,6 @@ class CommitSkillTests(unittest.TestCase):
             "[`orchestrate`](../orchestrate/SKILL.md#forge-isolation-and-prompt-construction)",
             "mandatory FR-037 plugin role template",
             "committed `agent-project-context`",
-            "committed `.forge/history/gotchas.md` prefix",
             "no task-assignment review payload beyond",
         )
         for control in controls:

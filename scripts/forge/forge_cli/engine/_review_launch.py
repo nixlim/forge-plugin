@@ -19,7 +19,7 @@ from forge_cli import chain_core
 from forge_cli.engine import _review_lane_api
 from forge_cli.engine._state import CLAUDE_EXECUTABLE as CLAUDE_EXECUTABLE
 from forge_cli.engine._state import CODEX_EXECUTABLE as CODEX_EXECUTABLE
-from forge_cli.envelope import FrozenError, ReasonCode, Refusal
+from forge_cli.envelope import FrozenError, ReasonCode, Refusal, V2ReasonCode
 from forge_cli.policy import sha256_bytes
 
 PROFILE_TIMEOUT_SECONDS = {"review": 2400, "implementer": 14400, "plan": 1200}
@@ -142,6 +142,34 @@ def resolve_review_route(
     route = ReviewRoute(role, resolved.provider, resolved.model, resolved.effort,
                         resolved.route_source, resolved.route_sha256, sandbox)
     return route
+
+
+def require_distinct_final_route(
+    ctx: chain_core.CommandContext,
+    route: ReviewRoute,
+    head: str,
+    state: Mapping[str, Any],
+) -> None:
+    if route.role != "review-final":
+        return
+    try:
+        implementer = route_config.resolve(Path(ctx.repo.root), "implementer", head)
+    except route_config.RouteRefusal as exc:
+        raise _review_refusal(str(exc), state) from exc
+    if (route.provider, route.model) == (implementer.provider, implementer.model):
+        literal = "forge: review request refused — review-final route equals the implementer route"
+        if state.get("kind") == "merge":
+            raise chain_core._merge_refusal(V2ReasonCode.STATE_PRECONDITION, literal, chain=state)
+        raise Refusal(
+            ReasonCode.STATE_PRECONDITION,
+            literal,
+            expected="a review-final provider or model distinct from the implementer route",
+            observed=f"{route.provider}/{route.model}",
+            remediation=chain_core._forge_command(
+                state, "commit abort --reason reviewer-route-conflict"
+            ),
+            chain=state,
+        )
 
 
 def allowed_environment(

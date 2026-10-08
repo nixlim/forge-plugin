@@ -294,10 +294,6 @@ def _review_package(
             observed=str(exc),
             chain=state,
         ) from exc
-    gotchas_result = repository.git(
-        ["show", f"{policy.sha}:.forge/history/gotchas.md"], check=False
-    )
-    gotchas = gotchas_result.stdout if gotchas_result.returncode == 0 else b""
     candidate = state["candidate"]
     header = (
         "FORGE MERGE REVIEW MASTER PACKAGE v1\n"
@@ -323,9 +319,7 @@ def _review_package(
             f"{policy.regions['project-triggers']}"
             "\n--- committed completeness-project-items ---\n"
             f"{policy.regions['completeness-project-items']}"
-            "\n--- committed gotchas ---\n"
         ).encode("utf-8")
-        + gotchas
         + b"\n--- END CONTROLLING REVIEW POLICY ---\n"
     )
     mutation_evidence = [

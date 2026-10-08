@@ -105,7 +105,6 @@ class FreshEvalRepo:
             ".codex/agents/review-cheap.toml",
             ".codex/agents/plan.toml",
             ".codex/config.toml",
-            ".forge/history/gotchas.md",
             "rules/review-constitution.md",
             "system/codex/agents/review-cheap.toml",
             "system/codex/agents/plan.toml",

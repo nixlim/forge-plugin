@@ -22,6 +22,7 @@ from forge_cli.engine._candidate_ops import (
 from forge_cli.engine._candidate_ops import (
     _invalidate_candidate_evidence as _invalidate_candidate_evidence,
 )
+from forge_cli.engine._candidate_ops import _tree_delta as _tree_delta
 from forge_cli.engine._classification import _run_classification as _run_classification
 from forge_cli.engine._core import _evidence_record as _evidence_record
 from forge_cli.engine._core import _record_process_step as _record_process_step
@@ -298,6 +299,8 @@ def gate_run(self, gate_id: str) -> Outcome:
         outputs = self.ctx.repo.normalize_paths([str(item) for item in details["outputs"]])
         combined_paths = list(dict.fromkeys([*state["paths"], *outputs]))
         old_candidate = state["candidate"].get("sha256")
+        old_identity = dict(state["candidate"])
+        old_tree = str(old_identity["tree_oid"])
         self.ctx.repo.git(["add", "--", *outputs])
         snapshot = _candidate_snapshot(self.ctx, state)
         if snapshot.base_commit_oid != state.get("repo_head"):
@@ -312,6 +315,7 @@ def gate_run(self, gate_id: str) -> Outcome:
         if set(snapshot.paths) != set(combined_paths):
             combined_paths = list(snapshot.paths)
         _install_candidate_snapshot(self.ctx, state, snapshot)
+        delta = _tree_delta(self.ctx, old_tree, str(state["candidate"]["tree_oid"]))
         _invalidate_candidate_evidence(
             state, preserve_operator_cosign=True
         )
@@ -323,6 +327,11 @@ def gate_run(self, gate_id: str) -> Outcome:
                 "gate_id": gate_id,
                 "old_candidate": old_candidate,
                 "new_candidate": state["candidate"]["sha256"],
+                "old_candidate_identity": old_identity,
+                "new_candidate_identity": dict(state["candidate"]),
+                "old_tree": old_tree,
+                "new_tree": state["candidate"]["tree_oid"],
+                "delta": delta,
                 "outputs": outputs,
             },
         )
