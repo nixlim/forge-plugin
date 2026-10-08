@@ -70,13 +70,28 @@ not part of `prompt.md`. Claude `prompt.md` and stdin start with the exact bytes
 The committed context MUST NOT come from working-tree state, another checkout, or a rendered agent
 definition. The typed lane renders the concrete values, saves those exact assembled bytes as
 `prompt.md`, and appends its owner record in the required order. Do not assemble or save that prompt
-by hand. Handoffs retain the upstream six-heading contract shown below.
+by hand. Handoffs retain the upstream six-heading contract shown below. Every assignment follows
+the [brief and design discipline](../workflow/SKILL.md#brief-and-design-discipline): quoted
+sentences, a baseline with per-file dispositions when existing code changes, no mechanism the
+ruling does not name, byte-identical kept diagnostics, and the focused checks the agent must run.
 
 A first-pass reviewer is always a fresh agent and native session launched with `-s read-only`.
 Its prompt contains the goal, acceptance criteria, constraints, and exact target SHA. It must
 contain none of the implementer's handoff, claimed test results, earlier review verdicts, or the
 orchestrator's tentative conclusion. Inspect the review target directly; do not use those excluded
 claims as prompt context.
+
+Give each reviewer one lens, and for a trim, a port or a control change run two independent
+reviewers on the same final bytes. The bloat-and-conformance lens: every added line traces to a
+quoted requirement sentence or is a MAJOR; retired names are absent from code, tests and prose; a
+mode flag, a per-verb parameter on a shared helper, or a re-implementation of a tool the code
+already calls is a MAJOR; the diff is measured against the baseline. The correctness-and-fail-closed
+lens: every kept control's focused test is executed and the control is then disabled in memory to
+show the test fails; hostile inputs are exercised; reverted files are byte-identical to the
+baseline. Every finding carries the command and output that proves it; a claim without executed
+evidence is labelled a hypothesis and never counts toward BLOCK; the report also lists what was
+verified correct. Nobody edits the reviewed tree while a reviewer runs, and a fix is followed by a
+re-review of the exact new bytes.
 
 ## Forge Execution Preparation And Launch
 
@@ -270,6 +285,10 @@ on both commands for a resumed reviewer session. Record the actual
 `--sandbox <profile> --route-source <source> --route-sha256 <digest>` on both records.
 - After any defect fix, the affected end-to-end verification must pass twice consecutively before
   task completion, with both observed passes retained in check evidence.
+- A review BLOCK whose fix would add a branch, flag, helper or mechanism to satisfy the finding is
+  a design signal, not a fix: stop the iteration, re-cut the design against the ruling, and
+  relaunch with the new brief. After three consecutive BLOCKs on one unit whose fixes each added
+  code, stop and escalate instead of launching a fourth.
 - Apply `${CLAUDE_PLUGIN_ROOT}/rules/untrusted-input.md` and
   `${CLAUDE_PLUGIN_ROOT}/rules/risk-authority.md` for input handling and authority decisions.
 

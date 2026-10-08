@@ -31,6 +31,9 @@ For the first independent review:
 - Provide the goal, acceptance criteria, constraints, and exact commit SHA.
 - Do not provide the implementer handoff, claimed test results, earlier review verdicts, or Claude's
   tentative conclusion.
+- Name the reviewer's lens and the baseline commit, and require the command and output that proves
+  each finding, as the orchestrate skill's reviewer-lens paragraph describes; a finding without
+  executed evidence is a hypothesis.
 - Build the prompt through the canonical
   [prompt-construction contract](../SKILL.md#forge-isolation-and-prompt-construction), in exact
   order: `${CLAUDE_PLUGIN_ROOT}/system/codex/prompts/review-cheap.md`; the `agent-project-context`

@@ -85,7 +85,9 @@ approval, pushed SHA, and cleanup outcome where applicable. A journal reference 
 establish a gate result.
 
 Under `Risks / Follow-ups`, list failed or missing checks, blocked work, user actions, accepted
-risks, and concrete next steps. Write `None recorded.` if nothing remains. Include available tool
+risks, and concrete next steps. State the ruling or request the run implemented and list every
+mechanism, field, verb or literal the change added beyond that text; an addition the ruling did
+not name is a follow-up even when every gate passed. Write `None recorded.` if nothing remains. Include available tool
 versions as one compact `Run metadata` bullet when observed; omit unavailable values.
 
 ## Final Check

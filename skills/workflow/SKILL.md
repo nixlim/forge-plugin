@@ -74,6 +74,30 @@ refused before a directory or file is created.
 - Apply `${CLAUDE_PLUGIN_ROOT}/rules/untrusted-input.md` and
   `${CLAUDE_PLUGIN_ROOT}/rules/risk-authority.md` without weakening either rule.
 
+## Brief and design discipline
+
+- A brief quotes the ruling or specification sentence it implements and never paraphrases it. When
+  the brief and the specification disagree, the specification wins and the agent reports the
+  disagreement instead of resolving it.
+- A brief adds no mechanism, field, verb, literal, event member, module or helper that the ruling
+  does not name, and never invites the agent to improve on the ruling. An agent that believes one
+  is needed stops that part and reports it. A requirement that has grown past its ruling by an
+  order of magnitude is cut before any code is written.
+- A brief that changes existing code names a baseline commit and gives every touched file one
+  disposition: keep, revert to the baseline, delete, or edit with the exact change. Its acceptance
+  criterion is the baseline shape plus the named additions, measured with `git diff <baseline>
+  --stat` and a trace from every added hunk to a quoted sentence.
+- Kept diagnostics stay byte-identical. A retired literal leaves code, tests and prose in the same
+  change; a deleted control loses its tests in the same change; a kept control keeps a focused
+  test that fails when the control is disabled in memory.
+- One rule for two verbs beats a mode flag, and shared helpers take no per-verb parameters. Never
+  re-implement a tool the code already calls: do not parse Git pathspec syntax, match Git's stderr
+  text, or predict what Git will stage; let Git act and observe the result with plumbing.
+- A control that its own specification says can be evaded by construction is not specified.
+  Measure the problem a mechanism would solve before adding it.
+- When a ruling changes while a unit is open, patch every outstanding brief before the next
+  launch; an agent otherwise re-reads the stale sentence.
+
 ## Full Workflow
 
 1. Inspect the repository and user request. Write a plan with deliverables, acceptance criteria,

@@ -571,7 +571,10 @@ an old verdict merely because a later snapshot has the same authorization ID.
 
 For each BLOCK, address every MAJOR or CRITICAL finding or consciously disposition it before the
 next review. Dispositioning any finding above MINOR requires explicit user approval; never
-self-approve it. After any fix, re-run the affected Step 2 validations, then run
+self-approve it. A fix that adds a branch, flag, helper or mechanism to satisfy a finding is a
+design signal, not a fix: re-cut the design against the governing requirement before the next
+restage, and after three consecutive BLOCKs whose fixes each added code, stop and escalate to the
+user instead of restaging again. After any fix, re-run the affected Step 2 validations, then run
 `commit restage --paths <path>...` in the live chain, naming every revised repository path under
 `commit start`'s path rules; the CLI records the old and new candidate identities and their exact
 tree delta. Every gate and the review run again after a restage; nothing carries forward. The
