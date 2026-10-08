@@ -286,9 +286,7 @@ on both commands for a resumed reviewer session. Record the actual
 - After any defect fix, the affected end-to-end verification must pass twice consecutively before
   task completion, with both observed passes retained in check evidence.
 - A review BLOCK whose fix would add a branch, flag, helper or mechanism to satisfy the finding is
-  a design signal, not a fix: stop the iteration, re-cut the design against the ruling, and
-  relaunch with the new brief. After three consecutive BLOCKs on one unit whose fixes each added
-  code, stop and escalate instead of launching a fourth.
+  a design signal, not a fix: re-cut the design against the ruling before relaunching.
 - Apply `${CLAUDE_PLUGIN_ROOT}/rules/untrusted-input.md` and
   `${CLAUDE_PLUGIN_ROOT}/rules/risk-authority.md` for input handling and authority decisions.
 
