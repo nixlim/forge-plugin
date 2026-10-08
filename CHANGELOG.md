@@ -15,6 +15,7 @@ Release dates are the UTC dates of the release commits.
 
 ### Changed
 
+- Trailing whitespace left by U2 in two replay modules is removed; FR-230 evidence re-minted.
 - The launch lane refuses to start when the launch-lane lock cannot be taken, as at 0.7.1; only the `execution_started` append stays best-effort (FR-034, FR-036). Found by the whole-stack review.
 - Whole-stack review follow-ups: the commit guard no longer admits the retired `commit abort-disposition` verb; dead parameters and test plumbing are removed; a focused test refuses every FR-256 retired flag; FR-230 evidence is re-minted.
 - Prose follow-ups from the whole-stack review: UPSTREAM records the learn loop, frozen-route launch binding and `commit abort-disposition` as retired by Revision 22; `docs/updating-forge.md` gains the Revision 22 breaking-upgrade note; `rules/evaluation-harness.md` and the README Evals section follow the amended FR-102; `forge-project.md` and `AGENTS.md` no longer describe durable run archives or archive-only chains; the `[Unreleased]` body names every retired surface under Removed.

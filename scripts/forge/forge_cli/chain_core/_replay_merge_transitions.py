@@ -807,10 +807,10 @@ def _check_merge_candidate_transition(frame: MergeTransitionValidFrame) -> Any:
             frame.event_name != "fetch_result"
             or frame.current_generation[0].get("generation") != 1
             or any(
-                
+
                     frame.current.get(name) != {}
                     for name in ("steps", "review", "approval", "authorization")
-                
+
             )
         ):
             return False

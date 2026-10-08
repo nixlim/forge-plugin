@@ -20,5 +20,3 @@ def _utc_value(value: Any) -> dt.datetime | None:
         return result if result.tzinfo is not None else None
     except ValueError:
         return None
-
-
