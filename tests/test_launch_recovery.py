@@ -70,21 +70,6 @@ class LaunchRecoveryTests(LaunchLaneSupport, unittest.TestCase):
         self.assertTrue((marker_path.parent / "pid").exists())
         self.assertEqual(self.execution_records(), [])
 
-    def test_append_lock_failure_reports_and_launches(self) -> None:
-        engine = self.ready_engine()
-        stderr = io.StringIO()
-        with (
-            mock.patch.object(LAUNCH_LANE.fcntl, "flock", side_effect=OSError("lock failed")),
-            redirect_stderr(stderr),
-        ):
-            outcome = self.seed_launch(engine=engine)
-        self.assertTrue(outcome.ok)
-        self.assertEqual(stderr.getvalue(), journal.APPEND_IO_ERROR + "\n")
-        marker_path = (self.run_dir(self.repo, self.run_id)
-                       / "codex-implementer-01/execution-01/launch.json")
-        self.assertTrue(marker_path.exists())
-        self.assertTrue((marker_path.parent / "pid").exists())
-
     def _assert_cleanup_failure_is_explicit(self) -> None:
         engine = self.ready_engine()
         directory = self.run_dir(self.repo, self.run_id) / "codex-implementer-01/execution-01"

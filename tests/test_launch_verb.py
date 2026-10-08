@@ -209,7 +209,7 @@ class LaunchRunDirectorySafetyTests(_LaunchVerbSupport, unittest.TestCase):
 
         assertion()
         with mock.patch.object(VERBS_LAUNCH, "_require_owner_run_dir"):
-            with redirect_stderr(io.StringIO()), self.assertRaises(AssertionError):
+            with self.assertRaises(journal.CoordinationRefusal):
                 assertion()
 
 
@@ -269,40 +269,19 @@ class LaunchVerbOwnerTests(_LaunchVerbSupport, unittest.TestCase):
         )
         self.assertTrue(self.seed_launch(engine=engine, worktree=other).ok)
 
-    def test_execution_directories_allocate_distinct_ids_without_journal_lock(self) -> None:
-        self.configure_route("plan", "claude")
+    def test_launch_lane_lock_failure_refuses_before_any_launch_write(self) -> None:
         engine = self.ready_engine()
-        implementer = VERBS_LAUNCH._preflight(
-            engine.ctx, "implementer", self.task_id, str(self.linked_worktree), str(self.brief)
-        )
-        planner = VERBS_LAUNCH._preflight(
-            engine.ctx, "plan", self.task_id, str(self.linked_worktree), str(self.brief)
-        )
-        barrier = threading.Barrier(2)
-
-        def synchronize(_run: object, _worktree: object) -> None:
-            barrier.wait(timeout=5)
-
-        def allocate(facts: object) -> object:
-            return VERBS_LAUNCH._owner_record(engine.ctx, facts)
-
+        run_dir = self.run_dir(self.repo, self.run_id)
+        failure = journal.CoordinationRefusal(journal.APPEND_IO_ERROR)
         with (
-            mock.patch.object(VERBS_LAUNCH, "_require_no_inflight", side_effect=synchronize),
-            mock.patch.object(journal, "open_append_lock", side_effect=journal.CoordinationRefusal(
-                journal.APPEND_IO_ERROR
-            )),
-            redirect_stderr(io.StringIO()),
-            concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool,
+            mock.patch.object(journal, "open_append_lock", side_effect=failure),
+            self.assertRaises(journal.CoordinationRefusal),
         ):
-            owners = list(pool.map(allocate, (implementer, planner)))
-        try:
-            self.assertEqual(
-                {owner.draft.paths.execution for owner in owners},
-                {"execution-01", "execution-02"},
-            )
-        finally:
-            for owner in owners:
-                os.close(owner.draft.attempt_fd)
+            self.seed_launch(engine=engine)
+        self._assert_no_attempt()
+        self.assertFalse((run_dir / LAUNCH_LANE.EXECUTION_IDS_NAME).exists())
+        self.assertEqual(list(run_dir.rglob("launch.json")), [])
+        self.assertTrue(self.seed_launch(engine=engine).ok)
 
     def test_reservation_skips_next_id_even_after_execution_directory_goes_away(self) -> None:
         engine = self.ready_engine()

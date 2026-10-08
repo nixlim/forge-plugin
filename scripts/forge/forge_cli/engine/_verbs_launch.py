@@ -458,8 +458,7 @@ def _owner_record(ctx: chain_core.CommandContext, facts: StartFacts) -> OwnerLau
             "task_id": facts.task, "started_at": draft.marker["requested_at"],
             **_execution_fields(facts, paths),
         }
-        if descriptor is not None:
-            _launch_lane.append_record(run, record, descriptor)
+        _launch_lane.append_record(run, record, descriptor)
         return OwnerLaunch(facts=facts, draft=draft)
 
 

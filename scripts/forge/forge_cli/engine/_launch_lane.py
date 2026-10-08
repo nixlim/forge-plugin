@@ -255,19 +255,14 @@ def run_state(ctx: chain_core.CommandContext, run_id: str) -> RunState:
 
 
 @contextlib.contextmanager
-def journal_lock(run: RunState) -> Iterator[int | None]:
+def journal_lock(run: RunState) -> Iterator[int]:
     """Serialize launch ids and the start append on the journal descriptor."""
 
-    descriptor = None
-    try:
-        descriptor = run.journal.open_append_lock(run.repository, run.run_dir.name)
-    except (OSError, run.journal.CoordinationRefusal):
-        print(run.journal.APPEND_IO_ERROR, file=sys.stderr)
+    descriptor = run.journal.open_append_lock(run.repository, run.run_dir.name)
     try:
         yield descriptor
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        os.close(descriptor)
 
 
 def append_record(run: RunState, record: dict[str, object], descriptor: int | None = None) -> None:
