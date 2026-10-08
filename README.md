@@ -172,9 +172,10 @@ remain readable history; Forge does not generate or require new ones.
 
 ## Evals
 
-Golden control regressions live in `.forge/evals/tasks/`. Journal-derived fixtures
-preserve the exact recorded agent prompt and name both their source run and
-execution; the committed `.result` is the accepted verdict baseline. Routing,
+Golden control regressions live in `.forge/evals/tasks/`. Gate-output and
+verdict-derived fixtures take the exact prompt as their Input and cite chain ID,
+candidate and evidence references as provenance; the committed `.result` is the
+accepted verdict baseline. Routing,
 reviewer, constitution or other control-class changes require a strict run:
 
 ```sh

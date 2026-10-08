@@ -62,8 +62,7 @@ commit SHA, and move deliberately:
 - **Check the changelog for consumer-visible semantics**: e.g. 0.6.9+
   activated runs validate journal record shapes at append time (malformed
   records refuse at the first write instead of poisoning the run); 0.6.10
-  tightens `run-readmit` to superset-or-`--replace` semantics and adds
-  required typed idempotency keys; after 0.6.10 the worktree-merge skill
+  adds required typed idempotency keys; after 0.6.10 the worktree-merge skill
   takes its reintegration lock through `common-lock hold` (no `flock` binary
   consulted; a dead lock owner is an operator-cleared condition) and gated run
   close retires restaged-candidate gate sets from FR-021 correlation. If you scripted around old behavior, those scripts
@@ -75,6 +74,12 @@ commit SHA, and move deliberately:
   version, so plugin caches are keyed by commit SHA and updates track each
   commit on `main`. The `v0.7.0` tag itself still ships versioned manifests.
   Pin `nixlim/forge-plugin#vX.Y.Z` for release-only updates.
+- **Revision 22:** the release is breaking for callers of the FR-256 retired
+  surfaces: the verbs and flags `validate --gates`, `journal close-preflight`, `run-readmit`, `run-retire`, `journal batch-recover`, `journal ingest-chain`, `chain outbox-drain`, `commit abort-disposition`, `journal verification-add`, `commit start --archive-run-id <run-id>` including its legacy/backfill flag pairs and `worktree-check`; the executables `archive-run.py`, `audit-commitments.py` and `journal-patterns.py`; their interpreter-loaded helper modules `archive_closing.py`, `chain_evidence_codec.py`, `commitment_paths.py`, `learn-proposals.py`, `learn-proposals-locked.py` and `route_provenance.py`; and `/forge:learn`. Existing run
+  directories, journals, activated bindings and committed archives are left
+  untouched and readable. After the upgrade FR-253's built-in control set and
+  FR-254's floor apply to your own paths of those names, and project control
+  extensions survive `init`.
 - **Local modifications do not survive updates.** Any patch you carry in the
   plugin cache is overwritten by every update; re-apply and re-verify after
   each one, or upstream the change.

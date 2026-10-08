@@ -10,9 +10,7 @@ from ._state import STATE_KEYS
 LEGACY_COMMIT_EVENTS = frozenset({"journal_receipted", "abort_disposition_recorded"})
 
 
-def _legacy_fact_valid(
-    event: Mapping[str, Any], prior: Mapping[str, Any] | None, current: Mapping[str, Any]
-) -> bool:
+def _legacy_fact_valid(prior: Mapping[str, Any] | None, current: Mapping[str, Any]) -> bool:
     if prior is None or not {"run_binding", "journal_outbox"} & set(prior):
         return False
     ignored = {"last_event_at", "inactive_after"}
@@ -55,7 +53,7 @@ def commit_event_fact_valid(event: Mapping[str, Any], prior: Mapping[str, Any] |
     } & set(payload["details"]):
         return False
     if payload["event"] in LEGACY_COMMIT_EVENTS:
-        return _legacy_fact_valid(event, prior, current)
+        return _legacy_fact_valid(prior, current)
     return _produced_identity_precedes(event, prior, current)
 
 

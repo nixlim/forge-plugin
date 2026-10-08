@@ -22,8 +22,8 @@ independent review and approval as other control changes.
 
 <!-- forge: added — fail-closed fixture growth and provenance contract (FR-102) -->
 
-Prefer journal-derived fixtures when growing the suite: preserve the exact recorded agent prompt
-as the fixture Input, declare the expected verdict, and record provenance containing both the
-orchestration run ID and the agent execution ID. Fixtures and committed `.result` baselines are
+Prefer gate-output and verdict-derived fixtures when growing the suite: the exact prompt supplies
+the fixture Input, the expected verdict supplies the immutable oracle, and chain ID, candidate and
+evidence references supply provenance. Fixtures and committed `.result` baselines are
 append-only evidence: never overwrite either one, and never edit a result merely to make the gate
 pass. A changed expectation requires a new independently reviewed fixture and baseline.

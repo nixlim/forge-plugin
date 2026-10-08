@@ -14,6 +14,7 @@ from tests._git_env import init_quiet_repository
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/codex_orch_tools.py"
+CLI = ROOT / "scripts/forge/cli.py"
 
 
 def invoke(*args: str) -> subprocess.CompletedProcess[str]:
@@ -173,6 +174,38 @@ class VocabularyWriterTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 2)
                     self.assertIn("usage:", result.stderr)
             self.assertFalse((Path(temporary) / ".codex-orchestrator").exists())
+
+    def test_retired_flags_are_refused_by_both_writers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            for flag in (
+                "--closing-head", "--legacy-approval", "--legacy-recovered-head",
+                "--dispense-reason", "--dispense-citation", "--backfill-closing-head",
+                "--archive-run-id", "--scope", "--successor-of", "--gates",
+            ):
+                with self.subTest(script=CLI.name, flag=flag):
+                    result = subprocess.run(
+                        [sys.executable, str(CLI), "--json", "commit", "start",
+                         "--paths", "README.md", flag, "x"],
+                        capture_output=True, text=True, check=False, cwd=temporary,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(
+                        json.loads(result.stdout)["message"],
+                        f"invalid CLI invocation: unrecognized arguments: {flag} x",
+                    )
+            identity = ("--repo", temporary, "--run-id", "run")
+            for verb, required, flag in (
+                ("run-close", ("--outcome", "x"), "--summary"),
+                ("run-close", ("--outcome", "x"), "--risk"),
+                ("run-close", ("--outcome", "x"), "--follow-up"),
+                ("run-open", ("--intent", "x", "--actor", "y"), "--goal"),
+                ("run-open", ("--intent", "x", "--actor", "y"), "--plugin-ref"),
+            ):
+                with self.subTest(script=SCRIPT.name, flag=flag):
+                    result = invoke(verb, *identity, *required, flag, "x")
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("usage:", result.stderr)
+            self.assertEqual(list(Path(temporary).iterdir()), [])
 
     def test_concurrent_execution_starts_keep_caller_ids_and_untorn_lines(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

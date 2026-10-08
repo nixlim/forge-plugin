@@ -283,17 +283,15 @@ class LaunchRepositorySupport:
     def run_dir(self, repo: Path, run_id: str) -> Path:
         return journal.run_directory(repo, run_id)
 
-    def open_run(self, repo: Path, run_id: str, label: str = "open") -> Any:
+    def open_run(self, repo: Path, run_id: str, label: str = "open") -> None:
         record = {"kind": "run_started", "run_id": run_id, "repository": str(repo),
                   "intent": label, "actor": "forge-test"}
         journal.append_run_record(repo, run_id, record)
-        return SimpleNamespace(records=[record])
 
-    def start_task(self, repo: Path, run_id: str, label: str = "task") -> Any:
+    def start_task(self, repo: Path, run_id: str, label: str = "task") -> None:
         record = {"kind": "task", "run_id": run_id, "task_id": self.task_id,
                   "title": label, "scope": "launch tests", "status": "started"}
         journal.append_run_record(repo, run_id, record)
-        return SimpleNamespace(records=[record])
 
     def _install_committed_launch_inputs(self) -> None:
         inputs = {
@@ -413,12 +411,11 @@ class LaunchRepositorySupport:
         self.configure_route(role, provider)
         return ROUTE_CONFIG.resolve(self.linked_worktree, role, self.head)
 
-    def open_run_and_task(self, run_id: str | None = None) -> tuple[Any, Any]:
+    def open_run_and_task(self, run_id: str | None = None) -> None:
         selected = run_id or self.run_id
         with self.api_environment():
-            opened = self.open_run(self.repo, selected)
-            task = self.start_task(self.repo, selected)
-        return opened, task
+            self.open_run(self.repo, selected)
+            self.start_task(self.repo, selected)
 
 class LaunchLaneSupport(LaunchRepositorySupport):
     def ready_engine(

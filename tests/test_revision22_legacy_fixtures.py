@@ -148,8 +148,8 @@ class HeadWriterCompatibilityTests(unittest.TestCase):
         replay = package_module("chain_core._commit_replay")
         original = replay._legacy_fact_valid
 
-        def refuse_outbox_change(event, prior, current):
-            return original(event, prior, current) and (
+        def refuse_outbox_change(prior, current):
+            return original(prior, current) and (
                 prior.get("journal_outbox") == current.get("journal_outbox")
             )
 

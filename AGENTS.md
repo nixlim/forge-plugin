@@ -93,11 +93,11 @@ authority.
 
 <!-- FORGE:REGION project-overview BEGIN -->
 Forge is a Claude Code plugin implementing the DVRR workflow, commit and merge gate chains,
-orchestration journal tooling, read-only adversarial review, drift sensing, and durable run
-archives. It is implemented with Bash and Python standard-library tooling. The normative control
-authority is `docs/specs/forge-plugin-spec.md`; the full unittest discovery suite is the project
-test gate. Installed repository surfaces are rendered from `system/`, `skills/`, `agents/`,
-`rules/`, `hooks/`, and `scripts/forge/`.
+orchestration journal tooling, read-only adversarial review, and drift sensing. It is implemented
+with Bash and Python standard-library tooling. The normative control authority is
+`docs/specs/forge-plugin-spec.md`; the full unittest discovery suite is the project test gate.
+Installed repository surfaces are rendered from `system/`, `skills/`, `agents/`, `rules/`,
+`hooks/`, and `scripts/forge/`.
 <!-- FORGE:REGION project-overview END -->
 
 ## File Categories
@@ -353,8 +353,7 @@ which the mechanical check deliberately also accepts. A commit whose
 staged paths are exclusively docs-class (`docs/**`, `.forge/history/**`,
 `.forge/evals/candidates/**`, `*.md`/`*.txt` outside control locations, `UPSTREAM`, and
 `CHANGELOG.md` itself) is exempt. Release commits move the `[Unreleased]` body under the new
-version heading. Archive-only chains skip this gate under the operator's standing direction of
-2026-08-31 (recorded per chain via `commit skip changelog`).
+version heading.
 
 ```bash
 python3 - "$@" <<'PY'

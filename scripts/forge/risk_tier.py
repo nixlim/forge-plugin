@@ -773,10 +773,7 @@ def classify(
             {"source": "project-hard", "pattern": match["pattern"]}
             for match in matches if match["tier"] == "hard"
         )
-        strict_floor = control or any(
-            path in pattern_matches[pattern]
-            for pattern in BUILTIN_REVIEW_FINAL_FLOOR
-        )
+        strict_floor = control or any(match["source"] == "builtin" for match in floor_matches)
         dependency_matches = [
             pattern for pattern in policy.dependency_patterns if path in pattern_matches[pattern]
         ]
