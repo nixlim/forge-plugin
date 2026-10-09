@@ -8,6 +8,10 @@ Release dates are the UTC dates of the release commits.
 
 ## [Unreleased]
 
+### Fixed
+
+- Recognize Bash dollar-quoted git commit and push verbs in the commit guard; NUL-bearing ANSI-C quotes now fail closed in action discovery instead of being skipped (bead forge-plugin-752).
+
 ## [0.8.0] - 2026-10-08
 
 ### Added

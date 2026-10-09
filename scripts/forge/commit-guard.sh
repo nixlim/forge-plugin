@@ -2482,6 +2482,7 @@ def _find_actions_recursive_body(
                 ):
                     if action not in actions:
                         actions.append(action)
+        normalized_segment = _normalize_dollar_quotes(normalized_segment)
         try:
             tokens = shlex.split(normalized_segment, comments=False, posix=True)
         except ValueError:
@@ -4460,7 +4461,12 @@ ResolvedCommand = tuple[
 
 def _resolve_command(command: str, check_halt: Path) -> ResolvedCommand:
     """Parse, then resolve action and committed command-policy inputs once."""
-    actions = find_actions(command)
+    action_discovery_error = False
+    try:
+        actions = find_actions(command)
+    except GuardDeniedCommandError:
+        actions = []
+        action_discovery_error = True
     cli_class = classify_forge_cli_invocation(command)
     contexts = [(action, resolve_repo_context(action)) for action in actions]
     modes: dict[tuple[object, ...], str] = {}
@@ -4497,6 +4503,9 @@ def _resolve_command(command: str, check_halt: Path) -> ResolvedCommand:
         except GuardDeniedCommandError:
             direct_invocation_error = True
     if direct_invocation_error and denied_rules:
+        denied_rules = ()
+        denied_policy_error = GUARD_DENIED_MALFORMED
+    if action_discovery_error:
         denied_rules = ()
         denied_policy_error = GUARD_DENIED_MALFORMED
     return (
