@@ -10,6 +10,7 @@ Release dates are the UTC dates of the release commits.
 
 ### Fixed
 
+- Keep unquoted substitutions that bash recognises as openers whole during segmentation and tokenisation, including dollar-brace and dollar-bracket only after an even run of unescaped dollars, as a structured-pass swallow the raw-union pass never applies, so they cannot split the word and hide a later git commit or push verb, a Forge CLI operator verb, or a configured denied-command row (bead forge-plugin-unu).
 - Recognize dollar-quoted git commit and push verbs (ANSI-C `$'...'` and locale `$"..."`) in the commit guard's action discovery; normalize dollar quotes before command segmentation so an escaped quote inside one no longer desynchronises top-level segmentation and hides a later git verb (the double-quoted command-substitution variant remains open as bead forge-plugin-er59); deny any command carrying a dollar quote the guard cannot normalize (NUL escapes, nonportable `\u`/`\U` escapes, invalid UTF-8, or an unterminated quote), in every repository kind and outside any repository, with the existing policy-malformed diagnostic (bead forge-plugin-752).
 
 ## [0.8.0] - 2026-10-08

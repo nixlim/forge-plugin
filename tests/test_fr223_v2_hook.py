@@ -1671,7 +1671,7 @@ class GuardRawSegmentUnionTests(HookHarnessMixin, unittest.TestCase):
                     "deny-merge-approve",
                 )
         with mock.patch.object(module, "RAW_SEGMENT_PASS_ENABLED", False):
-            for name in ("comment", "heredoc", "parameter"):
+            for name in ("comment", "heredoc"):
                 with self.subTest(disabled=name):
                     self.assertEqual(module.find_actions(self.wrap(name, self.PUSH)), [])
                     self.assertEqual(

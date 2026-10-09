@@ -721,6 +721,7 @@ def split_segments(command: str) -> list[tuple[str, str | None]]:
     escaped = False
     index = 0
     syntax: str | None = None
+    span_ends: dict[int, int] | None = None
 
     while index < len(command):
         char = command[index]
@@ -755,6 +756,17 @@ def split_segments(command: str) -> list[tuple[str, str | None]]:
             current.extend(command[index : closing + 1])
             index = closing + 1
             continue
+        # Structured-pass swallow: the raw-union pass (flag cleared) still splits here.
+        if quote is None and _case_swallow_active and _expansion_opener_at(command, index):
+            if syntax is None:
+                syntax = _shell_syntax_view(command)
+            if span_ends is None:
+                span_ends = _substitution_span_ends(syntax)
+            closing = span_ends.get(index)
+            if closing is not None:
+                current.extend(command[index : closing + 1])
+                index = closing + 1
+                continue
         if command.startswith("case", index):
             if syntax is None:
                 syntax = _shell_syntax_view(command)
@@ -1345,7 +1357,8 @@ def _skip_forge_cli_prefix(tokens: list[str]) -> int:
 
 
 def _classify_forge_cli_segment(segment: str) -> str:
-    normalized_segment, _openers, _closers = shell_group_structure(segment)
+    masked_segment = _mask_unquoted_substitutions(segment)
+    normalized_segment, _openers, _closers = shell_group_structure(masked_segment)
     try:
         tokens = shlex.split(normalized_segment, comments=False, posix=True)
     except ValueError:
@@ -2318,7 +2331,9 @@ def _find_direct_invocations_recursive(command: str, cwd: Path) -> list[tuple[st
                 for invocation in _find_direct_invocations_recursive(nested, cwd):
                     if invocation not in invocations:
                         invocations.append(invocation)
-            normalized_segment, _openers, _closers = shell_group_structure(segment)
+            normalized_segment, _openers, _closers = shell_group_structure(
+                _mask_unquoted_substitutions(segment)
+            )
             try:
                 tokens = shlex.split(
                     normalized_segment, comments=False, posix=True
@@ -2446,6 +2461,83 @@ def _find_actions_recursive(
         _exit_nesting()
 
 
+def _expansion_opener_at(text: str, offset: int) -> bool:
+    """Bash opens dollar-brace or dollar-bracket after an even unescaped-dollar run; tests disable this rule in memory."""
+    if not text.startswith(("${", "$["), offset):
+        return False
+    run = 0
+    index = offset - 1
+    while index >= 0 and text[index] == "$":
+        slash = index - 1
+        while slash >= 0 and text[slash] == "\\":
+            slash -= 1
+        if (index - slash - 1) % 2:
+            break
+        run += 1
+        index -= 1
+    return run % 2 == 0
+
+
+def _substitution_span_ends(view: str) -> dict[int, int]:
+    span_ends: dict[int, int] = {}
+    open_spans: list[tuple[int | None, str]] = []
+    for offset, char in enumerate(view):
+        if char == "$" and _expansion_opener_at(view, offset):
+            open_spans.append((offset, "}" if view[offset + 1] == "{" else "]"))
+        elif char == "[" and open_spans and open_spans[-1][1] == "]":
+            if open_spans[-1][0] != offset - 1:
+                open_spans.append((None, "]"))
+        elif open_spans and char == open_spans[-1][1]:
+            opening, _closer = open_spans.pop()
+            if opening is not None:
+                span_ends[opening] = offset
+    return span_ends
+
+
+def _mask_unquoted_substitutions(segment: str) -> str:
+    """Keep unquoted substitution spans in their shell words for shlex."""
+    probe: list[str] = []
+    probe_offsets: dict[int, int] = {}
+    backslashes = 0
+    for offset, char in enumerate(segment):
+        if char == "\\":
+            backslashes += 1
+        else:
+            if backslashes % 2 == 0 and (
+                _expansion_opener_at(segment, offset)
+                or segment.startswith(("$(", "<(", ">("), offset)
+                or char == "`"
+            ):
+                probe_offsets[offset] = len(probe)
+                probe.append("@")
+            backslashes = 0
+        probe.append(char)
+    syntax = _shell_syntax_view("".join(probe))
+    unquoted = {
+        offset for offset, position in probe_offsets.items() if syntax[position] == "@"
+    }
+    view = _shell_syntax_view(segment)
+    span_ends = _substitution_span_ends(view)
+    masked: list[str] = []
+    copied = 0
+    index = 0
+    while index < len(segment):
+        if index not in unquoted:
+            index += 1
+            continue
+        if _expansion_opener_at(segment, index):
+            closing = span_ends.get(index)
+        else:
+            closing = _opaque_executable_end(segment, index, None)
+        if closing is None:
+            index += 1
+            continue
+        masked.extend((segment[copied:index], shlex.quote(segment[index : closing + 1])))
+        copied = closing + 1
+        index = copied
+    return "".join((*masked, segment[copied:]))
+
+
 def _find_actions_recursive_body(
     command: str,
     cwd: Path,
@@ -2461,7 +2553,8 @@ def _find_actions_recursive_body(
     and_or_entry_cwds = cwds
     previous_separator: str | None = None
     for segment, separator in split_segments(command):
-        normalized_segment, openers, closers = shell_group_structure(segment)
+        masked_segment = _mask_unquoted_substitutions(segment)
+        normalized_segment, openers, closers = shell_group_structure(masked_segment)
         may_skip = previous_separator in {"&&", "||"}
         for index, opener in enumerate(openers):
             group_stack.append(
