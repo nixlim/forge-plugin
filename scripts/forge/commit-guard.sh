@@ -2452,6 +2452,7 @@ def _find_actions_recursive_body(
     *,
     executable_seen: bool,
 ) -> list[GitAction]:
+    command = _normalize_dollar_quotes(command)
     actions: list[GitAction] = []
     cwds = (cwd,)
     group_stack: list[
@@ -2482,7 +2483,6 @@ def _find_actions_recursive_body(
                 ):
                     if action not in actions:
                         actions.append(action)
-        normalized_segment = _normalize_dollar_quotes(normalized_segment)
         try:
             tokens = shlex.split(normalized_segment, comments=False, posix=True)
         except ValueError:
