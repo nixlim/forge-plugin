@@ -269,25 +269,36 @@ GUARD_DENIED_MAX_CELL_BYTES = 4096
 # Disabling this in memory makes distinct-argument floods linear in subprocess
 # cost again, which the time budget then denies.
 CONTEXT_MEMO_ENABLED = True
-# The structured parse may swallow a case compound into one segment. Bash does
-# not treat `case` as reserved after `#`, in heredoc bodies, or inside `${}`,
-# `[[ ]]`, `(( ))`, so a swallow admitted there can hide the segments that a
-# plain separator split exposes. Every command is therefore also split raw
-# (swallow disabled) and the union of actions and denials is enforced; the raw
+# The structured parse may swallow a case compound into one segment after `#`,
+# in heredoc bodies, or inside `${}`, `[[ ]]`, `(( ))`. In split_segments,
+# _case_swallow_active gates every structured-pass swallow: the case compound
+# and the dollar-brace/dollar-bracket span skip. Every command is also split raw
+# (swallows disabled) and the union of actions and denials is enforced; the raw
 # split never invents actions for a genuine compound because its first token
 # is `case`. Disabling this in memory re-opens the swallow class.
 RAW_SEGMENT_PASS_ENABLED = True
 _case_swallow_active = True
 CASE_WORD = re.compile(r"(?<![A-Za-z0-9_])case(?![A-Za-z0-9_])")
 COMMAND_POSITION_TAIL = re.compile(
-    r"\s*(?:(?:if|then|elif|else|while|until|do)\s+)*(?:(?:[({]|!|time|-p)\s*)*"
+    r"\s*(?:(?:if|then|elif|else|while|until|do)\s+|(?:[({]|!|time|-p)\s*)*"
+)
+CONTROL_FLOW_RESERVED_WORDS = frozenset({
+    "if", "then", "elif", "else", "while", "until", "do",
+})
+# Bash reserves an unquoted command-position word only before whitespace, redirection, or end; quotes and escapes make it ordinary.
+LEADING_CONTROL_FLOW_WORDS = re.compile(
+    r"^[ \t]*(?:(?:" + "|".join(sorted(CONTROL_FLOW_RESERVED_WORDS)) + r")(?=[ \t<>&]|$)[ \t]*)+"
 )
 IN_WORD = re.compile(r"(?<![A-Za-z0-9_])in(?![A-Za-z0-9_])")
 ESAC_WORD = re.compile(r"(?<![A-Za-z0-9_])esac(?![A-Za-z0-9_])")
 
 
 def _raw_segment_pass(function):
-    """Run ``function`` with case-compound swallowing disabled."""
+    """Clear ``_case_swallow_active`` to disable every structured-pass swallow.
+
+    In ``split_segments``, this gates case compounds and the
+    dollar-brace/dollar-bracket span skip.
+    """
     global _case_swallow_active
     previous = _case_swallow_active
     _case_swallow_active = False
@@ -624,8 +635,10 @@ def _matching_executable_parenthesis_body(command: str, index: int) -> int | Non
             elif (
                 case_states
                 and word == "esac"
-                and case_states[-1] == "pattern"
-                and not case_pattern_seen[-1]
+                and (
+                    (case_states[-1] == "pattern" and not case_pattern_seen[-1])
+                    or (case_states[-1] == "body" and command_position)
+                )
             ):
                 case_states.pop()
                 case_subject_seen.pop()
@@ -669,7 +682,7 @@ def _matching_executable_parenthesis_body(command: str, index: int) -> int | Non
                 command_position = True
             cursor += len(separator)
             continue
-        if char == "(":
+        if char == "(" and (not case_states or case_states[-1] != "pattern"):
             depth += 1
             command_position = True
         elif char == ")":
@@ -966,8 +979,10 @@ def _matching_case_end(
             elif (
                 case_states
                 and word == "esac"
-                and case_states[-1] == "pattern"
-                and not pattern_seen[-1]
+                and (
+                    (case_states[-1] == "pattern" and not pattern_seen[-1])
+                    or (case_states[-1] == "body" and command_position)
+                )
             ):
                 case_states.pop()
                 subject_seen.pop()
@@ -2345,15 +2360,7 @@ def _find_direct_invocations_recursive(command: str, cwd: Path) -> list[tuple[st
             )
             # Control-flow reserved words introduce, but are not part of, the
             # direct invocation in the remainder of this shell segment.
-            while command_tokens and command_tokens[0] in {
-                "if",
-                "then",
-                "elif",
-                "else",
-                "while",
-                "until",
-                "do",
-            }:
+            while command_tokens and command_tokens[0] in CONTROL_FLOW_RESERVED_WORDS:
                 command_tokens.pop(0)
             invocation = parse_direct_invocation(command_tokens, cwd)
             if invocation is not None and invocation not in invocations:
@@ -2577,6 +2584,7 @@ def _find_actions_recursive_body(
                     if action not in actions:
                         actions.append(action)
         try:
+            normalized_segment = LEADING_CONTROL_FLOW_WORDS.sub("", normalized_segment, count=1)
             tokens = shlex.split(normalized_segment, comments=False, posix=True)
         except ValueError:
             previous_separator = separator
